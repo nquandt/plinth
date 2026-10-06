@@ -1,0 +1,4 @@
+id = "dev.plinth.examples.7guis.counter"
+name = "7GUIs Counter"
+version = "0.1.0"
+publisher = "plinth"
