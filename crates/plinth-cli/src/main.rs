@@ -59,6 +59,8 @@ usage:
   plinth hub install <id>[@version] [--source <name>]
                                    download and add an app to the library
   plinth hub update [<id>]         install newer versions from the app's source
+  plinth hub pin <app id> <version> | --latest
+                                   run one installed version, or the newest again
   plinth hub policy deny|allow <capability> | show
                                    a hub-wide switch for a capability
   plinth registry build <folder> [--with-core]
@@ -752,32 +754,27 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some("update") => {
+            // `docs/HUB.md` §9.2: the same code path as the Hub UI's
+            // `update` (`plinth_hub::apply_update`).
             let only = args.get(1).copied();
+            let client = plinth_registry::HubSources;
             for entry in hub.list()? {
                 if let Some(only) = only
                     && entry.id != only
                 {
                     continue;
                 }
-                let Some(reg) = entry.registry.clone() else { continue };
-                let source = plinth_registry::source::Source::open(&reg.base).with_context(|| format!("open source {} ({})", reg.name, reg.base))?;
-                let doc = source.app(&entry.id)?;
-                let Some(latest) = doc.latest() else { continue };
-                let current = entry.active_version().map(|v| v.version.clone()).unwrap_or_default();
-                if !plinth_registry::is_newer(&latest.version, &current) {
+                if entry.registry.is_none() {
                     continue;
                 }
-                let previous_caps: std::collections::HashSet<String> =
-                    entry.active_version().map(|v| v.capabilities.iter().cloned().collect()).unwrap_or_default();
-                let bytes = source.package(&entry.id, &latest.version)?;
-                hub.add_package(&bytes)?;
-                hub.set_registry(&entry.id, &reg.name, &reg.base)?;
-                println!("updated {} to {} (from {})", entry.id, latest.version, reg.name);
-                let new_caps: Vec<&str> =
-                    latest.capabilities.iter().map(|c| c.name.as_str()).filter(|c| !previous_caps.contains(*c)).collect();
-                if !new_caps.is_empty() {
-                    println!("  new capabilities: {}", new_caps.join(", "));
+                let Some(updated) = plinth_hub::apply_update(&hub, &client, &entry.id)? else { continue };
+                println!("updated {} to {} (from {})", updated.id, updated.to, updated.source);
+                if !updated.new_capabilities.is_empty() {
+                    println!("  new capabilities: {}", updated.new_capabilities.join(", "));
                     println!("  note: `plinth hub run {}` will ask for them (medium/high risk only)", entry.id);
+                }
+                if let Some(pinned) = &entry.pinned {
+                    println!("  note: {} is pinned to {pinned}; `plinth hub pin {} --latest` runs the new version", entry.id, entry.id);
                 }
             }
             return Ok(ExitCode::SUCCESS);
@@ -865,6 +862,19 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
             let id = args.get(1).context("usage: plinth hub unblock <app id>")?;
             hub.unblock_app(id)?;
             println!("unblocked {id}");
+        }
+        Some("pin") => {
+            // `docs/HUB.md` §9.2: run one installed version, not the newest.
+            let usage = "usage: plinth hub pin <app id> <version> | plinth hub pin <app id> --latest";
+            let id = args.get(1).context(usage)?;
+            if raw.contains(&"--latest") {
+                hub.pin(id, None)?;
+                println!("{id} runs the newest version again");
+            } else {
+                let version = args.get(2).context(usage)?;
+                hub.pin(id, Some((*version).to_owned()))?;
+                println!("pinned {id} to {version}");
+            }
         }
         Some("block-publisher") => {
             let key = args.get(1).context("usage: plinth hub block-publisher <key id>")?;
