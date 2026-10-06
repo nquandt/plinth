@@ -70,6 +70,18 @@ impl Harness {
         start.elapsed()
     }
 
+    /// Fires every timer due by `now` and applies what the guest commits.
+    fn fire_timers(&mut self, now: Instant) {
+        let commits = self.guest.fire_due_timers(now).unwrap();
+        for log in self.guest.take_logs() {
+            eprintln!("guest: {log}");
+        }
+        for commit in commits {
+            let errors = self.tree.apply(&commit).unwrap();
+            assert!(errors.is_empty(), "op errors: {errors:?}");
+        }
+    }
+
     fn find(&self, kind: ControlKind, pred: impl Fn(&Node) -> bool) -> Vec<NodeId> {
         let mut found = Vec::new();
         let mut stack: Vec<NodeId> = self.tree.screens().map(|(_, id)| id).collect();
@@ -270,4 +282,140 @@ fn utility_converter_and_text_tools() {
     h.fire(epoch, event::CHANGE, Value::Number(90_061_000.0));
     let breakdown = h.one_in_current(ControlKind::Text, |n| n.text.as_deref().is_some_and(|t| t.contains("since the epoch")));
     assert_eq!(h.text_of(breakdown), "1d 1h 1m 1s since the epoch");
+}
+
+/// `examples/pong`: a game built from Level 2 primitives and a 16 ms
+/// `setInterval` loop. The test drives the timer queue with a fake clock,
+/// reads the ball and paddle positions from the spacer boxes that place
+/// them, and checks movement, pause, the paddle buttons, bounces and a
+/// point. It prints the time of one tick (event, step and commit) in
+/// wasmtime; see docs/GAPS.md "Games".
+#[test]
+fn pong_plays_a_point() {
+    use plinth_protocol::color;
+    const FIELD_W: i32 = 75;
+    const FIELD_H: i32 = 48;
+    const PADDLE_H: i32 = 10;
+    const BALL: i32 = 2;
+    const HALF_W: i32 = 37;
+    const NET_W: i32 = 1;
+
+    let art = build("pong");
+    eprintln!("pong: app {} B, component {} B", art.app.len(), art.component.len());
+    let mut h = Harness::start(&art.component);
+
+    let labelled = |h: &Harness, label: &str| -> NodeId {
+        h.find(ControlKind::Box, |n| n.str_prop(prop::LABEL) == Some(label))
+            .into_iter()
+            .chain(h.find(ControlKind::Pressable, |n| n.str_prop(prop::LABEL) == Some(label)))
+            .next()
+            .unwrap_or_else(|| panic!("no node labelled {label}"))
+    };
+    let int = |h: &Harness, id: NodeId, p: u16| h.tree.get(id).unwrap().prop(p).and_then(Value::as_int).unwrap_or(0);
+    let spacer_before = |h: &Harness, id: NodeId| -> NodeId {
+        let parent = h.tree.get(h.tree.get(id).unwrap().parent).unwrap();
+        let i = parent.children.iter().position(|c| *c == id).unwrap();
+        parent.children[i - 1]
+    };
+    let paddle = |h: &Harness, label: &str| {
+        let p = labelled(h, label);
+        int(h, spacer_before(h, p), prop::HEIGHT)
+    };
+    let ball = |h: &Harness| -> (i32, i32) {
+        for (label, dx) in [("Ball (left half)", 0), ("Ball (right half)", HALF_W + NET_W)] {
+            let b = labelled(h, label);
+            if h.tree.get(b).unwrap().enum_prop(prop::BG) == color::NONE {
+                continue;
+            }
+            let row = h.tree.get(b).unwrap().parent;
+            return (dx + int(h, spacer_before(h, b), prop::WIDTH), int(h, spacer_before(h, row), prop::HEIGHT));
+        }
+        panic!("no ball is visible");
+    };
+    let press = |h: &mut Harness, label: &str| {
+        let id = labelled(h, label);
+        h.fire(id, event::PRESS, Value::Null)
+    };
+    let score_texts = |h: &Harness| -> Vec<String> {
+        h.find(ControlKind::Span, |_| true).into_iter().map(|id| h.text_of(id)).collect()
+    };
+    let scores = |h: &Harness| -> (u32, u32) {
+        let t = score_texts(h);
+        let you = t.iter().position(|s| s == "You").unwrap();
+        let cpu = t.iter().position(|s| s == "Computer").unwrap();
+        (t[you + 1].parse().unwrap(), t[cpu + 1].parse().unwrap())
+    };
+
+    assert_eq!(scores(&h), (0, 0));
+    assert_eq!(paddle(&h, "Your paddle"), (FIELD_H - PADDLE_H) / 2);
+    let start = ball(&h);
+    assert!(h.guest.next_timer_deadline().is_none(), "no loop before Start");
+
+    press(&mut h, "Start");
+    let t0 = Instant::now();
+    let mut now = t0;
+    let mut tick = |h: &mut Harness| -> Duration {
+        now += Duration::from_millis(16);
+        let s = Instant::now();
+        h.fire_timers(now);
+        s.elapsed()
+    };
+    for _ in 0..10 {
+        tick(&mut h);
+    }
+    let moved = ball(&h);
+    assert!(moved.0 > start.0 && moved.1 != start.1, "the ball moves: {start:?} -> {moved:?}");
+
+    press(&mut h, "Pause");
+    assert!(h.guest.next_timer_deadline().is_none(), "Pause stops the loop");
+    press(&mut h, "Resume");
+
+    press(&mut h, "Up");
+    for _ in 0..5 {
+        tick(&mut h);
+    }
+    assert!(paddle(&h, "Your paddle") < (FIELD_H - PADDLE_H) / 2, "Up moves the paddle up");
+    press(&mut h, "Down");
+    for _ in 0..40 {
+        tick(&mut h);
+    }
+    assert_eq!(paddle(&h, "Your paddle"), FIELD_H - PADDLE_H, "Down stops at the bottom wall");
+    press(&mut h, "Stop");
+
+    // Play until a wall bounce, a return by the computer and a point.
+    let (mut wall, mut ret) = (false, false);
+    let (mut dx, mut dy) = (0, 0);
+    let mut prev = ball(&h);
+    let mut times = Vec::new();
+    let mut n = 0;
+    while (!wall || !ret || scores(&h) == (0, 0)) && n < 3000 && h.guest.next_timer_deadline().is_some() {
+        times.push(tick(&mut h));
+        n += 1;
+        let b = ball(&h);
+        let (ndx, ndy) = ((b.0 - prev.0).signum(), (b.1 - prev.1).signum());
+        if dy != 0 && ndy != 0 && ndy != dy && (b.1 <= 1 || b.1 >= FIELD_H - BALL - 1) {
+            wall = true;
+        }
+        if dx > 0 && ndx < 0 && prev.0 >= FIELD_W - BALL - 2 && b.0 >= FIELD_W - BALL - 6 {
+            ret = true;
+        }
+        if ndx != 0 {
+            dx = ndx;
+        }
+        if ndy != 0 {
+            dy = ndy;
+        }
+        prev = b;
+    }
+    assert!(wall, "a wall bounce");
+    assert!(ret, "the computer returned the ball");
+    assert!(scores(&h).1 >= 1, "the computer scored: {:?}", scores(&h));
+
+    times.sort();
+    eprintln!(
+        "pong: {} ticks, median {:?}, p95 {:?} per tick (wasmtime, event + commit + tree apply)",
+        times.len(),
+        times[times.len() / 2],
+        times[times.len() * 95 / 100]
+    );
 }
