@@ -81,7 +81,8 @@ jobs:
           set -e
           cargo build -p plinth-cli
           ./target/debug/plinth core export target/core.wasm
-          for app in counter todo timer notes gallery; do ./target/debug/plinth build examples/$app; done
+          for app in counter todo timer notes gallery budget; do ./target/debug/plinth build examples/$app; done
+          ./target/debug/plinth build web/test/fixtures/net-fixture
           for t in web/test/run-*.mjs; do node "$t"; done
 
       - name: tsc check of every example

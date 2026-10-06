@@ -215,6 +215,8 @@ In M1, `plinth:core` exports `Math`, `parseNumber`, `toString` and `console`; `p
 
 `plinth:dialog` (core 1.3, no capability) has `alert(message, done)`, `confirm(message, done)` and `prompt(message, done)`. Each returns at once; the answer arrives through a `completion` event (§8.4) and calls `done` (`alert`: no value, `confirm`: `boolean`, `prompt`: `string | null`). Pending callbacks are GC roots. `done` is optional for `alert`. The desktop host shows one request at a time as a modal overlay (host state, not a guest node): `alert` has OK, `confirm` has Cancel and OK, `prompt` adds a text field; Escape cancels and Enter confirms. The web host uses the browser's dialogs.
 
+`plinth:net` (core 1.5) has `fetch(url, options, done)`. `options` is `null` or an object literal `{ method?, headers?: Map<string, string>, body? }`; `done` gets `{ ok, status, text, error }`. A denied or failed call never throws: `done` gets `ok: false` and `error` is `"denied:undeclared"`, `"denied:refused"`, `"denied:unsupported"` or `"network: …"`. Text bodies only (UTF-8), a limit of 8 MiB, a time limit of 20 s, and no redirects. Capabilities: `net:<host>` (exact host) or `net:*`; a private or loopback address also needs `net.local`. The compiler can prove only that an app can reach the network at all; the host checks each URL against the declared hosts at call time.
+
 M2 adds three modules:
 - `plinth:time`: `now()`, `monotonicNow()`, `setTimeout(f, ms)`, `setInterval(f, ms)`, `clearTimeout(id)` and `clearInterval(id)`. A timer id is a `number`. No capability is necessary.
 - `plinth:store`: `kv.get(key): string | null`, `kv.set(key, value)`, `kv.remove(key)` and `kv.keys(): string[]`. Capability `store.kv`.

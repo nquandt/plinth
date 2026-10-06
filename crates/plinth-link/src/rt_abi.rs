@@ -141,6 +141,12 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("str_pad_start", &[I32, F64, I32], &[I32]),
     ("str_pad_end", &[I32, F64, I32], &[I32]),
     ("str_split", &[I32, I32], &[I32]),
+    // -- plinth:net (SPEC.md §8.4, §8.5, §11) -------------------------------
+    ("net_fetch", &[I32, I32, I32, I32, I32, I32], &[]),
+    ("net_result_ok", &[], &[I32]),
+    ("net_result_status", &[], &[F64]),
+    ("net_result_text", &[], &[I32]),
+    ("net_result_error", &[], &[I32]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -187,13 +193,18 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("str_pad_start", 4),
     ("str_pad_end", 4),
     ("str_split", 4),
+    ("net_fetch", 5),
+    ("net_result_ok", 5),
+    ("net_result_status", 5),
+    ("net_result_text", 5),
+    ("net_result_error", 5),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).
 pub fn added_in(name: &str) -> u32 {
     ADDED_IN.iter().find(|(n, _)| *n == name).map_or(0, |(_, m)| *m)
 }
-pub const CORE_MINOR: u32 = 4;
+pub const CORE_MINOR: u32 = 5;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;

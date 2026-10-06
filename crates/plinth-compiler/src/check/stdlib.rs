@@ -9,6 +9,10 @@ use crate::diag::{Span, code};
 use crate::tir::*;
 use crate::types::Type;
 
+/// `GET` (SPEC.md §8.5): `fetch`'s default method when `options` is `null`
+/// or omits `method`.
+const DEFAULT_METHOD: &str = "GET";
+
 /// The value and type names that each std module exports.
 pub const UI_NAMES: &[&str] = &[
     "signal", "computed", "effect", "app", "navigate", "Signal", "Computed", "Accent", "IconName", "ScreenDef", "AppConfig",
@@ -26,6 +30,7 @@ pub const TIME_NAMES: &[&str] = &["now", "monotonicNow", "setTimeout", "setInter
 pub const STORE_NAMES: &[&str] = &["kv"];
 pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
 pub const DIALOG_NAMES: &[&str] = &["alert", "confirm", "prompt"];
+pub const NET_NAMES: &[&str] = &["fetch", "Response", "FetchOptions"];
 
 /// The capability names, from the shared map (`plinth-link`'s
 /// `capabilities` module, `docs/HUB.md` §12.3) rather than a duplicated
@@ -56,6 +61,16 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "alert" => Binding::Std(StdFn::DialogAlert),
             "confirm" => Binding::Std(StdFn::DialogConfirm),
             "prompt" => Binding::Std(StdFn::DialogPrompt),
+            _ => return None,
+        }),
+        StdModule::Net => Some(match name {
+            "fetch" => Binding::Std(StdFn::NetFetch),
+            // `Response` is shaped structurally (the `done` callback's
+            // parameter type is inferred, like `confirm`'s `ok: boolean`):
+            // this placeholder exists only so `tsc` and `std_typings_match`
+            // see the name declared; the editor's own types come from
+            // `net.d.ts` directly.
+            "Response" | "FetchOptions" => Binding::Type(Type::Error),
             _ => return None,
         }),
         StdModule::Ui => Some(match name {
@@ -293,6 +308,107 @@ impl Checker<'_> {
                 let message = self.coerce(message, &Type::String);
                 let (cb, _) = self.callback(&args[1], &[Type::String.nullable()], Some(Type::Void));
                 TExpr::new(TExprKind::DialogCall("dialog_prompt", Box::new(message), Box::new(cb)), Type::Void, span)
+            }
+            StdFn::NetFetch => {
+                self.require_net_capability(span);
+                if args.len() != 3 {
+                    self.err(code::ARG_COUNT, span, "`fetch` takes a url, options, and a done callback");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let url = self.expr_with(&args[0], &Type::String);
+                let url = self.coerce(url, &Type::String);
+                let (method, headers, body) = self.net_fetch_options(&args[1]);
+
+                let response_sid = self.response_struct();
+                let (cb, _) = self.callback(&args[2], &[Type::Struct(response_sid)], Some(Type::Void));
+
+                // The wrapper the runtime invokes when the completion
+                // arrives (SPEC.md §8.4): decode the 4 fields the host
+                // stashed (`net_result_*`), build the `Response`, call the
+                // app's `done`.
+                let rt = |name: &'static str, ty: Type| TExpr::new(TExprKind::Rt(name, Vec::new()), ty, span);
+                let resp = TExpr::new(
+                    TExprKind::StructLit(
+                        response_sid,
+                        vec![
+                            rt("net_result_ok", Type::Bool),
+                            rt("net_result_status", Type::Number),
+                            rt("net_result_text", Type::String),
+                            rt("net_result_error", Type::String.nullable()),
+                        ],
+                    ),
+                    Type::Struct(response_sid),
+                    span,
+                );
+                let call = TExpr::new(TExprKind::CallClosure(Box::new(cb), vec![resp]), Type::Void, span);
+                let wrapper = self.synthetic_closure("<net_fetch_done>", vec![TStmt::Return(Some(call))], Type::Void, span);
+
+                TExpr::new(
+                    TExprKind::NetFetchCall(Box::new(url), Box::new(method), Box::new(headers), Box::new(body), Box::new(wrapper)),
+                    Type::Void,
+                    span,
+                )
+            }
+        }
+    }
+
+    /// `fetch`'s `options`: `null`, or an object literal with optional
+    /// `method`, `headers` (a `Map<string, string>`) and `body` fields
+    /// (SPEC.md §8.5). A general expression is not supported yet (only a
+    /// literal, so the checker never needs a nullable-struct field read);
+    /// returns `(method, headers, body)` typed expressions with the
+    /// defaults already filled in.
+    fn net_fetch_options(&mut self, e: &Expr) -> (TExpr, TExpr, TExpr) {
+        let span = e.span;
+        let default_method = || TExpr::new(TExprKind::Str(DEFAULT_METHOD.to_owned()), Type::String, span);
+        let default_body = || TExpr::new(TExprKind::Null, Type::String.nullable(), span);
+        let empty_headers = |c: &mut Self| {
+            let (k, v) = (Type::String, Type::String);
+            let sid = c.map_struct(&k, &v);
+            let arr = |elem: &Type| TExpr::new(TExprKind::ArrayLit(Vec::new()), Type::Array(Box::new(elem.clone())), span);
+            TExpr::new(TExprKind::StructLit(sid, vec![arr(&k), arr(&v)]), Type::Map(Box::new(k), Box::new(v)), span)
+        };
+        match &e.kind {
+            ExprKind::Null => (default_method(), empty_headers(self), default_body()),
+            ExprKind::Object(props) => {
+                let (mut method, mut headers, mut body) = (None, None, None);
+                for p in props {
+                    let ObjProp::Field(name, value, fspan) = p else {
+                        self.err(code::UNSUPPORTED, e.span, "`fetch`'s options cannot use a spread");
+                        continue;
+                    };
+                    match name.as_str() {
+                        "method" => {
+                            let te = self.expr_with(value, &Type::String);
+                            method = Some(self.coerce(te, &Type::String));
+                        }
+                        "headers" => {
+                            let want = Type::Map(Box::new(Type::String), Box::new(Type::String));
+                            let te = self.expr_with(value, &want);
+                            headers = Some(self.coerce(te, &want));
+                        }
+                        "body" => {
+                            let te = self.expr_with(value, &Type::String.nullable());
+                            body = Some(self.coerce(te, &Type::String.nullable()));
+                        }
+                        _ => self.err_help(
+                            code::NO_PROPERTY,
+                            *fspan,
+                            format!("fetch options has no `{name}` property"),
+                            "use `method`, `headers` or `body`",
+                        ),
+                    }
+                }
+                (method.unwrap_or_else(default_method), headers.unwrap_or_else(|| empty_headers(self)), body.unwrap_or_else(default_body))
+            }
+            _ => {
+                self.err_help(
+                    code::UNSUPPORTED,
+                    e.span,
+                    "`fetch`'s `options` must be `null` or an object literal",
+                    "write `null` or `{ method: \"POST\", body: \"...\" }`",
+                );
+                (default_method(), empty_headers(self), default_body())
             }
         }
     }

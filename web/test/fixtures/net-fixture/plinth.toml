@@ -1,0 +1,8 @@
+id = "dev.plinth.test.net-fixture"
+name = "Net Fixture"
+version = "0.1.0"
+publisher = "plinth"
+
+[[capabilities]]
+name = "net.local"
+rationale = "Test fixture: talks to a local HTTP server only (web/test/run-net.mjs)."

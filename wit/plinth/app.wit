@@ -105,6 +105,18 @@ interface dialog {
   prompt: func(message: string) -> u32;
 }
 
+/// HTTP fetch (SPEC.md §8.5, §11; capability: `net:<host>`, dynamic per
+/// declared host, plus `net.local` for private network ranges). Every
+/// call returns at once with a request id; the result arrives later
+/// through a `completion` event (SPEC.md §8.4). A denied or failed call
+/// never traps: it completes with an error result (SPEC.md §8.5).
+interface net {
+  /// `headers` is a list of `(name, value)` pairs. `body` is UTF-8 text
+  /// only. The completion `result` is a 4-element list: `ok` (bool),
+  /// `status` (s32), `text` (string), `error` (string, or null when `ok`).
+  fetch: func(url: string, method: string, headers: list<tuple<string, string>>, body: option<string>) -> u32;
+}
+
 world app {
   import ui;
   import dev;
@@ -112,6 +124,7 @@ world app {
   import store;
   import clipboard;
   import dialog;
+  import net;
 
   /// Builds the initial tree.
   export init: func(args: list<u8>);

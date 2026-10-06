@@ -59,6 +59,7 @@ wit-component = "0.251"
 wasmparser = "0.251"
 wasm-encoder = "0.251"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 sha2 = "0.10.9"
 ed25519-dalek = { version = "2", default-features = false, features = ["std", "rand_core"] }
 rand_core = { version = "0.6", features = ["getrandom"] }

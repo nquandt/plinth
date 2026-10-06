@@ -206,6 +206,67 @@ function hostImports(
       .then((answer) => completeRequest?.(id, answer ?? null));
     return id;
   }
+  // plinth:net (core 1.4, SPEC.md §8.5, §11): same request-id-now,
+  // completion-later shape as dialogs. `net:<host>` and `net.local` are
+  // dynamic capability names (one per declared host; §11), so the check
+  // happens here against the actual URL, not by exact string lookup.
+  function isPrivateNetHost(host) {
+    const h = host.split(":")[0]; // strip a port
+    if (h.toLowerCase() === "localhost" || h.endsWith(".local") || h === "::1" || h === "0.0.0.0" || h === "[::1]") return true;
+    const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!m) return false;
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+  function hostOf(url) {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return null;
+    }
+  }
+  function netDeniedReason(host) {
+    if (host === null) return DeniedReason.unsupported;
+    if (isPrivateNetHost(host)) {
+      return capabilities.has("net.local") ? null : DeniedReason.undeclared;
+    }
+    return capabilities.has(`net:${host}`) || capabilities.has("net:*") ? null : DeniedReason.undeclared;
+  }
+  function netResult(ok, status, text, error) {
+    return [ok, status, text, error];
+  }
+  async function runFetch(url, method, headers, body) {
+    const impl = typeof fetch === "function" ? fetch : null;
+    if (!impl) return netResult(false, 0, "", "network: no fetch implementation available");
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), 20000) : null;
+    try {
+      const res = await impl(url, {
+        method,
+        headers,
+        body: body ?? undefined,
+        redirect: "manual", // redirects are allowed only to allowed hosts (SPEC.md §11); not re-checked per hop yet.
+        signal: controller?.signal,
+      });
+      const text = await res.text();
+      return netResult(res.ok, res.status, text, null);
+    } catch (e) {
+      return netResult(false, 0, "", `network: ${e?.message ?? e}`);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+  function openNetFetch(url, method, headers, body) {
+    const id = nextRequest++;
+    const reason = netDeniedReason(hostOf(url));
+    if (reason !== null) {
+      const text = reason === DeniedReason.undeclared ? "denied:undeclared" : reason === DeniedReason.refused ? "denied:refused" : "denied:unsupported";
+      Promise.resolve().then(() => completeRequest?.(id, netResult(false, 0, "", text)));
+      return id;
+    }
+    runFetch(url, method, headers, body).then((result) => completeRequest?.(id, result));
+    return id;
+  }
   function mem() {
     return new DataView(getExports().memory.buffer);
   }
@@ -344,6 +405,29 @@ function hostImports(
       },
       prompt(ptr, len) {
         return openDialog("prompt", readString(ptr, len));
+      },
+    },
+    "plinth:app/net@1.0.0": {
+      // Lowered core ABI (checked against the built core with a binary
+      // import-section dump): url(ptr,len), method(ptr,len),
+      // headers(ptr,count) — each element a 16-byte (ptr,len,ptr,len)
+      // tuple<string,string> record — body(tag,ptr,len) (an
+      // `option<string>`, tag 0 = none). Returns the request id directly.
+      fetch(urlPtr, urlLen, methodPtr, methodLen, headersPtr, headersCount, bodyTag, bodyPtr, bodyLen) {
+        const url = readString(urlPtr, urlLen);
+        const method = readString(methodPtr, methodLen);
+        const v = mem();
+        const headers = [];
+        for (let i = 0; i < headersCount; i++) {
+          const base = headersPtr + i * 16;
+          const kPtr = v.getUint32(base, true);
+          const kLen = v.getUint32(base + 4, true);
+          const vPtr = v.getUint32(base + 8, true);
+          const vLen = v.getUint32(base + 12, true);
+          headers.push([readString(kPtr, kLen), readString(vPtr, vLen)]);
+        }
+        const body = bodyTag === 0 ? null : readString(bodyPtr, bodyLen);
+        return openNetFetch(url, method, headers, body);
       },
     },
     "plinth:app/clipboard@1.0.0": {

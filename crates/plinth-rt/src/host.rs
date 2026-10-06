@@ -94,6 +94,13 @@ pub fn register_request(id: u32, callable: Callable) {
 /// (already-answered, or never registered) request id is ignored, not an
 /// error.
 pub fn dispatch_completion(request: u32, result: &plinth_protocol::Value) {
+    // `plinth:net`'s result is a 4-element list (SPEC.md §8.4): stash it so
+    // `net_result_*` can read it, since a single `Val` word cannot carry
+    // four fields. Completions are dispatched one at a time (the guest is
+    // single-threaded, SPEC.md §4.5), so one global slot is enough.
+    if let plinth_protocol::Value::List(items) = result {
+        LAST_LIST.with(|l| *l = items.clone());
+    }
     let callable = REQUESTS.with(|r| {
         let i = r.iter().position(|x| x.id == request)?;
         Some(r.remove(i).callable)
@@ -102,6 +109,11 @@ pub fn dispatch_completion(request: u32, result: &plinth_protocol::Value) {
         crate::reactive::untracked(|| invoke(callable, crate::ui::value_to_val(result)));
     }
 }
+
+/// The last `plinth:net` completion's result list, read by `net_result_*`
+/// (SPEC.md §8.4). Set by `dispatch_completion` just before it invokes the
+/// net-fetch wrapper closure the compiler generates (`check/stdlib.rs`).
+static LAST_LIST: Global<Vec<plinth_protocol::Value>> = Global::new(Vec::new());
 
 /// The last denial reason for `plinth:store`'s `kv.*` calls, as the string
 /// `kv.lastError()` returns, or `None` if the last call was not denied.
@@ -342,4 +354,78 @@ pub fn dialog_prompt(callable: Callable, message: i32) {
         let id = host::dialog::prompt(message);
         register_request(id, callable);
     }
+}
+
+/// Reads the `(keys, values)` string arrays backing a `Map<string, string>`
+/// (`check/mod.rs`'s `map_struct`: a 2-field struct of arrays, always in
+/// that order, so these offsets are stable for any `Map<string, string>`
+/// the compiler builds). Used for `net.fetch`'s `headers`.
+#[cfg(target_arch = "wasm32")]
+fn map_to_pairs(map: u32) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)> {
+    use alloc::string::ToString;
+    if map == 0 {
+        return alloc::vec::Vec::new();
+    }
+    let keys = unsafe { crate::gc::load_u32(map + 8) };
+    let vals = unsafe { crate::gc::load_u32(map + 12) };
+    let n = crate::arrays::len(keys);
+    let mut out = alloc::vec::Vec::with_capacity(n as usize);
+    for i in 0..n as i32 {
+        let k = strings::as_str(crate::arrays::get_i32(keys, i) as u32).to_string();
+        let v = strings::as_str(crate::arrays::get_i32(vals, i) as u32).to_string();
+        out.push((k, v));
+    }
+    out
+}
+
+/// `net.fetch(url, method, headers, body, done)` (SPEC.md §8.5, §11):
+/// `headers` is a `Map<string, string>` pointer, or `0` for none. `body`
+/// is a nullable string pointer. The compiler's wrapper closure (built in
+/// `check/stdlib.rs`) decodes the completion's result list through
+/// `net_result_*` and calls the app's `done` with the decoded `Response`.
+pub fn net_fetch(callable: Callable, url: i32, method: i32, headers: i32, body: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let url = strings::as_str(url as u32);
+        let method = strings::as_str(method as u32);
+        let headers = map_to_pairs(headers as u32);
+        let body = if body == 0 { None } else { Some(strings::as_str(body as u32)) };
+        let id = host::net::fetch(url, method, &headers, body);
+        register_request(id, callable);
+    }
+}
+
+/// The last `net.fetch` completion's `ok` field (SPEC.md §8.4).
+pub fn net_result_ok() -> i32 {
+    LAST_LIST.with(|l| matches!(l.first(), Some(plinth_protocol::Value::Bool(true))) as i32)
+}
+
+/// The last `net.fetch` completion's `status` field, as a `number`. Native
+/// hosts send `Value::Int`; the web host's JS encoder has no `int` tag for
+/// a plain number literal, so it sends `Value::Number` instead (both are
+/// accepted here).
+pub fn net_result_status() -> f64 {
+    LAST_LIST.with(|l| match l.get(1) {
+        Some(plinth_protocol::Value::Int(i)) => *i as f64,
+        Some(plinth_protocol::Value::Number(n)) => *n,
+        _ => 0.0,
+    })
+}
+
+/// The last `net.fetch` completion's `text` field.
+pub fn net_result_text() -> i32 {
+    LAST_LIST.with(|l| match l.get(2) {
+        #[cfg(target_arch = "wasm32")]
+        Some(plinth_protocol::Value::Str(s)) => strings::from_str(s) as i32,
+        _ => 0,
+    })
+}
+
+/// The last `net.fetch` completion's `error` field, or `null`.
+pub fn net_result_error() -> i32 {
+    LAST_LIST.with(|l| match l.get(3) {
+        #[cfg(target_arch = "wasm32")]
+        Some(plinth_protocol::Value::Str(s)) => strings::from_str(s) as i32,
+        _ => 0,
+    })
 }

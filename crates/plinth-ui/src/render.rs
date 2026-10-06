@@ -62,6 +62,14 @@ pub trait GuestPort {
         let _ = (id, value);
         Ok(Vec::new())
     }
+
+    /// Drains `plinth:net` requests a worker thread finished since the
+    /// last poll (SPEC.md §8.4, §8.5): `(request id, result)` pairs ready
+    /// for `answer_dialog` (the same generic completion delivery dialogs
+    /// use). The default (no net host API access) has none.
+    fn poll_net_results(&mut self) -> Vec<(u32, Value)> {
+        Vec::new()
+    }
 }
 
 /// Which `plinth:dialog` call opened a pending dialog request (mirrors
@@ -380,19 +388,41 @@ impl PlinthRoot {
 
     /// Dispatches every timer due by now and applies what the guest
     /// commits (SPEC.md §8.4, §8.5), mirroring `fire` for `ui` events.
+    /// Also delivers any `plinth:net` result a worker thread finished
+    /// (SPEC.md §8.4, §8.5): `net.fetch` has no deadline of its own, so it
+    /// rides the same fixed poll tick as timers.
     pub fn poll_timers(&mut self, cx: &mut Context<Self>) {
         if self.stopped.is_some() {
             return;
         }
+        let mut changed = false;
         match self.guest.fire_due_timers(Instant::now()) {
-            Ok(commits) if commits.is_empty() => return,
-            Ok(commits) => {
+            Ok(commits) if !commits.is_empty() => {
                 self.apply_commits(commits);
+                changed = true;
             }
+            Ok(_) => {}
             Err(e) => {
                 log::error!("the app stopped: {e:#}");
                 self.stopped = Some(format!("{e:#}"));
+                return;
             }
+        }
+        for (id, result) in self.guest.poll_net_results() {
+            match self.guest.answer_dialog(id, result) {
+                Ok(commits) => {
+                    self.apply_commits(commits);
+                    changed = true;
+                }
+                Err(e) => {
+                    log::error!("the app stopped: {e:#}");
+                    self.stopped = Some(format!("{e:#}"));
+                    return;
+                }
+            }
+        }
+        if !changed {
+            return;
         }
         self.sync_fields(cx);
         self.sync_dialog(cx);

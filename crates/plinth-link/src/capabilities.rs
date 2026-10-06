@@ -14,6 +14,21 @@
 pub const STORE_KV: &str = "store.kv";
 pub const CLIPBOARD_READ: &str = "clipboard.read";
 pub const CLIPBOARD_WRITE: &str = "clipboard.write";
+/// `plinth:net` (SPEC.md §11). Capability names are dynamic: a manifest
+/// declares `net:<host>` for one host, or `net.local` for private network
+/// ranges. The compiler's reachability check (`PL1007`) only knows that
+/// `net_fetch` needs *some* capability starting with `net:` or equal to
+/// `net.local`; it cannot know the URL's host (often a runtime value), so
+/// this constant is a generic marker for that reachability check only.
+/// The real per-host decision happens at call time in the runner's
+/// `Policy` (`crates/plinth-runner-wasmtime/src/policy.rs`), which checks
+/// the actual URL against the manifest's declared `net:`/`net.local`
+/// entries (`docs/HUB.md` §7.1).
+pub const NET: &str = "net";
+/// Private network ranges (SPEC.md §11): a manifest must declare this
+/// fixed name, in addition to any `net:<host>` entry, before a request to
+/// a private/loopback address is allowed.
+pub const NET_LOCAL: &str = "net.local";
 
 /// How much a capability can do, for the consent screen's wording and
 /// default (`docs/HUB.md` §7.2).
@@ -46,6 +61,7 @@ pub const CAPABILITIES: &[CapabilityInfo] = &[
     CapabilityInfo { name: STORE_KV, risk: Risk::Low, description: "save data on this device" },
     CapabilityInfo { name: CLIPBOARD_WRITE, risk: Risk::Low, description: "write to the clipboard" },
     CapabilityInfo { name: CLIPBOARD_READ, risk: Risk::Medium, description: "read the clipboard" },
+    CapabilityInfo { name: NET_LOCAL, risk: Risk::Medium, description: "connect to devices on your local network" },
 ];
 
 /// The capability info for `name`, if it is a known capability.
@@ -65,6 +81,9 @@ pub const FUNCTION_CAPABILITIES: &[(&str, &str)] = &[
     // `kv_last_error` and `clipboard_last_error` read a local, harmless
     // status flag; the compiler does not gate them (`stdlib.rs`), so they
     // need no capability here either.
+    // `net_fetch` needs a `net:<host>` or `net.local` capability (see
+    // `NET` above); this generic marker only drives reachability.
+    ("net_fetch", NET),
 ];
 
 /// The capability that a runtime function needs, if any.

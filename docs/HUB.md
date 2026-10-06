@@ -208,6 +208,7 @@ For each version, the Hub computes three lists:
 Rules:
 - If an app can reach a capability that it does not declare, the source refuses to publish it and the Hub refuses to run it.
 - If an app declares a capability that it cannot reach, the Hub does not ask for it and shows "declared but not used".
+- `net:<host>` is an exception to rule 2's file-only computation: the host name is a runtime string (`SPEC.md` §11), so the reachable list can only say the app reaches `net` at all, from its import of `net_fetch`. The actual per-host decision happens at call time, in the runner's capability policy, against the manifest's declared `net:<host>`/`net:*`/`net.local` entries. The label (§7.2) still names each declared host; the Hub just cannot prove from the file alone which of them the app will actually call.
 
 ### 7.2 The capability label
 
@@ -217,7 +218,7 @@ Each app page and each consent screen has a short, fixed-format label, in plain 
 |---|---|---|
 | **None** | UI only, `time` | allowed, no question |
 | **Low** | `store.kv` (data on this device), `clipboard.write`, `notify` | allowed at install, shown in the label |
-| **Medium** | `clipboard.read`, `net:<listed hosts>`, `fs.pick` (files that the user picks) | asked one time |
+| **Medium** | `clipboard.read`, `net:<listed hosts>`, `net.local` (devices on your network), `fs.pick` (files that the user picks) | asked one time |
 | **High** | `net:*` (any host), `fs.app-data` export, `camera`, `microphone`, `location` | asked each time, or for a session |
 
 The label names each network host exactly ("This app connects to api.example.com"). The words and the levels come from one table in the host, so every app gets the same wording.
