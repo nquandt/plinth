@@ -22,6 +22,11 @@ use plinth_protocol::{
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
+/// A `List` with more rows than this renders as a virtual list (SPEC.md
+/// §7.3): only the rows near the viewport become elements, so a list of
+/// thousands of rows no longer costs one element per row per frame.
+const VIRTUAL_LIST_THRESHOLD: usize = 200;
+
 /// The host side of the guest connection. `dispatch` sends one event buffer
 /// and returns the op buffers that the guest committed while it ran.
 pub trait GuestPort {
@@ -622,6 +627,11 @@ where
 
 impl Render for PlinthRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Debug-only timing: set PLINTH_TRACE_RENDER=1 to log each frame's
+        // wall time, used to measure the §7.3 list virtualization work.
+        #[cfg(debug_assertions)]
+        let trace_start = std::env::var_os("PLINTH_TRACE_RENDER").is_some().then(Instant::now);
+
         self.class = WidthClass::from_width(window.viewport_size().width);
         self.ensure_fields(cx);
         if !self.focused_once {
@@ -724,7 +734,14 @@ impl Render for PlinthRoot {
                 }
             }
         };
-        body.children(overlays)
+        let body = body.children(overlays);
+
+        #[cfg(debug_assertions)]
+        if let Some(start) = trace_start {
+            eprintln!("plinth: PlinthRoot::render took {:?}", start.elapsed());
+        }
+
+        body
     }
 }
 
@@ -1204,6 +1221,9 @@ impl PlinthRoot {
 
     fn render_list(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let count = node.children.len();
+        if count > VIRTUAL_LIST_THRESHOLD {
+            return self.render_virtual_list(node, t, cx);
+        }
         let rows = node.children.iter().enumerate().map(|(i, &c)| {
             div()
                 .when(i + 1 < count, |d| d.border_b_1().border_color(t.border))
@@ -1217,6 +1237,66 @@ impl PlinthRoot {
             .flex_col()
             .mx(px(-8.))
             .children(rows.collect::<Vec<_>>())
+            .into_any_element()
+    }
+
+    /// A `List` with more than [`VIRTUAL_LIST_THRESHOLD`] rows renders with
+    /// gpui's `uniform_list` (SPEC.md §7.3, Q6: host-side virtualization):
+    /// only the rows that fit in the visible window become elements, so a
+    /// 10,000-row list costs a near-constant number of elements per frame
+    /// instead of one per row.
+    ///
+    /// `uniform_list` requires one row height for the whole list. Rows with
+    /// a subtitle are taller than rows without one; this picks the height
+    /// from the list's first row (SPEC.md note: a list that mixes rows with
+    /// and without a subtitle will clip or gap rows of the other kind once
+    /// virtualized — not a problem for the generated `big-list` example,
+    /// which gives every row the same shape, but a real fix needs gpui's
+    /// `list`/`ListState`, which this step didn't reach).
+    ///
+    /// Because only the rows inside the viewport become elements, rows
+    /// scrolled out of view are not present in the AccessKit tree; the list
+    /// container keeps `Role::List` so assistive tech still sees it as a
+    /// list, but screen readers can only reach the currently visible rows.
+    fn render_virtual_list(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let children: Rc<Vec<NodeId>> = Rc::new(node.children.clone());
+        let count = children.len();
+        let has_subtitle = children
+            .first()
+            .and_then(|&c| self.tree.get(c))
+            .map(|n| n.str_prop(prop::SUBTITLE).is_some())
+            .unwrap_or(false);
+        let row_h = if has_subtitle { px(78.) } else { px(61.) };
+        let max_h = match self.class {
+            WidthClass::Compact => px(420.),
+            WidthClass::Regular | WidthClass::Wide => px(560.),
+        };
+        let t = *t;
+        let entity = cx.entity();
+        let last_id = children.last().copied();
+        let list = gpui::uniform_list(eid("list-rows", node.id), count, move |range, _window, app| {
+            let children = children.clone();
+            range
+                .filter_map(|i| children.get(i).copied())
+                .map(|c| {
+                    let last = Some(c) == last_id;
+                    entity.update(app, |this, cx| {
+                        let row = this.render_node(c, &t, cx);
+                        div().h(row_h).when(!last, |d| d.border_b_1().border_color(t.border)).child(row).into_any_element()
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .with_sizing_behavior(gpui::ListSizingBehavior::Infer)
+        .h(max_h.min(row_h * count as f32))
+        .into_any_element();
+        div()
+            .id(eid("list", node.id))
+            .role(accesskit::Role::List)
+            .flex()
+            .flex_col()
+            .mx(px(-8.))
+            .child(list)
             .into_any_element()
     }
 

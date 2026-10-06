@@ -23,6 +23,7 @@ impl WidthClass {
 }
 
 /// The color tokens for one appearance.
+#[derive(Clone, Copy)]
 pub struct Tokens {
     pub background: Hsla,
     pub surface: Hsla,
