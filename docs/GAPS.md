@@ -519,7 +519,11 @@ Fixed:
   events late could move the caret or lose a key. Now the runtime keeps
   the node and value of the running `change` event and `set_prop` does
   not send the same `value` back (`plinth-rt/src/ui.rs`, `host_value`).
-  Test: `temperature_converts_both_ways_and_keeps_invalid_input`.
+  A node that the same event makes again with the same id (ids are used
+  again, for example a list row) gets the value. Tests:
+  `temperature_converts_both_ways_and_keeps_invalid_input` and
+  `one_way_value_is_not_echoed_but_a_new_row_gets_it` (`tests/lang.rs`);
+  `run-a11y.mjs --typing-only` (big-list toggle) found the id case.
 - **`Picker options={[A, B]}` with `const` names was rejected**
   (`PL3001: each item must be a string literal`): the literal fast path
   took every array literal. Now only an array of string literals takes it;

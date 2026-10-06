@@ -2253,6 +2253,77 @@ function Home() {
     assert_eq!(tree.get(picker).unwrap().str_prop(prop::OPTIONS), Some("one way\u{1f}return\u{1f}x"));
 }
 
+/// A one-way `value` plus `onChange` (SPEC.md §8.4): the guest does not
+/// send the changed value back to the node that sent it, but a row that
+/// the change makes again gets the value, also when its new node has the
+/// same id as the old one (ids are used again).
+#[test]
+fn one_way_value_is_not_echoed_but_a_new_row_gets_it() {
+    let main = r#"import { app, Screen, List, Toggle, TextField, signal } from "plinth:ui";
+interface Item { id: number; on: boolean }
+function Home() {
+  const items = signal<Item[]>([{ id: 1, on: false }]);
+  const text = signal("");
+  return (
+    <Screen title="Home">
+      <TextField label="T" value={text()} onChange={(v) => text.set(v)} />
+      <List
+        items={items()}
+        key={(i) => i.id}
+        row={(i) => <Toggle label="On" value={i.on} onChange={(on) => items.set([{ id: i.id, on: on }])} />}
+      />
+    </Screen>
+  );
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        tree.apply(&commit).unwrap();
+    }
+    let find = |tree: &Tree, kind: ControlKind| {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        loop {
+            let id = stack.pop().expect("node not found");
+            let node = tree.get(id).unwrap();
+            if node.kind == Some(kind) {
+                break id;
+            }
+            stack.extend(node.children.iter());
+        }
+    };
+    let mut change = |tree: &mut Tree, node: u32, value: Value| -> Vec<plinth_protocol::Op> {
+        tree.set_local_prop(node, prop::VALUE, value.clone());
+        let handler = tree.get(node).unwrap().handler(event::CHANGE).expect("a change handler");
+        let mut w = Writer::new();
+        w.event(&Event::Ui { handler, event: event::CHANGE, value });
+        let mut ops = Vec::new();
+        for commit in guest.on_event(w.as_bytes()).unwrap() {
+            tree.apply(&commit).unwrap();
+            ops.extend(plinth_protocol::decode_ops(&commit).unwrap());
+        }
+        ops
+    };
+    let field = find(&tree, ControlKind::TextField);
+    let ops = change(&mut tree, field, Value::Str("abc".into()));
+    assert!(!ops.iter().any(|op| matches!(op, plinth_protocol::Op::SetProp { prop: p, .. } if *p == prop::VALUE)), "{ops:?}");
+    for on in [true, false, true] {
+        let toggle = find(&tree, ControlKind::Toggle);
+        change(&mut tree, toggle, Value::Bool(on));
+        let toggle = find(&tree, ControlKind::Toggle);
+        assert_eq!(tree.get(toggle).unwrap().bool_prop(prop::VALUE), on);
+    }
+}
+
 #[test]
 fn last_index_of_finds_the_final_occurrence() {
     let main = r#"import { app, Screen, Text } from "plinth:ui";

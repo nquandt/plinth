@@ -173,6 +173,11 @@ pub fn create(kind: u16) -> NodeId {
             id
         });
         u.ops.op(&Op::Create { id, kind });
+        // A new node with the id of the changed one (ids are used again)
+        // does not show the value of the change.
+        if matches!(&u.host_value, Some((n, _)) if *n == id) {
+            u.host_value = None;
+        }
         id
     });
     reactive::add_cleanup(Cleanup::Node(id));
