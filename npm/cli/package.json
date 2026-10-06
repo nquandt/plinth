@@ -1,0 +1,13 @@
+{
+  "name": "@plinth/cli",
+  "version": "0.1.0",
+  "description": "Build cross-platform apps from TypeScript: the plinth compiler, dev host and packager",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/nquandt/plinth" },
+  "bin": { "plinth": "bin/plinth.js" },
+  "files": ["bin/", "types/"],
+  "engines": { "node": ">=18" },
+  "optionalDependencies": {
+    "@plinth/cli-win32-x64": "0.1.0"
+  }
+}

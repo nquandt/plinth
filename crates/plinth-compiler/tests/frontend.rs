@@ -62,3 +62,35 @@ fn jsx_errors() {
 fn missing_app() {
     assert_eq!(codes("const x = 1;"), ["PL1006"]);
 }
+
+/// The names exported by `std/*.d.ts` (what the editor sees) must be the
+/// names the compiler knows (SPEC.md §4.7).
+#[test]
+fn std_typings_match() {
+    use plinth_compiler::check::stdlib::{CORE_NAMES, UI_NAMES};
+    let std_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    let exports = |file: &str| -> Vec<String> {
+        let text = std::fs::read_to_string(std_dir.join(file)).unwrap();
+        let mut names: Vec<String> = text
+            .lines()
+            .filter_map(|l| {
+                let rest = l.trim_start().strip_prefix("export ")?;
+                let rest = rest.strip_prefix("declare ").unwrap_or(rest);
+                let rest = ["function ", "const ", "interface ", "type "].iter().find_map(|k| rest.strip_prefix(k))?;
+                Some(rest.split(|c: char| !c.is_alphanumeric() && c != '_').next()?.to_owned())
+            })
+            .collect();
+        names.sort();
+        names
+    };
+    let sorted = |names: &[&str]| {
+        let mut v: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+        v.sort();
+        v
+    };
+    assert_eq!(exports("ui.d.ts"), sorted(UI_NAMES), "std/ui.d.ts and check::stdlib::UI_NAMES differ");
+    assert_eq!(exports("core.d.ts"), sorted(CORE_NAMES), "std/core.d.ts and check::stdlib::CORE_NAMES differ");
+    for c in plinth_compiler::controls::CONTROLS {
+        assert!(UI_NAMES.contains(&c.name), "control {} is not in UI_NAMES", c.name);
+    }
+}

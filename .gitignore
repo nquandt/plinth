@@ -1,2 +1,4 @@
 /target
 *.plnt
+/npm/cli-*/plinth*
+/npm/cli/types

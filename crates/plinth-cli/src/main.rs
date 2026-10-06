@@ -155,7 +155,7 @@ fn new_project(dir: &Path) -> Result<()> {
     write(
         "package.json",
         &format!(
-            "{{\n  \"name\": \"{slug}\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"scripts\": {{\n    \"dev\": \"plinth dev\",\n    \"check\": \"plinth check\",\n    \"build\": \"plinth build\"\n  }},\n  \"devDependencies\": {{\n    \"plinth\": \"^{VERSION}\"\n  }}\n}}\n"
+            "{{\n  \"name\": \"{slug}\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"scripts\": {{\n    \"dev\": \"plinth dev\",\n    \"check\": \"plinth check\",\n    \"build\": \"plinth build\"\n  }},\n  \"devDependencies\": {{\n    \"@plinth/cli\": \"^{VERSION}\"\n  }}\n}}\n"
         ),
     )?;
     write_typings(dir)?;

@@ -186,6 +186,10 @@ The compiler rejects these features, and each one has a clear error message and 
 - **Object identity:** `===` on objects compares references, as in JS. There is no `==`.
 - **Property order:** object literal fields have the declared order. Iteration over objects is not supported. Use `Map`.
 - **Errors:** see §5.6.
+- **`for (let i = …)`:** the loop variable is one binding for all iterations. Closures in the loop body see its last value. `for…of` variables and variables declared in a loop body get a new binding for each iteration, as in JS.
+- **`toUpperCase` and `toLowerCase`:** the runtime maps ASCII, Latin-1, Latin Extended-A, Greek and Cyrillic. Other characters do not change. Multi-character mappings (`ß` → `SS`) are not done.
+- **`parseNumber` (JS `Number(s)`):** the result is exact for up to 15 significant digits and a decimal exponent from -22 to 22. Other inputs can differ by one unit in the last place. Hex and binary literals are not parsed.
+- **`toFixed`:** exact, except for integers above 2^64, which use the `toString` digits.
 
 ### 4.7 Standard library (`plinth:*` modules)
 
@@ -201,7 +205,9 @@ The compiler rejects these features, and each one has a clear error message and 
 | `plinth:canvas` | 2D drawing API for `<Canvas>` — capability `ui.canvas` |
 | `plinth:locale` | locale, number and date formatting, plural rules |
 
-Each module has a hand-written `.d.ts` file in the `plinth-std` package of this repo. That file is the single source of truth for the editor and the compiler.
+Each module has a hand-written `.d.ts` file in `std/` of this repo. The editor reads these files. The compiler has the same signatures built in, because it does not evaluate TypeScript type-level code. The test `std_typings_match` fails when the two disagree, so the `.d.ts` files stay the single source of truth.
+
+In M1, `plinth:core` exports `Math`, `parseNumber`, `toString` and `console`; `plinth:ui` exports the reactive primitives, `app`, `navigate` and the M0 controls.
 
 ---
 
@@ -218,7 +224,7 @@ The compiler is written in Rust. It is one binary, `plinth`, together with the C
 5. **Lower JSX and reactivity** (§7). This step turns templates into "create once, bind slots" code.
 6. **Lower to MIR.** Monomorphize generics, convert closures, transform async functions into state machines, compute struct layouts and itables.
 7. **Codegen** with `wasm-encoder` into a core Wasm module (linear memory).
-8. **Link** the prebuilt **runtime library** (`plinth-rt`, Rust compiled to `wasm32-unknown-unknown`). It holds the GC, strings, collections, signals, the op-buffer writer, and the scheduler.
+8. **Link** the prebuilt **runtime library** (`plinth-rt`, Rust compiled to `wasm32-unknown-unknown`). It holds the GC, strings, collections, signals, the op-buffer writer, and the scheduler. The compiler embeds `plinth-rt`. The **append linker** adds the app's types, functions, globals, table entries and passive data segments after those of `plinth-rt`, so no index inside the runtime changes. App code calls the exported `__plinth_rt_*` functions (`rt_abi.rs` lists them; the linker checks each name and type). The runtime calls app code only through *callables*: a thunk in the function table and a closure object. A start function gives the app entry point to the runtime. The linker removes the `__plinth_rt_*` exports.
 9. **Wrap** the module as a component with `wit-component`, against the `plinth:app` WIT world.
 10. **Validate** the imports (§4.1 level 3) and optimize the module (`wasm-opt`, optional).
 
@@ -236,7 +242,8 @@ The compiler is written in Rust. It is one binary, `plinth`, together with the C
 ### 5.4 Memory and GC
 
 - **Linear memory, not Wasm GC.** The iOS host must translate Wasm to native code ahead of time (§9.2). The AOT tools (`wasm2c`, WAMR AOT) have limited Wasm GC support, or none. Linear memory runs the same way in wasmtime, in every browser, and through AOT. A Wasm GC backend can come later as a second target.
-- **Collector:** a non-moving mark-sweep collector with size-class free lists in `plinth-rt`.
+- **Collector:** a non-moving mark-sweep collector in `plinth-rt`. The memory allocator under it has size-class free lists for small blocks and a first-fit list for large blocks. Compiler-defined types (structs, closure environments) register their size and reference offsets in a type table at start.
+- **Closures:** a variable that a nested function uses lives in a heap frame: one frame per call, and one per loop iteration for variables declared in a loop body. Other variables are Wasm locals.
 - **Key simplification:** the GC runs **only when the guest is idle**, that is, after `on-event` (or `init`) returns and the Wasm stack is empty. Thus the GC has no stack roots. The only roots are the globals, the signal graph, the pending tasks, and the live node handles. The compiler does not need a shadow stack.
 - **Safety valve:** if one event handler allocates past a hard limit, the guest traps with an `OutOfMemory` error. This rule stops runaway loops from taking down the host.
 
@@ -673,11 +680,12 @@ The stub finds its payload through a footer: the magic bytes `PLNTH\0`, the offs
 
 The developer experience must be as simple as `npm create vite` or `npx sv create`.
 
-- **Start a project:** `npm create plinth@latest my-app` (or `npx plinth new my-app`) writes a "hello world" app, the closed-world `tsconfig.json`, and a `package.json`.
+- **Start a project:** `npm create plinth@latest my-app` (the `create-plinth` package, or `plinth new my-app`) writes a "hello world" app, the closed-world `tsconfig.json`, `plinth.toml`, and a `package.json`.
 - **Daily commands** are npm scripts: `npm run dev`, `npm run build`, `npm run check`. Each script calls the `plinth` binary.
-- **The `plinth` package** gives the CLI binary and the `plinth:*` typings. The binary comes in one optional package for each platform (as `esbuild` and `@biomejs/biome` do), so `npm install` gets no build step and needs no Rust toolchain.
+- **The `@plinth/cli` package** gives the `plinth` command and the `plinth:*` typings. (The npm name `plinth` is taken; see Q2.) The binary comes in one optional package for each platform (as `esbuild` and `@biomejs/biome` do), so `npm install` gets no build step and needs no Rust toolchain.
 - **One self-contained binary.** The `plinth` binary contains the compiler, the prebuilt `plinth-rt`, the typings, and the desktop dev host. It never reads `node_modules` to compile. Only the editor reads the typings there.
-- **The project tsconfig** maps `plinth:*` to `node_modules/plinth/types/*`. Without npm, `plinth new` writes the typings to `.plinth/types/` instead.
+- **The project tsconfig** maps `plinth:*` to `.plinth/types/*`. Each `plinth` command writes the typings of its own version there, so the editor and the compiler always agree, with or without npm.
+- **Packing:** `node scripts/npm-pack.mjs` makes the tarballs in `target/npm` from a release build.
 
 **Project layout (an app):**
 
@@ -741,6 +749,10 @@ Each milestone has exit criteria. Work in this order. Windows is the first platf
 - JSX lowering and signals (§7), and `plinth-rt` with the GC (§5.4).
 - The `plinth check`, `plinth build`, and `plinth dev` commands (desktop).
 - **Exit:** `examples/counter` and `examples/todo`, written in Plinth TS, behave the same as the M0 hand-written guests. The artifacts meet the §5.5 size targets.
+- **Status (2026-10-05):** done. `plinth-rt` is 59.9 KiB and the counter artifact is 60 KiB, before `wasm-opt`. The e2e tests check the behavior and the sizes. These items move to later milestones:
+  - Hot reload restarts the app. It does not keep the signal state yet.
+  - `int`, `Map` and `Set` (§4.2) are not supported yet.
+  - `plinth check --watch` and `plinth dev` poll the files; they do not use OS file events.
 
 ### M2: Full UI API 1.0 and host APIs
 - All controls in §6.3, the layout rules in §6.4, the theme in §6.5, and accessibility.
