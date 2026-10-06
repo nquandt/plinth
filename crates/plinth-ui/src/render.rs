@@ -6,14 +6,14 @@ use crate::theme::{Tokens, WidthClass, icon_glyph};
 use crate::tree::{Node, Tree};
 use gpui::{
     AnyElement, ClickEvent, Context, ElementId, Entity, FontWeight, IntoElement, Render,
-    SharedString, Subscription, Window, div, prelude::*, px,
+    SharedString, Subscription, Window, div, prelude::*, px, relative,
 };
 use gpui_elements::editable_text::actions::Enter;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 use plinth_protocol::{
     ControlKind, Event, NodeId, Value, Writer, axis, button_role, button_size, event, prop, text_align, text_style, tone,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 /// The host side of the guest connection. `dispatch` sends one event buffer
@@ -30,6 +30,13 @@ struct Field {
     _subscription: Subscription,
 }
 
+/// A destructive action waiting for the user to confirm it (SPEC.md §6.4,
+/// UI API 1.2).
+struct PendingConfirm {
+    label: String,
+    handler: Option<u32>,
+}
+
 pub struct PlinthRoot {
     tree: Tree,
     guest: Box<dyn GuestPort>,
@@ -38,6 +45,11 @@ pub struct PlinthRoot {
     /// Set when the guest traps. The tree then stays read-only.
     stopped: Option<String>,
     class: WidthClass,
+    /// Toolbar overflow menus and `<Menu>` controls that are open, by node
+    /// id (UI API 1.2).
+    open_menus: HashSet<NodeId>,
+    /// The destructive action the host is confirming, if any.
+    confirm: Option<PendingConfirm>,
 }
 
 impl PlinthRoot {
@@ -55,6 +67,8 @@ impl PlinthRoot {
             fields: HashMap::new(),
             stopped: None,
             class: WidthClass::Wide,
+            open_menus: HashSet::new(),
+            confirm: None,
         };
         root.apply_commits(initial_commits);
         root
@@ -69,6 +83,8 @@ impl PlinthRoot {
             fields: HashMap::new(),
             stopped: Some(error),
             class: WidthClass::Wide,
+            open_menus: HashSet::new(),
+            confirm: None,
         }
     }
 
@@ -84,6 +100,8 @@ impl PlinthRoot {
         self.tree = Tree::new();
         self.fields.clear();
         self.stopped = None;
+        self.open_menus.clear();
+        self.confirm = None;
         match init {
             Ok(commits) => self.apply_commits(commits),
             Err(e) => self.stopped = Some(e),
@@ -202,19 +220,46 @@ impl Render for PlinthRoot {
                 None => div().flex_1().into_any_element(),
             });
 
-        let screens: Vec<(u32, NodeId)> = self.tree.screens().collect();
-        let shell = div().size_full().flex().bg(t.background).text_color(t.text);
-        if screens.len() < 2 {
-            return shell.child(content);
-        }
-        match self.class {
-            WidthClass::Compact => {
-                shell.flex_col().child(content).child(self.render_nav(&screens, &t, cx))
+        // Modal overlays (`Sheet`/`Dialog`, UI API 1.2) and the destructive
+        // action confirmation dialog render above everything else.
+        let overlay_ids = self.tree.current_root().map(|root| self.overlay_ids(root.id)).unwrap_or_default();
+        let mut overlays: Vec<AnyElement> = overlay_ids.into_iter().map(|id| self.render_overlay(id, &t, cx)).collect();
+        overlays.extend(self.render_confirm_overlay(&t, cx));
+
+        let screens: Vec<(u32, NodeId)> = self.tree.primary_screens().collect();
+        let shell = div()
+            .size_full()
+            .flex()
+            .bg(t.background)
+            .text_color(t.text)
+            .on_key_down({
+                let entity = cx.entity();
+                move |ev: &gpui::KeyDownEvent, _, cx| {
+                    let back = ev.keystroke.key == "escape"
+                        || (ev.keystroke.key == "left" && ev.keystroke.modifiers.alt);
+                    if back {
+                        entity.update(cx, |this, cx| {
+                            if this.confirm.is_some() {
+                                this.confirm = None;
+                            } else {
+                                this.tree.go_back();
+                            }
+                            cx.notify();
+                        });
+                    }
+                }
+            });
+        let body = if screens.len() < 2 {
+            shell.child(content)
+        } else {
+            match self.class {
+                WidthClass::Compact => shell.flex_col().child(content).child(self.render_nav(&screens, &t, cx)),
+                WidthClass::Regular | WidthClass::Wide => {
+                    shell.flex_row().child(self.render_nav(&screens, &t, cx)).child(content)
+                }
             }
-            WidthClass::Regular | WidthClass::Wide => {
-                shell.flex_row().child(self.render_nav(&screens, &t, cx)).child(content)
-            }
-        }
+        };
+        body.children(overlays)
     }
 }
 
@@ -288,8 +333,31 @@ impl PlinthRoot {
 
     fn render_screen(&self, screen: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let title = screen.str_prop(prop::TITLE).unwrap_or("").to_owned();
-        let children: Vec<AnyElement> = screen.children.iter().map(|&c| self.render_node(c, t, cx)).collect();
+        // `<Action>` children are declared through the `actions` prop
+        // (SPEC.md §6.3); the compiler appends them as ordinary child
+        // nodes, so the renderer tells them apart by control kind.
+        let (actions, body): (Vec<NodeId>, Vec<NodeId>) =
+            screen.children.iter().partition(|&&c| self.tree.get(c).map(|n| n.kind) == Some(Some(ControlKind::Action)));
+        let children: Vec<AnyElement> = body.iter().map(|&c| self.render_node(c, t, cx)).collect();
         let pad = if self.class == WidthClass::Compact { px(16.) } else { px(32.) };
+        let can_go_back = self.tree.can_go_back();
+        let header = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .id(eid("back", screen.id))
+                    .text_lg()
+                    .when(can_go_back, |d| {
+                        d.cursor_pointer().text_color(t.accent).child("‹").on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.tree.go_back();
+                            cx.notify();
+                        }))
+                    }),
+            )
+            .child(div().flex_1().text_2xl().font_weight(FontWeight::BOLD).child(title))
+            .child(self.render_actions_bar(screen.id, &actions, t, cx));
         div()
             .id(eid("screen", screen.id))
             .flex_1()
@@ -298,18 +366,83 @@ impl PlinthRoot {
             .flex()
             .flex_col()
             .items_center()
-            .child(
-                div()
-                    .w_full()
-                    .max_w(px(720.))
-                    .px(pad)
-                    .py_6()
-                    .flex()
-                    .flex_col()
-                    .gap_5()
-                    .child(div().text_2xl().font_weight(FontWeight::BOLD).child(title))
-                    .children(children),
-            )
+            .child(div().w_full().max_w(px(720.)).px(pad).py_6().flex().flex_col().gap_5().child(header).children(children))
+            .into_any_element()
+    }
+
+    /// The screen toolbar (SPEC.md §6.3, §6.4). Overflows into a disclosure
+    /// menu past 2 actions on `compact` or 4 on `regular`/`wide`.
+    fn render_actions_bar(&self, owner: NodeId, actions: &[NodeId], t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        if actions.is_empty() {
+            return div().into_any_element();
+        }
+        let limit = if self.class == WidthClass::Compact { 2 } else { 4 };
+        let (visible, overflow) = if actions.len() <= limit { (actions, &[][..]) } else { actions.split_at(limit - 1) };
+        let bar = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .children(visible.iter().filter_map(|&id| self.tree.get(id)).map(|n| self.render_action_item(n, t, cx)));
+        if overflow.is_empty() {
+            return bar.into_any_element();
+        }
+        let open = self.open_menus.contains(&owner);
+        let more = div()
+            .id(eid("more", owner))
+            .cursor_pointer()
+            .px_2()
+            .text_sm()
+            .text_color(t.text_muted)
+            .child("\u{22EF}")
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.toggle_menu(owner);
+                cx.notify();
+            }));
+        div()
+            .flex()
+            .flex_col()
+            .items_end()
+            .gap_1()
+            .child(bar.child(more))
+            .when(open, |d| d.child(self.render_menu_panel(overflow, t, cx)))
+            .into_any_element()
+    }
+
+    fn render_menu_panel(&self, actions: &[NodeId], t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_2()
+            .rounded_lg()
+            .bg(t.surface)
+            .border_1()
+            .border_color(t.border)
+            .children(actions.iter().filter_map(|&id| self.tree.get(id)).map(|n| self.render_action_item(n, t, cx)))
+            .into_any_element()
+    }
+
+    /// One `<Action>`: a toolbar button or a menu row.
+    fn render_action_item(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
+        let glyph = node.str_prop(prop::ICON).map(icon_glyph);
+        let destructive = node.enum_prop(prop::ROLE) == button_role::DESTRUCTIVE;
+        let id = node.id;
+        div()
+            .id(eid("action", id))
+            .cursor_pointer()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .text_sm()
+            .text_color(if destructive { t.danger } else { t.text })
+            .hover(|s| s.bg(t.hover))
+            .flex()
+            .items_center()
+            .gap_1()
+            .when_some(glyph, |d, g| d.child(g))
+            .child(label)
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.press_action(id, cx)))
             .into_any_element()
     }
 
@@ -342,6 +475,14 @@ impl PlinthRoot {
             ControlKind::Row => self.render_row(node, t, cx),
             ControlKind::Empty => self.render_empty(node, t),
             ControlKind::Group => self.render_group(node, t, cx),
+            // Sheet and Dialog are modal overlays (SPEC.md §6.3); the host
+            // renders them as a layer above the screen, not in the normal
+            // flow. See `render()` and `overlay_ids`.
+            ControlKind::Sheet | ControlKind::Dialog => div().into_any_element(),
+            ControlKind::Tabs => self.render_tabs(node, t, cx),
+            ControlKind::Menu => self.render_menu(node, t, cx),
+            ControlKind::Grid => self.render_grid(node, t, cx),
+            ControlKind::Action => self.render_action_item(node, t, cx),
         }
     }
 
@@ -608,6 +749,305 @@ impl PlinthRoot {
             .py_6()
             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(title))
             .when_some(message, |d, m| d.child(div().text_xs().text_color(t.text_muted).child(m)))
+            .into_any_element()
+    }
+
+    // -- UI API 1.2 structure --
+
+    fn toggle_menu(&mut self, id: NodeId) {
+        if !self.open_menus.remove(&id) {
+            self.open_menus.clear();
+            self.open_menus.insert(id);
+        }
+    }
+
+    /// Presses an `<Action>`. A destructive action asks for confirmation
+    /// first, unless `confirm={false}` (SPEC.md §6.4).
+    fn press_action(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        let Some(node) = self.tree.get(id) else { return };
+        let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
+        let handler = node.handler(event::PRESS);
+        let destructive = node.enum_prop(prop::ROLE) == button_role::DESTRUCTIVE;
+        let needs_confirm = destructive && node.prop(prop::CONFIRM).and_then(Value::as_bool).unwrap_or(true);
+        self.open_menus.clear();
+        if needs_confirm {
+            self.confirm = Some(PendingConfirm { label, handler });
+        } else if let Some(h) = handler {
+            self.fire(h, event::PRESS, Value::Null, cx);
+        }
+        cx.notify();
+    }
+
+    /// The standard confirmation dialog for a destructive action (SPEC.md
+    /// §6.4). This dialog is host state, not a guest node.
+    fn render_confirm_overlay(&self, t: &Tokens, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let pending = self.confirm.as_ref()?;
+        let message = format!("Are you sure you want to {}? This cannot be undone.", pending.label.to_lowercase());
+        let handler = pending.handler;
+        let panel = div()
+            .id("confirm-panel")
+            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+            .w(px(320.))
+            .p_5()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .rounded_xl()
+            .bg(t.surface)
+            .border_1()
+            .border_color(t.border)
+            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(pending.label.clone()))
+            .child(div().text_sm().text_color(t.text_muted).child(message))
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("confirm-cancel")
+                            .cursor_pointer()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .text_sm()
+                            .child("Cancel")
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.confirm = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("confirm-ok")
+                            .cursor_pointer()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(t.danger)
+                            .text_color(t.on_accent)
+                            .text_sm()
+                            .child("Delete")
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.confirm = None;
+                                if let Some(h) = handler {
+                                    this.fire(h, event::PRESS, Value::Null, cx);
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            );
+        Some(
+            div()
+                .id("confirm-backdrop")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(t.backdrop)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.confirm = None;
+                    cx.notify();
+                }))
+                .child(panel)
+                .into_any_element(),
+        )
+    }
+
+    /// Node ids of the open `Sheet`/`Dialog` descendants of `root`
+    /// (SPEC.md §6.3). There is normally at most one at a time.
+    fn overlay_ids(&self, root: NodeId) -> Vec<NodeId> {
+        let mut found = Vec::new();
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            let Some(node) = self.tree.get(id) else { continue };
+            let is_overlay = matches!(node.kind, Some(ControlKind::Sheet) | Some(ControlKind::Dialog));
+            if is_overlay && node.bool_prop(prop::VALUE) {
+                found.push(id);
+            }
+            stack.extend(node.children.iter().copied());
+        }
+        found
+    }
+
+    /// Closes `id` (a `Sheet` or `Dialog`), updating a bound `open` signal
+    /// two ways (SPEC.md §8.4).
+    fn close_overlay(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        let handler_close = self.tree.get(id).and_then(|n| n.handler(event::CLOSE));
+        let handler_change = self.tree.get(id).and_then(|n| n.handler(event::CHANGE));
+        self.tree.set_local_prop(id, prop::VALUE, Value::Bool(false));
+        if let Some(h) = handler_change {
+            self.fire(h, event::CHANGE, Value::Bool(false), cx);
+        }
+        if let Some(h) = handler_close {
+            self.fire(h, event::PRESS, Value::Null, cx);
+        }
+        cx.notify();
+    }
+
+    fn render_overlay(&self, id: NodeId, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let Some(node) = self.tree.get(id) else { return div().into_any_element() };
+        match node.kind {
+            Some(ControlKind::Dialog) => self.render_dialog_overlay(node, t, cx),
+            _ => self.render_sheet_overlay(node, t, cx),
+        }
+    }
+
+    fn render_dialog_overlay(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let id = node.id;
+        let title = node.str_prop(prop::TITLE).unwrap_or("").to_owned();
+        let message = node.str_prop(prop::MESSAGE).map(str::to_owned);
+        let actions: Vec<&Node> = node.children.iter().filter_map(|&c| self.tree.get(c)).collect();
+        let panel = div()
+            .id(eid("dialog", id))
+            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+            .w(px(360.))
+            .p_5()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .rounded_xl()
+            .bg(t.surface)
+            .border_1()
+            .border_color(t.border)
+            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(title))
+            .when_some(message, |d, m| d.child(div().text_sm().text_color(t.text_muted).child(m)))
+            .child(div().flex().justify_end().gap_2().children(actions.into_iter().map(|a| self.render_action_item(a, t, cx))));
+        div()
+            .id(eid("dialog-backdrop", id))
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(t.backdrop)
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.close_overlay(id, cx)))
+            .child(panel)
+            .into_any_element()
+    }
+
+    /// A bottom sheet on `compact`, a side panel on `regular`/`wide`
+    /// (SPEC.md §6.3).
+    fn render_sheet_overlay(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let id = node.id;
+        let title = node.str_prop(prop::TITLE).unwrap_or("").to_owned();
+        let children: Vec<AnyElement> = node.children.iter().map(|&c| self.render_node(c, t, cx)).collect();
+        let close_btn = div()
+            .id(eid("sheet-close", id))
+            .cursor_pointer()
+            .text_color(t.text_muted)
+            .child("\u{2715}")
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.close_overlay(id, cx)));
+        let panel = div()
+            .id(eid("sheet", id))
+            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+            .flex()
+            .flex_col()
+            .gap_4()
+            .p_5()
+            .rounded_t_xl()
+            .bg(t.surface)
+            .border_1()
+            .border_color(t.border)
+            .child(div().flex().items_center().justify_between().child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(title)).child(close_btn))
+            .children(children);
+        let backdrop = div()
+            .id(eid("sheet-backdrop", id))
+            .absolute()
+            .inset_0()
+            .bg(t.backdrop)
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.close_overlay(id, cx)));
+        if self.class == WidthClass::Compact {
+            backdrop.flex().flex_col().justify_end().child(panel.w_full().max_h(px(480.)).overflow_y_scroll()).into_any_element()
+        } else {
+            backdrop.flex().justify_end().child(panel.h_full().w(px(360.)).rounded_l_xl().overflow_y_scroll()).into_any_element()
+        }
+    }
+
+    /// In-screen segmented tabs (SPEC.md §6.3). `items` is joined with
+    /// U+0001 (see `controls.rs::PropTy::StrList`).
+    fn render_tabs(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let items: Vec<&str> = node.str_prop(prop::ITEMS).map(|s| s.split('\u{1}').collect()).unwrap_or_default();
+        let current = node.str_prop(prop::VALUE).unwrap_or("").to_owned();
+        let id = node.id;
+        div()
+            .flex()
+            .p_1()
+            .gap_1()
+            .rounded_lg()
+            .bg(t.surface_alt)
+            .children(items.into_iter().enumerate().map(|(i, item)| {
+                let item = item.to_owned();
+                let selected = item == current;
+                let value = item.clone();
+                div()
+                    .id(eid("tab", id as u64 * 1000 + i as u64))
+                    .flex_1()
+                    .cursor_pointer()
+                    .text_center()
+                    .text_sm()
+                    .py_1()
+                    .rounded_md()
+                    .when(selected, |d| d.bg(t.surface).font_weight(FontWeight::SEMIBOLD))
+                    .child(item)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        let handler = this.tree.get(id).and_then(|n| n.handler(event::CHANGE));
+                        this.tree.set_local_prop(id, prop::VALUE, Value::Str(value.clone()));
+                        match handler {
+                            Some(h) => this.fire(h, event::CHANGE, Value::Str(value.clone()), cx),
+                            None => cx.notify(),
+                        }
+                    }))
+            }))
+            .into_any_element()
+    }
+
+    /// `<Menu>`: a label that discloses its actions (SPEC.md §6.3).
+    fn render_menu(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
+        let id = node.id;
+        let open = self.open_menus.contains(&id);
+        let actions: Vec<NodeId> = node.children.clone();
+        div()
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap_1()
+            .child(
+                div()
+                    .id(eid("menu", id))
+                    .cursor_pointer()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(t.surface_alt)
+                    .text_sm()
+                    .child(label)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.toggle_menu(id);
+                        cx.notify();
+                    })),
+            )
+            .when(open, |d| d.child(self.render_menu_panel(&actions, t, cx)))
+            .into_any_element()
+    }
+
+    /// `<Grid>`: like `<List>`, with a responsive column count instead of
+    /// one row per item (SPEC.md §6.3). It reuses the keyed reconciler, so
+    /// its children are already the cell elements.
+    fn render_grid(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let columns: usize = match self.class {
+            WidthClass::Compact => 2,
+            WidthClass::Regular => 3,
+            WidthClass::Wide => 4,
+        };
+        let cells = self.render_children(node, t, cx);
+        div()
+            .flex()
+            .flex_wrap()
+            .gap_3()
+            .children(cells.into_iter().map(|c| div().w(relative(1. / columns as f32)).min_w_0().child(c)))
             .into_any_element()
     }
 }

@@ -4,7 +4,7 @@
 # enum ids. The compiler, the guest runtime and the host all generate their
 # constants from it. Never reuse or renumber an id inside one major version.
 
-version = "1.1"
+version = "1.2"
 
 [controls]
 screen = 1
@@ -18,12 +18,18 @@ list = 8
 row = 9
 empty = 10
 group = 11       # UI API 1.1
+tabs = 20        # UI API 1.2
+sheet = 21        # UI API 1.2
+dialog = 22        # UI API 1.2
+menu = 23        # UI API 1.2
+grid = 24        # UI API 1.2
+action = 25        # UI API 1.2 (a value, surfaced to the host as a child node)
 
 [props]
 title = 1        # string
 subtitle = 2     # string
 label = 3        # string
-value = 4        # string (text-field) | bool (toggle)
+value = 4        # string (text-field, tabs) | bool (toggle, sheet/dialog "open")
 placeholder = 5  # string
 role = 6         # enum button-role
 style = 7        # enum text-style
@@ -37,11 +43,14 @@ error = 14       # string
 axis = 15        # enum axis (1.1)
 size = 16        # enum button-size (1.1)
 align = 17       # enum text-align (1.1)
+items = 30        # string, items joined with U+0001 (tabs, UI API 1.2)
+confirm = 31        # bool, default true for a destructive action (UI API 1.2)
 
 [events]
 press = 1        # value: null
 change = 2       # value: the new value
 submit = 3       # value: the current value
+close = 6        # value: null (sheet onClose; UI API 1.2)
 
 [enums.button-role]
 default = 0

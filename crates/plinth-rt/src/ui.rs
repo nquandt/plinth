@@ -189,6 +189,23 @@ pub fn navigate(screen: u32) {
     with(|u| u.ops.op(&Op::Navigate { kind: nav_kind::SELECT_PRIMARY, screen, args: Value::Null }));
 }
 
+/// Declares `screen` as a primary (top-level) destination. `lower.rs` emits
+/// this once per primary screen, before any other navigate op (UI API 1.2).
+pub fn mark_primary(screen: u32) {
+    with(|u| u.ops.op(&Op::Navigate { kind: nav_kind::MARK_PRIMARY, screen, args: Value::Null }));
+}
+
+/// `navigate.push(screen)` (UI API 1.2): pushes `screen` onto the stack of
+/// the current primary tab.
+pub fn navigate_push(screen: u32) {
+    with(|u| u.ops.op(&Op::Navigate { kind: nav_kind::PUSH, screen, args: Value::Null }));
+}
+
+/// `navigate.back()` (UI API 1.2): pops the current primary tab's stack.
+pub fn navigate_back() {
+    with(|u| u.ops.op(&Op::Navigate { kind: nav_kind::BACK, screen: 0, args: Value::Null }));
+}
+
 /// The first node after slot `index` of `parent`, or 0 (append).
 fn node_after(u: &Ui, parent: NodeId, index: usize) -> NodeId {
     for slot in &u.slots(parent)[index + 1..] {

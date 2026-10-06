@@ -40,6 +40,8 @@ pub struct Tokens {
     pub success: Hsla,
     pub track: Hsla,
     pub knob: Hsla,
+    /// The backdrop behind a modal `Sheet`/`Dialog` (UI API 1.2).
+    pub backdrop: Hsla,
 }
 
 /// The named accent palette. Each entry is (name, light, dark).
@@ -88,6 +90,7 @@ impl Tokens {
                 success: c(0x5fd27a),
                 track: c(0x48484f),
                 knob: c(0xffffff),
+                backdrop: with_alpha(c(0x000000), 0.55),
             }
         } else {
             let accent = c(light_accent);
@@ -108,6 +111,7 @@ impl Tokens {
                 success: c(0x2e8540),
                 track: c(0xc9c9d0),
                 knob: c(0xffffff),
+                backdrop: with_alpha(c(0x000000), 0.35),
             }
         }
     }

@@ -46,8 +46,16 @@ export interface App {
 /** The app entry. `export default app({...})` in `app/main.tsx`. */
 export declare function app(config: AppConfig): App;
 
-/** Selects a primary screen by its name in `screens`. */
-export declare function navigate(screen: string): void;
+/** Stack navigation (SPEC.md §6.2, UI API 1.2). Call it directly to select a
+ * primary screen; `.push`/`.back` work the stack inside the current tab. */
+export declare const navigate: {
+  /** Selects a primary screen by its name in `screens`. */
+  (screen: string): void;
+  /** Pushes a screen onto the current primary tab's stack. */
+  push(screen: string): void;
+  /** Pops the current primary tab's stack. A no-op at the bottom. */
+  back(): void;
+};
 
 // -- Controls -----------------------------------------------------------------
 
@@ -58,7 +66,7 @@ type TextContent = string | number | (string | number)[];
 
 export type Tone = "default" | "muted" | "danger" | "success";
 
-export declare function Screen(props: { title: string; children?: Children }): Element;
+export declare function Screen(props: { title: string; actions?: Element[]; children?: Children }): Element;
 export declare function Section(props: { title?: string; footer?: string; children?: Children }): Element;
 
 export type Align = "start" | "center" | "end";
@@ -119,3 +127,50 @@ export declare function Row(props: {
 }): Element;
 
 export declare function Empty(props: { title: string; message?: string }): Element;
+
+// -- UI API 1.2: structure ------------------------------------------------
+
+/** A value, not shown by itself: pass it inside `actions={[...]}` on
+ * `Screen`, `Dialog` or `Menu`. */
+export declare function Action(props: {
+  label: string;
+  onPress: () => void;
+  icon?: IconName;
+  role?: "primary" | "default" | "destructive";
+  /** Destructive actions ask for confirmation unless this is `false`. */
+  confirm?: boolean;
+}): Element;
+
+/** In-screen segmented tabs. */
+export declare function Tabs(props: {
+  items: string[];
+  value: Signal<string> | string;
+  onChange?: (value: string) => void;
+}): Element;
+
+/** A modal: a bottom sheet on a narrow window, a side panel or dialog on a
+ * wide one. */
+export declare function Sheet(props: {
+  open: Signal<boolean> | boolean;
+  title: string;
+  onClose?: () => void;
+  children?: Children;
+}): Element;
+
+/** An alert or confirmation. */
+export declare function Dialog(props: {
+  open: Signal<boolean> | boolean;
+  title: string;
+  message?: string;
+  actions: Element[];
+}): Element;
+
+export declare function Menu(props: { label: string; actions: Element[] }): Element;
+
+/** Like `List`, with a responsive column count instead of one row per item. */
+export declare function Grid<T>(props: {
+  items: T[];
+  key: (item: T) => string | number;
+  cell: (item: T) => Element;
+  empty?: Element;
+}): Element;

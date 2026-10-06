@@ -1,6 +1,6 @@
 //! Expressions.
 
-use super::{Binding, Checker, StdObj};
+use super::{Binding, Checker, StdFn, StdObj};
 use crate::ast::{self, BinOp, Expr, ExprKind, LogicOp, ObjProp, UnOp};
 use crate::diag::{Span, code};
 use crate::tir::*;
@@ -302,6 +302,7 @@ impl Checker<'_> {
         match &callee.kind {
             ExprKind::Ident(name) => match self.lookup(name) {
                 Some(Binding::Std(f)) => return self.std_call(f, type_args, args, span, expected),
+                Some(Binding::StdObj(StdObj::Navigate)) => return self.std_call(StdFn::Navigate, type_args, args, span, expected),
                 Some(Binding::Func(fid)) => {
                     let ft = self.func_type(fid, callee.span);
                     let targs = self.call_args(&ft, args, span);

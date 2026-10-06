@@ -63,6 +63,9 @@ pub enum StdFn {
 pub enum StdObj {
     Math,
     Console,
+    /// `navigate`: callable directly (`navigate("name")`, `Binding::Std`
+    /// resolves that call) and also has `.push`/`.back` members (UI API 1.2).
+    Navigate,
 }
 
 #[derive(Debug, Clone)]
@@ -115,8 +118,10 @@ pub struct Checker<'d> {
     aliases: Vec<Vec<ast::TypeAlias>>,
     resolving_alias: HashSet<(usize, usize)>,
     anon_structs: HashMap<String, types::StructId>,
-    /// The screen names that `navigate` refers to, checked after the app.
-    pub navigations: Vec<(String, Span)>,
+    /// The screen names that `navigate` and `navigate.push` refer to,
+    /// checked after the app. The `bool` is `true` for `navigate(name)`,
+    /// which needs a primary screen; `navigate.push` accepts any screen.
+    pub navigations: Vec<(String, Span, bool)>,
     app_seen: bool,
 }
 
@@ -150,12 +155,15 @@ pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>) ->
                 .help("see `plinth new` for a starting point"),
         );
     }
-    let screens: Vec<String> = c.prog.screens.iter().map(|s| s.name.clone()).collect();
-    for (name, span) in std::mem::take(&mut c.navigations) {
-        if !screens.contains(&name) {
+    let primary: Vec<String> = c.prog.screens.iter().filter(|s| s.primary).map(|s| s.name.clone()).collect();
+    let all: Vec<String> = c.prog.screens.iter().map(|s| s.name.clone()).collect();
+    for (name, span, needs_primary) in std::mem::take(&mut c.navigations) {
+        let (ok, names, what) =
+            if needs_primary { (primary.contains(&name), &primary, "primary screen") } else { (all.contains(&name), &all, "screen") };
+        if !ok {
             c.diags.push(
-                Diagnostic::error(code::BAD_NAVIGATE, span, format!("there is no primary screen named \"{name}\""))
-                    .help(format!("the primary screens are: {}", screens.join(", "))),
+                Diagnostic::error(code::BAD_NAVIGATE, span, format!("there is no {what} named \"{name}\""))
+                    .help(format!("the {what}s are: {}", names.join(", "))),
             );
         }
     }

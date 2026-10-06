@@ -54,6 +54,9 @@ pub mod nav_kind {
     pub const REPLACE: u8 = 1;
     pub const BACK: u8 = 2;
     pub const SELECT_PRIMARY: u8 = 3;
+    /// Declares `screen` as one of the top-level (primary) destinations.
+    /// Sent once per primary screen, before any `select-primary` (UI API 1.2).
+    pub const MARK_PRIMARY: u8 = 4;
 }
 
 /// A dynamically typed value on the wire.
