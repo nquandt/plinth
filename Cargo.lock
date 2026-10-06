@@ -4944,16 +4944,19 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "ed25519-dalek",
  "env_logger",
  "gpui-ce",
  "gpui_ce_platform",
  "log",
+ "plinth-compiler",
  "plinth-hub",
  "plinth-link",
  "plinth-package",
  "plinth-protocol",
  "plinth-runner-wasmtime",
  "plinth-ui",
+ "rand_core 0.6.4",
  "wat",
 ]
 

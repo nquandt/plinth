@@ -28,4 +28,7 @@ arboard = { version = "3", default-features = false }
 
 [dev-dependencies]
 plinth-protocol.workspace = true
+plinth-compiler.workspace = true
+ed25519-dalek.workspace = true
+rand_core.workspace = true
 wat = "1"
