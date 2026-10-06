@@ -597,6 +597,174 @@ fn set_entries_is_not_supported() {
     assert_eq!(codes(&main), ["PL3004"]);
 }
 
+// -- 6. `int | null`, `boolean | null`, enum `| null` (HANDOFF.md item 2) ----
+//
+// These are boxed through the same box as `number | null` (`BoxI32`/
+// `UnboxI32` convert the `i32` to `f64` first, then reuse `box_f64`): no new
+// `plinth-rt` function.
+
+#[test]
+fn int_or_null_through_params_locals_and_nullish_coalescing() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { int } from "plinth:core";
+function pick(n: int, useIt: boolean): int | null {
+  return useIt ? n : null;
+}
+function Home() {
+  const a: int | null = pick(5, true);
+  const b: int | null = pick(5, false);
+  const out = "" + (a ?? -1) + "," + (b ?? -1);
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "5,-1");
+}
+
+#[test]
+fn boolean_or_null_narrowing() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function describe(flag: boolean | null): string {
+  if (flag === null) return "none";
+  return flag ? "yes" : "no";
+}
+function Home() {
+  const out = describe(true) + "," + describe(false) + "," + describe(null);
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "yes,no,none");
+}
+
+#[test]
+fn enum_or_null_equality_and_null_check() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+enum Color { Red, Green, Blue }
+function Home() {
+  const c: Color | null = Color.Green;
+  const n: Color | null = null;
+  const out = "" + (c === Color.Green) + "," + (n === null) + "," + (c === null);
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "true,true,false");
+}
+
+#[test]
+fn optional_struct_field_of_int_boxes_through_the_number_box() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { int } from "plinth:core";
+interface Item { id: int; note?: int; }
+function Home() {
+  const a: Item = { id: 1, note: 5 };
+  const b: Item = { id: 2 };
+  const out = "" + (a.note ?? -1) + "," + (b.note ?? -1);
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "5,-1");
+}
+
+#[test]
+fn map_get_boxes_an_int_value() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { int } from "plinth:core";
+function Home() {
+  const m = new Map<string, int>();
+  m.set("a", 3);
+  const out = "" + (m.get("a") ?? -1) + "," + (m.get("z") ?? -1);
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "3,-1");
+}
+
+#[test]
+fn set_get_boxes_a_boolean_map_value() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const m = new Map<string, boolean>();
+  m.set("ok", true);
+  const out = "" + (m.get("ok") ?? false) + "," + (m.get("missing") ?? false);
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "true,false");
+}
+
+#[test]
+fn array_of_int_pop_boxes_the_popped_value() {
+    // Regression test for a pre-existing bug this item's work uncovered:
+    // `Array<T>.pop()` for an `i32`-repr `T` built its `T | null` result by
+    // retagging the raw popped scalar as if it were already a boxed
+    // reference. It compiled (both are `i32` at the Wasm level) but was
+    // wrong at run time for any `T` that needed boxing.
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { int } from "plinth:core";
+function Home() {
+  const arr: int[] = [1, 2];
+  const p1 = arr.pop() ?? -1;
+  const p2 = arr.pop() ?? -1;
+  const p3 = arr.pop() ?? -1;
+  const out = "" + p1 + "," + p2 + "," + p3;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "2,1,-1");
+}
+
+#[test]
+fn int_or_null_switch_on_the_boxed_value() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { int } from "plinth:core";
+function describe(n: int | null): string {
+  switch (n) {
+    case 1: return "one";
+    case 2: return "two";
+    default: return "other";
+  }
+}
+function Home() {
+  const out = describe(1) + "," + describe(2) + "," + describe(null) + "," + describe(9);
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "one,two,other,other");
+}
+
+#[test]
+fn signal_or_null_is_still_rejected() {
+    let main = "import { app, Screen, Text, Signal } from \"plinth:ui\";\n\
+         function f(s: Signal<number> | null): void {}\n\
+         function Home() { return <Screen title=\"Home\" />; }"
+        .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL3010"]);
+}
+
 // -- Behavior smoke test: confirms the `run` harness works and the lint
 // does not fire on a normal counter-style program. -------------------------
 
