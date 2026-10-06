@@ -74,6 +74,24 @@ impl PlinthRoot {
         &self.tree
     }
 
+    /// Replaces the guest with a new build (hot reload). The selected screen
+    /// stays; the guest state starts again.
+    pub fn reload(&mut self, guest: Box<dyn GuestPort>, init: Result<Vec<Vec<u8>>, String>, cx: &mut Context<Self>) {
+        let screen = self.tree.current_screen;
+        self.guest = guest;
+        self.tree = Tree::new();
+        self.fields.clear();
+        self.stopped = None;
+        match init {
+            Ok(commits) => self.apply_commits(commits),
+            Err(e) => self.stopped = Some(e),
+        }
+        if self.tree.screens().any(|(s, _)| s == screen) {
+            self.tree.current_screen = screen;
+        }
+        cx.notify();
+    }
+
     fn apply_commits(&mut self, commits: Vec<Vec<u8>>) {
         for commit in commits {
             match self.tree.apply(&commit) {

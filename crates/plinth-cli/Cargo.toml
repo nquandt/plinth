@@ -1,6 +1,6 @@
 [package]
 name = "plinth-cli"
-description = "The plinth command-line tool"
+description = "The plinth command-line tool: new, check, build, dev, run"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,6 +10,10 @@ name = "plinth"
 path = "src/main.rs"
 
 [dependencies]
+plinth-compiler.workspace = true
+plinth-package.workspace = true
+plinth-host-desktop.workspace = true
+plinth-protocol.workspace = true
 anyhow.workspace = true
 wit-component.workspace = true
 wasmparser.workspace = true

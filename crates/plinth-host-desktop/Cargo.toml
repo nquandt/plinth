@@ -5,6 +5,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "plinth-host"
 path = "src/main.rs"
@@ -12,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 plinth-ui.workspace = true
 plinth-runner-wasmtime.workspace = true
+plinth-package.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true
