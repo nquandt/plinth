@@ -887,7 +887,7 @@ Each milestone has exit criteria. Work in this order. Windows is the first platf
 
 | # | Question | Notes |
 |---|---|---|
-| Q1 | Where is the `gpui-ce` fork with the iOS and Android backends? | `C:\repos\gpui-ce` has only Windows, macOS, Linux, and web. |
+| Q1 | Where is the `gpui-ce` fork with the iOS and Android backends? | `C:\repos\gpui-ce` has only Windows, macOS, Linux, and web. **Decided (2026-10-06):** mobile hosts render with gpui, like the desktop. Still open: where the iOS and Android backends come from. |
 | Q2 | Final project name | "Plinth" is a placeholder. |
 | Q3 | How the hub distributes iOS apps | Per-app IPAs, or a container app with AOT-compiled apps built in. |
 | Q4 | Should the runtime embed `gpui-component`, or own all controls? | **Decided (2026-10-06):** the runtime owns all controls and rebuilds them on the Level 2 styled primitives (`docs/UI-ADVANCED.md`, phase U5). |
