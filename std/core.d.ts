@@ -33,10 +33,15 @@ export declare function toString(value: number | boolean | string): string;
  * JSON encoding (SPEC.md §4.7). `stringify` serializes numbers, `int`,
  * booleans, strings, `null`/nullable values, arrays, objects of a known
  * shape (in declaration order) and `Map<string, V>` (as an object);
- * `NaN`/`Infinity` become `null`, as in JS. `parse<T>` is not available yet.
+ * `NaN`/`Infinity` become `null`, as in JS. `parse<T>` decodes the same
+ * shapes back, given an explicit type argument (write
+ * `JSON.parse<YourType>(text)`); it returns `null` on invalid JSON or a
+ * shape mismatch (a missing field or a field of the wrong type). Extra
+ * object fields are ignored, and `null` is fine for a nullable field.
  */
 export declare const JSON: {
   stringify(value: unknown): string;
+  parse<T>(text: string): T | null;
 };
 
 /** Development logging. The host shows the messages in its log. */

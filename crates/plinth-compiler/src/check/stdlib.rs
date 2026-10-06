@@ -250,7 +250,15 @@ impl Checker<'_> {
         }
     }
 
-    pub(super) fn std_obj_call(&mut self, o: StdObj, prop: &str, prop_span: Span, args: &[Expr], span: Span) -> TExpr {
+    pub(super) fn std_obj_call(
+        &mut self,
+        o: StdObj,
+        prop: &str,
+        prop_span: Span,
+        type_args: &[ast::TypeAnn],
+        args: &[Expr],
+        span: Span,
+    ) -> TExpr {
         match o {
             StdObj::Navigate => match prop {
                 "push" => {
@@ -402,8 +410,27 @@ impl Checker<'_> {
                     let value = self.expr(&args[0], None);
                     self.json_stringify_value(value, span)
                 }
+                "parse" => {
+                    if type_args.len() != 1 {
+                        self.err_help(
+                            code::GENERIC_USER,
+                            span,
+                            "`JSON.parse` needs an explicit type argument",
+                            "write `JSON.parse<YourType>(text)`",
+                        );
+                        return TExpr::new(TExprKind::Null, Type::Error, span);
+                    }
+                    if args.len() != 1 {
+                        self.err(code::ARG_COUNT, span, "`JSON.parse` takes one argument");
+                        return TExpr::new(TExprKind::Null, Type::Error, span);
+                    }
+                    let ty = self.resolve_type(&type_args[0]);
+                    let text = self.expr_with(&args[0], &Type::String);
+                    let text = self.coerce(text, &Type::String);
+                    self.json_parse_value(text, &ty, span)
+                }
                 _ => {
-                    self.err_help(code::NO_PROPERTY, prop_span, format!("`JSON.{prop}` does not exist"), "use `JSON.stringify`");
+                    self.err_help(code::NO_PROPERTY, prop_span, format!("`JSON.{prop}` does not exist"), "use `JSON.stringify`/`JSON.parse`");
                     TExpr::new(TExprKind::Null, Type::Error, span)
                 }
             },
