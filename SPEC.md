@@ -679,6 +679,24 @@ exclude = []            # e.g. ["ios"] if a capability is unsupported there
 
 The stub finds its payload through a footer: the magic bytes `PLNTH\0`, the offset, the length, and a digest.
 
+**Web export (design, 2026-10-06).** A developer must be able to put a Plinth app on any static web host with no server logic. The export has two forms:
+
+- `plinth build <dir> --target web` writes a folder, `dist/web/`: `index.html`, `plinth.js`, the core file that the app needs (`plinth-core-<version>.wasm`), and the unchanged `.plnt`.
+- `plinth build <dir> --target web --single-file` writes one file, `dist/<name>.html`. The loader is inline. The core and the `.plnt` are inline as base64 in `<script type="application/octet-stream" id="…">` elements.
+
+The page uses one loader script and one custom element:
+
+```html
+<script type="module" src="plinth.js"></script>
+<plinth-app src="todo.plnt"></plinth-app>
+```
+
+- `plinth.js` is the web host as one ES module (the protocol, the DOM renderer, the zip reader, and the host APIs). It defines the `<plinth-app>` element.
+- `<plinth-app src>` takes a URL to a `.plnt`, or `#id` for an inline package. An optional `core` attribute gives the URL or `#id` of the core file; by default, the loader looks for `plinth-core-<version>.wasm` next to `plinth.js`, with the version from the app's manifest.
+- A page can hold more than one `<plinth-app>`, and other HTML around it. The element takes the width of its container (the width classes of §6.1 follow the element, not the window).
+- A web export works like a native export (`plinth native`): there is no Hub and no consent screen, because the developer publishes the app on their own site. The host still gives only the declared capabilities. App storage belongs to the site's origin. `net` calls need CORS on the target server.
+- The web App Hub uses the same loader: `hub.html` is a page with a `<plinth-app>` for the Hub package.
+
 ### 10.4 App modules and the runtime
 
 **A `.plnt` is built one time and runs everywhere.** It holds only app code and is the same file for every OS and device. The runtime (`plinth-rt`) belongs to the host. Each user installs a host one time: the `plinth` CLI (`plinth run app.plnt`) or, later, a Plinth runner app. A native export (`plinth native`, §10.3) is the opposite case: it is specific to one host platform and contains the runtime.
