@@ -915,8 +915,10 @@ impl Checker<'_> {
         vec![TStmt::Let(arr_v, Some(arr)), TStmt::Loop { id, cond: Some(cond), test_after: false, update: None, body: vec![pop] }]
     }
 
-    /// `m.delete(k)` / `s.delete(v)`: finds the key, then swaps it with the
-    /// last entry and pops (so deletion does not keep insertion order).
+    /// `m.delete(k)` / `s.delete(v)`: finds the key, then shifts every later
+    /// entry down by one and pops, so `delete` keeps insertion order
+    /// (HANDOFF.md item 1). `for (let j = idx; j < last; j = j + 1) { keys[j]
+    /// = keys[j+1]; values[j] = values[j+1]; }` then one pop per array.
     fn kv_delete(&mut self, sid: crate::types::StructId, has_values: bool, eq: EqKind, o: TExpr, key: TExpr, span: Span) -> TExpr {
         let obj_v = self.temp(o.ty.clone());
         let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
@@ -936,21 +938,30 @@ impl Checker<'_> {
             Type::Number,
             span,
         );
-        let idx_ne_last = TExpr::new(TExprKind::Cmp(CmpOp::Ne, EqKind::F64, bx(idx_r.clone()), bx(last_r.clone())), Type::Bool, span);
         let keys_elem = match &keys.ty {
             Type::Array(e) => (**e).clone(),
             _ => unreachable!(),
         };
-        let mut swap_body = vec![self.arr_set_at(keys.clone(), idx_r.clone(), self.arr_get_at(keys.clone(), last_r.clone(), keys_elem, span), span)];
+
+        let j_v = self.temp(Type::Number);
+        let j_r = TExpr::new(TExprKind::Var(j_v), Type::Number, span);
+        let j_plus_1 =
+            TExpr::new(TExprKind::Num2(NumOp::Add, bx(j_r.clone()), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))), Type::Number, span);
+        let shift_cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(j_r.clone()), bx(last_r.clone())), Type::Bool, span);
+        let mut shift_body = vec![self.arr_set_at(keys.clone(), j_r.clone(), self.arr_get_at(keys.clone(), j_plus_1.clone(), keys_elem, span), span)];
         if has_values {
             let values = self.kv_field(&obj_r, sid, 1, span);
             let values_elem = match &values.ty {
                 Type::Array(e) => (**e).clone(),
                 _ => unreachable!(),
             };
-            swap_body.push(self.arr_set_at(values.clone(), idx_r.clone(), self.arr_get_at(values, last_r.clone(), values_elem, span), span));
+            shift_body.push(self.arr_set_at(values.clone(), j_r.clone(), self.arr_get_at(values, j_plus_1.clone(), values_elem, span), span));
         }
-        let mut pop_stmts = vec![TStmt::If(idx_ne_last, swap_body, Vec::new()), self.arr_pop_discard(keys, span)];
+        let shift_update = TExpr::new(TExprKind::Assign(Place::Var(j_v), bx(j_plus_1)), Type::Number, span);
+        let shift_id = self.prog.new_loop();
+        let shift_loop = TStmt::Loop { id: shift_id, cond: Some(shift_cond), test_after: false, update: Some(shift_update), body: shift_body };
+
+        let mut pop_stmts = vec![TStmt::Let(j_v, Some(idx_r.clone())), shift_loop, self.arr_pop_discard(keys, span)];
         if has_values {
             pop_stmts.push(self.arr_pop_discard(self.kv_field(&obj_r, sid, 1, span), span));
         }
@@ -960,6 +971,135 @@ impl Checker<'_> {
             TExpr::new(TExprKind::Cond(bx(not_found), bx(TExpr::new(TExprKind::Bool(false), Type::Bool, span)), bx(found_block)), Type::Bool, span);
         let prelude = vec![TStmt::Let(obj_v, Some(o)), TStmt::Let(idx_v, Some(search)), TStmt::Let(last_v, Some(last_init))];
         TExpr::new(TExprKind::Block(prelude, bx(cond)), Type::Bool, span)
+    }
+
+    /// `for…of` over a `Map` or `Set` (HANDOFF.md item 1): a bare `for (x of
+    /// set)`/`for ([k, v] of map)`, or `.keys()`/`.values()`/`.entries()`.
+    /// `None` means `iter` is not one of these forms, so the caller falls
+    /// back to the array `for…of`. Lowers to an index loop over the
+    /// `keys`/`values` arrays (see the comment above `kv_delete`): no new
+    /// runtime or codegen support is needed.
+    pub(super) fn kv_for_of(&mut self, kind: ast::VarKind, pattern: &ast::Pattern, iter: &Expr, body: &ast::Stmt) -> Option<Vec<TStmt>> {
+        #[derive(Clone, Copy, PartialEq)]
+        enum Mode {
+            Keys,
+            Values,
+            Entries,
+        }
+
+        let span = iter.span;
+        let (obj, mode) = if let ExprKind::Call { callee, args, .. } = &iter.kind {
+            if !args.is_empty() {
+                return None;
+            }
+            let ExprKind::Member { obj, prop, .. } = &callee.kind else { return None };
+            let mode = match prop.as_str() {
+                "keys" => Mode::Keys,
+                "values" => Mode::Values,
+                "entries" => Mode::Entries,
+                _ => return None,
+            };
+            let o = self.expr(obj, None);
+            if !matches!(o.ty, Type::Map(..) | Type::Set(_)) {
+                return None;
+            }
+            (o, mode)
+        } else {
+            let o = self.expr(iter, None);
+            match &o.ty {
+                Type::Map(..) => (o, Mode::Entries),
+                Type::Set(_) => (o, Mode::Keys),
+                _ => return None,
+            }
+        };
+
+        let (sid, k_ty, v_ty) = match &obj.ty {
+            Type::Map(k, v) => (self.map_struct(k, v), (**k).clone(), Some((**v).clone())),
+            Type::Set(t) => (self.set_struct(t), (**t).clone(), None),
+            _ => unreachable!(),
+        };
+        let mode = if matches!(obj.ty, Type::Set(_)) && mode != Mode::Keys {
+            let what = if mode == Mode::Values { "values()" } else { "entries()" };
+            self.err(code::NO_PROPERTY, span, format!("`Set` has no `{what}`; use a bare `for…of` or `.keys()`"));
+            Mode::Keys
+        } else {
+            mode
+        };
+
+        let mutable = kind == ast::VarKind::Let;
+        let id = self.prog.new_loop();
+
+        let obj_v = self.temp(obj.ty.clone());
+        let obj_r = TExpr::new(TExprKind::Var(obj_v), obj.ty.clone(), span);
+        let keys = self.kv_field(&obj_r, sid, 0, span);
+        let len = self.arr_len_of(keys.clone(), span);
+        let len_v = self.temp(Type::Number);
+        let len_r = TExpr::new(TExprKind::Var(len_v), Type::Number, span);
+        let i_v = self.temp(Type::Number);
+        let i_r = TExpr::new(TExprKind::Var(i_v), Type::Number, span);
+
+        self.fx.loops.push(id);
+        self.push_scope();
+
+        let mut prologue = Vec::new();
+        match (mode, pattern) {
+            (Mode::Keys, ast::Pattern::Ident(name, pspan)) => {
+                let v = self.new_var(name, k_ty.clone(), mutable);
+                self.define(name, *pspan, Binding::Var(v));
+                let get = self.arr_get_at(keys.clone(), i_r.clone(), k_ty.clone(), span);
+                prologue.push(TStmt::Let(v, Some(get)));
+            }
+            (Mode::Values, ast::Pattern::Ident(name, pspan)) => {
+                let vt = v_ty.clone().unwrap_or(Type::Error);
+                let values = self.kv_field(&obj_r, sid, 1, span);
+                let v = self.new_var(name, vt.clone(), mutable);
+                self.define(name, *pspan, Binding::Var(v));
+                let get = self.arr_get_at(values, i_r.clone(), vt, span);
+                prologue.push(TStmt::Let(v, Some(get)));
+            }
+            (Mode::Entries, ast::Pattern::Array(elems, pspan)) if elems.len() == 2 => match (&elems[0], &elems[1]) {
+                (Some(ast::Pattern::Ident(kn, kspan)), Some(ast::Pattern::Ident(vn, vspan))) => {
+                    let vt = v_ty.clone().unwrap_or(Type::Error);
+                    let kv = self.new_var(kn, k_ty.clone(), mutable);
+                    self.define(kn, *kspan, Binding::Var(kv));
+                    let kget = self.arr_get_at(keys.clone(), i_r.clone(), k_ty.clone(), span);
+                    prologue.push(TStmt::Let(kv, Some(kget)));
+                    let values = self.kv_field(&obj_r, sid, 1, span);
+                    let vv = self.new_var(vn, vt.clone(), mutable);
+                    self.define(vn, *vspan, Binding::Var(vv));
+                    let vget = self.arr_get_at(values, i_r.clone(), vt, span);
+                    prologue.push(TStmt::Let(vv, Some(vget)));
+                }
+                _ => {
+                    self.err(code::TYPE_MISMATCH, *pspan, "`for…of` over a `Map` needs `[key, value]` with simple names");
+                }
+            },
+            (Mode::Entries, other) => {
+                self.err(code::TYPE_MISMATCH, other.span(), "`for…of` over a `Map` needs `[key, value]`, for example `for (const [k, v] of m)`");
+            }
+            (_, other) => {
+                self.err(code::TYPE_MISMATCH, other.span(), "`for…of` over a `Set` needs a single name, for example `for (const v of s)`");
+            }
+        }
+
+        let b = match &body.kind {
+            ast::StmtKind::Block(b) => self.block_stmts(b),
+            _ => self.stmt(body, false),
+        };
+        prologue.extend(b);
+        self.pop_scope();
+        self.fx.loops.pop();
+
+        let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(len_r)), Type::Bool, span);
+        let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))), Type::Number, span);
+        let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
+        let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: prologue };
+        Some(vec![
+            TStmt::Let(obj_v, Some(obj)),
+            TStmt::Let(len_v, Some(len)),
+            TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
+            loop_stmt,
+        ])
     }
 
     fn map_method(&mut self, o: TExpr, k: &Type, v: &Type, prop: &str, prop_span: Span, args: &[Expr], span: Span) -> TExpr {

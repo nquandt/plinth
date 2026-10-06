@@ -455,6 +455,148 @@ function Home() {
     assert_eq!(text_of(&tree, ControlKind::Text), "0");
 }
 
+// -- 5b. `for…of` over `Map` / `Set` (HANDOFF.md item 1) ---------------------
+
+#[test]
+fn set_for_of_bare_visits_values_in_insertion_order() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const s = new Set<number>();
+  s.add(1);
+  s.add(2);
+  s.add(3);
+  let out = "";
+  for (const v of s) { out = out + v + ","; }
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "1,2,3,");
+}
+
+#[test]
+fn map_for_of_bare_destructures_key_value_pairs() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  let out = "";
+  for (const [k, v] of m) { out = out + k + "=" + v + ";"; }
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "a=1;b=2;");
+}
+
+#[test]
+fn map_keys_values_and_entries_iterate_in_insertion_order() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  let ks = "";
+  for (const k of m.keys()) { ks = ks + k; }
+  let vs = "";
+  for (const v of m.values()) { vs = vs + v; }
+  let es = "";
+  for (const [k, v] of m.entries()) { es = es + k + v; }
+  const out = ks + "," + vs + "," + es;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "ab,12,a1b2");
+}
+
+#[test]
+fn set_keys_is_the_same_as_a_bare_for_of() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const s = new Set<number>();
+  s.add(5);
+  s.add(6);
+  let out = "";
+  for (const v of s.keys()) { out = out + v; }
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "56");
+}
+
+#[test]
+fn map_delete_keeps_insertion_order_of_the_rest() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.set("c", 3);
+  m.delete("b");
+  let out = "";
+  for (const [k, v] of m) { out = out + k + v; }
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    // Before this fix, `delete` swapped with the last entry instead of
+    // shifting, so this would have come out as "a1c3" -> actually "c3a1"
+    // (c moved into b's slot). Shifting keeps a, c in their original order.
+    assert_eq!(text_of(&tree, ControlKind::Text), "a1c3");
+}
+
+#[test]
+fn set_delete_keeps_insertion_order_of_the_rest() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const s = new Set<number>();
+  s.add(1);
+  s.add(2);
+  s.add(3);
+  s.add(4);
+  s.delete(2);
+  let out = "";
+  for (const v of s) { out = out + v + ","; }
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "1,3,4,");
+}
+
+#[test]
+fn set_for_of_rejects_a_key_value_pattern() {
+    let main = with_app("const s = new Set<number>(); for (const [k, v] of s) {}");
+    assert_eq!(codes(&main), ["PL3001"]);
+}
+
+#[test]
+fn map_for_of_needs_a_key_value_pattern() {
+    let main = with_app("const m = new Map<string, number>(); for (const x of m) {}");
+    assert_eq!(codes(&main), ["PL3001"]);
+}
+
+#[test]
+fn set_entries_is_not_supported() {
+    let main = with_app("const s = new Set<number>(); for (const x of s.entries()) {}");
+    assert_eq!(codes(&main), ["PL3004"]);
+}
+
 // -- Behavior smoke test: confirms the `run` harness works and the lint
 // does not fire on a normal counter-style program. -------------------------
 

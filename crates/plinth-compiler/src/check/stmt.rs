@@ -159,12 +159,15 @@ impl Checker<'_> {
                 vec![TStmt::Block(out)]
             }
             StmtKind::ForOf { kind, pattern, iter, body } => {
+                if let Some(out) = self.kv_for_of(*kind, pattern, iter, body) {
+                    return out;
+                }
                 let arr = self.expr(iter, None);
                 let elem = match &arr.ty {
                     Type::Array(t) => (**t).clone(),
                     Type::Error => Type::Error,
                     other => {
-                        let msg = format!("`for…of` needs an array, not `{}`", self.show(other));
+                        let msg = format!("`for…of` needs an array, a `Map` or a `Set`, not `{}`", self.show(other));
                         self.err(code::TYPE_MISMATCH, iter.span, msg);
                         Type::Error
                     }
