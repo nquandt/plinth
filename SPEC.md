@@ -251,7 +251,7 @@ The compiler is written in Rust. It is one binary, `plinth`, together with the C
 
 | Item | Target |
 |---|---|
-| `plinth-rt` linked into each artifact | ≤ 60 KiB (after the linker stubs the unreachable functions; `wasm-opt -Oz` is optional) |
+| `plinth-rt` linked into each artifact | ≤ 60 KiB (after the linker stubs the unreachable functions; `wasm-opt -Oz` is optional). The raw `plinth-rt` has no strict limit: an app pays only for the runtime functions that it reaches. |
 | "Counter" app artifact | ≤ 80 KiB |
 | Typical small app (5 screens) | ≤ 300 KiB |
 
