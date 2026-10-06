@@ -38,6 +38,10 @@ fn build_rt(root: &Path, extra_args: &[&str], target_dir: &Path, out: &Path) {
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_BUILD_TARGET")
+        // Export the function table so a browser host can grow it and
+        // link app.wasm against it directly, with no static link in the
+        // browser (SPEC.md §18.3). Scoped to this target only.
+        .env("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS", "-C link-arg=--export-table")
         .status()
         .expect("run cargo for plinth-rt");
     assert!(status.success(), "building plinth-rt for wasm32 failed");
