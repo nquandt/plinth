@@ -328,10 +328,10 @@ impl Checker<'_> {
             };
             let tmp = self.temp(o.ty.clone());
             let read = TExpr::new(TExprKind::Var(tmp), o.ty.clone(), o.span);
-            let unwrapped = if inner == Type::Number {
-                TExpr::new(TExprKind::Coerce(Coercion::UnboxNum, bx(read.clone())), inner.clone(), o.span)
-            } else {
-                TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(read.clone())), inner.clone(), o.span)
+            let unwrapped = match inner.repr() {
+                crate::types::Repr::F64 => TExpr::new(TExprKind::Coerce(Coercion::UnboxNum, bx(read.clone())), inner.clone(), o.span),
+                crate::types::Repr::I32 => TExpr::new(TExprKind::Coerce(Coercion::UnboxI32, bx(read.clone())), inner.clone(), o.span),
+                _ => TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(read.clone())), inner.clone(), o.span),
             };
             let access = self.property(unwrapped, prop, prop_span, span);
             let result_ty = self.nullable(access.ty.clone(), span);
@@ -809,11 +809,43 @@ impl Checker<'_> {
             "pop" => {
                 self.no_args(args, span);
                 let r = self.nullable(elem.clone(), span);
-                if elem.repr() == crate::types::Repr::F64 {
-                    let v = TExpr::new(TExprKind::Rt("arr_pop_f64", vec![o]), Type::Number, span);
-                    TExpr::new(TExprKind::Coerce(Coercion::BoxNum, bx(v)), r, span)
-                } else {
-                    TExpr::new(TExprKind::Rt("arr_pop_i32", vec![o]), r, span)
+                match elem.repr() {
+                    crate::types::Repr::F64 | crate::types::Repr::I32 => {
+                        // `arr_pop_{f64,i32}` on an empty array returns a
+                        // sentinel (`NaN` / `0`), not a signal the checker
+                        // can box as null: boxing it unconditionally would
+                        // give a non-null `NaN`/`0` instead of `null`
+                        // (HANDOFF.md item 2 found this while adding boxing
+                        // for `int`/`boolean`/enum elements). Check first.
+                        let arr_v = self.temp(arr_ty.clone());
+                        let arr_r = TExpr::new(TExprKind::Var(arr_v), arr_ty.clone(), span);
+                        let is_empty = TExpr::new(
+                            TExprKind::Cmp(
+                                CmpOp::Eq,
+                                EqKind::F64,
+                                bx(self.arr_len_of(arr_r.clone(), span)),
+                                bx(TExpr::new(TExprKind::Num(0.0), Type::Number, span)),
+                            ),
+                            Type::Bool,
+                            span,
+                        );
+                        let null_v = self.coerce(TExpr::new(TExprKind::Null, Type::Null, span), &r);
+                        let (rt_fn, box_c) = if elem.repr() == crate::types::Repr::F64 {
+                            ("arr_pop_f64", Coercion::BoxNum)
+                        } else {
+                            ("arr_pop_i32", Coercion::BoxI32)
+                        };
+                        let v = TExpr::new(TExprKind::Rt(rt_fn, vec![arr_r]), elem.clone(), span);
+                        let popped = TExpr::new(TExprKind::Coerce(box_c, bx(v)), r.clone(), span);
+                        let cond = TExpr::new(TExprKind::Cond(bx(is_empty), bx(null_v), bx(popped)), r.clone(), span);
+                        TExpr::new(TExprKind::Block(vec![TStmt::Let(arr_v, Some(o))], bx(cond)), r, span)
+                    }
+                    _ => {
+                        // Already a `Ref`: `0` already means null, and
+                        // `arr_pop_i32` on an empty array returns exactly
+                        // that `0` without boxing it into something else.
+                        TExpr::new(TExprKind::Rt("arr_pop_i32", vec![o]), r, span)
+                    }
                 }
             }
             "slice" => {
@@ -1573,6 +1605,7 @@ impl Checker<'_> {
             match (c.widen((**inner).clone()), t) {
                 (Type::String, Type::String) => Some(EqKind::NullStr),
                 (Type::Number, Type::Number) => Some(EqKind::NullF64),
+                (x, y) if x == *y && x.repr() == crate::types::Repr::I32 => Some(EqKind::NullI32),
                 (x, y) if x == *y && x.repr() == crate::types::Repr::Ref => Some(EqKind::Ref),
                 _ => None,
             }
@@ -1629,10 +1662,14 @@ impl Checker<'_> {
                 let ty = self.join(&inner, &rt.ty, span);
                 let tmp = self.temp(lt.ty.clone());
                 let read = TExpr::new(TExprKind::Var(tmp), lt.ty.clone(), l.span);
-                let unwrapped = if inner == Type::Number && matches!(lt.ty, Type::Nullable(_)) {
-                    TExpr::new(TExprKind::Coerce(Coercion::UnboxNum, bx(read.clone())), Type::Number, l.span)
-                } else {
+                let unwrapped = if !matches!(lt.ty, Type::Nullable(_)) {
                     TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(read.clone())), inner, l.span)
+                } else {
+                    match inner.repr() {
+                        crate::types::Repr::F64 => TExpr::new(TExprKind::Coerce(Coercion::UnboxNum, bx(read.clone())), inner, l.span),
+                        crate::types::Repr::I32 => TExpr::new(TExprKind::Coerce(Coercion::UnboxI32, bx(read.clone())), inner, l.span),
+                        _ => TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(read.clone())), inner, l.span),
+                    }
                 };
                 let unwrapped = self.coerce(unwrapped, &ty);
                 let rt = self.coerce(rt, &ty);

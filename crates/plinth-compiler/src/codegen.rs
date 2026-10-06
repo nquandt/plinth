@@ -1009,22 +1009,29 @@ impl FnGen {
             EqKind::F64 => self.emit(I::F64Eq),
             EqKind::I32 | EqKind::Ref => self.emit(I::I32Eq),
             EqKind::Str => self.rt(g, "str_eq"),
-            EqKind::NullStr | EqKind::NullF64 => {
+            EqKind::NullStr | EqKind::NullF64 | EqKind::NullI32 => {
                 // a !== null && unwrap(a) === b
-                let br = if eq == EqKind::NullF64 { Repr::F64 } else { Repr::I32 };
+                let br = match eq {
+                    EqKind::NullF64 => Repr::F64,
+                    EqKind::NullI32 => Repr::I32,
+                    _ => Repr::I32,
+                };
                 let (ta, tb) = (self.tmp(Repr::I32), self.tmp(br));
                 self.emit(I::LocalSet(tb));
                 self.emit(I::LocalTee(ta));
                 self.open(I::If(BlockType::Result(ValType::I32)));
                 self.emit(I::LocalGet(ta));
-                if eq == EqKind::NullF64 {
+                if eq == EqKind::NullF64 || eq == EqKind::NullI32 {
                     self.rt(g, "unbox_f64");
                 }
+                if eq == EqKind::NullI32 {
+                    self.emit(I::I32TruncSatF64S);
+                }
                 self.emit(I::LocalGet(tb));
-                if eq == EqKind::NullF64 {
-                    self.emit(I::F64Eq);
-                } else {
-                    self.rt(g, "str_eq");
+                match eq {
+                    EqKind::NullF64 => self.emit(I::F64Eq),
+                    EqKind::NullI32 => self.emit(I::I32Eq),
+                    _ => self.rt(g, "str_eq"),
                 }
                 self.emit(I::Else);
                 self.emit(I::I32Const(0));
@@ -1130,7 +1137,7 @@ impl FnGen {
                         CmpOp::Gt => I::F64Gt,
                         CmpOp::Ge => I::F64Ge,
                     }),
-                    EqKind::Str | EqKind::NullStr | EqKind::NullF64 => {
+                    EqKind::Str | EqKind::NullStr | EqKind::NullF64 | EqKind::NullI32 => {
                         self.eq(g, *kind);
                         if *op == CmpOp::Ne {
                             self.emit(I::I32Eqz);
@@ -1355,6 +1362,14 @@ impl FnGen {
         match c {
             Coercion::BoxNum => self.rt(g, "box_f64"),
             Coercion::UnboxNum => self.rt(g, "unbox_f64"),
+            Coercion::BoxI32 => {
+                self.emit(I::F64ConvertI32S);
+                self.rt(g, "box_f64");
+            }
+            Coercion::UnboxI32 => {
+                self.rt(g, "unbox_f64");
+                self.emit(I::I32TruncSatF64S);
+            }
             Coercion::NumToStr => self.rt(g, "str_from_f64"),
             Coercion::BoolToStr => self.rt(g, "str_from_bool"),
             Coercion::I32ToNum => self.emit(I::F64ConvertI32S),
@@ -1389,7 +1404,10 @@ impl FnGen {
                 self.emit(I::I32Const(0));
                 self.emit(I::I32Ne);
             }
-            Type::Nullable(inner) if **inner == Type::Number => {
+            Type::Nullable(inner) if **inner == Type::Number || inner.repr() == Repr::I32 => {
+                // Boxed: `unbox_f64` always gives back an exact integer for
+                // an `i32`-repr inner type, so `x !== 0 && x === x` (the
+                // `number` truthiness test) is correct for it too.
                 let t = self.tmp(Repr::I32);
                 self.emit(I::LocalTee(t));
                 self.open(I::If(BlockType::Result(ValType::I32)));

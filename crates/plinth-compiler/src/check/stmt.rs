@@ -241,6 +241,7 @@ impl Checker<'_> {
                     Type::String => EqKind::Str,
                     Type::Nullable(inner) if **inner == Type::String => EqKind::NullStr,
                     Type::Nullable(inner) if **inner == Type::Number => EqKind::NullF64,
+                    Type::Nullable(inner) if inner.repr() == crate::types::Repr::I32 => EqKind::NullI32,
                     Type::Error => EqKind::I32,
                     other => {
                         let msg = format!("`switch` works on numbers, strings and enums, not `{}`", self.show(other));
@@ -507,8 +508,12 @@ impl Checker<'_> {
     pub(super) fn var_read(&mut self, v: VarId, span: Span) -> TExpr {
         let ty = self.prog.vars[v as usize].ty.clone();
         let read = TExpr::new(TExprKind::Var(v), ty.clone(), span);
+        // `narrowed` only ever comes from `narrowable`, which only narrows a
+        // variable whose declared type is `T | null`; `ty` here is that
+        // `Nullable(_)`, so the box, if any, always needs unwrapping.
         match self.narrowed(v) {
-            Some(n) if n == Type::Number => TExpr::new(TExprKind::Coerce(Coercion::UnboxNum, Box::new(read)), n, span),
+            Some(n) if n.repr() == crate::types::Repr::F64 => TExpr::new(TExprKind::Coerce(Coercion::UnboxNum, Box::new(read)), n, span),
+            Some(n) if n.repr() == crate::types::Repr::I32 => TExpr::new(TExprKind::Coerce(Coercion::UnboxI32, Box::new(read)), n, span),
             Some(n) => TExpr::new(TExprKind::Coerce(Coercion::Retag, Box::new(read)), n, span),
             None => read,
         }

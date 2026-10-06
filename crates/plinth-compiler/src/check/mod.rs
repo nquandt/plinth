@@ -531,9 +531,11 @@ impl Checker<'_> {
     }
 
     /// `T | null`, with a check that the representation supports null.
+    /// `number`, `int`, `boolean` and enums are boxed (HANDOFF.md item 2);
+    /// everything else of `Ref` representation reuses its own 0-is-null.
     fn nullable(&mut self, ty: Type, span: Span) -> Type {
         match ty {
-            Type::Bool | Type::Int | Type::Enum(_) | Type::Signal(_) | Type::Computed(_) => {
+            Type::Signal(_) | Type::Computed(_) => {
                 self.err_help(
                     code::NULLABLE,
                     span,
@@ -723,11 +725,12 @@ impl Checker<'_> {
         matches!(t, Type::String | Type::StrLits(_) | Type::Number | Type::Int | Type::Bool | Type::Enum(_))
     }
 
-    /// A `Map` value type. Narrower than general types for v0: no
-    /// `boolean`/`int`/enum (`get` needs a nullable result, and those
-    /// types cannot be `| null` yet; HANDOFF.md item 5).
+    /// A `Map` value type. `get` needs a nullable result, so this is every
+    /// type `nullable` accepts (HANDOFF.md item 2 lifted the v0
+    /// restriction against `boolean`/`int`/enum, boxed the same way).
     fn valid_map_value_type(&self, t: &Type) -> bool {
         matches!(t, Type::String | Type::StrLits(_) | Type::Number | Type::Struct(_) | Type::Array(_) | Type::Union(_))
+            || matches!(t, Type::Bool | Type::Int | Type::Enum(_))
     }
 
     /// The comparison for a `Map` key or `Set` element.
@@ -854,6 +857,7 @@ impl Checker<'_> {
             (T::StrLits(a), T::StrLits(b)) if a.iter().all(|x| b.contains(x)) => Some(Some(Coercion::Retag)),
             (T::Null, T::Nullable(_)) | (T::Null, T::Element) => Some(Some(Coercion::Retag)),
             (T::Number, T::Nullable(inner)) if **inner == T::Number => Some(Some(Coercion::BoxNum)),
+            (t, T::Nullable(inner)) if *t == **inner && t.repr() == types::Repr::I32 => Some(Some(Coercion::BoxI32)),
             (t, T::Nullable(inner)) if t.repr() == types::Repr::Ref => {
                 self.conversion(t, inner).filter(|c| c.is_none_or(|c| c == Coercion::Retag)).map(|_| Some(Coercion::Retag))
             }

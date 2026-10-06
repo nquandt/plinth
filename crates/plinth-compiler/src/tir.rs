@@ -170,6 +170,9 @@ pub enum EqKind {
     NullStr,
     /// `number | null` (first, boxed) with `number`.
     NullF64,
+    /// An `int | null` / `boolean | null` / enum `| null` (first, boxed,
+    /// through the same box as `number | null`) with the plain scalar.
+    NullI32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,6 +181,13 @@ pub enum Coercion {
     BoxNum,
     /// number | null → number (traps on null)
     UnboxNum,
+    /// A scalar of `i32` representation (`int`, `boolean`, an enum) →
+    /// the same type `| null` (HANDOFF.md item 2). Reuses the `number`
+    /// box: converts to `f64`, then `box_f64` (exact for every `i32`).
+    BoxI32,
+    /// The reverse of `BoxI32` (traps on null): `unbox_f64`, then
+    /// truncates back to `i32`.
+    UnboxI32,
     NumToStr,
     BoolToStr,
     /// An enum or another i32 to a number.
