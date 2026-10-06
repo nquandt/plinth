@@ -90,3 +90,39 @@ small local change), per the dogfooding task's scope.
   `crates/plinth-compiler/tests/lang.rs`. No example app used a
   fragment workaround precisely matching this shape, so no app changes
   were needed for this item.
+- #6 (fixed): `expr as T` is now allowed for two safe, checked
+  narrowings, each compiled into its own run-time check that `throw`s
+  (traps) on a mismatch, since Plinth has no `any` escape hatch to
+  fall back on the way TypeScript's compile-time-only `as` can: (1)
+  `string` (or a wider literal union) to a narrower string literal
+  union, reusing the same literal-membership check already built for
+  `JSON.parse<T>()` (`json_decode_str_lits` in `check/expr.rs`; a
+  `Type::StrLits` is a plain run-time `string`, so the check is a
+  chain of `===` comparisons, no interned-id decoding needed); and (2)
+  a discriminated union to one of its members, checked by comparing
+  the union's existing discriminant tag (`TExprKind::UnionTag`, the
+  same mechanism `.tag` property reads use) against the target
+  member's literal. Both reuse the existing `throw`/`trap` path
+  (`TStmt::Throw` → the `__plinth_rt_throw` ABI function, already in
+  core 1.0), so **no new runtime function was needed** and
+  `CORE_MINOR` did not change. `number as int` is explicitly rejected
+  with a PL2006 pointing at `int(x)`, since there is nothing to check
+  that would make it safe. Casts between unrelated types still get
+  PL2006. Implementation: a new `ExprKind::As` (parsed in `parse.rs`,
+  previously `as` was rejected at parse time before the checker ever
+  saw it) and `Checker::as_cast`/`cast_str_to_lits`/
+  `cast_union_to_member` in `check/expr.rs`. Documented in
+  `docs/language.md` ("Supported syntax"). Tests:
+  `string_as_literal_union_narrows_and_runs`,
+  `string_as_literal_union_traps_on_a_bad_value`,
+  `union_as_member_narrows_and_runs`, `union_as_wrong_member_traps`,
+  `number_as_int_is_rejected`, `as_cast_between_unrelated_types_is_rejected`
+  in `crates/plinth-compiler/tests/lang.rs`. Removed the workaround in
+  `examples/budget`: `Category` (`app/types.ts`) is a real string
+  literal union again instead of a plain `string` alias, and
+  `app/transactions.tsx` narrows the `Picker`'s `string` signal value
+  with `draftCategory() as Category` / `editCategory() as Category`
+  before calling `addTransaction`/`updateTransaction`; `app/stats.tsx`
+  now takes `Category` instead of `string`. Verified with
+  `npx -y -p typescript@7 tsc -p .` (clean) and
+  `cargo test -p plinth-compiler --test apps`.

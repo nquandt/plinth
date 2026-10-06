@@ -1094,8 +1094,13 @@ impl Cx<'_> {
                 return None;
             }
             E::TSAsExpression(a) => {
-                self.err_help(code::TYPE_ASSERTION, a.span, "`as` casts are not allowed", "annotate the variable type instead");
-                return None;
+                // Parsing always succeeds; the checker (`as_cast` in
+                // `check/expr.rs`) decides whether this particular cast is
+                // a safe, checked narrowing and rejects it with PL2006
+                // otherwise, since only there are both sides' types known.
+                let inner = self.expr(&a.expression)?;
+                let ty = self.ty(&a.type_annotation)?;
+                ExprKind::As(Box::new(inner), ty, self.span(a.span))
             }
             E::TSSatisfiesExpression(s) => return self.expr(&s.expression),
             E::TSTypeAssertion(a) => {

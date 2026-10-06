@@ -68,6 +68,17 @@ yet:** static members, getters/setters, generic classes,
 - Classes, single inheritance, `instanceof`, general union narrowing,
   generic functions and interfaces (all implemented; see "Status"
   above).
+- `expr as T`, but only for a checked, safe narrowing: `string` (or a
+  wider string literal union) to a narrower string literal union, or a
+  discriminated union to one of its members. Each accepted cast carries
+  its own run-time check and `throw`s (traps) if the value turns out
+  not to match — Plinth has no `any` escape hatch to fall back on, so
+  an `as` that TypeScript treats as a compile-time-only annotation must
+  still be safe at run time here. `number as int` is deliberately not
+  one of these: there is nothing to check that would make it safe, so
+  it is rejected; use `int(x)` (it truncates). Any other cast, between
+  types the checker cannot relate this way, is still rejected with
+  `PL2006`.
 
 Planned for a later compiler version: `async`/`await`, `Promise.all`,
 `try`/`catch`/`throw`.

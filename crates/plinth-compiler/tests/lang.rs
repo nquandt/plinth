@@ -1748,3 +1748,115 @@ fn fragment_inside_a_ternary_branch_is_still_rejected() {
     );
     assert_eq!(codes(&main), vec!["PL4004"]);
 }
+
+// -- Safe `as` casts (dogfooding gap #6): a string to a narrower literal
+// union, and a discriminated union to one of its members, are allowed,
+// each with its own run-time check that traps if the value does not
+// actually match. Casts between unrelated types, and `number as int`,
+// are still rejected with PL2006. ----------------------------------------
+
+#[test]
+fn string_as_literal_union_narrows_and_runs() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+type Category = "Groceries" | "Rent";
+function categorize(s: string): Category {
+  return s as Category;
+}
+function Home() {
+  const c = categorize("Rent");
+  return <Screen title="Home"><Text>{c}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "Rent");
+}
+
+#[test]
+fn string_as_literal_union_traps_on_a_bad_value() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+type Category = "Groceries" | "Rent";
+function categorize(s: string): Category {
+  return s as Category;
+}
+function Home() {
+  const c = categorize("Nope");
+  return <Screen title="Home"><Text>{c}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let err = guest.init(&[]).err().expect("expected a trap");
+    let msg = format!("{err:?}");
+    assert!(msg.to_lowercase().contains("unreachable") || msg.to_lowercase().contains("trap"), "{msg}");
+}
+
+#[test]
+fn union_as_member_narrows_and_runs() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Circle { kind: "circle"; r: number }
+interface Square { kind: "square"; side: number }
+type Shape = Circle | Square;
+function asCircle(s: Shape): Circle {
+  return s as Circle;
+}
+function Home() {
+  const s: Shape = { kind: "circle", r: 2 };
+  const c = asCircle(s);
+  return <Screen title="Home"><Text>{"" + c.r}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "2");
+}
+
+#[test]
+fn union_as_wrong_member_traps() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Circle { kind: "circle"; r: number }
+interface Square { kind: "square"; side: number }
+type Shape = Circle | Square;
+function asCircle(s: Shape): Circle {
+  return s as Circle;
+}
+function Home() {
+  const s: Shape = { kind: "square", side: 2 };
+  const c = asCircle(s);
+  return <Screen title="Home"><Text>{"" + c.r}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    assert!(guest.init(&[]).is_err(), "expected a trap");
+}
+
+#[test]
+fn number_as_int_is_rejected() {
+    let main = with_app("const n: number = 5; const x = n as int;");
+    assert_eq!(codes(&main), vec!["PL2006"]);
+}
+
+#[test]
+fn as_cast_between_unrelated_types_is_rejected() {
+    let main = with_app("const n: number = 5; const x = n as boolean;");
+    assert_eq!(codes(&main), vec!["PL2006"]);
+}

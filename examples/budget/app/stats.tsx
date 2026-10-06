@@ -2,14 +2,15 @@ import { Screen, Section, Text, Progress, Button, navigate, List } from "plinth:
 import { Math } from "plinth:core";
 import { totalsByCategory, maxCategoryMagnitude, income, spending, balance } from "./model";
 import { categories } from "./types";
+import type { Category } from "./types";
 
-function progressFor(category: string): number {
+function progressFor(category: Category): number {
   const totals = totalsByCategory();
   const value = Math.abs(totals.get(category) ?? 0);
   return value / maxCategoryMagnitude();
 }
 
-function categoryLabel(category: string): string {
+function categoryLabel(category: Category): string {
   const totals = totalsByCategory();
   const value = totals.get(category) ?? 0;
   return `${category}: ${value.toFixed(2)}`;

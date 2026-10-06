@@ -28,6 +28,7 @@ import {
   deleteTransaction,
   selectTransaction,
 } from "./model";
+import type { Category } from "./types";
 function amountLabel(amount: number): string {
   return amount >= 0 ? `+${amount.toFixed(2)}` : amount.toFixed(2);
 }
@@ -62,7 +63,7 @@ export default function Transactions() {
   };
 
   const submitAdd = () => {
-    if (addTransaction(draftDate(), draftAmount(), draftCategory(), draftNote())) {
+    if (addTransaction(draftDate(), draftAmount(), draftCategory() as Category, draftNote())) {
       addOpen.set(false);
     }
   };
@@ -85,7 +86,7 @@ export default function Transactions() {
     if (t === null) {
       return;
     }
-    updateTransaction(t.id, editDate(), editAmount(), editCategory(), editNote());
+    updateTransaction(t.id, editDate(), editAmount(), editCategory() as Category, editNote());
     editOpen.set(false);
   };
 

@@ -166,6 +166,7 @@ impl Checker<'_> {
             ExprKind::New(name, type_args) => self.new_map_or_set(name, type_args, expected, span),
             ExprKind::NewInstance(name, args) => self.new_instance(name, args, span),
             ExprKind::InstanceOf(obj, name, name_span) => self.instance_of(obj, name, *name_span, span),
+            ExprKind::As(inner, type_ann, cast_span) => self.as_cast(inner, type_ann, *cast_span),
         }
     }
 
@@ -633,6 +634,119 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
         }
+    }
+
+    /// `expr as T` (dogfooding gap #6). TypeScript's `as` is normally a
+    /// compile-time-only annotation, but Plinth has no dynamic `any`
+    /// escape hatch to fall back on if the annotation is wrong, so every
+    /// cast this accepts carries its own run-time check that `throw`s
+    /// (traps) if the value turns out not to be what was claimed. Two
+    /// shapes are safe enough to support cheaply:
+    ///
+    /// 1. `string` (or a wider literal union) to a narrower string
+    ///    literal union: checked by comparing the string against the
+    ///    target's literal set, the same run-time check already used for
+    ///    `JSON.parse<T>()` (`json_decode_str_lits`).
+    /// 2. A discriminated union to one of its members: checked by
+    ///    comparing the union's shared discriminant tag (`UnionTag`,
+    ///    the same mechanism `.tag` property access uses) against the
+    ///    target member's literal tag.
+    ///
+    /// `number as int` is deliberately NOT a cast (there is nothing to
+    /// check at run time that would make it safe; `int(x)` truncates and
+    /// is the sanctioned conversion). Everything else still gets PL2006.
+    fn as_cast(&mut self, inner: &Expr, type_ann: &ast::TypeAnn, span: Span) -> TExpr {
+        let target = self.resolve_type(type_ann);
+        let te = self.expr(inner, None);
+        let from = te.ty.clone();
+        if from == target {
+            return TExpr::new(te.kind, target, span);
+        }
+        match (&from, &target) {
+            (Type::String, Type::StrLits(lits)) | (Type::StrLits(_), Type::StrLits(lits)) => {
+                return self.cast_str_to_lits(te, lits.clone(), span);
+            }
+            _ => {}
+        }
+        if let Type::Union(members) = &from {
+            if members.iter().any(|m| *m == target) {
+                return self.cast_union_to_member(te, members.clone(), target, span);
+            }
+        }
+        if from == Type::Number && target == Type::Int {
+            self.err_help(code::TYPE_ASSERTION, span, "`as int` is not a cast", "use `int(x)` to convert and truncate instead");
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        let msg = format!("cannot cast `{}` to `{}`: the types are unrelated", self.show(&from), self.show(&target));
+        self.err_help(
+            code::TYPE_ASSERTION,
+            span,
+            msg,
+            "`as` only narrows `string` to a literal union, or a discriminated union to one of its members; for anything else, check the value at run time (a type guard function, `typeof`, or a discriminant field comparison) or annotate the variable type instead",
+        );
+        TExpr::new(TExprKind::Null, Type::Error, span)
+    }
+
+    /// `str as "a" | "b" | ...`: trap (via `throw`, like any other runtime
+    /// error) if the string is not one of the target's literals.
+    fn cast_str_to_lits(&mut self, te: TExpr, lits: Rc<[String]>, span: Span) -> TExpr {
+        let v = self.temp(Type::String);
+        let v_r = TExpr::new(TExprKind::Var(v), Type::String, span);
+        let mut cond: Option<TExpr> = None;
+        for lit in lits.iter() {
+            let eq = TExpr::new(
+                TExprKind::Cmp(CmpOp::Eq, EqKind::Str, bx(v_r.clone()), bx(TExpr::new(TExprKind::Str(lit.clone()), Type::String, span))),
+                Type::Bool,
+                span,
+            );
+            cond = Some(match cond {
+                Some(c) => TExpr::new(TExprKind::Or(bx(c), bx(eq)), Type::Bool, span),
+                None => eq,
+            });
+        }
+        let matched = cond.unwrap_or_else(|| TExpr::new(TExprKind::Bool(false), Type::Bool, span));
+        let not_matched = TExpr::new(TExprKind::Not(bx(matched)), Type::Bool, span);
+        let msg = format!("`as` cast failed: the string is not one of {}", lits.join(", "));
+        let fail = TStmt::Throw(TExpr::new(TExprKind::Str(msg), Type::String, span));
+        let guard = TStmt::If(not_matched, vec![fail], Vec::new());
+        let result = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(v_r)), Type::StrLits(lits.clone()), span);
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(v, Some(self.coerce(te, &Type::String))), guard], bx(result)), Type::StrLits(lits), span)
+    }
+
+    /// `union as Member`: trap if the union's discriminant tag does not
+    /// match the target member's literal tag.
+    fn cast_union_to_member(&mut self, te: TExpr, members: Rc<[Type]>, target: Type, span: Span) -> TExpr {
+        let union_ty = Type::Union(members.clone());
+        let Some((_, lits)) = self.union_discriminant(&members) else {
+            self.err_help(
+                code::TYPE_ASSERTION,
+                span,
+                "cannot cast: this union has no shared discriminant field to check at run time",
+                "narrow it first with a discriminant field comparison",
+            );
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        };
+        let target_idx = members.iter().position(|m| *m == target).expect("checked by caller");
+        let Some((lit, _)) = lits.iter().find(|(_, idx)| *idx == target_idx) else {
+            self.err(code::TYPE_ASSERTION, span, "cannot cast: this union member has no discriminant literal");
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        };
+        let lit = lit.clone();
+        let all_lits = Type::str_lits(lits.iter().map(|(l, _)| l.clone()).collect());
+        let v = self.temp(union_ty.clone());
+        let v_r = TExpr::new(TExprKind::Var(v), union_ty.clone(), span);
+        let tag = TExpr::new(TExprKind::UnionTag(bx(v_r.clone())), all_lits, span);
+        let eq = TExpr::new(
+            TExprKind::Cmp(CmpOp::Eq, EqKind::Str, bx(tag), bx(TExpr::new(TExprKind::Str(lit.clone()), Type::String, span))),
+            Type::Bool,
+            span,
+        );
+        let not_matched = TExpr::new(TExprKind::Not(bx(eq)), Type::Bool, span);
+        let msg = format!("`as` cast failed: the value's tag is not \"{lit}\"");
+        let fail = TStmt::Throw(TExpr::new(TExprKind::Str(msg), Type::String, span));
+        let guard = TStmt::If(not_matched, vec![fail], Vec::new());
+        let result = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(v_r)), target.clone(), span);
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(v, Some(te)), guard], bx(result)), target, span)
     }
 
     /// Checks arguments against a signature. Missing optional arguments
