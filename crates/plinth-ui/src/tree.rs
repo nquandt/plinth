@@ -3,7 +3,7 @@
 //! This module has no gpui dependency, so tests can drive it directly.
 
 use plinth_protocol::{ControlKind, NodeId, Op, Value, decode_ops, nav_kind};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// One node of the semantic tree.
 #[derive(Debug, Clone)]
@@ -184,15 +184,149 @@ impl Tree {
 
     /// Decodes and applies one commit. A malformed buffer changes nothing.
     /// A well-formed op that refers to a bad node is skipped and reported.
+    ///
+    /// Consecutive `Insert`/`Move` ops that target the same parent (how a
+    /// `List` diff writes a reorder, SPEC.md §7.3) are applied as one batch
+    /// instead of one at a time: `apply_move_run` below rebuilds that
+    /// parent's children once, in O(n), rather than doing an O(n)
+    /// `position`/`insert` per op (O(n^2) for a full reverse).
     pub fn apply(&mut self, buf: &[u8]) -> Result<Vec<OpError>, plinth_protocol::DecodeError> {
         let ops = decode_ops(buf)?;
         let mut errors = Vec::new();
-        for (index, op) in ops.into_iter().enumerate() {
-            if let Err(message) = self.apply_op(op) {
-                errors.push(OpError { index, message });
+        let mut i = 0;
+        while i < ops.len() {
+            match &ops[i] {
+                Op::Insert { parent, .. } | Op::Move { parent, .. } => {
+                    let parent = *parent;
+                    let mut j = i + 1;
+                    while j < ops.len()
+                        && matches!(&ops[j], Op::Insert { parent: p, .. } | Op::Move { parent: p, .. } if *p == parent)
+                    {
+                        j += 1;
+                    }
+                    self.apply_move_run(parent, &ops[i..j], i, &mut errors);
+                    i = j;
+                }
+                _ => {
+                    if let Err(message) = self.apply_op(ops[i].clone()) {
+                        errors.push(OpError { index: i, message });
+                    }
+                    i += 1;
+                }
             }
         }
         Ok(errors)
+    }
+
+    /// Applies a run of `Insert`/`Move` ops that all target `parent`, using
+    /// one doubly linked list over the parent's children (indexed by node
+    /// id in `next`/`prev`) instead of scanning/shifting a `Vec` per op.
+    /// Each op unlinks and relinks in O(1); the new `children` order is
+    /// read off the list once, in O(n), after the whole run. `before == 0`
+    /// still means "the current end of the list", matching `apply_op`'s
+    /// sequential semantics (a static `append` emits several ops with
+    /// `before: 0`, each meaning "after whatever was placed last").
+    fn apply_move_run(&mut self, parent: NodeId, run: &[Op], base_index: usize, errors: &mut Vec<OpError>) {
+        if self.node(parent).is_err() {
+            for k in 0..run.len() {
+                errors.push(OpError { index: base_index + k, message: format!("no node with id {parent}") });
+            }
+            return;
+        }
+
+        let children = self.get(parent).unwrap().children.clone();
+        let mut next: HashMap<NodeId, NodeId> = HashMap::with_capacity(children.len());
+        let mut prev: HashMap<NodeId, NodeId> = HashMap::with_capacity(children.len());
+        let mut head: NodeId = children.first().copied().unwrap_or(0);
+        let mut tail: NodeId = children.last().copied().unwrap_or(0);
+        for w in children.windows(2) {
+            next.insert(w[0], w[1]);
+            prev.insert(w[1], w[0]);
+        }
+
+        fn unlink(
+            id: NodeId,
+            head: &mut NodeId,
+            tail: &mut NodeId,
+            next: &mut HashMap<NodeId, NodeId>,
+            prev: &mut HashMap<NodeId, NodeId>,
+        ) {
+            let p = prev.remove(&id).unwrap_or(0);
+            let n = next.remove(&id).unwrap_or(0);
+            if p != 0 {
+                next.insert(p, n);
+            } else if *head == id {
+                *head = n;
+            }
+            if n != 0 {
+                prev.insert(n, p);
+            } else if *tail == id {
+                *tail = p;
+            }
+        }
+
+        for (k, op) in run.iter().enumerate() {
+            let (id, before, is_move) = match *op {
+                Op::Insert { id, before, .. } => (id, before, false),
+                Op::Move { id, before, .. } => (id, before, true),
+                _ => unreachable!("run only holds Insert/Move"),
+            };
+            if id == parent || self.is_ancestor(id, parent) {
+                errors.push(OpError { index: base_index + k, message: format!("insert: node {id} cannot go inside itself") });
+                continue;
+            }
+            let Ok(old_parent) = self.node(id).map(|n| n.parent) else {
+                errors.push(OpError { index: base_index + k, message: format!("no node with id {id}") });
+                continue;
+            };
+            let _ = is_move;
+            if old_parent == parent {
+                // Already linked here (or was, before an earlier op in this
+                // same run moved it): unlink from its current spot.
+                unlink(id, &mut head, &mut tail, &mut next, &mut prev);
+            } else {
+                self.detach(id, old_parent);
+            }
+            // `before` must still be linked in this parent's list to be a
+            // valid anchor; otherwise fall back to appending at the end,
+            // matching the old `unwrap_or(children.len())` behavior.
+            let anchor = if before != 0 && (before == head || prev.contains_key(&before) || next.contains_key(&before) || before == tail)
+            {
+                before
+            } else {
+                0
+            };
+            if anchor == 0 {
+                prev.remove(&id);
+                next.remove(&id);
+                if tail != 0 {
+                    next.insert(tail, id);
+                    prev.insert(id, tail);
+                } else {
+                    head = id;
+                }
+                tail = id;
+            } else {
+                let p = prev.remove(&anchor).unwrap_or(0);
+                prev.insert(anchor, id);
+                next.insert(id, anchor);
+                if p != 0 {
+                    next.insert(p, id);
+                } else {
+                    head = id;
+                }
+                prev.insert(id, p);
+            }
+            self.get_mut(id).unwrap().parent = parent;
+        }
+
+        let mut result = Vec::with_capacity(next.len() + 1);
+        let mut cur = head;
+        while cur != 0 {
+            result.push(cur);
+            cur = next.get(&cur).copied().unwrap_or(0);
+        }
+        self.get_mut(parent).unwrap().children = result;
     }
 
     fn apply_op(&mut self, op: Op) -> Result<(), String> {
@@ -558,6 +692,103 @@ mod tests {
         screen(&mut u, 1, 0);
         screen(&mut u, 2, 1);
         assert_eq!(u.primary_screens().map(|(s, _)| s).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    // -- batched Insert/Move (SPEC.md §7.3, §8.3) ----------------------------
+
+    fn list_of(t: &mut Tree, n: usize) -> Vec<NodeId> {
+        let mut ops = vec![create(1, ControlKind::Screen)];
+        let ids: Vec<NodeId> = (2..2 + n as NodeId).collect();
+        for &id in &ids {
+            ops.push(create(id, ControlKind::Text));
+        }
+        for &id in &ids {
+            ops.push(insert(1, id, 0));
+        }
+        commit(t, &ops);
+        ids
+    }
+
+    #[test]
+    fn move_to_front_in_one_commit() {
+        let mut t = Tree::new();
+        let ids = list_of(&mut t, 5); // [2,3,4,5,6]
+        let errors = commit(&mut t, &[Op::Move { parent: 1, id: ids[4], before: ids[0] }]);
+        assert!(errors.is_empty());
+        assert_eq!(t.get(1).unwrap().children, vec![6, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn move_to_end_in_one_commit() {
+        let mut t = Tree::new();
+        let ids = list_of(&mut t, 5); // [2,3,4,5,6]
+        let errors = commit(&mut t, &[Op::Move { parent: 1, id: ids[0], before: 0 }]);
+        assert!(errors.is_empty());
+        assert_eq!(t.get(1).unwrap().children, vec![3, 4, 5, 6, 2]);
+    }
+
+    #[test]
+    fn swap_neighbors_in_one_commit() {
+        let mut t = Tree::new();
+        let _ = list_of(&mut t, 4); // [2,3,4,5]
+        // Swap 3 and 4: move 4 before 3.
+        let errors = commit(&mut t, &[Op::Move { parent: 1, id: 4, before: 3 }]);
+        assert!(errors.is_empty());
+        assert_eq!(t.get(1).unwrap().children, vec![2, 4, 3, 5]);
+    }
+
+    #[test]
+    fn many_moves_in_one_commit_reverse() {
+        let mut t = Tree::new();
+        let n = 50;
+        let ids = list_of(&mut t, n); // [2..=51]
+        // Reverse: move each row (in its OLD order) to just before the
+        // previously moved one, which chains them into the reverse order.
+        // `before: 0` on the first one means "append at the current end".
+        let mut ops = Vec::new();
+        let mut before = 0;
+        for &id in &ids {
+            ops.push(Op::Move { parent: 1, id, before });
+            before = id;
+        }
+        let errors = commit(&mut t, &ops);
+        assert!(errors.is_empty());
+        let expected: Vec<NodeId> = ids.iter().rev().copied().collect();
+        assert_eq!(t.get(1).unwrap().children, expected);
+    }
+
+    #[test]
+    fn move_with_dangling_before_falls_back_to_append() {
+        let mut t = Tree::new();
+        let _ = list_of(&mut t, 3); // [2,3,4]
+        // `before: 999` doesn't exist in this parent; original behavior
+        // (position().unwrap_or(children.len())) appends at the end.
+        let errors = commit(&mut t, &[Op::Move { parent: 1, id: 2, before: 999 }]);
+        assert!(errors.is_empty());
+        assert_eq!(t.get(1).unwrap().children, vec![3, 4, 2]);
+    }
+
+    #[test]
+    fn move_between_two_parents_in_one_commit() {
+        let mut t = Tree::new();
+        commit(
+            &mut t,
+            &[
+                create(1, ControlKind::Screen),
+                create(2, ControlKind::Section),
+                create(3, ControlKind::Section),
+                create(4, ControlKind::Text),
+                insert(2, 4, 0),
+                insert(1, 2, 0),
+                insert(1, 3, 0),
+            ],
+        );
+        assert_eq!(t.get(2).unwrap().children, vec![4]);
+        let errors = commit(&mut t, &[Op::Move { parent: 3, id: 4, before: 0 }]);
+        assert!(errors.is_empty());
+        assert!(t.get(2).unwrap().children.is_empty());
+        assert_eq!(t.get(3).unwrap().children, vec![4]);
+        assert_eq!(t.get(4).unwrap().parent, 3);
     }
 
     #[test]

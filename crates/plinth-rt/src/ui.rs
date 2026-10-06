@@ -438,6 +438,44 @@ fn key_hash(k: &Key) -> u32 {
     }
 }
 
+/// Marks the elements of `seq` (old positions of the rows in their new
+/// order, `u32::MAX` for a row with no old position) that belong to the
+/// longest strictly increasing subsequence of the non-`MAX` elements. Those
+/// rows are already in relative order and need no `Op::Move`; this is the
+/// standard keyed-diff minimal-moves trick. O(n log n) (patience sorting
+/// with parent pointers for reconstruction).
+fn longest_increasing_subsequence(seq: &[u32]) -> alloc::vec::Vec<bool> {
+    // Indices into `seq` of the candidates (new rows cannot anchor the LIS).
+    let idxs: Vec<usize> = (0..seq.len()).filter(|&i| seq[i] != u32::MAX).collect();
+    // `tails[k]` is the index (into `idxs`) of the smallest tail value of an
+    // increasing subsequence of length k + 1 found so far.
+    let mut tails: Vec<usize> = Vec::new();
+    // `prev[k]` is the predecessor of `idxs[k]` in its subsequence, as an
+    // index into `idxs`, or -1 at the start of a subsequence.
+    let mut prev: Vec<i32> = alloc::vec::Vec::new();
+    prev.resize(idxs.len(), -1);
+    for (k, &i) in idxs.iter().enumerate() {
+        let v = seq[i];
+        let pos = tails.partition_point(|&t| seq[idxs[t]] < v);
+        if pos > 0 {
+            prev[k] = tails[pos - 1] as i32;
+        }
+        if pos == tails.len() {
+            tails.push(k);
+        } else {
+            tails[pos] = k;
+        }
+    }
+    let mut in_lis = alloc::vec::Vec::new();
+    in_lis.resize(seq.len(), false);
+    let mut k = tails.last().copied();
+    while let Some(kk) = k {
+        in_lis[idxs[kk]] = true;
+        k = if prev[kk] >= 0 { Some(prev[kk] as usize) } else { None };
+    }
+    in_lis
+}
+
 fn run_list(id: u32) {
     let Some((node, owner, items_c, key_c, row_c, empty_c)) =
         with(|u| u.lists[id as usize].as_ref().map(|l| (l.node, l.owner, l.items, l.key, l.row, l.empty)))
@@ -465,9 +503,12 @@ fn run_list(id: u32) {
     });
     let mut old: Vec<Option<Row>> = old_rows.into_iter().map(Some).collect();
     let mut rows = Vec::with_capacity(items.len());
-    // The nodes of reused rows. A new row can get the id of a removed row,
-    // so the order below must not match on ids alone.
-    let mut kept: Vec<NodeId> = Vec::new();
+    // Whether `rows[i]` is the same row (same node) `prev_order` already
+    // has in it. A brand-new row's node id can coincidentally equal a
+    // removed row's freed id (ids are reused), so this must be tracked
+    // explicitly rather than inferred later by matching `r.node` against
+    // `prev_order`.
+    let mut reused = Vec::with_capacity(items.len());
     // A sorted index of (key, position in `old`) for O(log n) reuse lookup
     // instead of a linear scan: scanning `old` per new item made init,
     // filter and append O(n^2) for large lists (SPEC.md §7.3, Q6).
@@ -485,8 +526,8 @@ fn run_list(id: u32) {
             match reuse.and_then(|i| old[i].take()) {
                 // The same key and the same item: keep the row.
                 Some(r) if r.item.same(&item) => {
-                    kept.push(r.node);
-                    rows.push(r)
+                    rows.push(r);
+                    reused.push(true);
                 }
                 stale => {
                     if let Some(r) = stale {
@@ -503,6 +544,7 @@ fn run_list(id: u32) {
                         _ => crate::trap("a List row must return an element"),
                     });
                     rows.push(Row { key, item, node: row_node, scope });
+                    reused.push(false);
                 }
             }
         }
@@ -511,27 +553,42 @@ fn run_list(id: u32) {
         remove_row(r);
     }
 
-    // Put the row nodes in order with insert and move ops.
-    let mut kept_sorted = kept.clone();
-    kept_sorted.sort_unstable();
-    let mut current: Vec<NodeId> =
-        prev_order.into_iter().filter(|n| kept_sorted.binary_search(n).is_ok()).collect();
+    // Put the row nodes in order with insert and move ops: the standard
+    // keyed-diff method. `old_pos[i]` is the index in `prev_order` of
+    // `rows[i]`'s node, or `u32::MAX` for a brand-new row. The rows whose
+    // old positions form the longest increasing subsequence are already in
+    // relative order, so they need no `Move`; every other row gets one
+    // `Move` (or `Insert` if new). Walking from the end means each op's
+    // `before` is a node already placed at its final position. O(n log n),
+    // versus the old O(n) `position`/`remove`/`insert` per out-of-place row.
+    let mut old_pos_sorted: Vec<(NodeId, u32)> =
+        prev_order.iter().enumerate().map(|(i, n)| (*n, i as u32)).collect();
+    old_pos_sorted.sort_unstable_by_key(|(n, _)| *n);
+    let old_pos: Vec<u32> = rows
+        .iter()
+        .zip(reused.iter())
+        .map(|(r, &was_reused)| {
+            if !was_reused {
+                return u32::MAX;
+            }
+            old_pos_sorted.binary_search_by_key(&r.node, |(n, _)| *n).map(|found| old_pos_sorted[found].1).unwrap_or(u32::MAX)
+        })
+        .collect();
+    let in_lis = longest_increasing_subsequence(&old_pos);
+    let current: Vec<NodeId> = rows.iter().map(|r| r.node).collect();
     with(|u| {
-        for (i, r) in rows.iter().enumerate() {
-            if current.get(i) == Some(&r.node) {
-                continue;
+        let mut before: NodeId = 0;
+        for i in (0..rows.len()).rev() {
+            let r = &rows[i];
+            if in_lis[i] {
+                // Already in the right relative order; no op needed, but
+                // it is the next `before` for an earlier out-of-place row.
+            } else if old_pos[i] == u32::MAX {
+                u.ops.op(&Op::Insert { parent: node, id: r.node, before });
+            } else {
+                u.ops.op(&Op::Move { parent: node, id: r.node, before });
             }
-            let before = current.get(i).copied().unwrap_or(0);
-            let existed = current.iter().position(|n| *n == r.node);
-            let op = match existed {
-                Some(_) => Op::Move { parent: node, id: r.node, before },
-                None => Op::Insert { parent: node, id: r.node, before },
-            };
-            u.ops.op(&op);
-            if let Some(pos) = existed {
-                current.remove(pos);
-            }
-            current.insert(i, r.node);
+            before = r.node;
         }
     });
 
