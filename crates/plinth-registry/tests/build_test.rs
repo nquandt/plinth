@@ -58,7 +58,7 @@ fn build_two_apps_and_is_idempotent() {
     std::fs::create_dir_all(dir.join("incoming")).unwrap();
     std::fs::write(dir.join("incoming/notes.plnt"), compile_package("notes", "com.example.notes", "0.1.0")).unwrap();
 
-    let report = build(&dir, &Options { with_core: true }).unwrap();
+    let report = build(&dir, &Options { with_core: true, ..Default::default() }).unwrap();
     assert_eq!(report.added.len(), 2);
 
     assert!(dir.join("plinth-registry.json").exists());
@@ -70,7 +70,7 @@ fn build_two_apps_and_is_idempotent() {
     let before = snapshot(&dir);
 
     // Running again on the same input must be a no-op (byte-identical).
-    let report2 = build(&dir, &Options { with_core: true }).unwrap();
+    let report2 = build(&dir, &Options { with_core: true, ..Default::default() }).unwrap();
     assert_eq!(report2.added.len(), 0);
     assert_eq!(report2.unchanged.len(), 2);
     assert_eq!(before, snapshot(&dir), "rebuilding the same input changed the output");

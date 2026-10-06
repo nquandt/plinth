@@ -4,8 +4,11 @@
 use anyhow::{Context as _, Result};
 use std::path::Path;
 
-pub fn build(folder: &Path, with_core: bool) -> Result<()> {
-    let report = plinth_registry::build::build(folder, &plinth_registry::build::Options { with_core })?;
+pub fn build(folder: &Path, with_core: bool, hub_trusted_keys: Vec<String>) -> Result<()> {
+    let report = plinth_registry::build::build(folder, &plinth_registry::build::Options { with_core, hub_trusted_keys: hub_trusted_keys.clone() })?;
+    if !hub_trusted_keys.is_empty() {
+        println!("  wrote hub.json (trusted Hub keys: {})", hub_trusted_keys.join(", "));
+    }
     println!("built the registry at {}", folder.display());
     for (id, version) in &report.added {
         println!("  added {id}@{version}");

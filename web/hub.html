@@ -3,263 +3,178 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Plinth apps</title>
+    <title>Plinth Hub</title>
     <link rel="stylesheet" href="style.css" />
     <style>
-      /* The web App Hub (docs/web-hub.md). Colors come from the tokens in
-         style.css; only the risk colors are new. */
+      /* The web App Hub shell (docs/web-hub.md): the Hub app renders in
+         #app like any app; these rules are only for the host dialogs (the
+         consent window and the app window). Colors come from style.css. */
       :root {
-        --hub-warn: #f0b429;
+        --host-warn: #f0b429;
       }
       @media (prefers-color-scheme: light) {
         :root {
-          --hub-warn: #7a4d00;
+          --host-warn: #7a4d00;
         }
       }
-      body {
+      .host-dialog,
+      .host-window {
+        background: var(--pl-bg);
+        color: var(--pl-text);
+        border: 1px solid var(--pl-border);
+        border-radius: 12px;
         font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
         line-height: 1.45;
       }
-      .hub-header {
-        display: flex;
-        align-items: baseline;
-        gap: 12px;
-        flex-wrap: wrap;
-        padding: 12px 16px;
-        border-bottom: 1px solid var(--pl-border);
-        background: var(--pl-surface);
+      .host-dialog {
+        width: min(560px, calc(100vw - 32px));
+        max-height: calc(100vh - 32px);
+        box-sizing: border-box;
+        padding: 16px 20px;
       }
-      .hub-brand {
-        font-weight: 700;
-        color: var(--pl-text);
-        text-decoration: none;
+      .host-dialog::backdrop,
+      .host-window::backdrop {
+        background: rgb(0 0 0 / 0.55);
       }
-      .hub-registry {
-        color: var(--pl-muted);
-        font-size: 0.9rem;
-      }
-      .hub-main {
-        max-width: 760px;
-        margin: 0 auto;
-        padding: 16px;
-      }
-      .hub-main:focus {
-        outline: none;
-      }
-      .hub-main h1 {
-        font-size: 1.5rem;
-        margin: 8px 0 12px;
-      }
-      .hub-main h1:focus {
-        outline: none;
-      }
-      .hub-search {
-        display: block;
+      .host-dialog h2 {
+        font-size: 1.2rem;
         margin: 0 0 8px;
       }
-      .hub-search label {
-        display: block;
-        font-size: 0.85rem;
-        color: var(--pl-muted);
-        margin-bottom: 4px;
-      }
-      .hub-count {
+      .host-meta {
         color: var(--pl-muted);
         font-size: 0.9rem;
-        margin: 0 0 12px;
-      }
-      .hub-list {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        display: grid;
-        gap: 10px;
-      }
-      @media (min-width: 640px) {
-        .hub-list {
-          grid-template-columns: 1fr 1fr;
-        }
-      }
-      .hub-card {
-        display: flex;
-        gap: 12px;
-        align-items: flex-start;
-        height: 100%;
-        background: var(--pl-surface);
-        border: 1px solid var(--pl-border);
-        border-radius: 10px;
-        padding: 12px;
-        color: var(--pl-text);
-        text-decoration: none;
-      }
-      .hub-card:hover {
-        border-color: var(--pl-accent);
-      }
-      .hub-card-body {
-        min-width: 0;
-        flex: 1;
-      }
-      .hub-card h2 {
-        font-size: 1.05rem;
-        margin: 0;
-      }
-      .hub-meta {
-        color: var(--pl-muted);
-        font-size: 0.85rem;
-        margin: 2px 0 0;
         overflow-wrap: anywhere;
       }
-      .hub-summary {
-        margin: 6px 0 0;
-      }
-      .hub-icon {
-        flex: none;
-        width: 48px;
-        height: 48px;
-        border-radius: 12px;
-        object-fit: cover;
-        background: var(--pl-accent);
-        color: var(--pl-accent-text);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: 700;
-        font-size: 1.3rem;
-      }
-      .hub-icon-large {
-        width: 72px;
-        height: 72px;
-        border-radius: 16px;
-        font-size: 2rem;
-      }
-      .hub-chips {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        margin: 8px 0 0;
-        padding: 0;
+      .host-caps {
         list-style: none;
-      }
-      .hub-chip {
-        border: 1px solid var(--pl-border);
-        border-radius: 999px;
-        padding: 1px 8px;
-        font-size: 0.8rem;
-        color: var(--pl-text);
-      }
-      .hub-risk-medium {
-        border-color: var(--hub-warn);
-        color: var(--hub-warn);
-      }
-      .hub-risk-high,
-      .hub-risk-unknown {
-        border-color: var(--pl-danger);
-        color: var(--pl-danger);
-      }
-      .hub-note {
-        border: 1px solid var(--hub-warn);
-        border-radius: 8px;
-        padding: 8px 12px;
-        margin: 12px 0;
-      }
-      .hub-note-danger {
-        border-color: var(--pl-danger);
-      }
-      .hub-back {
-        display: inline-block;
-        color: var(--pl-accent);
-        margin: 4px 0 8px;
-      }
-      @media (prefers-color-scheme: dark) {
-        .hub-back {
-          color: #8fb0ff;
-        }
-      }
-      .hub-app-head {
-        display: flex;
-        gap: 16px;
-        align-items: center;
-      }
-      .hub-app-head h1 {
-        margin: 0;
-      }
-      .hub-open {
-        display: inline-block;
-        background: var(--pl-accent);
-        color: var(--pl-accent-text);
-        border-radius: 8px;
-        padding: 10px 22px;
-        font-weight: 600;
-        text-decoration: none;
-        margin: 16px 0 4px;
-      }
-      .hub-section {
-        margin: 24px 0 0;
-      }
-      .hub-section h2 {
-        font-size: 1.1rem;
-        margin: 0 0 8px;
-      }
-      .hub-caps {
-        list-style: none;
+        margin: 12px 0 0;
         padding: 0;
-        margin: 0;
         display: grid;
         gap: 8px;
       }
-      .hub-cap {
+      .host-cap {
         background: var(--pl-surface);
         border: 1px solid var(--pl-border);
         border-radius: 8px;
-        padding: 10px 12px;
-      }
-      .hub-cap-head {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        align-items: baseline;
-        justify-content: space-between;
-      }
-      .hub-cap-title {
-        font-weight: 600;
+        padding: 8px 12px 10px;
         margin: 0;
+        min-width: 0;
       }
-      .hub-cap p {
+      .host-cap legend {
+        padding: 0 4px;
+      }
+      .host-cap p {
         margin: 4px 0 0;
       }
-      .hub-code {
+      .host-cap-title {
+        font-weight: 600;
+      }
+      .host-code {
         font-family: ui-monospace, Consolas, monospace;
         font-size: 0.85rem;
         color: var(--pl-muted);
       }
-      .hub-support-no {
-        color: var(--pl-danger);
-        font-weight: 600;
-      }
-      .hub-support-limited {
-        color: var(--hub-warn);
-        font-weight: 600;
-      }
-      .hub-table-wrap {
-        overflow-x: auto;
-      }
-      .hub-table {
-        border-collapse: collapse;
-        width: 100%;
-        font-size: 0.9rem;
-      }
-      .hub-table th,
-      .hub-table td {
-        text-align: left;
-        padding: 6px 8px;
-        border-bottom: 1px solid var(--pl-border);
+      .host-chip {
+        border: 1px solid var(--pl-border);
+        border-radius: 999px;
+        padding: 1px 8px;
+        font-size: 0.8rem;
         white-space: nowrap;
       }
-      .hub-error {
-        color: var(--pl-danger);
-        white-space: pre-wrap;
+      .host-risk-medium {
+        border-color: var(--host-warn);
+        color: var(--host-warn);
       }
-      .hub-visually-hidden {
+      .host-risk-high {
+        border-color: var(--pl-danger);
+        color: var(--pl-danger);
+      }
+      .host-choices {
+        display: flex;
+        gap: 24px;
+        margin: 8px 0 0;
+      }
+      .host-choices label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 32px;
+        cursor: pointer;
+      }
+      .host-choices input {
+        width: 18px;
+        height: 18px;
+        accent-color: var(--pl-accent);
+      }
+      .host-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        margin: 16px 0 0;
+      }
+      .host-button {
+        font: inherit;
+        border-radius: 8px;
+        padding: 8px 16px;
+        cursor: pointer;
+        background: var(--pl-surface);
+        color: var(--pl-text);
+        border: 1px solid var(--pl-border);
+      }
+      .host-input {
+        width: 100%;
+        box-sizing: border-box;
+        font: inherit;
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--pl-border);
+        background: var(--pl-surface);
+        color: var(--pl-text);
+      }
+      .host-primary {
+        background: var(--pl-accent);
+        color: var(--pl-accent-text);
+        border-color: var(--pl-accent);
+        font-weight: 600;
+      }
+      .host-window {
+        position: fixed;
+        inset: 8px;
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        box-shadow: 0 0 0 100vmax rgb(0 0 0 / 0.55);
+      }
+      .host-window-bar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 6px 8px 6px 16px;
+        border-bottom: 1px solid var(--pl-border);
+        background: var(--pl-surface);
+      }
+      .host-window-bar h2 {
+        font-size: 1.05rem;
+        margin: 0;
+      }
+      .host-window-bar .host-button {
+        margin-left: auto;
+      }
+      .host-frame {
+        flex: 1;
+        width: 100%;
+        min-height: 0;
+        border: 0;
+        background: var(--pl-bg);
+      }
+      .host-error {
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 24px 16px;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      .host-visually-hidden {
         position: absolute;
         width: 1px;
         height: 1px;
@@ -270,14 +185,11 @@
     </style>
   </head>
   <body>
-    <header class="hub-header">
-      <a class="hub-brand" href="#/">Plinth apps</a>
-      <span class="hub-registry" id="hub-registry"></span>
-    </header>
-    <main class="hub-main" id="hub-main" tabindex="-1">
-      <p>Loading&hellip;</p>
-    </main>
-    <div class="hub-visually-hidden" id="hub-status" role="status" aria-live="polite"></div>
-    <script type="module" src="hub.js"></script>
+    <!-- The Hub UI is the Plinth app examples/hub; hub-shell.js loads it
+         from the registry and runs it with the plinth:hub backend
+         (docs/web-hub.md). -->
+    <div id="app"><p style="padding: 24px">Loading the Hub&hellip;</p></div>
+    <div class="host-visually-hidden" id="host-status" role="status" aria-live="polite"></div>
+    <script type="module" src="hub-shell.js"></script>
   </body>
 </html>

@@ -98,6 +98,69 @@ function manifestEntry(manifestText) {
 
 const DeniedReason = { undeclared: 0, refused: 1, unsupported: 2 };
 
+/** True for a host in a private or loopback range (`net.local`, SPEC.md §11). */
+export function isPrivateNetHost(host) {
+  const h = host.split(":")[0]; // strip a port
+  if (h.toLowerCase() === "localhost" || h.endsWith(".local") || h === "::1" || h === "0.0.0.0" || h === "[::1]") return true;
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
+/**
+ * The `plinth:net` check (SPEC.md §11): `net:<host>` and `net.local` are
+ * dynamic names, so the check runs against the URL. `capReason(name)` gives
+ * null (usable) or a `DeniedReason`. Returns null or a `DeniedReason`.
+ */
+function netDeniedReason(url, capReason) {
+  let host;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return DeniedReason.unsupported;
+  }
+  const names = isPrivateNetHost(host) ? ["net.local"] : [`net:${host}`, "net:*"];
+  const reasons = names.map(capReason);
+  if (reasons.includes(null)) return null;
+  return reasons.includes(DeniedReason.refused) ? DeniedReason.refused : DeniedReason.undeclared;
+}
+
+/**
+ * The `plinth:net` check for a host page (the app-frame host checks the
+ * request again in the parent): null if `url` may be fetched, else the
+ * `"denied:<reason>"` text. `declared` and `refused` are capability sets.
+ */
+export function netDenied(url, declared, refused = new Set()) {
+  const capReason = (name) => (!declared.has(name) ? DeniedReason.undeclared : refused.has(name) ? DeniedReason.refused : null);
+  const reason = netDeniedReason(url, capReason);
+  if (reason === null) return null;
+  return reason === DeniedReason.undeclared ? "denied:undeclared" : reason === DeniedReason.refused ? "denied:refused" : "denied:unsupported";
+}
+
+/** One HTTP request for `plinth:net`: `[ok, status, text, error]`, never a throw. */
+export async function httpFetch(url, method, headers, body, impl = typeof fetch === "function" ? fetch : null) {
+  if (!impl) return [false, 0, "", "network: no fetch implementation available"];
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), 20000) : null;
+  try {
+    const res = await impl(url, {
+      method,
+      headers,
+      body: body ?? undefined,
+      redirect: "manual", // redirects are allowed only to allowed hosts (SPEC.md §11); not re-checked per hop yet.
+      credentials: "omit", // an app request never carries the page's cookies
+      signal: controller?.signal,
+    });
+    const text = await res.text();
+    return [res.ok, res.status, text, null];
+  } catch (e) {
+    return [false, 0, "", `network: ${e?.message ?? e}`];
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 /**
  * A `Map`-backed implementation of the kv storage interface `hostImports`
  * expects ({get,set,delete,keys}, all synchronous). Used as the Node
@@ -200,10 +263,21 @@ function hostImports(
     cancelTimerEvent,
     kvStore,
     capabilities = new Set(),
+    refused = new Set(),
     askDialog,
     completeRequest,
+    clipboard = null,
+    hub = null,
+    netFetch = null,
   } = {},
 ) {
+  // A capability is usable when the manifest declares it and the user did
+  // not refuse it (the web App Hub's consent, docs/web-hub.md). A refused
+  // call answers `denied(refused)`; it never traps (SPEC.md §8.5).
+  function capReason(name) {
+    if (!capabilities.has(name)) return DeniedReason.undeclared;
+    return refused.has(name) ? DeniedReason.refused : null;
+  }
   // plinth:dialog (core 1.3, SPEC.md §8.5): each call returns a request id at
   // once; the answer arrives later as a `completion` event.
   let nextRequest = 1;
@@ -216,64 +290,25 @@ function hostImports(
     return id;
   }
   // plinth:net (core 1.4, SPEC.md §8.5, §11): same request-id-now,
-  // completion-later shape as dialogs. `net:<host>` and `net.local` are
-  // dynamic capability names (one per declared host; §11), so the check
-  // happens here against the actual URL, not by exact string lookup.
-  function isPrivateNetHost(host) {
-    const h = host.split(":")[0]; // strip a port
-    if (h.toLowerCase() === "localhost" || h.endsWith(".local") || h === "::1" || h === "0.0.0.0" || h === "[::1]") return true;
-    const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-    if (!m) return false;
-    const [a, b] = [Number(m[1]), Number(m[2])];
-    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
-  }
-  function hostOf(url) {
-    try {
-      return new URL(url).hostname;
-    } catch {
-      return null;
-    }
-  }
-  function netDeniedReason(host) {
-    if (host === null) return DeniedReason.unsupported;
-    if (isPrivateNetHost(host)) {
-      return capabilities.has("net.local") ? null : DeniedReason.undeclared;
-    }
-    return capabilities.has(`net:${host}`) || capabilities.has("net:*") ? null : DeniedReason.undeclared;
-  }
-  function netResult(ok, status, text, error) {
-    return [ok, status, text, error];
-  }
-  async function runFetch(url, method, headers, body) {
-    const impl = typeof fetch === "function" ? fetch : null;
-    if (!impl) return netResult(false, 0, "", "network: no fetch implementation available");
-    const controller = typeof AbortController === "function" ? new AbortController() : null;
-    const timeout = controller ? setTimeout(() => controller.abort(), 20000) : null;
-    try {
-      const res = await impl(url, {
-        method,
-        headers,
-        body: body ?? undefined,
-        redirect: "manual", // redirects are allowed only to allowed hosts (SPEC.md §11); not re-checked per hop yet.
-        signal: controller?.signal,
-      });
-      const text = await res.text();
-      return netResult(res.ok, res.status, text, null);
-    } catch (e) {
-      return netResult(false, 0, "", `network: ${e?.message ?? e}`);
-    } finally {
-      if (timeout) clearTimeout(timeout);
-    }
-  }
+  // completion-later shape as dialogs. The check is `netDeniedReason`
+  // (module level, shared with the app-frame host).
   function openNetFetch(url, method, headers, body) {
     const id = nextRequest++;
-    const reason = netDeniedReason(hostOf(url));
+    const reason = netDeniedReason(url, capReason);
     if (reason !== null) {
       const text = reason === DeniedReason.undeclared ? "denied:undeclared" : reason === DeniedReason.refused ? "denied:refused" : "denied:unsupported";
-      Promise.resolve().then(() => completeRequest?.(id, netResult(false, 0, "", text)));
+      Promise.resolve().then(() => completeRequest?.(id, [false, 0, "", text]));
       return id;
     }
-    runFetch(url, method, headers, body).then((result) => completeRequest?.(id, result));
+    // `netFetch` (the app frame): the parent page makes the request, so it
+    // carries the page's real origin (docs/web-hub.md §4). It answers the
+    // same `[ok, status, text, error]` result.
+    const run = netFetch
+      ? Promise.resolve()
+          .then(() => netFetch(url, method, headers, body))
+          .catch((e) => [false, 0, "", `network: ${e?.message ?? e}`])
+      : httpFetch(url, method, headers, body);
+    run.then((result) => completeRequest?.(id, result));
     return id;
   }
   function mem() {
@@ -349,10 +384,64 @@ function hostImports(
     v.setUint32(retptr + 8, values.length, true);
   }
 
+  // plinth:hub: the reason a call is denied, or null.
+  function hubReason() {
+    const reason = capReason("hub.manage");
+    if (reason !== null) return reason;
+    return hub ? null : DeniedReason.unsupported;
+  }
+  function hubString(retptr, call) {
+    const reason = hubReason();
+    if (reason !== null) return writeDeniedAt4(retptr, reason);
+    let value;
+    try {
+      value = call();
+    } catch {
+      return writeDeniedAt4(retptr, DeniedReason.unsupported);
+    }
+    writeOkString(retptr, value);
+  }
+  function hubUnit(retptr, call) {
+    const reason = hubReason();
+    if (reason !== null) return writeDeniedUnit(retptr, reason);
+    try {
+      call();
+    } catch {
+      return writeDeniedUnit(retptr, DeniedReason.unsupported);
+    }
+    writeOkUnit(retptr);
+  }
+  const deniedText = (reason) =>
+    reason === DeniedReason.undeclared ? "denied:undeclared" : reason === DeniedReason.refused ? "denied:refused" : "denied:unsupported";
+  /** An async hub call: `denied` is null (answer null) or "text" (answer the reason text). */
+  function hubAsync(denied, call, ok, failed) {
+    const id = nextRequest++;
+    const reason = hubReason();
+    if (reason !== null) {
+      Promise.resolve().then(() => completeRequest?.(id, denied === "text" ? deniedText(reason) : null));
+      return id;
+    }
+    Promise.resolve()
+      .then(call)
+      .then(
+        (value) => completeRequest?.(id, ok(value)),
+        (err) => completeRequest?.(id, failed(String(err?.message ?? err))),
+      );
+    return id;
+  }
+
   let nextTimer = 1;
   const timers = new Map(); // id -> JS handle
-  const hasStoreCap = capabilities.has("store.kv");
+  const storeReason = kvStore ? capReason("store.kv") : DeniedReason.undeclared;
   let clipboardCache = null;
+  // The clipboard: `navigator.clipboard` by default; the web App Hub's
+  // sandboxed frame gives its own (`{ writeText(text), readText() }`, both
+  // may return a promise) that asks the hub page.
+  const clip =
+    clipboard ??
+    (typeof navigator !== "undefined" && navigator.clipboard?.writeText
+      ? { writeText: (t) => navigator.clipboard.writeText(t), readText: () => navigator.clipboard.readText() }
+      : null);
 
   return {
     "plinth:app/ui@1.0.0": {
@@ -410,21 +499,22 @@ function hostImports(
     },
     "plinth:app/store@1.0.0": {
       "kv-get"(keyPtr, keyLen, retptr) {
-        if (!hasStoreCap || !kvStore) return writeDeniedAt4(retptr, DeniedReason.undeclared);
+        if (storeReason !== null) return writeDeniedAt4(retptr, storeReason);
         writeOkOptionString(retptr, kvStore.get(readString(keyPtr, keyLen)));
       },
       "kv-set"(keyPtr, keyLen, valPtr, valLen, retptr) {
-        if (!hasStoreCap || !kvStore) return writeDeniedUnit(retptr, DeniedReason.undeclared);
-        kvStore.set(readString(keyPtr, keyLen), readString(valPtr, valLen));
+        if (storeReason !== null) return writeDeniedUnit(retptr, storeReason);
+        // A store can refuse a write (`false`), for example over its quota.
+        if (kvStore.set(readString(keyPtr, keyLen), readString(valPtr, valLen)) === false) return writeDeniedUnit(retptr, DeniedReason.refused);
         writeOkUnit(retptr);
       },
       "kv-delete"(keyPtr, keyLen, retptr) {
-        if (!hasStoreCap || !kvStore) return writeDeniedUnit(retptr, DeniedReason.undeclared);
+        if (storeReason !== null) return writeDeniedUnit(retptr, storeReason);
         kvStore.delete(readString(keyPtr, keyLen));
         writeOkUnit(retptr);
       },
       "kv-keys"(retptr) {
-        if (!hasStoreCap || !kvStore) return writeDeniedAt4(retptr, DeniedReason.undeclared);
+        if (storeReason !== null) return writeDeniedAt4(retptr, storeReason);
         writeOkStringList(retptr, kvStore.keys());
       },
     },
@@ -464,96 +554,106 @@ function hostImports(
     },
     "plinth:app/clipboard@1.0.0": {
       "write-text"(ptr, len, retptr) {
+        const reason = capReason("clipboard.write");
+        if (reason !== null) return writeDeniedUnit(retptr, reason);
         const text = readString(ptr, len);
         clipboardCache = text;
-        if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        if (clip) {
           // Fire-and-forget: the Clipboard API is async, this host call is not.
-          navigator.clipboard.writeText(text).catch(() => {});
+          Promise.resolve()
+            .then(() => clip.writeText(text))
+            .catch(() => {});
         }
         writeOkUnit(retptr);
       },
       "read-text"(retptr) {
-        if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
+        const reason = capReason("clipboard.read");
+        if (reason !== null) return writeDeniedAt4(retptr, reason);
+        if (clip) {
           // Kick off a refresh for next time; this call answers from the cache now.
-          navigator.clipboard
-            .readText()
-            .then((v) => (clipboardCache = v))
+          Promise.resolve()
+            .then(() => clip.readText())
+            .then((v) => {
+              if (typeof v === "string") clipboardCache = v;
+            })
             .catch(() => {});
         }
         writeOkOptionString(retptr, clipboardCache);
       },
     },
-    // `plinth:hub` (`docs/HUB.md` §4.1, §12.2) is privileged and needs a
-    // real Hub backend (the library, grants, signature checks) that this
-    // early web host does not have yet (`docs/HUB.md` §11: the web Hub is
-    // H6). Every call answers "unsupported", exactly like a desktop host
-    // build with no implementation for a capability (SPEC.md §9.4); it
-    // never traps, so a trusted Hub UI app still loads and runs here, it
-    // just cannot manage the library yet.
+    // `plinth:hub` (`docs/HUB.md` §4.1, §12.2): privileged. The calls go to
+    // `hub` (`hub-host.js`), which only the web App Hub shell gives, and
+    // only to the Hub app signed by a trusted key (`hub-shell.js`). Without
+    // it every call answers "unsupported" (SPEC.md §9.4); a declared but
+    // refused `hub.manage` answers "refused". Never a trap. A backend error
+    // answers "unsupported", as on the desktop host.
     "plinth:app/hub@1.0.0": {
       "list-apps"(retptr) {
-        writeDeniedAt4(retptr, DeniedReason.unsupported);
+        hubString(retptr, () => hub.listAppsJson());
       },
-      launch(_idPtr, _idLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      launch(idPtr, idLen, retptr) {
+        hubUnit(retptr, () => hub.launch(readString(idPtr, idLen)));
       },
-      "set-grant"(_idPtr, _idLen, _capPtr, _capLen, _allowed, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      "set-grant"(idPtr, idLen, capPtr, capLen, allowed, retptr) {
+        hubUnit(retptr, () => hub.setGrant(readString(idPtr, idLen), readString(capPtr, capLen), Boolean(allowed)));
       },
-      block(_idPtr, _idLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      block(idPtr, idLen, retptr) {
+        hubUnit(retptr, () => hub.block(readString(idPtr, idLen)));
       },
-      unblock(_idPtr, _idLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      unblock(idPtr, idLen, retptr) {
+        hubUnit(retptr, () => hub.unblock(readString(idPtr, idLen)));
       },
       // Core 1.8 (`docs/HUB.md` §9.1, §5.2, H3 step 2).
       "list-groups"(retptr) {
-        writeDeniedAt4(retptr, DeniedReason.unsupported);
+        hubString(retptr, () => hub.listGroupsJson());
       },
-      "create-group"(_namePtr, _nameLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      "create-group"(namePtr, nameLen, retptr) {
+        hubUnit(retptr, () => hub.createGroup(readString(namePtr, nameLen)));
       },
-      "set-group"(_idPtr, _idLen, _groupPtr, _groupLen, _member, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      "set-group"(idPtr, idLen, groupPtr, groupLen, member, retptr) {
+        hubUnit(retptr, () => hub.setGroup(readString(idPtr, idLen), readString(groupPtr, groupLen), Boolean(member)));
       },
-      remove(_idPtr, _idLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      remove(idPtr, idLen, retptr) {
+        hubUnit(retptr, () => hub.remove(readString(idPtr, idLen)));
       },
-      // Async: a request id now, a denied completion later (null for
-      // `search`, the reason text for `install`; `wit/plinth/app.wit`).
-      search(_queryPtr, _queryLen) {
-        const id = nextRequest++;
-        Promise.resolve().then(() => completeRequest?.(id, null));
-        return id;
+      // Async: a request id now, the completion later (`wit/plinth/app.wit`).
+      // Denied: null for `search` and `check-updates`, the reason text for
+      // `install` and `update`.
+      search(queryPtr, queryLen) {
+        const query = readString(queryPtr, queryLen);
+        return hubAsync(null, () => hub.search(query), (json) => json, () => null);
       },
-      install(_idPtr, _idLen) {
-        const id = nextRequest++;
-        Promise.resolve().then(() => completeRequest?.(id, "denied:unsupported"));
-        return id;
+      install(idPtr, idLen) {
+        const app = readString(idPtr, idLen);
+        return hubAsync("text", () => hub.install(app), () => null, (e) => e);
       },
       // Core 1.9 (`docs/HUB.md` §4.1, §7.4, §9.2).
-      "app-info"(_idPtr, _idLen, retptr) {
-        writeDeniedAt4(retptr, DeniedReason.unsupported);
+      "app-info"(idPtr, idLen, retptr) {
+        hubString(retptr, () => hub.appInfoJson(readString(idPtr, idLen)));
       },
-      pin(_idPtr, _idLen, _versionPtr, _versionLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      pin(idPtr, idLen, versionPtr, versionLen, retptr) {
+        hubUnit(retptr, () => hub.pin(readString(idPtr, idLen), readString(versionPtr, versionLen)));
       },
-      "block-publisher"(_keyPtr, _keyLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      "block-publisher"(keyPtr, keyLen, retptr) {
+        hubUnit(retptr, () => hub.blockPublisher(readString(keyPtr, keyLen)));
       },
-      "unblock-publisher"(_keyPtr, _keyLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      "unblock-publisher"(keyPtr, keyLen, retptr) {
+        hubUnit(retptr, () => hub.unblockPublisher(readString(keyPtr, keyLen)));
       },
-      // Async, like `search` (null) and `install` (the reason text).
-      "check-updates"(_idPtr, _idLen) {
-        const id = nextRequest++;
-        Promise.resolve().then(() => completeRequest?.(id, null));
-        return id;
+      "check-updates"(idPtr, idLen) {
+        const app = readString(idPtr, idLen);
+        // A failed check still answers with JSON, so the app can tell
+        // "denied" (null) from "failed" (as the desktop host does).
+        return hubAsync(
+          null,
+          () => hub.checkUpdates(app),
+          (json) => json,
+          (e) => JSON.stringify({ updates: [], errors: [e] }),
+        );
       },
-      update(_idPtr, _idLen) {
-        const id = nextRequest++;
-        Promise.resolve().then(() => completeRequest?.(id, "denied:unsupported"));
-        return id;
+      update(idPtr, idLen) {
+        const app = readString(idPtr, idLen);
+        return hubAsync("text", () => hub.update(app), () => null, (e) => e);
       },
     },
   };
@@ -654,6 +754,8 @@ export class PlinthApp {
       scheduleTimerEvent,
       completeRequest,
       capabilities,
+      refused: opts.refused ?? new Set(),
+      hub: opts.hub ?? null,
       kvStore,
       onCommit: (ops) => this.onCommit(ops),
     });

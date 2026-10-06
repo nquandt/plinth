@@ -112,7 +112,7 @@ fn flow_over_http_and_folder() {
     let reg_dir = temp_dir("reg");
     std::fs::write(reg_dir.join("counter.plnt"), compile_counter("com.example.counter-seed", "0.1.0")).unwrap();
     std::fs::write(reg_dir.join("notes.plnt"), compile_notes("com.example.notes", "0.1.0")).unwrap();
-    build(&reg_dir, &Options { with_core: true }).unwrap();
+    build(&reg_dir, &Options { with_core: true, ..Default::default() }).unwrap();
 
     // -- Folder path, no server. --
     run_flow(reg_dir.to_str().unwrap(), &reg_dir);

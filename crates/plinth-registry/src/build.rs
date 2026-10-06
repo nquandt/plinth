@@ -14,6 +14,24 @@ use std::path::{Path, PathBuf};
 pub struct Options {
     /// Copies the built-in core into `cores/` and writes `cores/index.json`.
     pub with_core: bool,
+    /// The publisher key ids (`ed25519:…`) that the web App Hub trusts as
+    /// Hub keys (`docs/web-hub.md`, `docs/HUB.md` §4.1). When it is not
+    /// empty, the build writes `hub.json` at the registry root; the page
+    /// gives `hub.manage` only to a Hub package that one of them signed.
+    pub hub_trusted_keys: Vec<String>,
+}
+
+/// The app id of the Hub app (`examples/hub`) that the web App Hub runs.
+pub const HUB_APP_ID: &str = "dev.plinth.hub";
+
+/// `hub.json`: the static configuration of the web App Hub.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct WebHubConfig {
+    pub schema: String,
+    /// The app id of the Hub app in this registry.
+    pub hub: String,
+    #[serde(rename = "trustedKeys")]
+    pub trusted_keys: Vec<String>,
 }
 
 /// Builds (or updates) the static registry at `folder`.
@@ -31,6 +49,10 @@ pub fn build(folder: &Path, options: &Options) -> Result<Report> {
     }
 
     regenerate_indexes(folder)?;
+    if !options.hub_trusted_keys.is_empty() {
+        let config = WebHubConfig { schema: "plinth.web-hub/1".into(), hub: HUB_APP_ID.into(), trusted_keys: options.hub_trusted_keys.clone() };
+        write_atomic(&folder.join("hub.json"), to_stable_json(&config)?.as_bytes())?;
+    }
     Ok(report)
 }
 

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # The web App Hub demo (docs/web-hub.md): builds the CLI and the example
-# apps, writes a registry with the runtime core to target/web-hub-registry,
-# and serves the registry and the web App Hub on http://127.0.0.1:8787/.
+# apps, signs the Hub app (examples/hub) with a throwaway demo key in
+# target/web-hub-demo-key (never the owner's key, never in the repository),
+# writes a registry with the runtime core and hub.json (the demo key as the
+# trusted Hub key) to target/web-hub-registry, and serves the registry and
+# the web host on http://127.0.0.1:8787/.
 #
 #   bash scripts/web-hub-demo.sh              # build, then serve (Ctrl+C to stop)
 #   bash scripts/web-hub-demo.sh --no-serve   # build only
@@ -18,10 +21,8 @@ port="${PORT:-8787}"
 serve=yes
 [ "${1:-}" = "--no-serve" ] && serve=no
 
-# Apps that do not make sense in this demo: `hub` is privileged (it needs
-# hub.manage, which the browser host does not give), `gc-torture` and
-# `big-list` are stress tests.
-skip=" hub gc-torture big-list "
+# Stress tests that do not make sense in this demo.
+skip=" gc-torture big-list "
 
 cargo build -p plinth-cli
 plinth=./target/debug/plinth
@@ -43,7 +44,16 @@ for dir in examples/*/; do
   done
 done
 
-"$plinth" registry build "$registry" --with-core
+# The demo Hub key: made one time, kept in target/ (git ignores it). The
+# Hub manifest's publisher is "you", so the key has that name.
+keydir=target/web-hub-demo-key
+if [ -z "$(ls -A "$keydir" 2>/dev/null)" ]; then
+  PLINTH_PUBLISHER_DIR="$keydir" "$plinth" publisher init --name you
+fi
+key="$(PLINTH_PUBLISHER_DIR="$keydir" "$plinth" publisher show | awk '{print $NF}')"
+PLINTH_PUBLISHER_DIR="$keydir" "$plinth" sign "$registry/incoming/hub.plnt"
+
+"$plinth" registry build "$registry" --with-core --hub-trusted-key "$key"
 
 if [ "$serve" = yes ]; then
   echo

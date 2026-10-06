@@ -89,8 +89,17 @@ fn handle(mut stream: TcpStream, folder: &Path, options: Options) -> Result<()> 
     if options.web
         && let Some(name) = rel.strip_prefix("web/")
     {
+        // The app frame (`app-frame.html`) runs in a sandboxed iframe with an
+        // opaque origin (`docs/web-hub.md` §4). A module script of such a
+        // page is a CORS request with `Origin: null`, so the web files allow
+        // any origin (they are public and need no credentials). The frame
+        // page itself is also sandboxed by its header, so it has an opaque
+        // origin even if a browser opens it directly.
+        const CORS: (&str, &str) = ("Access-Control-Allow-Origin", "*");
+        const FRAME_CSP: (&str, &str) = ("Content-Security-Policy", "sandbox allow-scripts");
+        let extra: &[(&str, &str)] = if name == "app-frame.html" { &[CORS, FRAME_CSP] } else { &[CORS] };
         return match crate::web_files::get(name) {
-            Some(bytes) => respond(&mut stream, 200, content_type(Path::new(name)), bytes, head, &[]),
+            Some(bytes) => respond(&mut stream, 200, content_type(Path::new(name)), bytes, head, extra),
             None => respond(&mut stream, 404, "text/plain", b"not found", head, &[]),
         };
     }
