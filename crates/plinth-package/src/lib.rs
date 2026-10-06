@@ -233,12 +233,81 @@ pub fn is_package(bytes: &[u8]) -> bool {
     bytes.starts_with(b"PK\x03\x04")
 }
 
+// -- Single-file export (SPEC.md §10.3) ---------------------------------------
+
+/// The last bytes of a single-file export: the magic `PLNTH\0` and the
+/// footer format version.
+pub const PAYLOAD_MAGIC: [u8; 8] = *b"PLNTH\0\x01\0";
+/// The footer: the SHA-256 of the payload, its offset and its length (both
+/// little-endian `u64`), and `PAYLOAD_MAGIC`.
+const FOOTER_LEN: usize = 32 + 8 + 8 + 8;
+
+/// Adds a `.plnt` to the end of a host executable.
+pub fn append_payload(host: &[u8], plnt: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(host.len() + plnt.len() + FOOTER_LEN);
+    out.extend_from_slice(host);
+    let offset = out.len() as u64;
+    out.extend_from_slice(plnt);
+    out.extend_from_slice(&Sha256::digest(plnt));
+    out.extend_from_slice(&offset.to_le_bytes());
+    out.extend_from_slice(&(plnt.len() as u64).to_le_bytes());
+    out.extend_from_slice(&PAYLOAD_MAGIC);
+    out
+}
+
+/// Reads the `.plnt` payload of a single-file export, if the file has one.
+/// It reads only the footer and the payload, not the whole executable.
+pub fn read_payload(path: &std::path::Path) -> Result<Option<Vec<u8>>> {
+    use std::io::{Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let size = f.metadata()?.len();
+    if size < FOOTER_LEN as u64 {
+        return Ok(None);
+    }
+    let mut footer = [0u8; FOOTER_LEN];
+    f.seek(SeekFrom::End(-(FOOTER_LEN as i64)))?;
+    f.read_exact(&mut footer)?;
+    if footer[48..] != PAYLOAD_MAGIC {
+        return Ok(None);
+    }
+    let offset = u64::from_le_bytes(footer[32..40].try_into().unwrap());
+    let len = u64::from_le_bytes(footer[40..48].try_into().unwrap());
+    if len > MAX_TOTAL || offset.checked_add(len).is_none_or(|end| end > size - FOOTER_LEN as u64) {
+        bail!("the payload footer of {} is not valid", path.display());
+    }
+    let mut payload = vec![0u8; len as usize];
+    f.seek(SeekFrom::Start(offset))?;
+    f.read_exact(&mut payload)?;
+    if Sha256::digest(&payload)[..] != footer[..32] {
+        bail!("the payload of {} does not match its digest", path.display());
+    }
+    Ok(Some(payload))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn config() -> ProjectConfig {
         ProjectConfig::parse("id = \"dev.plinth.test\"\nname = \"Test\"\nversion = \"0.1.0\"\npublisher = \"me\"\n").unwrap()
+    }
+
+    #[test]
+    fn payload_round_trip() {
+        let dir = std::env::temp_dir().join(format!("plinth-payload-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = dir.join("host.exe");
+        std::fs::write(&plain, b"MZ host bytes").unwrap();
+        assert!(read_payload(&plain).unwrap().is_none());
+        let exe = dir.join("app.exe");
+        std::fs::write(&exe, append_payload(b"MZ host bytes", b"PK\x03\x04 a package")).unwrap();
+        assert_eq!(read_payload(&exe).unwrap().as_deref(), Some(&b"PK\x03\x04 a package"[..]));
+        // A changed payload fails the digest check.
+        let mut bytes = std::fs::read(&exe).unwrap();
+        bytes[15] ^= 1;
+        std::fs::write(&exe, bytes).unwrap();
+        assert!(read_payload(&exe).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

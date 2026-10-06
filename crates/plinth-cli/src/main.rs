@@ -23,6 +23,8 @@ usage:
   plinth build [dir] [--out <file>]
                                    make dist/<name>.plnt
   plinth run <app.plnt | app.wasm> run a package
+  plinth native <app.plnt | dir> [-o <file>]
+                                   make one executable: this host and the app
   plinth validate <app.plnt | app.wasm>
                                    check a package and its Wasm imports
 
@@ -39,6 +41,15 @@ const TYPINGS: &[(&str, &str)] = &[
 ];
 
 fn main() -> ExitCode {
+    // A single-file export (SPEC.md §10.3) runs its payload and nothing else.
+    match std::env::current_exe().map_err(anyhow::Error::from).and_then(|exe| plinth_package::read_payload(&exe)) {
+        Ok(Some(plnt)) => return run_payload(plnt),
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("error: {e:#}");
+            return ExitCode::FAILURE;
+        }
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(args) {
         Ok(code) => code,
@@ -78,6 +89,16 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
             plinth_host_desktop::init_logging();
             plinth_host_desktop::run(plinth_host_desktop::HostApp::load(Path::new(file))?, None)?;
             Ok(ExitCode::SUCCESS)
+        }
+        Some("native") => {
+            let input = positional.get(1).context("usage: plinth native <app.plnt | dir> [-o <file>]")?;
+            let out = args.iter().position(|a| *a == "-o").and_then(|i| args.get(i + 1)).map(PathBuf::from);
+            if let Some(t) = args.iter().position(|a| *a == "-t").and_then(|i| args.get(i + 1))
+                && *t != std::env::consts::OS
+            {
+                bail!("this plinth can make `{}` executables only; run `plinth native` on {t}", std::env::consts::OS);
+            }
+            Ok(if native(Path::new(input), out)? { ExitCode::SUCCESS } else { ExitCode::FAILURE })
         }
         Some("validate") => {
             let file = positional.get(1).context("usage: plinth validate <file>")?;
@@ -301,8 +322,14 @@ fn compile(dir: &Path) -> Result<Option<Built>> {
 }
 
 fn build(dir: &Path, out: Option<PathBuf>) -> Result<bool> {
+    Ok(build_package(dir, out)?.is_some())
+}
+
+/// Builds the package and returns its path, or `None` when the app has
+/// errors.
+fn build_package(dir: &Path, out: Option<PathBuf>) -> Result<Option<PathBuf>> {
     let started = std::time::Instant::now();
-    let Some(b) = compile(dir)? else { return Ok(false) };
+    let Some(b) = compile(dir)? else { return Ok(None) };
     let manifest = b.config.manifest(plinth_protocol::UI_API_VERSION, &b.runtime, b.accent, &b.app);
     let pkg = Package { manifest, component: b.app, assets: Vec::new() };
     let bytes = pkg.write()?;
@@ -321,7 +348,75 @@ fn build(dir: &Path, out: Option<PathBuf>) -> Result<bool> {
         pkg.component.len(),
         bytes.len().div_ceil(1024)
     );
+    Ok(Some(out))
+}
+
+// -- native (single-file export, SPEC.md §10.3) ---------------------------------
+
+/// Makes one executable from this host and a package. `input` is a `.plnt`
+/// or a project directory, which is built first.
+fn native(input: &Path, out: Option<PathBuf>) -> Result<bool> {
+    let plnt_path = if input.is_dir() {
+        match build_package(input, None)? {
+            Some(p) => p,
+            None => return Ok(false),
+        }
+    } else {
+        input.to_path_buf()
+    };
+    let plnt = std::fs::read(&plnt_path).with_context(|| format!("read {}", plnt_path.display()))?;
+    // Check the package before it goes into an executable.
+    let app = plinth_host_desktop::HostApp::from_bytes(plnt.clone(), &plnt_path)?;
+    let host_exe = std::env::current_exe()?;
+    if plinth_package::read_payload(&host_exe)?.is_some() {
+        bail!("this plinth is a single-file export; use the plinth CLI");
+    }
+    let host = std::fs::read(&host_exe).with_context(|| format!("read {}", host_exe.display()))?;
+    let out = out.unwrap_or_else(|| {
+        let stem = plnt_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "app".into());
+        plnt_path.with_file_name(format!("{stem}{}", std::env::consts::EXE_SUFFIX))
+    });
+    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&out, plinth_package::append_payload(&host, &plnt)).with_context(|| format!("write {}", out.display()))?;
+    println!("made {} ({}, {} MiB)", out.display(), app.title, std::fs::metadata(&out)?.len() >> 20);
     Ok(true)
+}
+
+/// Runs the payload of a single-file export.
+fn run_payload(plnt: Vec<u8>) -> ExitCode {
+    hide_own_console();
+    plinth_host_desktop::init_logging();
+    let name = std::env::current_exe().unwrap_or_default();
+    let result = plinth_host_desktop::HostApp::from_bytes(plnt, &name).and_then(|app| plinth_host_desktop::run(app, None));
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// On Windows, a console program that starts from Explorer gets its own
+/// console window. An app does not need it, so the export closes it. A
+/// console that a terminal owns stays.
+fn hide_own_console() {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetConsoleProcessList(list: *mut u32, count: u32) -> u32;
+            fn FreeConsole() -> i32;
+        }
+        let mut ids = [0u32; 2];
+        // SAFETY: the buffer holds `ids.len()` process ids.
+        if unsafe { GetConsoleProcessList(ids.as_mut_ptr(), ids.len() as u32) } == 1 {
+            // SAFETY: no arguments; a process can always leave its console.
+            unsafe { FreeConsole() };
+        }
+    }
 }
 
 // -- dev -----------------------------------------------------------------------

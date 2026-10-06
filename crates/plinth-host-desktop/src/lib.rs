@@ -29,9 +29,15 @@ pub struct HostApp {
 impl HostApp {
     /// Reads a `.plnt` package, a bare app module or a bare component. An
     /// app module holds only the app code; the host links it into its own
-    /// runtime (SPEC.md §10.1).
+    /// runtime (SPEC.md §10.4).
     pub fn load(path: &Path) -> Result<HostApp> {
         let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        Self::from_bytes(bytes, path)
+    }
+
+    /// Like `load`, for bytes that are already in memory (for example the
+    /// payload of a single-file export). `path` names them in messages.
+    pub fn from_bytes(bytes: Vec<u8>, path: &Path) -> Result<HostApp> {
         if plinth_package::is_package(&bytes) {
             let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("open {}", path.display()))?;
             Ok(HostApp {
