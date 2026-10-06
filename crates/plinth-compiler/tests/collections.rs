@@ -236,6 +236,60 @@ fn tuple_literal_with_the_wrong_length_is_rejected() {
     assert_eq!(codes(&show("const p: [string, number] = [\"x\"];", "\"\"")), ["PL3001"]);
 }
 
+
+// -- Tuples with optional and rest elements ------------------------------------
+
+#[test]
+fn tuple_with_optional_elements() {
+    let body = r#"const a: [number, string?] = [1];
+const b: [number, string?] = [2, "x"];
+const c: [number, string?, boolean?] = [3, null, true];
+const n = (b[1] ?? "-") + (a[1] ?? "-");
+const [x, y] = b;
+let t: [number, string?] = [4];
+t[1] = "set";
+const lens = "" + a.length + b.length + c.length + t.length;"#;
+    assert_eq!(shown(body, r#"n + "|" + x + (y ?? "") + "|" + lens + "|" + (t[1] ?? "")"#), "x-|2x|1232|set");
+}
+
+#[test]
+fn tuple_with_a_rest_element() {
+    let body = r#"const xs = [7, 8];
+const a: [string, ...number[]] = ["a", 1, 2, 3];
+const b: [string, ...number[]] = ["b"];
+const c: [string, boolean?, ...number[]] = ["c", true, ...xs, 9];
+let d: [string, ...number[]] = ["d", ...xs];
+d[2] = 5;
+const [h, f, g] = a;
+const all: [...number[]] = [4, 5];
+const out = a[0] + a[1] + a[3] + "|" + a.length + b.length + c.length + d.length + "|" + h + f + g + "|" + d[1] + d[2] + "|" + all.length;"#;
+    assert_eq!(shown(body, "out"), "a13|4153|a12|75|2");
+}
+
+#[test]
+fn tuple_with_optional_and_rest_elements_to_json() {
+    let body = r#"const a: [string, ...number[]] = ["a", 1, 2];
+const b: [string, ...number[]] = ["b"];
+const c: [number, string?] = [1];
+const j = JSON.stringify(a) + JSON.stringify(b) + JSON.stringify(c);"#;
+    let main = show(body, "j").replace("from \"plinth:ui\";", "from \"plinth:ui\";\nimport { JSON } from \"plinth:core\";");
+    assert_eq!(text_of(&run(&main), ControlKind::Text), r#"["a",1,2]["b"][1,null]"#);
+}
+
+#[test]
+fn tuple_with_optional_and_rest_elements_diagnostics() {
+    // Too few elements, too many, a spread in the fixed part.
+    assert_eq!(codes(&show(r#"const a: [number, number, string?] = [1];"#, "\"\"")), ["PL3001"]);
+    assert_eq!(codes(&show(r#"const a: [number, string?] = [1, "a", "b"];"#, "\"\"")), ["PL3001"]);
+    assert_eq!(codes(&show(r#"const xs = [1]; const a: [number, ...number[]] = [...xs];"#, "\"\"")), ["PL3001"]);
+    // The rest element is not last, a required element after an optional one,
+    // a rest element that is not an array.
+    assert_eq!(codes(&show(r#"let a: [...number[], string] = [""];"#, "\"\"")), ["PL2012"]);
+    assert_eq!(codes(&show(r#"let a: [number?, string] = [1, ""];"#, "\"\"")), ["PL1000"]);
+    assert_eq!(codes(&show(r#"let a: [string, ...[number, number]] | null = null;"#, "\"\"")), ["PL2012"]);
+    // A computed index into a tuple with a rest element.
+    assert_eq!(codes(&show(r#"const a: [string, ...number[]] = ["a"]; const i = 1; const v = a[i];"#, "\"\"")), ["PL2011"]);
+}
 #[test]
 fn map_set_with_a_value_that_reads_the_same_new_key() {
     // Before the fix, `set` pushed the key and then evaluated the value, so

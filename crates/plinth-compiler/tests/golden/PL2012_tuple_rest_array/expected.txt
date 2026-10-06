@@ -1,0 +1,4 @@
+app/main.tsx(2,20): error PL2012: a rest element must have an array type, not `[number, number]`
+  let b: [string, ...[number, number]] | null = null;
+                     ^^^^^^^^^^^^^^^^
+  help: write `...T[]`, for example `[string, ...number[]]`

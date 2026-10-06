@@ -443,16 +443,25 @@ impl Checker<'_> {
             Pattern::Array(elems, span) => {
                 // A tuple (`[k, v]` of `Map.entries()`): each name reads a field.
                 if let Type::Struct(sid) = src.ty
-                    && let Some(tys) = self.tuple_elems(sid)
+                    && let Some(shape) = self.tuple_shape(sid)
                 {
-                    if elems.len() > tys.len() {
-                        let msg = format!("`{}` has only {} element(s)", self.prog.structs[sid as usize].name, tys.len());
+                    let n = shape.fixed.len();
+                    if shape.rest.is_none() && elems.len() > n {
+                        let msg = format!("`{}` has only {} element(s)", self.prog.structs[sid as usize].name, n);
                         self.err(code::TYPE_MISMATCH, *span, msg);
                         return out;
                     }
                     for (i, sub) in elems.iter().enumerate() {
                         let Some(sub) = sub else { continue };
-                        let part = TExpr::new(TExprKind::Field(Box::new(src.clone()), sid, i as u32), tys[i].clone(), sub.span());
+                        let part = match &shape.rest {
+                            Some(r) if i >= n => {
+                                let aty = Type::Array(Box::new(r.clone()));
+                                let arr = TExpr::new(TExprKind::Field(Box::new(src.clone()), sid, shape.rest_field()), aty, sub.span());
+                                let k = TExpr::new(TExprKind::Num((i - n) as f64), Type::Number, sub.span());
+                                TExpr::new(TExprKind::Index(Box::new(arr), Box::new(k)), r.clone(), sub.span())
+                            }
+                            _ => TExpr::new(TExprKind::Field(Box::new(src.clone()), sid, i as u32), shape.fixed[i].clone(), sub.span()),
+                        };
                         out.extend(self.bind_part(sub, part, mutable));
                     }
                     return out;

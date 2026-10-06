@@ -540,23 +540,25 @@ impl Cx<'_> {
             }
             T::TSTypeLiteral(l) => TypeAnn::Object(self.members(&l.members)?, span),
             T::TSTupleType(tt) => {
-                let mut parts = Vec::new();
-                for e in &tt.element_types {
-                    let inner = match e.as_ts_type() {
-                        Some(T::TSNamedTupleMember(m)) if !m.optional => m.element_type.as_ts_type(),
-                        Some(T::TSNamedTupleMember(_)) => None,
-                        other => other,
-                    };
-                    let Some(inner) = inner else {
+                let mut parts: Vec<(TypeAnn, TupleMark)> = Vec::new();
+                for (i, e) in tt.element_types.iter().enumerate() {
+                    let Some((inner, mark)) = tuple_elem(e) else { continue };
+                    let espan = oxc_span::GetSpan::span(e);
+                    if mark == TupleMark::Rest && i + 1 != tt.element_types.len() {
                         self.err_help(
                             code::ADVANCED_TYPE,
-                            t_span(t),
-                            "optional and rest tuple elements are not supported",
-                            "write a fixed-length tuple such as `[string, number]`",
+                            espan,
+                            "a rest element must be the last element of a tuple",
+                            "write the rest element last: `[string, ...number[]]`",
                         );
                         return None;
-                    };
-                    parts.push(self.ty(inner)?);
+                    }
+                    // The parser already reports a required element after
+                    // an optional one (`PL1000`).
+                    if mark == TupleMark::Required && parts.iter().any(|(_, m)| *m == TupleMark::Optional) {
+                        return None;
+                    }
+                    parts.push((self.ty(inner)?, mark));
                 }
                 if parts.is_empty() {
                     self.err_help(code::ADVANCED_TYPE, t_span(t), "an empty tuple type is not supported", "use an array type");
@@ -1437,6 +1439,22 @@ fn normalize_arrow_body(body: Body, expression: bool) -> Body {
             other => Body::Block(vec![other]),
         },
         other => other,
+    }
+}
+
+/// The type and kind of a tuple element (`T`, `T?`, `...T`, or a named
+/// member `a: T`, `a?: T`, `...a: T`).
+fn tuple_elem<'b, 'a>(e: &'b o::TSTupleElement<'a>) -> Option<(&'b o::TSType<'a>, TupleMark)> {
+    match e {
+        o::TSTupleElement::TSOptionalType(t) => Some((&t.type_annotation, TupleMark::Optional)),
+        o::TSTupleElement::TSRestType(t) => Some((&t.type_annotation, TupleMark::Rest)),
+        other => match other.as_ts_type()? {
+            o::TSType::TSNamedTupleMember(m) => {
+                let (t, mark) = tuple_elem(&m.element_type)?;
+                Some((t, if m.optional && mark == TupleMark::Required { TupleMark::Optional } else { mark }))
+            }
+            t => Some((t, TupleMark::Required)),
+        },
     }
 }
 

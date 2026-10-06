@@ -439,6 +439,46 @@ small local change), per the dogfooding task's scope.
     `PL3004_promise_static` (was `PL3004_promise_race`),
     `PL2012_promise_all_void`.
 
+- **Tuples with optional and rest elements (branch `wt-compiler2`).**
+  Before, `[number, string?]` and `[string, ...number[]]` were
+  `PL2012`. Now:
+  - The parser keeps a mark on each element (`ast::TupleMark`:
+    required, optional, rest). A rest element that is not last is
+    `PL2012` (golden `PL2012_tuple_rest_last`). The parser of `oxc`
+    already reports a required element after an optional one
+    (`PL1000`).
+  - `Checker::tuple_type` (`check/mod.rs`) builds the tuple struct. An
+    optional element is a field of type `T | null` with the `optional`
+    mark. A rest element is a last field named `...` that holds the
+    array; its type must be an array (`PL2012`, golden
+    `PL2012_tuple_rest_array`). `[...T[]]` is `T[]`. `tuple_shape`
+    gives the fixed element types, the number of required elements and
+    the rest element type.
+  - A literal where such a tuple is expected can leave out optional
+    elements (they are `null`) and can have any number of elements and
+    spreads after the fixed ones (they go into a new array). Wrong
+    lengths and a spread in the fixed part are `PL3001` (golden
+    `PL3001_tuple_optional_rest`).
+  - `t[k]` with a number literal `k` past the fixed elements reads (or
+    writes) element `k - n` of the rest array. A computed index is
+    still `PL2011` (golden `PL2011_tuple_rest_index`). Destructuring
+    reads the rest array the same way.
+  - `t.length` works on all tuples: the number of required elements,
+    plus the optional elements up to the last one that is not `null`,
+    plus the length of the rest array.
+  - `JSON.stringify` writes the rest elements into the same JSON array.
+    A left-out optional element is written as `null` (JavaScript leaves
+    it out); Plinth cannot tell a left-out element from `null`.
+  - Not done: a rest pattern in destructuring (`const [a, ...r] = t`;
+    array patterns have no rest at all), a rest element in the middle,
+    a spread of a tuple into a rest element (`...[A, B]`), and
+    `JSON.parse` of a tuple type.
+  - Tests: `tuple_with_optional_elements`,
+    `tuple_with_a_rest_element`,
+    `tuple_with_optional_and_rest_elements_to_json`,
+    `tuple_with_optional_and_rest_elements_diagnostics`
+    (`tests/collections.rs`).
+
 - **`Promise.race`, `any` and `allSettled` (branch `wt-compiler2`).**
   Generated code only, like `Promise.all`: one helper function per
   combinator and promise type (`make_promise_race_any`,

@@ -119,8 +119,19 @@ pub enum TypeAnn {
     Union(Vec<TypeAnn>, Span),
     Func { params: Vec<(String, TypeAnn, bool)>, ret: Box<TypeAnn>, span: Span },
     Object(Vec<FieldAnn>, Span),
-    /// `[A, B]`: a fixed-length tuple (no optional or rest elements).
-    Tuple(Vec<TypeAnn>, Span),
+    /// `[A, B?, ...C[]]`: a tuple. Optional elements come after the
+    /// required ones; a rest element (its array type) can only be last.
+    Tuple(Vec<(TypeAnn, TupleMark)>, Span),
+}
+
+/// The kind of a tuple element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TupleMark {
+    Required,
+    /// `T?`
+    Optional,
+    /// `...T[]`
+    Rest,
 }
 
 impl TypeAnn {
