@@ -363,10 +363,10 @@ abi! {
     // -- Host APIs (plinth:time, plinth:store, plinth:clipboard; SPEC.md §8.5) --
     fn __plinth_rt_time_now() -> f64 { host::now() }
     fn __plinth_rt_time_monotonic_now() -> f64 { host::monotonic_now() }
-    fn __plinth_rt_set_timer(thunk: i32, env: i32, ms: i32, repeat: i32) -> i32 {
+    fn __plinth_rt_set_timer(thunk: i32, env: i32, ms: f64, repeat: i32) -> f64 {
         host::set_timer(Callable { thunk: thunk as u32, env: env as u32 }, ms, repeat != 0)
     }
-    fn __plinth_rt_clear_timer(id: i32) { host::clear_timer(id) }
+    fn __plinth_rt_clear_timer(id: f64) { host::clear_timer(id) }
     fn __plinth_rt_kv_get(key: i32) -> i32 { host::kv_get(key) }
     fn __plinth_rt_kv_set(key: i32, value: i32) { host::kv_set(key, value) }
     fn __plinth_rt_kv_delete(key: i32) { host::kv_delete(key) }

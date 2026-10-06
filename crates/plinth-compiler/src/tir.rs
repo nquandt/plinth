@@ -248,6 +248,9 @@ pub enum TExprKind {
     Jsx(Box<TJsx>),
     /// `navigate("name")`. The screen index is resolved after the app config.
     Navigate(String),
+    /// `setTimeout`/`setInterval`: `(ms, repeat, callback)`. Returns the
+    /// timer id as a `number` (SPEC.md §8.5, `plinth:time`).
+    TimerNew(Box<TExpr>, bool, Box<TExpr>),
 
     // -- Forms that only `lower` makes. ------------------------------------
     /// The table index of the thunk adapter for a closure signature.

@@ -32,6 +32,9 @@ pub mod code {
     pub const UNKNOWN_EXPORT: &str = "PL1004";
     pub const UNKNOWN_STD_MODULE: &str = "PL1005";
     pub const NO_APP: &str = "PL1006";
+    /// A `plinth:*` host API call needs a capability that `plinth.toml`
+    /// does not declare (SPEC.md §11).
+    pub const CAPABILITY_UNDECLARED: &str = "PL1007";
     // 2xxx: rejected language features (SPEC.md §4.4).
     pub const UNSUPPORTED: &str = "PL2000";
     pub const ANY: &str = "PL2001";

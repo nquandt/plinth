@@ -72,8 +72,16 @@ struct Loaded {
     deps: Vec<(usize, Span)>,
 }
 
-/// Parses and checks a project. The program is `None` when there are errors.
+/// Parses and checks a project with no declared capabilities (SPEC.md
+/// §11): any host API call that needs one is reported.
 pub fn frontend(fs: &dyn FileSystem) -> Frontend {
+    frontend_with_capabilities(fs, &[])
+}
+
+/// Parses and checks a project. The program is `None` when there are
+/// errors. `capabilities` are the capability names from `plinth.toml`
+/// (SPEC.md §11), used to check host API calls.
+pub fn frontend_with_capabilities(fs: &dyn FileSystem, capabilities: &[String]) -> Frontend {
     let mut sources = Sources::default();
     let mut diags = Vec::new();
     let Some(text) = fs.read(ENTRY) else {
@@ -193,7 +201,7 @@ pub fn frontend(fs: &dyn FileSystem) -> Frontend {
         })
         .collect();
     let main = new_index[0];
-    let program = check::check(&modules, main, &mut diags);
+    let program = check::check(&modules, main, &mut diags, capabilities);
     let ok = !diags.iter().any(|d| d.severity == Severity::Error);
     Frontend { sources, diags, program: ok.then_some(program) }
 }
@@ -217,7 +225,7 @@ fn resolve(fs: &dyn FileSystem, from: &str, spec: &str) -> Result<Target, DiagFn
                 let name = name.to_owned();
                 Err(Box::new(move |span| {
                     Diagnostic::error(code::UNKNOWN_STD_MODULE, span, format!("`plinth:{name}` is not a Plinth module yet"))
-                        .help("M1 has plinth:ui and plinth:core; the host API modules come in M2")
+                        .help("available modules: plinth:ui, plinth:core, plinth:time, plinth:store, plinth:clipboard")
                 }))
             }
         };

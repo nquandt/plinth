@@ -69,14 +69,14 @@ pub fn monotonic_now() -> f64 {
 }
 
 /// `setTimeout`/`setInterval`: schedules `callable` and returns a timer
-/// id for `clearTimeout`/`clearInterval`.
-pub fn set_timer(callable: Callable, ms: i32, repeat: bool) -> i32 {
+/// id (as a `number`) for `clearTimeout`/`clearInterval`.
+pub fn set_timer(callable: Callable, ms: f64, repeat: bool) -> f64 {
     #[cfg(target_arch = "wasm32")]
     {
-        match host::time::set_timer(ms.max(0) as u32, repeat) {
+        match host::time::set_timer(ms.max(0.0) as u32, repeat) {
             Ok(id) => {
                 TIMERS.with(|t| t.push(Timer { id, callable, one_shot: !repeat }));
-                id as i32
+                id as f64
             }
             Err(_) => host_denied_trap("setTimeout"),
         }
@@ -84,16 +84,21 @@ pub fn set_timer(callable: Callable, ms: i32, repeat: bool) -> i32 {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = (callable, ms, repeat);
-        0
+        0.0
     }
 }
 
 /// `clearTimeout`/`clearInterval`.
-pub fn clear_timer(id: i32) {
+pub fn clear_timer(id: f64) {
     #[cfg(target_arch = "wasm32")]
     {
-        host::time::cancel_timer(id as u32);
-        TIMERS.with(|t| t.retain(|x| x.id != id as u32));
+        let id = id as u32;
+        host::time::cancel_timer(id);
+        TIMERS.with(|t| t.retain(|x| x.id != id));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = id;
     }
 }
 
