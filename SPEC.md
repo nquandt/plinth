@@ -387,6 +387,7 @@ UI API 1.2 adds the controls `Checkbox`, `TextArea`, `Slider`, `NumberField`, `P
 - `Progress` without `value` is indeterminate.
 - `Menu` and the toolbar overflow open an anchored popover above the content. It closes on an outside click, on Escape, and after an action runs. Its AccessKit roles are `menu` and `menu item`.
 - `Slider` also follows pointer drag on its track, snapped to `step`.
+- **UI API 1.3** adds `Image` (**src**, **alt**, `aspect?: "square" | "wide" | "tall"`). `src` must be a string literal that names a file in the project's `assets/` directory (`PL4008` otherwise), and `alt` must not be empty (`PL4009`). `plinth build` puts the files in the `.plnt` under `assets/`. The host renders an image from the package, sized by the runtime from `aspect` and the width class, and shows a placeholder with the `alt` text if the asset is missing. (Follow-up: limit the height of large images on regular and wide windows.)
 - Every control has an AccessKit role, name and state. Interactive controls take keyboard focus (Tab) and activation (Enter or Space; arrows for `Slider`).
 
 ### 6.4 Layout rules (runtime-owned)
