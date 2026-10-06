@@ -30,6 +30,16 @@ usage:
   plinth core list                 show the installed runtime cores
   plinth core install <core.wasm>  install a runtime core
   plinth core export <file>        write the built-in core to a file
+  plinth hub add <app.plnt>        add a package to the Hub library
+  plinth hub list                  list library apps
+  plinth hub run <app id>          run a library app (consent screen first)
+  plinth hub remove <app id>       remove an app from the library
+  plinth hub grants <app id> [allow|refuse <capability>]
+                                   show or set a grant
+  plinth hub block|unblock <app id>
+                                   block or unblock an app
+  plinth hub groups [create <name> | add <app id> <name>]
+                                   list, or manage, library groups
 
 The project directory defaults to the current directory.";
 
@@ -128,6 +138,7 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Some("hub") => hub_command(&positional[1..]),
         Some("validate") => {
             let file = positional.get(1).context("usage: plinth validate <file>")?;
             dev_tools::validate_file(Path::new(file))?;
@@ -527,5 +538,91 @@ fn dev(dir: &Path) -> Result<ExitCode> {
         assets: read_assets(dir),
     };
     plinth_host_desktop::run(app, Some(rx))?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `plinth hub …` (`docs/HUB.md` §4.3, §9, §15 phase H0 part 4): a thin CLI
+/// over `plinth-hub`, for testing the library, grants and consent flow
+/// without the Hub UI (which comes in H3).
+fn hub_command(args: &[&str]) -> Result<ExitCode> {
+    let hub = plinth_hub::Hub::open_default()?;
+    match args.first().copied() {
+        Some("add") => {
+            let file = args.get(1).context("usage: plinth hub add <app.plnt>")?;
+            let bytes = std::fs::read(file).with_context(|| format!("read {file}"))?;
+            let id = hub.add_package(&bytes)?;
+            println!("added {id}");
+        }
+        Some("list") | None => {
+            let apps = hub.list()?;
+            if apps.is_empty() {
+                println!("the library is empty");
+            }
+            for app in apps {
+                let version = app.active_version().map(|v| v.version.as_str()).unwrap_or("-");
+                let pin = if app.pinned.is_some() { " (pinned)" } else { "" };
+                println!("{}  {}  {}{}", app.id, app.name, version, pin);
+            }
+        }
+        Some("run") => {
+            let id = args.get(1).context("usage: plinth hub run <app id>")?;
+            plinth_host_desktop::init_logging();
+            plinth_host_desktop::run_from_hub(&hub, id)?;
+        }
+        Some("remove") => {
+            let id = args.get(1).context("usage: plinth hub remove <app id>")?;
+            hub.remove(id)?;
+            println!("removed {id}");
+        }
+        Some("grants") => {
+            let id = args.get(1).context("usage: plinth hub grants <app id> [allow|refuse <capability>]")?;
+            match args.get(2).copied() {
+                None => {
+                    for (capability, grant) in hub.grants(id)? {
+                        println!("{capability}  {:?}  version {}", grant.decision, grant.version_seen);
+                    }
+                }
+                Some(action @ ("allow" | "refuse")) => {
+                    let capability = args.get(3).context("usage: plinth hub grants <app id> allow|refuse <capability>")?;
+                    let entry = hub.get(id)?.with_context(|| format!("{id} is not in the library"))?;
+                    let version = entry.active_version().map(|v| v.version.clone()).unwrap_or_default();
+                    let decision = if action == "allow" { plinth_hub::Decision::Allowed } else { plinth_hub::Decision::Refused };
+                    hub.set_grant(id, capability, decision, &version)?;
+                    println!("{action}ed {capability} for {id}");
+                }
+                Some(other) => bail!("unknown `plinth hub grants {other}`; use allow or refuse"),
+            }
+        }
+        Some("block") => {
+            let id = args.get(1).context("usage: plinth hub block <app id>")?;
+            hub.block_app(id)?;
+            println!("blocked {id}");
+        }
+        Some("unblock") => {
+            let id = args.get(1).context("usage: plinth hub unblock <app id>")?;
+            hub.unblock_app(id)?;
+            println!("unblocked {id}");
+        }
+        Some("groups") => match args.get(1).copied() {
+            None => {
+                for group in hub.groups()? {
+                    println!("{group}");
+                }
+            }
+            Some("create") => {
+                let name = args.get(2).context("usage: plinth hub groups create <name>")?;
+                hub.create_group(name)?;
+                println!("created group {name}");
+            }
+            Some("add") => {
+                let id = args.get(2).context("usage: plinth hub groups add <app id> <name>")?;
+                let name = args.get(3).context("usage: plinth hub groups add <app id> <name>")?;
+                hub.add_to_group(id, name)?;
+                println!("added {id} to {name}");
+            }
+            Some(other) => bail!("unknown `plinth hub groups {other}`; use create or add"),
+        },
+        Some(other) => bail!("unknown `plinth hub {other}`; see `plinth --help`"),
+    }
     Ok(ExitCode::SUCCESS)
 }
