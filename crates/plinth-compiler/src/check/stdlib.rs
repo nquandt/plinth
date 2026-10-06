@@ -18,6 +18,8 @@ pub const UI_NAMES: &[&str] = &[
     "Tabs", "Sheet", "Dialog", "Menu", "Grid", "Action",
     // UI API 1.3
     "Image", "Aspect",
+    // UI API 1.4
+    "Icon",
 ];
 pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int", "JSON"];
 pub const TIME_NAMES: &[&str] = &["now", "monotonicNow", "setTimeout", "setInterval", "clearTimeout", "clearInterval"];

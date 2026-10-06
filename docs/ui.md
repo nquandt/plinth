@@ -1,4 +1,4 @@
-# UI control reference (UI API 1.3)
+# UI control reference (UI API 1.4)
 
 Every control in this page is a typed JSX intrinsic exported from
 `plinth:ui`. Props in **bold** are required. This reference is checked
@@ -96,9 +96,15 @@ is not listed in `primary` is reachable only through `push`.
 | `Progress` | `label?`, `value?: number` — 0 to 1; missing means indeterminate |
 | `Empty` | **title**, `message?` |
 | `Image` | **src: string**, **alt: string**, `aspect?: "square" \| "wide" \| "tall"` |
+| `Icon` | **name: IconName**, `tone?: Tone`, `label?: string` |
 
 `Tone` is `"default" | "muted" | "danger" | "success"`. `Align` is
 `"start" | "center" | "end"`.
+
+`Icon` renders a glyph from the runtime icon set. It is decorative by
+default (hidden from AccessKit, `aria-hidden`); pass `label` to give it
+an accessible name and an AccessKit image role. `Row.icon` renders the
+same glyph inline and stays the simpler way to put an icon on a row.
 
 `Image.src` must be a string literal naming a file under the project's
 `assets/` directory (otherwise `PL4008`); `alt` must not be empty
@@ -183,8 +189,8 @@ The control set is the **UI API**, versioned `MAJOR.MINOR`
 independently of the framework's own version. A minor version only adds
 controls or optional props; a major version can remove or change them.
 Your package declares the UI API version it was built against
-(`ui-api = "1.3"` in `plinth.toml`); a host supports a range. An unknown
+(`ui-api = "1.4"` in `plinth.toml`); a host supports a range. An unknown
 prop is a compile error; a host that sees a control kind newer than it
 supports renders a placeholder and logs an error — it does not crash.
 
-This page documents **UI API 1.3**, the version in `std/ui.d.ts` today.
+This page documents **UI API 1.4**, the version in `std/ui.d.ts` today.

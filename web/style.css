@@ -303,6 +303,19 @@ body {
   text-align: center;
   padding: 8px;
 }
+.pl-icon {
+  display: inline-block;
+  color: var(--pl-text);
+}
+.pl-icon.pl-tone-muted {
+  color: var(--pl-muted);
+}
+.pl-icon.pl-tone-danger {
+  color: var(--pl-danger);
+}
+.pl-icon.pl-tone-success {
+  color: #2e7d32;
+}
 .pl-tabs {
   display: flex;
   gap: 4px;

@@ -1001,6 +1001,7 @@ impl PlinthRoot {
             ControlKind::Grid => self.render_grid(node, t, cx),
             ControlKind::Action => self.render_action_item(node, t, false, cx),
             ControlKind::Image => self.render_image(node, t),
+            ControlKind::Icon => self.render_icon(node, t),
         }
     }
 
@@ -1808,6 +1809,26 @@ impl PlinthRoot {
                 .child(div().text_xs().text_color(t.text_muted).child(alt))
                 .into_any_element(),
         }
+    }
+
+    /// `<Icon>` (SPEC.md §6.3, UI API 1.4): a glyph from the runtime icon
+    /// set. Decorative by default (hidden from AccessKit); `label` gives
+    /// it an accessible name.
+    fn render_icon(&self, node: &Node, t: &Tokens) -> AnyElement {
+        let glyph = icon_glyph(node.str_prop(prop::ICON).unwrap_or(""));
+        let color = match node.enum_prop(prop::TONE) {
+            tone::MUTED => t.text_muted,
+            tone::DANGER => t.danger,
+            tone::SUCCESS => t.success,
+            _ => t.text,
+        };
+        let label = node.str_prop(prop::LABEL).map(str::to_owned);
+        let el = div().id(eid("icon", node.id)).text_color(color).child(glyph);
+        match label {
+            Some(label) => el.role(accesskit::Role::Image).aria_label(label),
+            None => el.aria_hidden(),
+        }
+        .into_any_element()
     }
 
     // -- UI API 1.2 structure --

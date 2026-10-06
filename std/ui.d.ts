@@ -251,3 +251,9 @@ export declare function Image(props: {
   alt: string;
   aspect?: Aspect;
 }): Element;
+
+// -- UI API 1.4 -----------------------------------------------------------
+
+/** An icon from the runtime icon set (SPEC.md §6.3). Decorative by default
+ * (hidden from screen readers); pass `label` to give it an accessible name. */
+export declare function Icon(props: { name: IconName; tone?: Tone; label?: string }): Element;

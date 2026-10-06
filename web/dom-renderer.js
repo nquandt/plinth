@@ -7,9 +7,44 @@
 // This file is DOM-only: it does not touch wasm directly. `app.onCommit`
 // (from plinth-web.js) feeds it ops; it calls `app.onEvent(...)` back.
 
-import { ControlKind, Prop, Event, EnumAspect } from "./ui-api.js";
+import { ControlKind, Prop, Event, EnumAspect, EnumTone } from "./ui-api.js";
 
 const ASPECT_RATIO = { [EnumAspect.square]: "1 / 1", [EnumAspect.wide]: "16 / 9", [EnumAspect.tall]: "3 / 4" };
+
+/** Icon name -> glyph, matching `plinth-ui`'s `theme::icon_glyph` (SPEC.md §6.3). */
+const ICON_GLYPH = {
+  house: "⌂", home: "⌂",
+  gear: "⚙", settings: "⚙",
+  check: "✓",
+  list: "≡",
+  plus: "+", add: "+",
+  trash: "✕", delete: "✕",
+  star: "★",
+  info: "ⓘ",
+  number: "#", counter: "#",
+  search: "🔍",
+  edit: "✎",
+  close: "✕",
+  back: "←",
+  forward: "→",
+  calendar: "📅",
+  clock: "🕐",
+  user: "👤",
+  mail: "✉",
+  heart: "♥",
+  bell: "🔔",
+  share: "⤴",
+  download: "⬇",
+  upload: "⬆",
+  refresh: "↻",
+  filter: "▾",
+  menu: "≡",
+  more: "…",
+  lock: "🔒",
+  warning: "⚠",
+};
+
+const TONE_CLASS = { [EnumTone.muted]: "pl-tone-muted", [EnumTone.danger]: "pl-tone-danger", [EnumTone.success]: "pl-tone-success" };
 
 const kindName = Object.fromEntries(Object.entries(ControlKind).map(([k, v]) => [v, k]));
 
@@ -258,6 +293,8 @@ export class DomRenderer {
         return this.renderActionStandalone(n);
       case "image":
         return this.renderImage(n);
+      case "icon":
+        return this.renderIcon(n);
       default:
         return this.renderChildren(n, el("div", `pl-${kname}`));
     }
@@ -555,6 +592,25 @@ export class DomRenderer {
     const b = el("span", "pl-badge");
     b.textContent = n.props.get(Prop.label) ?? n.props.get(Prop.title) ?? "";
     return b;
+  }
+
+  /** `<Icon>` (SPEC.md §6.3, UI API 1.4): a glyph from the runtime icon
+   * set. Decorative by default (hidden from screen readers); `label`
+   * gives it an accessible name. */
+  renderIcon(n) {
+    const name = n.props.get(Prop.icon) ?? "";
+    const label = n.props.get(Prop.label);
+    const tone = n.props.get(Prop.tone)?.enum;
+    const cls = ["pl-icon", TONE_CLASS[tone]].filter(Boolean).join(" ");
+    const span = el("span", cls);
+    span.textContent = ICON_GLYPH[name] ?? "•";
+    if (label) {
+      span.setAttribute("role", "img");
+      span.setAttribute("aria-label", label);
+    } else {
+      span.setAttribute("aria-hidden", "true");
+    }
+    return span;
   }
 
   /** `<Image>` (SPEC.md §6.3, §10.1): an asset from the package. Sized by
