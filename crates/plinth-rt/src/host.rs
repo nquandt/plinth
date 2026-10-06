@@ -38,6 +38,19 @@ struct Timer {
 
 static TIMERS: Global<Vec<Timer>> = Global::new(Vec::new());
 
+/// Gives every heap reference that a pending timer holds. Without this, a
+/// timer's closure environment looks unreachable to the collector between
+/// the timer firing and `setTimer`/`clearTimer`, and the GC frees it: the
+/// next firing then calls through a dangling function-table index (SPEC.md
+/// §5.4; found by the GC stress-mode `timer` test, `gc_stress.rs`).
+pub fn trace_roots(f: &mut dyn FnMut(u32)) {
+    TIMERS.with(|t| {
+        for timer in t.iter() {
+            f(timer.callable.env);
+        }
+    });
+}
+
 /// Dispatches a `timer` event (SPEC.md §8.4) to its registered callback,
 /// mirroring `ui::dispatch`'s handler lookup. One-shot timers are removed
 /// after firing (the host already drops its own copy); repeating timers

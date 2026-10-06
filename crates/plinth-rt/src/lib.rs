@@ -146,10 +146,11 @@ fn commit() {
 }
 
 fn collect_if_needed() {
-    if gc::should_collect() {
+    if gc::should_collect() || gc::stress_enabled() {
         gc::collect(|f| {
             reactive::trace_roots(f);
             ui::trace_roots(f);
+            host::trace_roots(f);
         });
     }
 }
@@ -157,7 +158,14 @@ fn collect_if_needed() {
 struct Rt;
 
 impl bindings::Guest for Rt {
-    fn init(_args: Vec<u8>) {
+    fn init(args: Vec<u8>) {
+        // GC stress mode (SPEC.md §16): `init`'s first arg byte, when set to
+        // 1, makes the test harness collect after every `init`/`on-event`
+        // for the life of this instance, instead of only when idle past the
+        // threshold. Normal apps never pass this byte.
+        if args.first() == Some(&1) {
+            gc::set_stress(true);
+        }
         let Some(main) = MAIN.get() else { trap("the artifact has no app entry point") };
         invoke(Callable { thunk: main, env: 0 }, Val::None);
         reactive::flush();

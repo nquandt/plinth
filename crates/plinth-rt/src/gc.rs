@@ -22,7 +22,7 @@
 //! Compiler-defined types (structs and environments) are registered at start
 //! with their size and the offsets of their reference fields.
 
-use crate::global::Global;
+use crate::global::{Global, GlobalCell};
 use alloc::alloc::{Layout, alloc_zeroed, dealloc};
 use alloc::vec::Vec;
 
@@ -53,6 +53,32 @@ struct Heap {
 }
 
 static HEAP: Global<Heap> = Global::new(Heap { objects: Vec::new(), types: Vec::new(), roots: Vec::new(), allocated_since_gc: 0 });
+
+/// Test-only stress mode (SPEC.md §16): when on, `collect_if_needed` (in
+/// `lib.rs`) collects after every `init`/`on-event`, and `collect` poisons
+/// freed memory so a use-after-free reads as garbage instead of zeros. Off
+/// by default, so normal apps pay nothing for this: the linker stubs
+/// `set_stress` and `poison_free` out of any app that never calls them.
+static STRESS: GlobalCell<bool> = GlobalCell::new(false);
+
+/// Turns stress mode on or off. Test harnesses call this; normal apps never
+/// reach it.
+pub fn set_stress(on: bool) {
+    STRESS.set(on);
+}
+
+pub fn stress_enabled() -> bool {
+    STRESS.get()
+}
+
+/// The byte pattern written over freed objects in stress mode.
+const POISON: u8 = 0xAA;
+
+fn poison(ptr: u32, size: usize) {
+    if STRESS.get() {
+        unsafe { core::ptr::write_bytes(ptr as *mut u8, POISON, size) };
+    }
+}
 
 #[inline]
 pub unsafe fn load_u32(addr: u32) -> u32 {
@@ -201,9 +227,11 @@ pub fn collect(runtime_roots: impl FnOnce(&mut dyn FnMut(u32))) {
                 true
             } else {
                 if matches!(type_of(p), T_ARR_F64 | T_ARR_I32 | T_ARR_REF) {
+                    crate::arrays::poison_data(p);
                     crate::arrays::free_data(p);
                 }
                 let size = object_size(h, p);
+                poison(p, size);
                 raw_free(p, size);
                 false
             }

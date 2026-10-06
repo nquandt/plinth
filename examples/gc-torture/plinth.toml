@@ -1,0 +1,4 @@
+id = "dev.plinth.examples.gc-torture"
+name = "GC Torture"
+version = "0.1.0"
+publisher = "plinth"
