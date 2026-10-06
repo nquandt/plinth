@@ -508,6 +508,14 @@ impl Hub {
         self.save_library(&lib)
     }
 
+    /// Takes `id` out of `group`. The group stays, also when it is empty.
+    pub fn remove_from_group(&self, id: &str, group: &str) -> Result<()> {
+        let mut lib = self.library()?;
+        let entry = lib.apps.get_mut(id).with_context(|| format!("{id} is not in the library"))?;
+        entry.groups.retain(|g| g != group);
+        self.save_library(&lib)
+    }
+
     pub fn add_to_group(&self, id: &str, group: &str) -> Result<()> {
         let mut lib = self.library()?;
         if !lib.groups.iter().any(|g| g == group) {
@@ -691,11 +699,95 @@ struct GlobalPolicy {
 pub struct HubService {
     hub: Hub,
     launches: Vec<String>,
+    sources: Option<std::sync::Arc<dyn SourceClient>>,
 }
 
 impl HubService {
+    /// A service with no source client: `search` and `install` report that
+    /// this host cannot read sources.
     pub fn new(hub: Hub) -> Self {
-        Self { hub, launches: Vec::new() }
+        Self { hub, launches: Vec::new(), sources: None }
+    }
+
+    /// A service that reads the configured sources (`sources.json`,
+    /// `docs/REGISTRY.md` §9) through `client` for `search` and `install`.
+    pub fn with_sources(hub: Hub, client: std::sync::Arc<dyn SourceClient>) -> Self {
+        Self { hub, launches: Vec::new(), sources: Some(client) }
+    }
+}
+
+/// One app that a source lists (`docs/HUB.md` §5.2), for `plinth:hub`'s
+/// `search`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SearchHit {
+    pub id: String,
+    pub name: String,
+    /// The latest version that the source lists.
+    pub version: String,
+    pub description: String,
+}
+
+/// Reads registry sources for the Hub (`docs/REGISTRY.md` §9). The desktop
+/// host implements this with `plinth-registry`; tests use a fake. This
+/// crate does not depend on `plinth-registry`, so the dependency runs one
+/// way.
+pub trait SourceClient: Send + Sync {
+    /// The apps in the source at `base` that match `query`.
+    fn search(&self, base: &str, query: &str) -> Result<Vec<SearchHit>>;
+    /// The package bytes of the latest version of `id`, or `None` if the
+    /// source does not list `id`.
+    fn latest_package(&self, base: &str, id: &str) -> Result<Option<Vec<u8>>>;
+}
+
+/// Searches every configured source of `hub` (`docs/HUB.md` §5.2). A
+/// source that fails adds one line to `errors`; the other sources still
+/// give their hits. The result is the JSON text that
+/// `wit/plinth/app.wit`'s `hub.search` describes.
+pub fn search_sources(hub: &Hub, client: &dyn SourceClient, query: &str) -> Result<String> {
+    let mut hits = Vec::new();
+    let mut errors = Vec::new();
+    for (name, base) in hub.sources()? {
+        match client.search(&base, query) {
+            Ok(found) => {
+                for hit in found {
+                    hits.push(serde_json::json!({
+                        "id": hit.id,
+                        "name": hit.name,
+                        "version": hit.version,
+                        "description": hit.description,
+                        "source": name,
+                    }));
+                }
+            }
+            Err(e) => errors.push(format!("{name}: {e:#}")),
+        }
+    }
+    Ok(serde_json::to_string(&serde_json::json!({ "hits": hits, "errors": errors }))?)
+}
+
+/// Installs the latest version of `id` from the first configured source of
+/// `hub` that lists it, and records that source (`docs/REGISTRY.md` §9) so
+/// `plinth hub update` finds newer versions. Returns the app id.
+pub fn install_from_sources(hub: &Hub, client: &dyn SourceClient, id: &str) -> Result<String> {
+    let mut errors = Vec::new();
+    for (name, base) in hub.sources()? {
+        match client.latest_package(&base, id) {
+            Ok(Some(bytes)) => {
+                let added = hub.add_package(&bytes)?;
+                if added != id {
+                    bail!("source {name} gave a package for {added}, not {id}");
+                }
+                hub.set_registry(&added, &name, &base)?;
+                return Ok(added);
+            }
+            Ok(None) => {}
+            Err(e) => errors.push(format!("{name}: {e:#}")),
+        }
+    }
+    if errors.is_empty() {
+        bail!("no configured source lists {id}")
+    } else {
+        bail!("no configured source could give {id} ({})", errors.join("; "))
     }
 }
 
@@ -719,13 +811,32 @@ impl plinth_runner_wasmtime::hub::HubBackend for HubService {
             let Some(active) = entry.active_version() else { continue };
             let report = self.hub.capability_report(&entry.id, &active.capabilities).map_err(|e| e.to_string())?;
             let blocked = self.hub.is_blocked(&entry.id).unwrap_or(false);
+            // The manifest gives the publisher name and each capability's
+            // reason (`docs/HUB.md` §7.2). A package that cannot be read
+            // still lists, without them.
+            let manifest = self
+                .hub
+                .version_bytes(&entry.id, &active.version)
+                .ok()
+                .and_then(|bytes| plinth_package::Package::read(&bytes).ok())
+                .map(|pkg| pkg.manifest);
             let capabilities: Vec<serde_json::Value> = report
                 .iter()
                 .map(|c| {
+                    let description = plinth_link::capabilities::info(&c.name).map(|i| i.description).unwrap_or("");
+                    let rationale = manifest
+                        .as_ref()
+                        .and_then(|m| m.capabilities.iter().find(|d| d.name == c.name))
+                        .map(|d| d.rationale.clone())
+                        .unwrap_or_default();
                     serde_json::json!({
                         "name": c.name,
                         "risk": risk_word(c.risk),
+                        "description": description,
+                        "rationale": rationale,
+                        "decided": c.decision.is_some(),
                         "allowed": matches!(c.decision, Some(Decision::Allowed)),
+                        "byDefault": c.by_default,
                     })
                 })
                 .collect();
@@ -733,8 +844,11 @@ impl plinth_runner_wasmtime::hub::HubBackend for HubService {
                 "id": entry.id,
                 "name": entry.name,
                 "version": active.version,
+                "publisher": manifest.as_ref().map(|m| m.publisher.clone()).unwrap_or_default(),
                 "signer": active.signer.clone().unwrap_or_default(),
+                "source": entry.registry.as_ref().map(|r| r.name.clone()).unwrap_or_default(),
                 "blocked": blocked,
+                "groups": entry.groups,
                 "capabilities": capabilities,
             }));
         }
@@ -767,6 +881,47 @@ impl plinth_runner_wasmtime::hub::HubBackend for HubService {
 
     fn unblock(&mut self, id: &str) -> Result<(), String> {
         self.hub.unblock_app(id).map_err(|e| e.to_string())
+    }
+
+    fn list_groups_json(&self) -> Result<String, String> {
+        let groups = self.hub.groups().map_err(|e| e.to_string())?;
+        serde_json::to_string(&groups).map_err(|e| e.to_string())
+    }
+
+    fn create_group(&mut self, name: &str) -> Result<(), String> {
+        if name.trim().is_empty() {
+            return Err("a group needs a name".to_owned());
+        }
+        self.hub.create_group(name.trim()).map_err(|e| e.to_string())
+    }
+
+    fn set_group(&mut self, id: &str, group: &str, member: bool) -> Result<(), String> {
+        let r = if member { self.hub.add_to_group(id, group) } else { self.hub.remove_from_group(id, group) };
+        r.map_err(|e| e.to_string())
+    }
+
+    fn remove(&mut self, id: &str) -> Result<(), String> {
+        self.hub.remove(id).map_err(|e| e.to_string())
+    }
+
+    fn search(&self, query: &str) -> plinth_runner_wasmtime::hub::HubJob {
+        let hub = self.hub.clone();
+        let client = self.sources.clone();
+        let query = query.to_owned();
+        Box::new(move || match client {
+            Some(client) => search_sources(&hub, client.as_ref(), &query).map_err(|e| format!("{e:#}")),
+            None => Ok(r#"{"hits":[],"errors":["this host cannot read sources"]}"#.to_owned()),
+        })
+    }
+
+    fn install(&self, id: &str) -> plinth_runner_wasmtime::hub::HubJob {
+        let hub = self.hub.clone();
+        let client = self.sources.clone();
+        let id = id.to_owned();
+        Box::new(move || match client {
+            Some(client) => install_from_sources(&hub, client.as_ref(), &id).map_err(|e| format!("{e:#}")),
+            None => Err("this host cannot read sources".to_owned()),
+        })
     }
 }
 
@@ -1052,6 +1207,112 @@ mod tests {
         assert_eq!(apps[0]["blocked"], true);
         svc.unblock(&id).unwrap();
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The capability label fields of `list-apps` (`docs/HUB.md` §7.2):
+    /// the fixed description, the app's reason, and who decided.
+    #[test]
+    fn list_apps_has_the_capability_label_and_groups() {
+        use plinth_runner_wasmtime::hub::HubBackend;
+        let (hub, dir) = temp_hub();
+        let id = hub
+            .add_package(&fake_package_with_capabilities("com.example.notes", "0.1.0", &[("store.kv", "save notes"), ("clipboard.read", "paste")]))
+            .unwrap();
+        let mut svc = HubService::new(hub.clone());
+        svc.set_group(&id, "Work", true).unwrap();
+        let apps: serde_json::Value = serde_json::from_str(&svc.list_apps_json().unwrap()).unwrap();
+        let app = &apps[0];
+        assert_eq!(app["groups"], serde_json::json!(["Work"]));
+        assert_eq!(app["source"], "");
+        let caps = app["capabilities"].as_array().unwrap();
+        let kv = caps.iter().find(|c| c["name"] == "store.kv").unwrap();
+        assert_eq!(kv["risk"], "low");
+        assert_eq!(kv["description"], "save data on this device");
+        assert_eq!(kv["rationale"], "save notes");
+        assert_eq!(kv["decided"], true);
+        assert_eq!(kv["byDefault"], true);
+        let clip = caps.iter().find(|c| c["name"] == "clipboard.read").unwrap();
+        assert_eq!(clip["decided"], false);
+        assert_eq!(clip["allowed"], false);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `docs/HUB.md` §9.1: groups through the `plinth:hub` backend, and
+    /// `remove`.
+    #[test]
+    fn hub_service_groups_and_remove() {
+        use plinth_runner_wasmtime::hub::HubBackend;
+        let (hub, dir) = temp_hub();
+        let id = hub.add_package(&fake_package("com.example.notes", "0.1.0")).unwrap();
+        let mut svc = HubService::new(hub.clone());
+        assert_eq!(svc.list_groups_json().unwrap(), "[]");
+        svc.create_group("Family").unwrap();
+        assert!(svc.create_group("  ").is_err());
+        svc.set_group(&id, "Work", true).unwrap();
+        assert_eq!(svc.list_groups_json().unwrap(), r#"["Family","Work"]"#);
+        assert_eq!(hub.get(&id).unwrap().unwrap().groups, vec!["Work".to_string()]);
+        svc.set_group(&id, "Work", false).unwrap();
+        assert!(hub.get(&id).unwrap().unwrap().groups.is_empty());
+        // The group stays when its last app leaves it.
+        assert_eq!(svc.list_groups_json().unwrap(), r#"["Family","Work"]"#);
+        svc.remove(&id).unwrap();
+        assert!(hub.get(&id).unwrap().is_none());
+        assert!(svc.remove(&id).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A fake source client: `good` lists one app; `bad` always fails.
+    struct FakeSources {
+        package: Vec<u8>,
+    }
+
+    impl SourceClient for FakeSources {
+        fn search(&self, base: &str, query: &str) -> Result<Vec<SearchHit>> {
+            if base == "bad" {
+                bail!("cannot reach the source");
+            }
+            let hit = SearchHit { id: "com.example.notes".into(), name: "Notes".into(), version: "0.1.0".into(), description: "Take notes".into() };
+            Ok(if "notes".contains(&query.to_lowercase()) { vec![hit] } else { Vec::new() })
+        }
+
+        fn latest_package(&self, base: &str, id: &str) -> Result<Option<Vec<u8>>> {
+            if base == "bad" {
+                bail!("cannot reach the source");
+            }
+            Ok((id == "com.example.notes").then(|| self.package.clone()))
+        }
+    }
+
+    /// `docs/HUB.md` §5.2: search across every source (one failing source
+    /// does not hide the others), then install from the first source that
+    /// lists the app, recording that source.
+    #[test]
+    fn hub_service_searches_and_installs_from_sources() {
+        use plinth_runner_wasmtime::hub::HubBackend;
+        let (hub, dir) = temp_hub();
+        hub.source_add("a-broken", "bad").unwrap();
+        hub.source_add("main", "good").unwrap();
+        let client = std::sync::Arc::new(FakeSources { package: fake_package("com.example.notes", "0.1.0") });
+        let svc = HubService::with_sources(hub.clone(), client);
+
+        let result: serde_json::Value = serde_json::from_str(&(svc.search("note"))().unwrap()).unwrap();
+        assert_eq!(result["hits"][0]["id"], "com.example.notes");
+        assert_eq!(result["hits"][0]["source"], "main");
+        assert_eq!(result["errors"].as_array().unwrap().len(), 1);
+        assert!(result["errors"][0].as_str().unwrap().starts_with("a-broken:"));
+
+        assert_eq!((svc.install("com.example.notes"))().unwrap(), "com.example.notes");
+        let entry = hub.get("com.example.notes").unwrap().unwrap();
+        assert_eq!(entry.registry.unwrap().name, "main");
+
+        let err = (svc.install("com.example.missing"))().unwrap_err();
+        assert!(err.contains("no configured source could give"), "{err}");
+
+        // Without a source client, search answers with one error.
+        let plain = HubService::new(hub.clone());
+        let result: serde_json::Value = serde_json::from_str(&(plain.search("x"))().unwrap()).unwrap();
+        assert_eq!(result["errors"][0], "this host cannot read sources");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

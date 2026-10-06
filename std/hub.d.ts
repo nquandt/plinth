@@ -8,8 +8,8 @@
  * `Array<{ id: string, name: string, version: string, publisher: string,
  * signer: string, source: string, blocked: boolean, groups: string[],
  * capabilities: Array<{ name: string, risk: "none" | "low" | "medium" |
- * "high", description: string, decided: boolean, allowed: boolean,
- * byDefault: boolean }> }>`. `signer` is `""` for an unsigned app;
+ * "high", description: string, rationale: string, decided: boolean,
+ * allowed: boolean, byDefault: boolean }> }>`. `signer` is `""` for an unsigned app;
  * `source` is `""` for an app added from a file. Decode it with
  * `JSON.parse` (`plinth:core`, SPEC.md §4.7). Returns `null` if denied. */
 export declare function listApps(): string | null;
