@@ -30,6 +30,7 @@ export const ControlKind = {
   "action": 25,
   "image": 26,
   "icon": 27,
+  "datePicker": 28,
 };
 
 export const Prop = {
@@ -59,6 +60,7 @@ export const Prop = {
   "src": 32,
   "alt": 33,
   "aspect": 34,
+  "mode": 35,
 };
 
 export const Event = {
@@ -108,5 +110,11 @@ export const EnumAspect = {
   "square": 0,
   "wide": 1,
   "tall": 2,
+};
+
+export const EnumDatePickerMode = {
+  "date": 0,
+  "time": 1,
+  "datetime": 2,
 };
 
