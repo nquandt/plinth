@@ -9,6 +9,7 @@ members = [
   "crates/plinth-guest",
   "crates/plinth-rt",
   "crates/plinth-compiler",
+  "crates/plinth-link",
   "crates/plinth-package",
   "crates/plinth-shoot",
   "examples/counter-rs",
@@ -22,6 +23,7 @@ default-members = [
   "crates/plinth-host-desktop",
   "crates/plinth-cli",
   "crates/plinth-compiler",
+  "crates/plinth-link",
   "crates/plinth-package",
 ]
 
@@ -36,6 +38,7 @@ plinth-ui = { path = "crates/plinth-ui" }
 plinth-runner-wasmtime = { path = "crates/plinth-runner-wasmtime" }
 plinth-guest = { path = "crates/plinth-guest" }
 plinth-compiler = { path = "crates/plinth-compiler" }
+plinth-link = { path = "crates/plinth-link" }
 plinth-package = { path = "crates/plinth-package" }
 plinth-host-desktop = { path = "crates/plinth-host-desktop" }
 anyhow = "1"

@@ -4819,6 +4819,7 @@ dependencies = [
  "oxc_parser",
  "oxc_span",
  "oxc_syntax",
+ "plinth-link",
  "plinth-protocol",
  "plinth-runner-wasmtime",
  "plinth-ui",
@@ -4848,12 +4849,23 @@ dependencies = [
  "gpui-ce",
  "gpui_ce_platform",
  "log",
- "plinth-compiler",
+ "plinth-link",
  "plinth-package",
  "plinth-protocol",
  "plinth-runner-wasmtime",
  "plinth-ui",
  "wat",
+]
+
+[[package]]
+name = "plinth-link"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sha2",
+ "wasm-encoder 0.251.0",
+ "wasmparser 0.251.0",
+ "wit-component 0.251.0",
 ]
 
 [[package]]

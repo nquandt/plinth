@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 plinth-protocol.workspace = true
+plinth-link.workspace = true
 anyhow.workspace = true
 wasm-encoder.workspace = true
 wasmparser.workspace = true

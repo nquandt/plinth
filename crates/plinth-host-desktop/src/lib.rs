@@ -58,7 +58,7 @@ impl HostApp {
 /// Links an app module into the installed core that it needs (SPEC.md
 /// §10.5). A component passes through unchanged.
 fn with_runtime(entry: Vec<u8>) -> Result<Vec<u8>> {
-    use plinth_compiler::{cores, split};
+    use plinth_link::{cores, split};
     if split::is_app_module(&entry) { cores::link_app(&entry) } else { Ok(entry) }
 }
 

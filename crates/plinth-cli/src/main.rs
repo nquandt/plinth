@@ -403,9 +403,13 @@ fn native(input: &Path, out: Option<PathBuf>) -> Result<bool> {
     let plnt = std::fs::read(&plnt_path).with_context(|| format!("read {}", plnt_path.display()))?;
     // Check the package before it goes into an executable.
     let app = plinth_host_desktop::HostApp::from_bytes(plnt.clone(), &plnt_path)?;
-    let host_exe = std::env::current_exe()?;
+    // The stub is `plinth-host` when it is next to this program (it has no
+    // compiler); otherwise this program, which can also run a payload.
+    let me = std::env::current_exe()?;
+    let runner = me.with_file_name(format!("plinth-host{}", std::env::consts::EXE_SUFFIX));
+    let host_exe = if runner.is_file() { runner } else { me };
     if plinth_package::read_payload(&host_exe)?.is_some() {
-        bail!("this plinth is a single-file export; use the plinth CLI");
+        bail!("{} is a single-file export; use the plinth CLI", host_exe.display());
     }
     let host = std::fs::read(&host_exe).with_context(|| format!("read {}", host_exe.display()))?;
     let out = out.unwrap_or_else(|| {

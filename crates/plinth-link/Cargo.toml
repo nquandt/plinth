@@ -1,0 +1,13 @@
+[package]
+name = "plinth-link"
+description = "Plinth runtime cores and the app linker: the part of the toolchain that every host needs (SPEC.md §10.4, §10.5)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+wasm-encoder.workspace = true
+wasmparser.workspace = true
+wit-component.workspace = true
+sha2.workspace = true

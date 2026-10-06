@@ -4,14 +4,13 @@ pub mod ast;
 pub mod codegen;
 pub mod check;
 pub mod controls;
-pub mod cores;
+// The linker and the cores live in `plinth-link`, which hosts use without
+// the compiler.
+pub use plinth_link::{cores, link, rt_abi, split};
 pub mod diag;
 pub mod driver;
-pub mod link;
 pub mod lower;
 pub mod parse;
-pub mod rt_abi;
-pub mod split;
 pub mod tir;
 pub mod types;
 
