@@ -56,7 +56,7 @@ function icon(app, large = false) {
 }
 
 function setView(...children) {
-  main.replaceChildren(...children);
+  main.replaceChildren(...children.filter((c) => c !== null && c !== undefined && c !== false));
 }
 
 /** Moves focus to the new view's heading, so a screen reader reads it. */
@@ -178,7 +178,7 @@ function versionsTable(doc) {
   );
   return el(
     "div",
-    { class: "hub-table-wrap", role: "region", "aria-labelledby": "hub-versions", tabindex: "0" },
+    { class: "hub-table-wrap", role: "region", "aria-label": "Version table", tabindex: "0" },
     el(
       "table",
       { class: "hub-table" },
@@ -268,6 +268,7 @@ async function route() {
   if (m) await showApp(decodeURIComponent(m[1]));
   else showList();
   focusHeading();
+  document.body.dataset.route = hash; // for tests: this view is rendered
 }
 
 async function start() {

@@ -18,9 +18,9 @@
 // dump race the page's own async work. CDP lets us just poll the real page
 // in real time until `#result` is populated.
 
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { readFile, mkdtemp, rm, copyFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -131,6 +131,13 @@ async function openPage(cdpPort) {
         await new Promise((r) => setTimeout(r, intervalMs));
       }
     },
+    /** Evaluates `expression` and awaits it if it is a promise. */
+    async eval(expression) {
+      const res = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+      if (res.exceptionDetails) throw new Error(res.exceptionDetails.exception?.description ?? res.exceptionDetails.text);
+      return res.result?.value;
+    },
+    send,
     async close() {
       ws.close();
       await fetch(`http://127.0.0.1:${cdpPort}/json/close/${target.id}`).catch(() => {});
@@ -160,11 +167,12 @@ async function main() {
 
   let failed = false;
   const summary = [];
+  const hubOnly = process.argv.includes("--hub-only");
 
   try {
     await waitForCdp(cdpPort);
 
-    for (const app of APPS) {
+    for (const app of hubOnly ? [] : APPS) {
       const appUrl = `${base}/examples/${app}/dist/${app}.plnt`;
       const coreUrl = `${base}/target/core.wasm`;
       const testUrl = `${base}/web/test/a11y.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(coreUrl)}`;
@@ -210,6 +218,24 @@ async function main() {
       if (serious.length === 0 && minor.length === 0) console.log("  no violations");
       if (serious.length > 0) failed = true;
     }
+
+    // The web App Hub (docs/web-hub.md): served by `plinth registry serve --web`.
+    console.log("== web App Hub ==");
+    try {
+      const hub = await checkHub(cdpPort);
+      for (const r of hub) {
+        const serious = r.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+        summary.push({ app: `hub: ${r.view}`, serious: serious.length, minor: r.violations.length - serious.length });
+        for (const v of r.violations) {
+          console.log(`  ${r.view}: [${v.impact}] ${v.id}: ${v.help} (${v.nodes.length} node(s))`);
+          if (process.env.A11Y_VERBOSE) for (const n of v.nodes) console.log(`      ${n.target}\n      ${n.html}\n      ${n.failureSummary}`);
+        }
+        if (serious.length > 0) failed = true;
+      }
+    } catch (err) {
+      console.error(`  FAILED: ${err.stack ?? err}`);
+      failed = true;
+    }
   } finally {
     edge.kill();
     server.close();
@@ -224,6 +250,133 @@ async function main() {
     process.exit(1);
   }
   console.log("\nOK: no serious/critical accessibility violations.");
+}
+
+const AXE_URL = "https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.9.1/axe.min.js";
+
+/** Runs axe-core in the page (loads it from the CDN the first time). */
+async function axeRun(page) {
+  const json = await page.eval(`(async () => {
+    if (!window.axe) {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = ${JSON.stringify(AXE_URL)};
+        s.onload = resolve;
+        s.onerror = () => reject(new Error("cannot load axe-core"));
+        document.head.append(s);
+      });
+    }
+    const r = await axe.run(document);
+    return JSON.stringify(r.violations.map((v) => ({ id: v.id, impact: v.impact, help: v.help,
+      nodes: v.nodes.map((n) => ({ target: n.target, html: n.html, failureSummary: n.failureSummary })) })));
+  })()`);
+  return JSON.parse(json);
+}
+
+/** Starts `plinth registry serve <dir> --web --port 0`; resolves with the base URL. */
+function startHubServer(exe, dir) {
+  const child = spawn(exe, ["registry", "serve", dir, "--web", "--port", "0"], { stdio: ["ignore", "pipe", "inherit"], windowsHide: true });
+  return new Promise((resolve, reject) => {
+    let out = "";
+    child.stdout.on("data", (chunk) => {
+      out += chunk;
+      const m = /on (http:\/\/127\.0\.0\.1:\d+)/.exec(out);
+      if (m) resolve({ child, base: m[1] });
+    });
+    child.on("exit", (code) => reject(new Error(`the hub server stopped (${code}): ${out}`)));
+  });
+}
+
+/**
+ * The web App Hub in headless Edge: the list renders (light and dark, and
+ * at phone width with no horizontal scroll), app pages show the capability
+ * label and the browser support, and Open runs counter in the web host.
+ * Returns the axe result of each view.
+ */
+async function checkHub(cdpPort) {
+  const exe = path.join(root, "target/debug", process.platform === "win32" ? "plinth.exe" : "plinth");
+  const dir = await mkdtemp(path.join(tmpdir(), "plinth-a11y-hub-"));
+  for (const app of ["counter", "notes", "quotes", "utility", "hub"]) {
+    await copyFile(path.join(root, "examples", app, "dist", `${app}.plnt`), path.join(dir, `${app}.plnt`));
+  }
+  execFileSync(exe, ["registry", "build", dir, "--with-core"], { stdio: "ignore" });
+  const { child, base } = await startHubServer(exe, dir);
+  const results = [];
+  const page = await openPage(cdpPort);
+  try {
+    const ready = `document.body.dataset.ready === "true" ? true : null`;
+    // A11Y_SHOTS=<folder>: also save a PNG of each view, to look at by eye.
+    const shot = async (name) => {
+      if (!process.env.A11Y_SHOTS) return;
+      await mkdir(process.env.A11Y_SHOTS, { recursive: true });
+      const r = await page.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true });
+      await writeFile(path.join(process.env.A11Y_SHOTS, `hub-${name}.png`), Buffer.from(r.data, "base64"));
+    };
+    for (const scheme of ["light", "dark"]) {
+      await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: scheme }] });
+      await page.navigate(`${base}/`);
+      await page.waitFor(ready, 20000);
+      const cards = await page.eval(`document.querySelectorAll(".hub-card").length`);
+      if (cards !== 5) throw new Error(`the list shows ${cards} apps, not 5`);
+      results.push({ view: `list (${scheme})`, violations: await axeRun(page) });
+      await shot(`list-${scheme}`);
+    }
+
+    // Search.
+    await page.eval(`(() => { const q = document.getElementById("hub-q"); q.value = "clip"; q.dispatchEvent(new Event("input")); })()`);
+    const found = await page.eval(`[...document.querySelectorAll(".hub-card h2")].map((h) => h.textContent).join(",")`);
+    if (found !== "Utility") throw new Error(`search "clip" shows ${found}`);
+
+    // App pages: the label, the risk levels and the browser support.
+    const appPage = async (id) => {
+      await page.eval(`location.hash = "#/app/${id}"`);
+      await page.waitFor(`document.body.dataset.route === "#/app/${id}" ? true : null`, 10000);
+      return page.eval(`document.getElementById("hub-main").innerText`);
+    };
+    const utility = await appPage("dev.plinth.examples.utility");
+    for (const want of ["Read the clipboard.", "Medium risk", "Write to the clipboard.", "Low risk", "Limited in the browser"]) {
+      if (!utility.includes(want)) throw new Error(`the Utility page has no "${want}":\n${utility}`);
+    }
+    results.push({ view: "app page (utility)", violations: await axeRun(page) });
+    await shot("app-utility");
+    const hubApp = await appPage("dev.plinth.hub");
+    for (const want of ["High risk", "Not supported in the browser", "does not support hub.manage"]) {
+      if (!hubApp.includes(want)) throw new Error(`the Hub page has no "${want}":\n${hubApp}`);
+    }
+
+    await shot("app-hub");
+
+    // Phone width: no horizontal scroll.
+    await page.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 800, deviceScaleFactor: 2, mobile: true });
+    await appPage("dev.plinth.examples.quotes");
+    const overflow = await page.eval(`document.documentElement.scrollWidth - window.innerWidth`);
+    if (overflow > 0) throw new Error(`the app page scrolls sideways by ${overflow}px at 390px`);
+    results.push({ view: "app page (quotes, phone)", violations: await axeRun(page) });
+    await shot("app-quotes-phone");
+    await page.eval(`location.hash = "#/"`);
+    await page.waitFor(`document.querySelector(".hub-card") ? true : null`, 10000);
+    const listOverflow = await page.eval(`document.documentElement.scrollWidth - window.innerWidth`);
+    if (listOverflow > 0) throw new Error(`the list scrolls sideways by ${listOverflow}px at 390px`);
+    await shot("list-phone");
+    await page.send("Emulation.clearDeviceMetricsOverride");
+
+    // Open counter: the web host renders its UI, with a link back.
+    await appPage("dev.plinth.examples.counter");
+    await page.eval(`document.querySelector(".hub-open").click()`);
+    await page.waitFor(`document.querySelector("#app button") && !document.getElementById("host-bar").hidden ? true : null`, 20000);
+    const text = await page.eval(`document.getElementById("app").innerText`);
+    if (!/0/.test(text)) throw new Error(`counter did not render its count: ${text}`);
+    await page.eval(`[...document.querySelectorAll("#app button")].find((b) => b.textContent.trim() === "Increment").click()`);
+    await page.waitFor(`[...document.querySelectorAll("#app h1, #app h2")].some((h) => h.textContent.trim() === "1") ? true : null`, 5000);
+    results.push({ view: "counter opened from the hub", violations: await axeRun(page) });
+    await shot("counter");
+    console.log("  list, search, app pages, phone width and Open counter: ok");
+  } finally {
+    await page.close();
+    child.kill();
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+  return results;
 }
 
 main().catch((err) => {
