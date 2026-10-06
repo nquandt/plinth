@@ -237,6 +237,23 @@ async function main() {
       console.error(`  FAILED: ${err.stack ?? err}`);
       failed = true;
     }
+    // The renderer updates elements in place (SPEC.md M5): hover, text
+    // selection and unchanged elements survive re-renders.
+    for (const [name, check] of [
+      ["hover and text selection survive timer ticks (stopwatch)", checkHoverAndSelection],
+      ["TextArea selection survives a re-render (settings-gallery)", checkTextAreaSelection],
+      ["an unchanged row is the same element after a commit (todo)", checkRowIdentity],
+      ["one row of 10,000 changes, no other element does (big-list)", checkBigList],
+    ]) {
+      console.log(`== ${name} ==`);
+      try {
+        const note = await check(cdpPort, base);
+        console.log(`  ok${note ? `: ${note}` : ""}`);
+      } catch (err) {
+        console.error(`  FAILED: ${err.stack ?? err}`);
+        failed = true;
+      }
+    }
     // The web App Hub (docs/web-hub.md): served by `plinth registry serve --web`.
     if (!process.argv.includes("--typing-only")) console.log("== web App Hub ==");
     if (!process.argv.includes("--typing-only")) try {
@@ -303,6 +320,176 @@ async function checkStopwatch(cdpPort, base) {
     await new Promise((res) => setTimeout(res, 400));
     const later = await page.eval(shown);
     if (later !== stopped) throw new Error(`one Stop click did not stop the stopwatch: "${stopped}" then "${later}"`);
+  } finally {
+    await page.close();
+  }
+}
+
+/** Opens `examples/<app>` in the web host and waits for `ready` (an expression). */
+async function openApp(cdpPort, base, app, ready) {
+  const appUrl = `${base}/examples/${app}/dist/${app}.plnt`;
+  const coreUrl = `${base}/target/core.wasm`;
+  const page = await openPage(cdpPort);
+  await page.navigate(`${base}/web/index.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(coreUrl)}`);
+  try {
+    await page.waitFor(`(${ready}) ? true : null`, 30000);
+  } catch (err) {
+    await page.close();
+    throw err;
+  }
+  return page;
+}
+
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+/**
+ * With the stopwatch running (10 commits a second), the mouse rests on
+ * Reset and the "Actions" legend text is selected. After many ticks, Reset
+ * must be the same element and still `:hover`, and the selection must
+ * still hold the same text.
+ */
+async function checkHoverAndSelection(cdpPort, base) {
+  const button = (label) => `[...document.querySelectorAll("#app button")].find((b) => b.textContent.trim() === ${JSON.stringify(label)})`;
+  const page = await openApp(cdpPort, base, "timer", button("Start"));
+  try {
+    await page.eval(`${button("Start")}.click()`);
+    const r = await page.eval(`(() => { const b = ${button("Reset")}; window.__reset = b; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: r.x, y: r.y });
+    await page.eval(`(() => {
+      const legend = [...document.querySelectorAll("#app legend")].find((l) => l.textContent === "Actions");
+      const range = document.createRange();
+      range.selectNodeContents(legend);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+    })()`);
+    const shown = `[...document.querySelectorAll("#app .pl-heading")].map((h) => h.textContent).join()`;
+    const before = await page.eval(shown);
+    await sleep(600);
+    if ((await page.eval(shown)) === before) throw new Error("the stopwatch did not tick");
+    const state = await page.eval(`({
+      same: ${button("Reset")} === window.__reset,
+      hover: window.__reset.matches(":hover"),
+      selection: getSelection().toString(),
+    })`);
+    if (!state.same) throw new Error("the Reset button is a new element after the ticks");
+    if (!state.hover) throw new Error("Reset lost its :hover state");
+    // (The legend's CSS shows it in capitals; toString() gives what is shown.)
+    if (state.selection.toLowerCase() !== "actions") throw new Error(`the selection is "${state.selection}", not "Actions"`);
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Types into the settings gallery's TextArea, selects a part of the text,
+ * then a click on a Checkbox makes the app commit (a Text changes). The
+ * TextArea must keep the focus and the selection.
+ */
+async function checkTextAreaSelection(cdpPort, base) {
+  const page = await openApp(cdpPort, base, "settings-gallery", `document.querySelector("#app textarea")`);
+  try {
+    await page.eval(`(window.__ta = document.querySelector("#app textarea")).focus()`);
+    await page.send("Input.insertText", { text: "hello world" });
+    await page.eval(`window.__ta.setSelectionRange(6, 11, "forward")`);
+    const textBefore = await page.eval(`document.querySelector("#app main").textContent`);
+    // A programmatic click does not move the focus.
+    await page.eval(`document.querySelector("#app input[type=checkbox]").click()`);
+    await sleep(100);
+    if ((await page.eval(`document.querySelector("#app main").textContent`)) === textBefore) throw new Error("the checkbox click did not change the page");
+    const state = await page.eval(`(() => { const t = document.querySelector("#app textarea"); return { same: t === window.__ta, focused: document.activeElement === t, value: t.value, start: t.selectionStart, end: t.selectionEnd }; })()`);
+    if (!state.same) throw new Error("the TextArea is a new element");
+    if (!state.focused) throw new Error("the TextArea lost the focus");
+    if (state.value !== "hello world" || state.start !== 6 || state.end !== 11) throw new Error(`TextArea state after the commit: ${JSON.stringify(state)}`);
+  } finally {
+    await page.close();
+  }
+}
+
+/** Adds a task in todo: the rows that were there are the same DOM objects. */
+async function checkRowIdentity(cdpPort, base) {
+  const page = await openApp(cdpPort, base, "todo", `document.querySelector("#app input[type=text]")`);
+  try {
+    const add = async (text) => {
+      await page.eval(`document.querySelector("#app input[type=text]").focus()`);
+      await page.send("Input.insertText", { text });
+      await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+      await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    };
+    const rows = `[...document.querySelectorAll("#app .pl-row")]`;
+    await add("first");
+    await page.waitFor(`${rows}.length >= 1 ? true : null`, 3000);
+    const count = await page.eval(`(window.__rows = ${rows}).length`);
+    await add("second");
+    await page.waitFor(`${rows}.length > ${count} ? true : null`, 3000);
+    const kept = await page.eval(`window.__rows.every((r) => r.isConnected && ${rows}.includes(r))`);
+    if (!kept) throw new Error("adding a task made the old rows again");
+    return `${count} old row(s) kept`;
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * big-list (10,000 rows): clicks on one row's Toggle. Only that row may
+ * change: a MutationObserver records every DOM change, and each one must be
+ * inside the row (or the list's swap of that one row). The first and last
+ * rows stay the same objects. Prints the time of each whole round trip
+ * (the event, the guest's list diff, the commit and the DOM update).
+ */
+async function checkBigList(cdpPort, base) {
+  const t0 = Date.now();
+  const page = await openApp(cdpPort, base, "big-list", `document.querySelectorAll("#app .pl-row").length === 10000`);
+  try {
+    const loadMs = Date.now() - t0;
+    const r = await page.eval(`(async () => {
+      const rows = () => document.querySelectorAll("#app .pl-row");
+      const first = rows()[0], last = rows()[9999], row = rows()[4], list = row.parentNode;
+      const records = [];
+      const mo = new MutationObserver((rs) => records.push(...rs));
+      mo.observe(document.getElementById("app"), { subtree: true, childList: true, attributes: true, characterData: true });
+      // Time the renderer's own part of each round trip too.
+      const { DomRenderer } = await import("/web/dom-renderer.js");
+      const renderMs = [];
+      const render = DomRenderer.prototype.render;
+      DomRenderer.prototype.render = function () {
+        const t = performance.now();
+        render.call(this);
+        renderMs.push(performance.now() - t);
+      };
+      const times = [];
+      const seen = new Set([row]);
+      for (let i = 0; i < 5; i++) {
+        const target = rows()[4];
+        seen.add(target);
+        const t = performance.now();
+        target.querySelector("input[type=checkbox]").click();
+        times.push(performance.now() - t);
+      }
+      await new Promise((res) => setTimeout(res, 0));
+      mo.disconnect();
+      DomRenderer.prototype.render = render;
+      seen.add(rows()[4]);
+      const inRow = (n) => [...seen].some((r) => r.contains(n));
+      const outside = records.filter((m) => !inRow(m.target) &&
+        !(m.type === "childList" && m.target === list && [...m.addedNodes, ...m.removedNodes].every((n) => seen.has(n))));
+      return {
+        times,
+        renderMs,
+        records: records.length,
+        outside: outside.slice(0, 5).map((m) => m.type + " on " + (m.target.className || m.target.nodeName)),
+        outsideCount: outside.length,
+        sameRow: rows()[4] === row,
+        sameEnds: rows()[0] === first && rows()[9999] === last,
+        on: rows()[4].querySelector("input[type=checkbox]").checked,
+      };
+    })()`);
+    const ms = r.times.map((t) => t.toFixed(1)).join(", ");
+    const renderMs = r.renderMs.map((t) => t.toFixed(2)).join(", ");
+    console.log(`  load ${loadMs} ms; one-row toggle round trips: ${ms} ms (DOM renderer part: ${renderMs} ms); ${r.records} DOM mutation record(s), ${r.outsideCount} outside the row`);
+    if (!r.sameEnds) throw new Error("the first or last row is a new element");
+    if (r.outsideCount) throw new Error(`DOM changes outside the toggled row: ${r.outside.join("; ")}`);
+    if (!r.on) throw new Error("the toggle is not on after 5 clicks");
+    return `the row element itself ${r.sameRow ? "is kept" : "was made again by the guest"}`;
   } finally {
     await page.close();
   }

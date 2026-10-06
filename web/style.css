@@ -1,6 +1,12 @@
 /* Minimal, runtime-owned look for the web host spike (SPEC.md §3: apps
    declare intent, the runtime owns layout, spacing and color). */
 
+/* The renderer hides optional parts (an empty label, the back button) with
+   the `hidden` attribute; a class's `display` must not show them again. */
+[hidden] {
+  display: none !important;
+}
+
 :root {
   --pl-bg: #0b0c0f;
   --pl-surface: #15171c;
@@ -395,6 +401,21 @@ body {
   height: 10px;
   border-radius: 2px;
   background: currentColor;
+}
+.pl-chart-legend-label {
+  color: var(--pl-text);
+}
+.pl-chart-legend-value {
+  color: var(--pl-muted);
+}
+/* The zero line of bar and line charts: negative values go below it. */
+.pl-chart-zero {
+  stroke: var(--pl-muted);
+  stroke-width: 1;
+}
+/* An all-zero pie: a neutral disc, as on the desktop. */
+.pl-chart-track {
+  fill: var(--pl-border);
 }
 /* Visually hidden but still reachable by a screen reader: the Chart's
    exact-value data table (SPEC.md §6.3). */
