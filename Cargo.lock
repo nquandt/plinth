@@ -4903,6 +4903,7 @@ dependencies = [
  "gpui_ce_platform",
  "gpui_ce_wgpu",
  "log",
+ "plinth-compiler",
  "plinth-host-desktop",
  "plinth-runner-wasmtime",
  "plinth-ui",
