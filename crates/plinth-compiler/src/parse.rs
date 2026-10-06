@@ -622,9 +622,20 @@ impl Cx<'_> {
             self.err(code::ASYNC, f.span, "async functions and generators come in v1");
             return None;
         }
-        if f.type_parameters.is_some() {
-            self.err(code::GENERIC_USER, f.span, "generic functions come in v1");
-            return None;
+        let mut type_params = Vec::new();
+        if let Some(tp) = &f.type_parameters {
+            for p in &tp.params {
+                if p.constraint.is_some() || p.default.is_some() {
+                    self.err_help(
+                        code::GENERIC_USER,
+                        p.span,
+                        "a constrained or defaulted type parameter is not supported yet",
+                        "use a plain type parameter: `<T>`",
+                    );
+                    return None;
+                }
+                type_params.push(p.name.name.to_string());
+            }
         }
         if f.this_param.is_some() {
             self.err(code::THIS, f.span, "`this` parameters are not allowed");
@@ -645,6 +656,7 @@ impl Cx<'_> {
             exported: false,
             is_default: false,
             span: self.span(f.span),
+            type_params,
         })
     }
 
@@ -871,6 +883,7 @@ impl Cx<'_> {
                     exported: false,
                     is_default: false,
                     span,
+                    type_params: Vec::new(),
                 }))
             }
             E::FunctionExpression(f) => ExprKind::Func(Box::new(self.function(f)?)),

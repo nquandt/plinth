@@ -76,6 +76,8 @@ pub enum Binding {
     Control(ControlKind),
     Std(StdFn),
     StdObj(StdObj),
+    /// A generic function template, by index into `Checker::generics`.
+    Generic(usize),
 }
 
 #[derive(Default)]
@@ -137,6 +139,20 @@ pub struct Checker<'d> {
     /// Set just before checking a `computed`/`effect` callback body, so the
     /// new closure's `FnCx` starts in `Reactive` instead of `Callback`.
     pending_reactive: bool,
+    /// Generic top-level function templates, not checked until a call site
+    /// instantiates them (HANDOFF.md item 3).
+    generics: Vec<GenericTemplate>,
+    /// Concrete types for the generic function template being checked
+    /// right now, by type-parameter name.
+    generic_bindings: HashMap<String, Type>,
+    /// Instantiations so far: `(template index, type arguments) -> FuncId`.
+    /// Linear (there are only ever a handful) so `Type` need not be `Hash`.
+    instantiations: Vec<(usize, Vec<Type>, FuncId)>,
+}
+
+struct GenericTemplate {
+    decl: ast::FuncDecl,
+    module: usize,
 }
 
 /// Checks all modules. `modules` must be in dependency order (dependencies
@@ -158,6 +174,9 @@ pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>) ->
         navigations: Vec::new(),
         app_seen: false,
         pending_reactive: false,
+        generics: Vec::new(),
+        generic_bindings: HashMap::new(),
+        instantiations: Vec::new(),
     };
     c.prog.module_count = modules.len() as u32;
     for (i, m) in modules.iter().enumerate() {
@@ -258,7 +277,11 @@ impl Checker<'_> {
         // 3. Top-level functions are hoisted.
         for item in &src.ast.items {
             if let Item::Stmt(ast::Stmt { kind: ast::StmtKind::Func(f), .. }) = item {
-                self.declare_top_func(f, m);
+                if f.type_params.is_empty() {
+                    self.declare_top_func(f, m);
+                } else {
+                    self.declare_generic(f, m);
+                }
             }
         }
 
@@ -547,6 +570,11 @@ impl Checker<'_> {
     }
 
     fn named_type(&mut self, name: &str, args: &[TypeAnn], span: Span) -> Type {
+        if args.is_empty() {
+            if let Some(t) = self.generic_bindings.get(name) {
+                return t.clone();
+            }
+        }
         let arity = |c: &mut Self, n: usize| {
             if args.len() != n {
                 c.err(code::UNKNOWN_TYPE, span, format!("`{name}` takes {n} type argument(s)"));
@@ -881,6 +909,93 @@ impl Checker<'_> {
         self.pending.insert(fid, PendingFunc { decl: f.clone(), module: m });
     }
 
+    /// Registers a generic top-level function as a template: it is checked
+    /// (once per distinct type arguments) only when a call site
+    /// instantiates it (HANDOFF.md item 3).
+    fn declare_generic(&mut self, f: &ast::FuncDecl, m: usize) {
+        if f.is_default {
+            self.err(code::GENERIC_USER, f.span, "a generic function cannot be the default export");
+        }
+        let idx = self.generics.len();
+        self.generics.push(GenericTemplate { decl: f.clone(), module: m });
+        if let Some((n, span)) = &f.name {
+            self.define(n, *span, Binding::Generic(idx));
+            if f.exported {
+                self.exports[m].insert(n.clone(), Binding::Generic(idx));
+            }
+        }
+    }
+
+    /// Checks (or reuses an earlier, identical) instantiation of a generic
+    /// function template for one call site. Returns its concrete `FuncId`
+    /// and `FuncType`, or `None` on an error already reported.
+    pub(crate) fn instantiate_generic(
+        &mut self,
+        gid: usize,
+        type_args: &[ast::TypeAnn],
+        args: &[ast::Expr],
+        span: Span,
+    ) -> Option<(FuncId, Rc<FuncType>)> {
+        let decl = self.generics[gid].decl.clone();
+        let module = self.generics[gid].module;
+        let names = decl.type_params.clone();
+        // 1. The concrete type for each type parameter: explicit `f<T>(...)`
+        // arguments, or inferred from the call's argument types.
+        let mut bound: Vec<Type> = Vec::new();
+        if !type_args.is_empty() {
+            if type_args.len() != names.len() {
+                self.err(code::ARG_COUNT, span, format!("`{}` takes {} type argument(s)", display_name(&decl), names.len()));
+                return None;
+            }
+            for t in type_args {
+                bound.push(self.resolve_type(t));
+            }
+        } else {
+            let mut by_name: HashMap<&str, Type> = HashMap::new();
+            for (p, a) in decl.params.iter().zip(args) {
+                let Some(ann) = &p.ty else { continue };
+                let te = self.expr(a, None);
+                infer_type_param(ann, &te.ty, &names, &mut by_name);
+            }
+            for n in &names {
+                match by_name.get(n.as_str()) {
+                    Some(t) => bound.push(t.clone()),
+                    None => {
+                        let msg = format!("cannot infer type parameter `{n}` of `{}`; give it explicitly", display_name(&decl));
+                        self.err(code::CANNOT_INFER, span, msg);
+                        return None;
+                    }
+                }
+            }
+        }
+        if bound.iter().any(Type::is_error) {
+            return None;
+        }
+        // 2. Reuse an earlier instantiation with the same type arguments.
+        if let Some((_, _, fid)) = self.instantiations.iter().find(|(g, b, _)| *g == gid && *b == bound) {
+            let fid = *fid;
+            return Some((fid, self.func_type(fid, span)));
+        }
+        // 3. Check a fresh copy of the template with `names[i] := bound[i]`.
+        let saved_bindings = std::mem::take(&mut self.generic_bindings);
+        for (n, t) in names.iter().zip(&bound) {
+            self.generic_bindings.insert(n.clone(), t.clone());
+        }
+        let saved_module = std::mem::replace(&mut self.module, module);
+        let base = decl.name.as_ref().map(|(n, _)| n.as_str()).unwrap_or("f");
+        let mangled = format!("{base}${}", self.instantiations.iter().filter(|(g, ..)| *g == gid).count());
+        let mut mono = decl.clone();
+        mono.name = Some((mangled.clone(), decl.span));
+        mono.type_params.clear();
+        self.declare_top_func(&mono, module);
+        let Some(Binding::Func(fid)) = self.lookup(&mangled) else { unreachable!() };
+        self.check_pending(fid);
+        self.module = saved_module;
+        self.generic_bindings = saved_bindings;
+        self.instantiations.push((gid, bound, fid));
+        Some((fid, self.func_type(fid, span)))
+    }
+
     /// Checks a top-level function body now (for its inferred return type).
     fn check_pending(&mut self, fid: FuncId) {
         let Some(p) = self.pending.remove(&fid) else { return };
@@ -1098,4 +1213,38 @@ fn contains_break(stmts: &[TStmt]) -> bool {
         TStmt::Block(b) => contains_break(b),
         _ => false,
     })
+}
+
+fn display_name(decl: &ast::FuncDecl) -> &str {
+    decl.name.as_ref().map(|(n, _)| n.as_str()).unwrap_or("<anonymous>")
+}
+
+/// Unifies a parameter's type annotation (as written, with type-parameter
+/// names still bare identifiers) against the checked type of the argument,
+/// to infer `name → Type` for any type parameter it mentions. Only the
+/// shapes generic helpers actually need: `T`, `T[]`, `T | null`.
+fn infer_type_param<'a>(ann: &'a TypeAnn, arg: &Type, names: &[String], out: &mut HashMap<&'a str, Type>) {
+    match ann {
+        TypeAnn::Named { name, args, .. } if args.is_empty() && names.iter().any(|n| n == name) => {
+            out.entry(name.as_str()).or_insert_with(|| arg.clone());
+        }
+        TypeAnn::Array(inner, _) => {
+            if let Type::Array(elem) = arg {
+                infer_type_param(inner, elem, names, out);
+            }
+        }
+        TypeAnn::Union(parts, _) => {
+            // `T | null`: unify `T` against the non-null part of the arg.
+            let inner_arg = match arg {
+                Type::Nullable(t) => (**t).clone(),
+                t => t.clone(),
+            };
+            for p in parts {
+                if !matches!(p, TypeAnn::Null(_)) {
+                    infer_type_param(p, &inner_arg, names, out);
+                }
+            }
+        }
+        _ => {}
+    }
 }

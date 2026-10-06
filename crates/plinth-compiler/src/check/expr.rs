@@ -197,6 +197,15 @@ impl Checker<'_> {
                 self.err(code::UNSUPPORTED, span, format!("`{name}` can only be called, not used as a value"));
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
+            Some(Binding::Generic(_)) => {
+                self.err_help(
+                    code::GENERIC_USER,
+                    span,
+                    format!("`{name}` is generic; it can only be called directly"),
+                    format!("write `{name}(...)` or `{name}<T>(...)`"),
+                );
+                TExpr::new(TExprKind::Null, Type::Error, span)
+            }
             Some(Binding::Control(_)) => {
                 self.err_help(code::UNSUPPORTED, span, format!("`{name}` is a control"), format!("write `<{name} ... />`"));
                 TExpr::new(TExprKind::Null, Type::Error, span)
@@ -348,6 +357,15 @@ impl Checker<'_> {
                     let ft = self.func_type(fid, callee.span);
                     let targs = self.call_args(&ft, args, span);
                     return TExpr::new(TExprKind::Call(fid, targs), ft.ret.clone(), span);
+                }
+                Some(Binding::Generic(gid)) => {
+                    return match self.instantiate_generic(gid, type_args, args, span) {
+                        Some((fid, ft)) => {
+                            let targs = self.call_args(&ft, args, span);
+                            TExpr::new(TExprKind::Call(fid, targs), ft.ret.clone(), span)
+                        }
+                        None => TExpr::new(TExprKind::Null, Type::Error, span),
+                    };
                 }
                 _ => {}
             },

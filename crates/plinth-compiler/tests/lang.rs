@@ -218,6 +218,84 @@ fn bare_typeof_outside_comparison_is_rejected() {
     assert_eq!(codes(&main), ["PL2012"]);
 }
 
+// -- 3. Generic functions (monomorphized) ------------------------------------
+
+#[test]
+fn generic_identity_monomorphizes_per_type() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function identity<T>(x: T): T { return x; }
+function Home() {
+  const n = identity(1);
+  const s = identity("hi");
+  return <Screen title="Home"><Text>{s + "-" + (n + 1)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi-2");
+}
+
+#[test]
+fn generic_array_helper_infers_from_argument() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function first<T>(xs: T[]): T { return xs[0]; }
+function Home() {
+  const xs: number[] = [5, 6, 7];
+  return <Screen title="Home"><Text>{first(xs)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "5");
+}
+
+#[test]
+fn generic_call_with_explicit_type_argument() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function identity<T>(x: T): T { return x; }
+function Home() {
+  return <Screen title="Home"><Text>{identity<string>("hey")}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hey");
+}
+
+#[test]
+fn generic_type_param_cannot_be_inferred() {
+    // `T` only appears in the return type: nothing to infer it from.
+    let main = with_app("function make<T>(): T[] { return []; }\nconst xs = make();");
+    assert_eq!(codes(&main), ["PL3007"]);
+}
+
+#[test]
+fn generic_function_used_as_a_value_is_rejected() {
+    let main = with_app("function identity<T>(x: T): T { return x; }\nconst f = identity;");
+    assert_eq!(codes(&main), ["PL2015"]);
+}
+
+#[test]
+fn generic_call_reuses_the_same_instantiation() {
+    // Calling with the same concrete type twice must still just work (no
+    // duplicate-definition or redeclaration errors from monomorphizing).
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function identity<T>(x: T): T { return x; }
+function Home() {
+  const a = identity(1);
+  const b = identity(2);
+  return <Screen title="Home"><Text>{a + b}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "3");
+}
+
 // -- Behavior smoke test: confirms the `run` harness works and the lint
 // does not fire on a normal counter-style program. -------------------------
 

@@ -159,6 +159,9 @@ pub struct FuncDecl {
     pub exported: bool,
     pub is_default: bool,
     pub span: Span,
+    /// Names of `<T, U, …>` type parameters (generic functions, monomorphized
+    /// per call site; HANDOFF.md item 3). Empty for an ordinary function.
+    pub type_params: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
