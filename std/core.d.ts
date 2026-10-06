@@ -29,6 +29,16 @@ export declare function parseNumber(s: string): number;
 /** Converts a value to its string form. */
 export declare function toString(value: number | boolean | string): string;
 
+/**
+ * JSON encoding (SPEC.md §4.7). `stringify` serializes numbers, `int`,
+ * booleans, strings, `null`/nullable values, arrays, objects of a known
+ * shape (in declaration order) and `Map<string, V>` (as an object);
+ * `NaN`/`Infinity` become `null`, as in JS. `parse<T>` is not available yet.
+ */
+export declare const JSON: {
+  stringify(value: unknown): string;
+};
+
 /** Development logging. The host shows the messages in its log. */
 export declare const console: {
   log(message: string): void;

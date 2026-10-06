@@ -111,6 +111,9 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("clipboard_read_text", &[], &[I32]),
     ("kv_last_error", &[], &[I32]),
     ("clipboard_last_error", &[], &[I32]),
+    // -- JSON (SPEC.md §4.7) -----------------------------------------------
+    ("json_num_str", &[F64], &[I32]),
+    ("json_quote_str", &[I32], &[I32]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -125,7 +128,7 @@ pub const PREFIX: &str = "__plinth_rt_";
 /// The core version that this compiler targets. An app module declares it
 /// in its `plinth-core` custom section (SPEC.md §10.4, §10.5).
 pub const CORE_MAJOR: u32 = 1;
-pub const CORE_MINOR: u32 = 0;
+pub const CORE_MINOR: u32 = 1;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;

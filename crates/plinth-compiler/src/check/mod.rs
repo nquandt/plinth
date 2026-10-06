@@ -83,6 +83,8 @@ pub enum StdObj {
     Navigate,
     /// `kv` from `plinth:store` (SPEC.md §8.5, capability `store.kv`).
     Kv,
+    /// `JSON` from `plinth:core` (SPEC.md §4.7): `stringify`/`parse`.
+    Json,
 }
 
 #[derive(Debug, Clone)]

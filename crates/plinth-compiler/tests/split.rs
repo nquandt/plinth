@@ -59,7 +59,7 @@ fn the_counter_app_module_holds_only_app_code() {
 
 #[test]
 fn a_newer_minor_or_another_major_is_rejected_by_this_core() {
-    assert!(load_error(&needing(counter().app, "1.9")).contains("needs core 1.9, but this core is 1.0"));
+    assert!(load_error(&needing(counter().app, "1.9")).contains("needs core 1.9, but this core is 1.1"));
     assert!(load_error(&needing(counter().app, "2.0")).contains("needs core 2.0"));
 }
 
@@ -101,7 +101,7 @@ fn install_and_link_through_the_cores_directory() {
     // SAFETY: this test is the only one in this binary that reads the variable.
     unsafe { std::env::set_var("PLINTH_CORES_DIR", &dir) };
     let path = cores::install(link::runtime()).unwrap();
-    assert!(path.ends_with("1.0/core.wasm") || path.ends_with("1.0\\core.wasm"));
+    assert!(path.ends_with("1.1/core.wasm") || path.ends_with("1.1\\core.wasm"));
     // Installing the same core again is fine; other contents are not.
     cores::install(link::runtime()).unwrap();
     assert!(cores::install(b"\0asm\x01\0\0\0").is_err());

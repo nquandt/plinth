@@ -38,6 +38,40 @@ pub fn len16(s: &str) -> usize {
     if s.is_ascii() { s.len() } else { s.encode_utf16().count() }
 }
 
+/// `JSON.stringify` of a number (SPEC.md §4.7): `NaN`/`Infinity` become the
+/// `null` token, like JS; everything else formats like `toString`.
+pub fn json_number_to_string(v: f64) -> String {
+    if v.is_finite() { number_to_string(v) } else { String::from("null") }
+}
+
+const HEX: &[u8; 16] = b"0123456789abcdef";
+
+/// `JSON.stringify` of a string: a quoted, escaped JSON string literal.
+/// Non-ASCII bytes pass through unescaped (valid UTF-8 JSON).
+pub fn json_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for b in s.bytes() {
+        match b {
+            b'"' => out.push_str("\\\""),
+            b'\\' => out.push_str("\\\\"),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
+            0x08 => out.push_str("\\b"),
+            0x0c => out.push_str("\\f"),
+            0x00..=0x1f => {
+                out.push_str("\\u00");
+                out.push(HEX[(b >> 4) as usize] as char);
+                out.push(HEX[(b & 0xf) as usize] as char);
+            }
+            _ => unsafe { out.as_mut_vec().push(b) },
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Converts a UTF-16 index range to a byte range.
 fn byte_range(s: &str, start: usize, end: usize) -> (usize, usize) {
     if s.is_ascii() {
