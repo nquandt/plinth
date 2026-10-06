@@ -22,7 +22,7 @@ pub fn lower(prog: &mut Program, dev: bool) -> FuncId {
     let n = prog.funcs.len();
     for fid in 0..n as FuncId {
         let body = std::mem::take(&mut prog.funcs[fid as usize].body);
-        let mut cx = Cx { prog, func: fid, loops: Vec::new(), dev };
+        let mut cx = Cx { prog, func: fid, loops: Vec::new(), dev, sig_ordinal: 0 };
         let body = cx.stmts(body);
         prog.funcs[fid as usize].body = body;
     }
@@ -281,6 +281,11 @@ struct Cx<'p> {
     /// `signal(...)` whose value has a shape `sig_register`/`sig_restore`
     /// understand.
     dev: bool,
+    /// Hot reload (SPEC.md §13): the count of component-local signals
+    /// registered so far in the function being lowered. Reset per
+    /// function (see `lower`); the n-th registrable `signal(...)` in a
+    /// function gets ordinal n-1, which is part of its declaration key.
+    sig_ordinal: u32,
 }
 
 impl Cx<'_> {
@@ -302,6 +307,23 @@ impl Cx<'_> {
                     _ => unreachable!(),
                 };
                 let key = fnv1a(&format!("{module_idx}:{}", self.prog.vars[v as usize].name));
+                let read = TExpr::new(TExprKind::Var(v), self.prog.vars[v as usize].ty.clone(), span);
+                TStmt::Block(vec![
+                    TStmt::Let(v, Some(lowered)),
+                    rt_stmt("sig_register", vec![read, i32c(key as i32), i32c(shape as i32)]),
+                ])
+            }
+            TStmt::Let(v, Some(e)) if self.dev && self.is_registrable_local_signal(v) => {
+                let span = e.span;
+                let lowered = self.expr(e);
+                let shape = match &self.prog.vars[v as usize].ty {
+                    Type::Signal(inner) => shape_code(inner).expect("checked by is_registrable_local_signal"),
+                    _ => unreachable!(),
+                };
+                let func_name = self.prog.funcs[self.func as usize].name.clone();
+                let ordinal = self.sig_ordinal;
+                self.sig_ordinal += 1;
+                let key = fnv1a(&format!("{func_name}:{ordinal}"));
                 let read = TExpr::new(TExprKind::Var(v), self.prog.vars[v as usize].ty.clone(), span);
                 TStmt::Block(vec![
                     TStmt::Let(v, Some(lowered)),
@@ -350,6 +372,22 @@ impl Cx<'_> {
         matches!(self.prog.funcs[self.func as usize].kind, FuncKind::ModuleInit(_))
             && self.prog.vars[v as usize].module.is_some()
             && matches!(&self.prog.vars[v as usize].ty, Type::Signal(inner) if shape_code(inner).is_some())
+    }
+
+    /// Hot reload (SPEC.md §13): `v` is a `let` at the top level of a
+    /// component function or a closure (a `List` row, a `Tabs`/`Sheet`
+    /// render prop, ...), not inside a loop, and its value has a shape
+    /// `sig_register` understands. Its runtime key is the declaring
+    /// function's name plus the n-th such signal in it (`sig_ordinal`);
+    /// the runtime combines that with the current instance path (the
+    /// owning `List` row's key, if any) when it registers.
+    fn is_registrable_local_signal(&self, v: VarId) -> bool {
+        let info = &self.prog.vars[v as usize];
+        matches!(self.prog.funcs[self.func as usize].kind, FuncKind::TopLevel | FuncKind::Closure)
+            && info.owner == self.func
+            && info.module.is_none()
+            && info.in_loop.is_none()
+            && matches!(&info.ty, Type::Signal(inner) if shape_code(inner).is_some())
     }
 
     fn expr(&mut self, e: TExpr) -> TExpr {

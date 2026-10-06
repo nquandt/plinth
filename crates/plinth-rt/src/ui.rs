@@ -419,6 +419,25 @@ fn to_key(v: Val) -> Key {
     }
 }
 
+/// A hash of a `List` row key, for hot reload's instance paths (SPEC.md
+/// §13). Dev builds only; FNV-1a, the same algorithm the compiler uses
+/// for declaration keys.
+#[cfg(feature = "dev")]
+fn key_hash(k: &Key) -> u32 {
+    fn fnv1a_bytes(bytes: &[u8]) -> u32 {
+        let mut h: u32 = 0x811c_9dc5;
+        for b in bytes {
+            h ^= *b as u32;
+            h = h.wrapping_mul(0x0100_0193);
+        }
+        h
+    }
+    match k {
+        Key::Num(bits) => fnv1a_bytes(&bits.to_le_bytes()),
+        Key::Str(s) => fnv1a_bytes(s.as_bytes()),
+    }
+}
+
 fn run_list(id: u32) {
     let Some((node, owner, items_c, key_c, row_c, empty_c)) =
         with(|u| u.lists[id as usize].as_ref().map(|l| (l.node, l.owner, l.items, l.key, l.row, l.empty)))
@@ -464,6 +483,11 @@ fn run_list(id: u32) {
                         remove_row(r);
                     }
                     let scope = reactive::new_scope(owner);
+                    #[cfg(feature = "dev")]
+                    {
+                        let base = reactive::hotreload_path_of(owner);
+                        reactive::hotreload_set_path(scope, reactive::hotreload_combine(base, key_hash(&key)));
+                    }
                     let row_node = reactive::run_in_scope(scope, || match invoke(row_c, item) {
                         Val::I32(n) => n as NodeId,
                         _ => crate::trap("a List row must return an element"),

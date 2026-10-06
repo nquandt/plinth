@@ -252,6 +252,8 @@ pub fn dispose(scope: ScopeId) {
         // An effect's child scope is a child of this scope, so the loop
         // above disposed it already.
         for id in sc.rnodes {
+            #[cfg(feature = "dev")]
+            hotreload::unregister(id);
             s.unsubscribe(id);
             s.nodes[id as usize] = RNode::Free;
             s.free.push(id);
@@ -394,9 +396,20 @@ fn run_effect(id: RId) {
 // and the code below never run in a release build. Component-local
 // signals (inside a component function, a loop, or a closure) are never
 // registered, so they always start fresh after a reload.
+// Component-local signals (SPEC.md §13): a signal declared inside a
+// component function or a `List` row closure is keyed by the declaring
+// function's name plus the n-th registrable `signal(...)` in it (computed
+// at compile time, see `lower.rs`), combined at *register* time with the
+// current owner scope's "instance path". The instance path is 0 for the
+// root scope and for any scope that does not explicitly set one; a `List`
+// row scope sets its path from the row's key, combined with its owner's
+// path, so sibling rows keyed differently get different final keys and a
+// signal declared inside nested components keeps the path of the row (or
+// root) they ultimately run under (components do not create their own
+// scope, so nested component calls inherit the current scope's path).
 #[cfg(feature = "dev")]
 mod hotreload {
-    use super::{RId, Val, signal_peek, signal_set};
+    use super::{RId, ScopeId, Val, signal_peek, signal_set};
     use alloc::vec::Vec;
 
     struct Entry {
@@ -406,9 +419,50 @@ mod hotreload {
     }
 
     static REGISTRY: crate::global::Global<Vec<Entry>> = crate::global::Global::new(Vec::new());
+    static PATHS: crate::global::Global<Vec<u32>> = crate::global::Global::new(Vec::new());
+
+    fn ensure(scope: ScopeId, paths: &mut Vec<u32>) {
+        let i = scope as usize;
+        if paths.len() <= i {
+            paths.resize(i + 1, 0);
+        }
+    }
+
+    /// The instance path of `scope` (0 if never set).
+    pub fn path_of(scope: ScopeId) -> u32 {
+        PATHS.with(|p| {
+            ensure(scope, p);
+            p[scope as usize]
+        })
+    }
+
+    /// Sets the instance path of `scope`. `List` rows call this right
+    /// after creating their scope, combining their owner's path with a
+    /// hash of the row key.
+    pub fn set_path(scope: ScopeId, path: u32) {
+        PATHS.with(|p| {
+            ensure(scope, p);
+            p[scope as usize] = path;
+        });
+    }
+
+    /// A small, deterministic mix of a declaration key (or path) with an
+    /// instance discriminator (a row key hash, or a child path). Not
+    /// cryptographic; it only needs to separate sibling instances.
+    pub fn combine(a: u32, b: u32) -> u32 {
+        (a ^ b).wrapping_mul(0x0100_0193)
+    }
 
     pub fn register(id: RId, key: i32, shape: i32) {
-        REGISTRY.with(|r| r.push(Entry { key: key as u32, shape: shape as u32, id }));
+        let key = combine(key as u32, path_of(super::current_scope()));
+        REGISTRY.with(|r| r.push(Entry { key, shape: shape as u32, id }));
+    }
+
+    /// Drops the registry entry for a disposed signal, so a removed
+    /// `List` row's state does not leak and a reused runtime id does not
+    /// wrongly match a future, unrelated signal.
+    pub fn unregister(id: RId) {
+        REGISTRY.with(|r| r.retain(|e| e.id != id));
     }
 
     /// Writes `(count, then one (key, shape, tag, payload) per entry)`.
@@ -517,6 +571,8 @@ mod hotreload {
 
 #[cfg(feature = "dev")]
 pub use hotreload::{register as sig_register, restore as sig_restore, snapshot as sig_snapshot};
+#[cfg(feature = "dev")]
+pub use hotreload::{combine as hotreload_combine, path_of as hotreload_path_of, set_path as hotreload_set_path};
 
 /// Runs the dirty effects until no effect is dirty.
 pub fn flush() {
