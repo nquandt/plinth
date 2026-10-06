@@ -388,9 +388,17 @@ small local change), per the dogfooding task's scope.
   - Only `await` in a `case` value is still `PL2009` (new golden
     `PL2009_await_case`). The goldens of the removed messages are
     deleted; `PL2009_generator_method` replaces `PL2009_async_method`.
-  - Limit: a `return` inside a synchronous `try`/`finally` that is inside
-    an asynchronous `try`/`finally` runs the outer `finally` before the
-    inner one.
+  - Limit (fixed, branch `wt-compiler2`): a `return` inside a
+    synchronous `try`/`finally` that is inside an asynchronous
+    `try`/`finally` ran the outer `finally` before the inner one. The
+    same was true for `break` and `continue`, and an exception in the
+    inner `finally` was lost. Now the statement that leaves sets a flag
+    (`$leave`) and returns, so the synchronous `finally` blocks run
+    first; the outermost of them calls the closure of the asynchronous
+    `finally` when the flag is set (`Ctx::sync_fin` in
+    `check/asyncfn.rs`). A `return` in the synchronous `finally` block
+    itself replaces the pending one, as in JavaScript. Test:
+    `a_sync_finally_inside_an_async_finally_runs_first`.
   - Tests: the "`await` in `switch`, `do…while` and `try`/`finally`"
     section of `tests/async_await.rs`.
 

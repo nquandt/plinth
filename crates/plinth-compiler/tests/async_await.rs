@@ -614,6 +614,85 @@ async function run(): Promise<string> {
 }
 
 #[test]
+fn a_sync_finally_inside_an_async_finally_runs_first() {
+    // A `return`, `break` or `continue` in a synchronous `try`/`finally`
+    // that leaves an asynchronous `try`/`finally` runs the inner `finally`
+    // before the outer one, as in JavaScript.
+    let top = r#"let log = "";
+async function ret(): Promise<string> {
+  try {
+    await alert("a");
+    try {
+      try {
+        return "r";
+      } finally {
+        log = log + "in1;";
+      }
+    } finally {
+      log = log + "in2;";
+    }
+  } finally {
+    log = log + "out;";
+  }
+}
+async function loop(): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    try {
+      await alert("l" + i);
+      try {
+        if (i === 0) { continue; }
+        break;
+      } finally {
+        log = log + "i" + i + ";";
+      }
+    } finally {
+      log = log + "o" + i + ";";
+    }
+  }
+}
+async function thrower(): Promise<number> {
+  try {
+    await alert("t");
+    try {
+      return 1;
+    } finally {
+      throw new Error("inner");
+    }
+  } finally {
+    log = log + "tout;";
+  }
+}
+async function override(): Promise<number> {
+  try {
+    await alert("v");
+    try {
+      return 1;
+    } finally {
+      log = log + "v1;";
+      if (log.length > 0) { return 2; }
+    }
+  } finally {
+    log = log + "v2;";
+  }
+}"#;
+    let handler = r#"async () => {
+  const r = await ret();
+  await loop();
+  let m = "";
+  try { await thrower(); } catch (e) { m = e.message; }
+  const v = await override();
+  status.set(r + ":" + m + ":" + v + ":" + log);
+}"#;
+    let main = app(top, handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    for m in ["a", "l0", "l1", "t", "v"] {
+        answer(&mut guest, &mut tree, DialogKind::Alert, m, Value::Null);
+    }
+    assert_eq!(text(&tree), "r:inner:2:in1;in2;out;i0;o0;i1;o1;tout;v1;v2;");
+}
+
+#[test]
 fn an_exception_in_finally_replaces_the_pending_one() {
     let top = r#"async function run(): Promise<void> {
   try {
