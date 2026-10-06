@@ -224,7 +224,7 @@ The compiler is written in Rust. It is one binary, `plinth`, together with the C
 5. **Lower JSX and reactivity** (§7). This step turns templates into "create once, bind slots" code.
 6. **Lower to MIR.** Monomorphize generics, convert closures, transform async functions into state machines, compute struct layouts and itables.
 7. **Codegen** with `wasm-encoder` into a core Wasm module (linear memory).
-8. **Link** the prebuilt **runtime library** (`plinth-rt`, Rust compiled to `wasm32-unknown-unknown`). It holds the GC, strings, collections, signals, the op-buffer writer, and the scheduler. The compiler embeds `plinth-rt`. The **append linker** adds the app's types, functions, globals, table entries and passive data segments after those of `plinth-rt`, so no index inside the runtime changes. App code calls the exported `__plinth_rt_*` functions (`rt_abi.rs` lists them; the linker checks each name and type). The runtime calls app code only through *callables*: a thunk in the function table and a closure object. A start function gives the app entry point to the runtime. The linker removes the `__plinth_rt_*` exports.
+8. **Link** the prebuilt **runtime library** (`plinth-rt`, Rust compiled to `wasm32-unknown-unknown`). It holds the GC, strings, collections, signals, the op-buffer writer, and the scheduler. The compiler embeds `plinth-rt`. The **append linker** adds the app's types, functions, globals, table entries and passive data segments after those of `plinth-rt`, so no index inside the runtime changes. App code calls the exported `__plinth_rt_*` functions (`rt_abi.rs` lists them; the linker checks each name and type). The runtime calls app code only through *callables*: a thunk in the function table and a closure object. A start function gives the app entry point to the runtime. The linker removes the `__plinth_rt_*` exports. It also replaces each runtime function that the app cannot reach with a stub (`unreachable`). A stub keeps its index, so the append rule stays true. The roots are the runtime exports, the start function, the table entries, and the runtime functions that the app code calls.
 9. **Wrap** the module as a component with `wit-component`, against the `plinth:app` WIT world.
 10. **Validate** the imports (§4.1 level 3) and optimize the module (`wasm-opt`, optional).
 
@@ -251,7 +251,7 @@ The compiler is written in Rust. It is one binary, `plinth`, together with the C
 
 | Item | Target |
 |---|---|
-| `plinth-rt` linked into each artifact | ≤ 60 KiB (after `wasm-opt -Oz`) |
+| `plinth-rt` linked into each artifact | ≤ 60 KiB (after the linker stubs the unreachable functions; `wasm-opt -Oz` is optional) |
 | "Counter" app artifact | ≤ 80 KiB |
 | Typical small app (5 screens) | ≤ 300 KiB |
 
@@ -676,7 +676,7 @@ The stub finds its payload through a footer: the magic bytes `PLNTH\0`, the offs
 | `plinth run <file.plnt\|url>` | Run a package in the local runtime. |
 | `plinth validate <file.plnt>` | Validate the package structure, the manifest, and the Wasm imports. |
 | `plinth publish` | Sign and upload to the hub. |
-| `plinth shoot <file.plnt>` | Render each screen headless to PNGs (for review and tests). |
+| `plinth shoot <file.plnt>` | Render each screen headless to PNGs (for review and tests). Today this is the separate dev tool `plinth-shoot <file.plnt> <out-dir>`, because it needs the `test-support` features of gpui-ce. It uses the headless WGPU renderer and writes one PNG for each screen and each width class. |
 
 ### 13.1 Distribution through npm
 
@@ -687,7 +687,8 @@ The developer experience must be as simple as `npm create vite` or `npx sv creat
 - **The `@plinth/cli` package** gives the `plinth` command and the `plinth:*` typings. (The npm name `plinth` is taken; see Q2.) The binary comes in one optional package for each platform (as `esbuild` and `@biomejs/biome` do), so `npm install` gets no build step and needs no Rust toolchain.
 - **One self-contained binary.** The `plinth` binary contains the compiler, the prebuilt `plinth-rt`, the typings, and the desktop dev host. It never reads `node_modules` to compile. Only the editor reads the typings there.
 - **The project tsconfig** maps `plinth:*` to `.plinth/types/*`. Each `plinth` command writes the typings of its own version there, so the editor and the compiler always agree, with or without npm.
-- **Packing:** `node scripts/npm-pack.mjs` makes the tarballs in `target/npm` from a release build.
+- **Packing:** `node scripts/npm-pack.mjs` makes the tarballs in `target/npm` from a release build. In CI, `--platform <os>-<arch> --binary <path>` packs one platform package, and `--meta` packs `@plinth/cli` and `create-plinth`. `scripts/set-version.mjs` writes one version into `Cargo.toml` and all `package.json` files.
+- **Release:** `.github/workflows/release.yml` builds the binary for `win32-x64`, `linux-x64`, `darwin-x64` and `darwin-arm64` on a `v*` tag, and publishes the packages with the `NPM_TOKEN` secret. `docs/RELEASING.md` gives the steps. Only the Windows build is tested.
 
 **Project layout (an app):**
 
