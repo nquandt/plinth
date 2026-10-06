@@ -1,0 +1,4 @@
+app/main.tsx(3,24): error PL2000: the depth of `flat` must be a number literal or `Infinity`
+  const b = [[[1]]].flat(n);
+                         ^
+  help: write the depth as a number, such as `flat(2)`

@@ -168,8 +168,26 @@ fn flat_on_a_flat_array_is_a_copy() {
 }
 
 #[test]
-fn flat_with_a_depth_other_than_one_is_rejected() {
-    assert_eq!(codes(&show("const a = [[[1]]]; const b = a.flat(2);", "\"\"")), ["PL2000"]);
+fn flat_with_a_larger_depth_and_infinity() {
+    let body = r#"const a = [[[1, 2], [3]], [], [[4], []]];
+const two: number[] = a.flat(2);
+const one: number[][] = a.flat(1);
+const all: number[] = a.flat(Infinity);
+const more: number[] = a.flat(7);
+const none: number[][][] = a.flat(0);
+none.push([]);
+const deep = [[[["x"]]], [[["y", "z"]]]];
+const d3: string[] = deep.flat(3);
+const d2: string[][] = deep.flat(2);
+const flatAlready: number[] = [5, 6].flat(Infinity);"#;
+    let out = "s(two) + \"|\" + one.length + \"|\" + s(all) + \"|\" + s(more) + \"|\" + none.length + a.length + \"|\" + d3.join(\"\") + d2.length + \"|\" + s(flatAlready) + \"|\" + (Infinity > 1e308) + (NaN === NaN)";
+    let main = show(body, out);
+    assert_eq!(text_of(&run_with(&main, true), ControlKind::Text), "1,2,3,4|4|1,2,3,4|1,2,3,4|43|xyz2|5,6|truefalse");
+}
+
+#[test]
+fn flat_with_a_computed_depth_is_rejected() {
+    assert_eq!(codes(&show("const a = [[[1]]]; const n = 2; const b = a.flat(n);", "\"\"")), ["PL2000"]);
 }
 
 // -- `Map.entries()` as a value, and tuples -----------------------------------

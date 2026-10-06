@@ -300,6 +300,9 @@ impl Checker<'_> {
                 self.err(code::UNKNOWN_NAME, span, format!("`{name}` is a type, not a value"));
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
+            // `Infinity` and `NaN` from `std/lib.d.ts`.
+            None if name == "Infinity" => TExpr::new(TExprKind::Num(f64::INFINITY), Type::Number, span),
+            None if name == "NaN" => TExpr::new(TExprKind::Num(f64::NAN), Type::Number, span),
             None if name == "this" => {
                 self.err_help(
                     code::THIS,
@@ -1555,17 +1558,49 @@ impl Checker<'_> {
     /// `arr.flat()`: one level. On a `T[][]` it appends every inner array to
     /// a new `T[]`; on any other array it returns a copy (as JS does). A
     /// depth other than a literal `1` is not supported.
+    /// `arr.flat(depth?)`. The result type depends on the depth, so the
+    /// depth must be a number literal or `Infinity`. Each level is one
+    /// generated loop (`flat_once`); a depth larger than the nesting of
+    /// the array flattens all levels, as in JS.
     fn array_flat(&mut self, o: TExpr, elem: Type, args: &[Expr], span: Span) -> TExpr {
         if args.len() > 1 {
             self.err(code::ARG_COUNT, span, "`flat` takes at most one depth");
             return TExpr::new(TExprKind::Null, Type::Error, span);
         }
-        if let Some(a) = args.first()
-            && !matches!(a.kind, ExprKind::Num(n) if n == 1.0)
-        {
-            self.err_help(code::UNSUPPORTED, a.span, "`flat` flattens one level only", "remove the depth, or call `flat()` again for each level");
-            return TExpr::new(TExprKind::Null, Type::Error, span);
+        let depth = match args.first().map(|a| &a.kind) {
+            None => 1.0,
+            Some(ExprKind::Num(n)) => n.trunc().max(0.0),
+            Some(ExprKind::Ident(name)) if name == "Infinity" && self.lookup(name).is_none() => f64::INFINITY,
+            Some(_) => {
+                let a = &args[0];
+                self.err_help(
+                    code::UNSUPPORTED,
+                    a.span,
+                    "the depth of `flat` must be a number literal or `Infinity`",
+                    "write the depth as a number, such as `flat(2)`",
+                );
+                return TExpr::new(TExprKind::Null, Type::Error, span);
+            }
+        };
+        if depth == 0.0 {
+            return self.arr_copy_of(o, span);
         }
+        let mut out = self.flat_once(o, elem, span);
+        let mut done = 1.0;
+        while done < depth {
+            let Type::Array(e) = out.ty.clone() else { unreachable!() };
+            if !matches!(*e, Type::Array(_)) {
+                break;
+            }
+            out = self.flat_once(out, *e, span);
+            done += 1.0;
+        }
+        out
+    }
+
+    /// One level of `flat`: a `T[][]` becomes a `T[]`; any other array is
+    /// copied.
+    fn flat_once(&mut self, o: TExpr, elem: Type, span: Span) -> TExpr {
         let inner = match &elem {
             Type::Array(inner) => (**inner).clone(),
             _ => return self.arr_copy_of(o, span),

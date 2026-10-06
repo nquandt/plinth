@@ -245,9 +245,24 @@ small local change), per the dogfooding task's scope.
   end?)` changes the array in place and returns it; `start` and `end` use the
   same relative index rule as `slice`. `flat()` flattens one level: a `T[][]`
   becomes a new `T[]`; on another array it returns a copy. A depth other
-  than a literal `1` is `PL2000`. `std/lib.d.ts` has the three signatures
-  (`flat` has a `this: U[][]` overload, so `tsc` gives the correct type).
-  Tests: `crates/plinth-compiler/tests/collections.rs`.
+  than a literal `1` was `PL2000`; see the next entry. `std/lib.d.ts` has
+  the three signatures (`flat` has a `this: U[][]` overload, so `tsc`
+  gives the correct type). Tests: `crates/plinth-compiler/tests/collections.rs`.
+
+- **`flat(depth)` with a depth larger than 1, and `Infinity` (branch
+  `wt-compiler2`).** The result type depends on the depth, so the depth
+  must be a number literal or `Infinity`; any other expression is
+  `PL2000` (golden `PL2000_flat_depth`). `array_flat` repeats the
+  one-level loop (`flat_once`) once for each level, and stops when the
+  elements are not arrays, so a depth larger than the nesting (or
+  `Infinity`) flattens all levels, as in JS. `flat(0)` is a copy. A
+  fractional depth is truncated. Each level makes one new array; there is
+  no new runtime function. `std/lib.d.ts` has overloads for `tsc`: depth
+  0, 1, 2 and 3 exactly, and for a larger depth or `Infinity` all levels
+  of an array with up to four levels. `Infinity` and `NaN` are now global
+  values (`f64` constants; `declare var` in `std/lib.d.ts`). Tests:
+  `flat_with_a_larger_depth_and_infinity`,
+  `flat_with_a_computed_depth_is_rejected` (`tests/collections.rs`).
 
 - **`Map.entries()` as a value, and tuples (HANDOFF.md §9 item 4).**
   `m.entries()` returns a new `[K, V][]`. A tuple type `[A, B, …]` is a
