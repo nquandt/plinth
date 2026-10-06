@@ -143,3 +143,32 @@ fn flow_over_http_and_folder() {
 
     std::fs::remove_dir_all(&reg_dir).ok();
 }
+
+/// The Hub UI's `search` and `install` (`docs/HUB.md` §5.2, phase H3 step
+/// 2) through `HubService` with the real source client, against a folder
+/// registry: one search across two sources (one of them broken), then an
+/// install that records its source.
+#[test]
+fn hub_service_searches_and_installs_with_hub_sources() {
+    use plinth_runner_wasmtime::hub::HubBackend;
+    let reg_dir = temp_dir("hubsrc");
+    std::fs::write(reg_dir.join("notes.plnt"), compile_notes("com.example.notes", "0.1.0")).unwrap();
+    build(&reg_dir, &Options::default()).unwrap();
+
+    let hub = plinth_hub::Hub::open(temp_dir("hubsrc-hub")).unwrap();
+    let empty = temp_dir("hubsrc-empty");
+    hub.source_add("broken", empty.to_str().unwrap()).unwrap();
+    hub.source_add("local", reg_dir.to_str().unwrap()).unwrap();
+    let svc = plinth_hub::HubService::with_sources(hub.clone(), std::sync::Arc::new(plinth_registry::HubSources));
+
+    let result: serde_json::Value = serde_json::from_str(&(svc.search("note"))().unwrap()).unwrap();
+    assert_eq!(result["hits"][0]["id"], "com.example.notes", "{result}");
+    assert_eq!(result["hits"][0]["source"], "local");
+    assert_eq!(result["hits"][0]["version"], "0.1.0");
+    assert!(result["errors"][0].as_str().unwrap().starts_with("broken:"), "{result}");
+
+    assert_eq!((svc.install("com.example.notes"))().unwrap(), "com.example.notes");
+    let entry = hub.get("com.example.notes").unwrap().unwrap();
+    assert_eq!(entry.registry.unwrap().name, "local");
+    assert!((svc.install("com.example.nothing"))().is_err());
+}

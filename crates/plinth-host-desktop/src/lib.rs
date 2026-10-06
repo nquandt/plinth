@@ -221,6 +221,10 @@ impl GuestPort for WasmGuest {
     fn poll_net_results(&mut self) -> Vec<(u32, plinth_protocol::Value)> {
         self.guest.poll_net_results()
     }
+
+    fn take_hub_launches(&mut self) -> Vec<String> {
+        self.guest.take_hub_launches()
+    }
 }
 
 fn print_logs(guest: &mut Guest) {
@@ -416,94 +420,232 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
     Ok(())
 }
 
-/// Runs one library app from the Hub (`docs/HUB.md` §7.3, §9, phase H0
-/// parts 2–3): refuses a blocked app, shows the consent screen for any
-/// declared capability that has no grant yet, saves the decisions, then
-/// opens the app with a policy built from the grants (declared AND
-/// allowed is granted; declared and refused is denied). Returns `Ok(())`
-/// without running anything if the user cancels consent.
-pub fn run_from_hub(hub: &plinth_hub::Hub, app_id: &str) -> Result<()> {
+// -- The Hub host (`docs/HUB.md` §4.2, §7.3, phase H3) ----------------------
+
+/// A library app that is ready to open: its component is linked, its
+/// policy comes from the grants, and the trusted-signer rule for
+/// `hub.manage` passed.
+pub struct PreparedApp {
+    pub app: HostApp,
+    pub policy: Policy,
+    /// `true` when the app declares `hub.manage` (the Hub UI): it gets a
+    /// `plinth:hub` backend, and the host polls it for launch requests.
+    pub hub_manage: bool,
+}
+
+/// What the host must do to open a library app (`docs/HUB.md` §7.3).
+pub enum LaunchPlan {
+    /// Every declared capability is decided: open the app.
+    Ready(Box<PreparedApp>),
+    /// Show the consent window for `pending` (capability, reason of the
+    /// app) first, then call `apply_consent` with the decisions.
+    NeedsConsent { app_name: String, publisher: String, signer: Option<String>, version: String, pending: Vec<(String, String)> },
+}
+
+/// Decides how to open `app_id` from the library: refuses a blocked app,
+/// asks for consent when the pinned-or-latest version declares a
+/// capability that has no decision (`docs/HUB.md` §7.3 step 3), else
+/// prepares the app. No window opens here, so a test can call it.
+pub fn plan_launch(hub: &plinth_hub::Hub, app_id: &str) -> Result<LaunchPlan> {
     if hub.is_blocked(app_id)? {
         anyhow::bail!("{app_id} is blocked; it will not run");
     }
     let entry = hub.get(app_id)?.with_context(|| format!("{app_id} is not in the library"))?;
-    // The candidate to try is the pinned-or-latest version: if it declares
-    // a capability with no decision yet, consent is asked for it
-    // (`docs/HUB.md` §7.3 step 3), not silently skipped in favor of an
-    // older version.
+    // The candidate is the pinned-or-latest version: if it declares a
+    // capability with no decision yet, consent is asked for it, not
+    // silently skipped in favor of an older version.
     let candidate = entry.active_version().with_context(|| format!("{app_id} has no versions"))?.clone();
-    let candidate_bytes = hub.version_bytes(app_id, &candidate.version)?;
-    let pkg = plinth_package::Package::read(&candidate_bytes).with_context(|| format!("read the package for {app_id}"))?;
+    let bytes = hub.version_bytes(app_id, &candidate.version)?;
+    let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("read the package for {app_id}"))?;
     let declared: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
-
     let pending = hub.needs_consent(app_id, &declared)?;
-    let pkg = if pending.is_empty() {
-        pkg
-    } else {
-        let publisher = pkg.manifest.publisher.clone();
-        // A bad signature is refused outright (`docs/HUB.md` §6.1); an
-        // unsigned package shows "unverified publisher" as before.
-        let signer = plinth_package::signature::verify(&pkg).context("the package signature does not check out")?;
-        let with_reasons: Vec<(String, String)> = pending
-            .iter()
-            .map(|c| {
-                let why = pkg.manifest.capabilities.iter().find(|m| &m.name == c).map(|m| m.rationale.clone()).unwrap_or_default();
-                (c.clone(), why)
-            })
-            .collect();
-        match consent::show(&pkg.manifest.name, &publisher, signer.as_ref().map(|s| s.key.as_str()), &with_reasons) {
-            Some(decisions) => {
-                for (capability, allowed) in decisions {
-                    let decision = if allowed { plinth_hub::Decision::Allowed } else { plinth_hub::Decision::Refused };
-                    hub.set_grant(app_id, &capability, decision, &candidate.version)?;
-                }
-                pkg
-            }
-            None => {
-                // Cancelled: the new capability is still undecided, so run
-                // the newest fully-decided version instead, if there is
-                // one (`docs/HUB.md` §7.3 step 3).
-                let fallback = hub.runnable_version(app_id)?;
-                if fallback.version == candidate.version {
-                    eprintln!("[plinth] consent cancelled; {app_id} will not run");
-                    return Ok(());
-                }
-                eprintln!("[plinth] consent cancelled; running the previous version {} of {app_id}", fallback.version);
-                let bytes = hub.version_bytes(app_id, &fallback.version)?;
-                plinth_package::Package::read(&bytes).with_context(|| format!("read version {} of {app_id}", fallback.version))?
-            }
-        }
-    };
+    if pending.is_empty() {
+        return Ok(LaunchPlan::Ready(Box::new(prepare(hub, app_id, pkg)?)));
+    }
+    // A bad signature is refused outright (`docs/HUB.md` §6.1); an
+    // unsigned package shows "unverified publisher".
+    let signer = plinth_package::signature::verify(&pkg).context("the package signature does not check out")?;
+    let pending = pending
+        .iter()
+        .map(|c| {
+            let why = pkg.manifest.capabilities.iter().find(|m| &m.name == c).map(|m| m.rationale.clone()).unwrap_or_default();
+            (c.clone(), why)
+        })
+        .collect();
+    Ok(LaunchPlan::NeedsConsent {
+        app_name: pkg.manifest.name.clone(),
+        publisher: pkg.manifest.publisher.clone(),
+        signer: signer.map(|s| s.key),
+        version: candidate.version,
+        pending,
+    })
+}
 
+/// Saves the consent decisions for `version` of `app_id` and prepares the
+/// app. `None` (the user cancelled) runs the newest version whose
+/// capabilities are all decided, if it is not `version` (`docs/HUB.md`
+/// §7.3 step 3); else it returns `Ok(None)` and nothing runs.
+pub fn apply_consent(
+    hub: &plinth_hub::Hub,
+    app_id: &str,
+    version: &str,
+    decisions: Option<Vec<(String, bool)>>,
+) -> Result<Option<PreparedApp>> {
+    match decisions {
+        Some(decisions) => {
+            for (capability, allowed) in decisions {
+                let decision = if allowed { plinth_hub::Decision::Allowed } else { plinth_hub::Decision::Refused };
+                hub.set_grant(app_id, &capability, decision, version)?;
+            }
+            let bytes = hub.version_bytes(app_id, version)?;
+            let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("read version {version} of {app_id}"))?;
+            Ok(Some(prepare(hub, app_id, pkg)?))
+        }
+        None => {
+            let fallback = hub.runnable_version(app_id)?;
+            if fallback.version == version {
+                eprintln!("[plinth] consent cancelled; {app_id} will not run");
+                return Ok(None);
+            }
+            eprintln!("[plinth] consent cancelled; running the previous version {} of {app_id}", fallback.version);
+            let bytes = hub.version_bytes(app_id, &fallback.version)?;
+            let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("read version {} of {app_id}", fallback.version))?;
+            Ok(Some(prepare(hub, app_id, pkg)?))
+        }
+    }
+}
+
+/// Links a library package and builds its policy from the grants
+/// (declared AND allowed is granted; declared and refused is denied).
+fn prepare(hub: &plinth_hub::Hub, app_id: &str, pkg: plinth_package::Package) -> Result<PreparedApp> {
     let declared: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
     check_hub_trust(&pkg, &declared)?;
-    let hub_backend = declared
-        .iter()
-        .any(|c| c == plinth_runner_wasmtime::capability::HUB_MANAGE)
-        .then(|| Box::new(plinth_hub::HubService::new(hub.clone())) as Box<dyn plinth_runner_wasmtime::hub::HubBackend>);
+    let hub_manage = declared.iter().any(|c| c == plinth_runner_wasmtime::capability::HUB_MANAGE);
     let policy = hub.policy_for(app_id, &declared)?;
     let title = pkg.manifest.name;
     let accent = pkg.manifest.accent.unwrap_or_else(|| "teal".into());
     let component = with_runtime(pkg.component, &declared)?;
     let assets: std::collections::HashMap<String, Vec<u8>> =
         pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
-    let host_app = HostApp { component, title, accent, app_id: app_id.to_owned(), capabilities: declared, assets };
-    run_with_policy_and_hub(host_app, policy, hub_backend)
+    let app = HostApp { component, title, accent, app_id: app_id.to_owned(), capabilities: declared, assets };
+    Ok(PreparedApp { app, policy, hub_manage })
 }
 
-/// Opens one app window, alone in its own process, with a policy the
-/// caller already built (`Policy` from grants, instead of "declared is
-/// granted") and a `plinth:hub` backend for a guest the host trusted with
-/// `hub.manage` (`None` for an ordinary library app). No hot reload: this
-/// path is for library apps, not `plinth dev`. The Hub UI (`docs/HUB.md`
-/// §4.2, step 2 of this phase) will instead keep its own process alive and
-/// call `open_app` directly for each app it launches, so several run at
-/// once beside the Hub window.
-fn run_with_policy_and_hub(app: HostApp, policy: Policy, hub: Option<Box<dyn plinth_runner_wasmtime::hub::HubBackend>>) -> Result<()> {
-    let runner = Arc::new(Runner::new()?);
+/// What a Hub host process shares across its windows (`docs/HUB.md` §4.2,
+/// §12.2): the library, one engine, and the source client for the Hub
+/// UI's `search` and `install`.
+#[derive(Clone)]
+pub struct HubHost {
+    pub hub: plinth_hub::Hub,
+    pub runner: Arc<Runner>,
+    pub sources: Option<Arc<dyn plinth_hub::SourceClient>>,
+}
+
+impl HubHost {
+    /// The `plinth:hub` backend for a Hub UI window.
+    fn backend(&self) -> Box<dyn plinth_runner_wasmtime::hub::HubBackend> {
+        Box::new(match &self.sources {
+            Some(sources) => plinth_hub::HubService::with_sources(self.hub.clone(), sources.clone()),
+            None => plinth_hub::HubService::new(self.hub.clone()),
+        })
+    }
+}
+
+/// How often the host asks a Hub UI window for launch requests.
+pub const HUB_LAUNCH_POLL: Duration = Duration::from_millis(100);
+
+/// Opens a prepared library app in a new window. A Hub UI app (one with
+/// `hub.manage`) gets a `plinth:hub` backend and a poll loop that opens
+/// each app that it launches (`poll_hub_launches`).
+pub fn open_prepared(cx: &mut App, host: &HubHost, prepared: PreparedApp) -> gpui::WindowHandle<PlinthRoot> {
+    let PreparedApp { app, policy, hub_manage } = prepared;
+    let backend = hub_manage.then(|| host.backend());
+    let window = open_app_with_hub(cx, host.runner.clone(), app, policy, backend);
+    if hub_manage {
+        let host = host.clone();
+        cx.spawn(async move |cx| loop {
+            cx.background_executor().timer(HUB_LAUNCH_POLL).await;
+            let open = cx.update(|cx| poll_hub_launches(cx, window, &host));
+            if !open {
+                return;
+            }
+        })
+        .detach();
+    }
+    window
+}
+
+/// Drains the launch requests of the Hub UI in `window` and launches each
+/// app (`launch_from_hub`). Returns `false` when the window is closed, so
+/// the caller stops polling. A launch that fails (a blocked app, an app
+/// that is not in the library) is logged; the Hub UI shows the state of
+/// the library itself.
+pub fn poll_hub_launches(cx: &mut App, window: gpui::WindowHandle<PlinthRoot>, host: &HubHost) -> bool {
+    let Ok(ids) = window.update(cx, |root, _, _| root.take_hub_launches()) else { return false };
+    for id in ids {
+        if let Err(e) = launch_from_hub(cx, host, &id) {
+            eprintln!("[plinth] cannot open {id}: {e:#}");
+        }
+    }
+    true
+}
+
+/// Opens library app `app_id` in a new window of this process
+/// (`docs/HUB.md` §4.2): at once if every capability is decided, else
+/// after the consent window (`docs/HUB.md` §7.3), which opens in this
+/// process too and does not block the other windows.
+pub fn launch_from_hub(cx: &mut App, host: &HubHost, app_id: &str) -> Result<()> {
+    match plan_launch(&host.hub, app_id)? {
+        LaunchPlan::Ready(prepared) => {
+            open_prepared(cx, host, *prepared);
+        }
+        LaunchPlan::NeedsConsent { app_name, publisher, signer, version, pending } => {
+            let host = host.clone();
+            let app_id = app_id.to_owned();
+            consent::open(cx, &app_name, &publisher, signer.as_deref(), &pending, move |decisions, cx| {
+                match apply_consent(&host.hub, &app_id, &version, decisions) {
+                    Ok(Some(prepared)) => {
+                        open_prepared(cx, &host, prepared);
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("[plinth] cannot open {app_id}: {e:#}"),
+                }
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Runs one library app from the Hub (`docs/HUB.md` §7.3, §9): refuses a
+/// blocked app, shows the consent screen for any declared capability that
+/// has no grant yet, saves the decisions, then opens the app with a policy
+/// built from the grants. Returns `Ok(())` without running anything if the
+/// user cancels consent. No source client: the Hub UI's `search` and
+/// `install` report that this host cannot read sources.
+pub fn run_from_hub(hub: &plinth_hub::Hub, app_id: &str) -> Result<()> {
+    run_from_hub_with_sources(hub, app_id, None)
+}
+
+/// Like `run_from_hub`, with a source client for the Hub UI's `search` and
+/// `install` (`docs/HUB.md` §5). The process keeps running while any
+/// window is open: if the app is the Hub UI, each app that it launches
+/// opens in a new window of this process (`docs/HUB.md` §4.2).
+pub fn run_from_hub_with_sources(hub: &plinth_hub::Hub, app_id: &str, sources: Option<Arc<dyn plinth_hub::SourceClient>>) -> Result<()> {
+    let prepared = match plan_launch(hub, app_id)? {
+        LaunchPlan::Ready(prepared) => *prepared,
+        LaunchPlan::NeedsConsent { app_name, publisher, signer, version, pending } => {
+            // No application runs yet: the consent window runs its own loop.
+            let decisions = consent::show(&app_name, &publisher, signer.as_deref(), &pending);
+            match apply_consent(hub, app_id, &version, decisions)? {
+                Some(prepared) => prepared,
+                None => return Ok(()),
+            }
+        }
+    };
+    let host = HubHost { hub: hub.clone(), runner: Arc::new(Runner::new()?), sources };
     gpui_platform::application().run(move |cx: &mut App| {
         init_app(cx);
-        open_app_with_hub(cx, runner.clone(), app, policy, hub);
+        open_prepared(cx, &host, prepared);
         cx.activate(true);
     });
     Ok(())

@@ -249,3 +249,31 @@ mod tests {
         assert!(s.starts_with('{'));
     }
 }
+
+// -- The Hub's source client (`docs/HUB.md` §5, phase H3 step 2) ------------
+
+/// Reads registry sources for the Hub UI's `search` and `install`
+/// (`plinth_hub::SourceClient`). Each call opens the source again, so a
+/// changed registry is seen at once.
+pub struct HubSources;
+
+impl plinth_hub::SourceClient for HubSources {
+    fn search(&self, base: &str, query: &str) -> anyhow::Result<Vec<plinth_hub::SearchHit>> {
+        let source = source::Source::open(base)?;
+        Ok(source
+            .search(query)?
+            .into_iter()
+            .map(|a| plinth_hub::SearchHit { id: a.id, name: a.name, version: a.latest, description: a.summary.unwrap_or_default() })
+            .collect())
+    }
+
+    fn latest_package(&self, base: &str, id: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        let source = source::Source::open(base)?;
+        if !source.apps()?.iter().any(|a| a.id == id) {
+            return Ok(None);
+        }
+        let doc = source.app(id)?;
+        let Some(latest) = doc.latest() else { return Ok(None) };
+        Ok(Some(source.package(id, &latest.version)?))
+    }
+}

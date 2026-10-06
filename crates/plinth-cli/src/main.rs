@@ -38,6 +38,7 @@ usage:
   plinth hub add <app.plnt>        add a package to the Hub library
   plinth hub list                  list library apps
   plinth hub run <app id>          run a library app (consent screen first)
+  plinth hub ui [<app id>]         run the Hub UI app (default dev.plinth.hub)
   plinth hub remove <app id>       remove an app from the library
   plinth hub grants <app id> [allow|refuse <capability>]
                                    show or set a grant
@@ -617,6 +618,10 @@ fn publisher_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
     }
 }
 
+/// The app id of the Hub UI (`examples/hub`), which `plinth hub ui` runs
+/// when no id is given.
+const HUB_UI_APP_ID: &str = "dev.plinth.hub";
+
 /// `plinth hub …` (`docs/HUB.md` §4.3, §9, §15 phase H0 part 4): a thin CLI
 /// over `plinth-hub`, for testing the library, grants and consent flow
 /// without the Hub UI (which comes in H3).
@@ -727,10 +732,18 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                 println!("{}  {}  {}{}  [{signer}]", app.id, app.name, version, pin);
             }
         }
-        Some("run") => {
-            let id = args.get(1).context("usage: plinth hub run <app id>")?;
+        Some(cmd @ ("run" | "ui")) => {
+            // `plinth hub ui` runs the Hub UI app (`docs/HUB.md` §4.1,
+            // `examples/hub`); `run` needs an id. Either way, an app that
+            // the Hub UI launches opens in a new window of this process.
+            let id = match (cmd, args.get(1)) {
+                (_, Some(id)) => *id,
+                ("ui", None) => HUB_UI_APP_ID,
+                _ => bail!("usage: plinth hub run <app id>"),
+            };
             plinth_host_desktop::init_logging();
-            plinth_host_desktop::run_from_hub(&hub, id)?;
+            let sources: std::sync::Arc<dyn plinth_hub::SourceClient> = std::sync::Arc::new(plinth_registry::HubSources);
+            plinth_host_desktop::run_from_hub_with_sources(&hub, id, Some(sources))?;
         }
         Some("remove") => {
             let id = args.get(1).context("usage: plinth hub remove <app id>")?;

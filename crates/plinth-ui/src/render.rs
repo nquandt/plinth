@@ -70,6 +70,13 @@ pub trait GuestPort {
     fn poll_net_results(&mut self) -> Vec<(u32, Value)> {
         Vec::new()
     }
+
+    /// Drains the app ids that a privileged Hub UI guest asked the host to
+    /// launch (`plinth:hub`'s `launch`, `docs/HUB.md` §4.1, §4.2). The
+    /// default (no `plinth:hub` backend) has none.
+    fn take_hub_launches(&mut self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Which `plinth:dialog` call opened a pending dialog request (mirrors
@@ -427,6 +434,12 @@ impl PlinthRoot {
         self.sync_fields(cx);
         self.sync_dialog(cx);
         cx.notify();
+    }
+
+    /// Drains the launch requests of a Hub UI guest (`docs/HUB.md` §4.2).
+    /// The host polls this and opens a window for each app id.
+    pub fn take_hub_launches(&mut self) -> Vec<String> {
+        self.guest.take_hub_launches()
     }
 
     /// Pushes guest-side `value` changes into the text field states.
