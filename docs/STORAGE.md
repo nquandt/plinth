@@ -65,6 +65,29 @@ Open questions for the profile:
 - ST-Q8: Pairing on the web host: a browser profile has no keychain. Keep the key in IndexedDB as a non-extractable WebCrypto key, and require the recovery phrase on each new browser?
 - ST-Q9: Can an app ask for the user's identity (for example a public key to sign shared documents) without a vendor account? A `profile.identity` capability, with a separate key for each app so apps cannot track the user across apps.
 
+### 2.2 Instances, hosts and trust (draft)
+
+**Data key.** The data of an app belongs to the triple (profile, app identity, instance). The app identity is (publisher key, app id), as in §3 rule 2.
+
+**Instances.** An instance is one named set of an app's state: its private space, `kv`, secrets, windows and grants. Every app has the instance `default`. A user can make more, for example "Work" and "Personal", to use two accounts of one app at the same time. Two instances of one app cannot read each other's data, except through a space that the user grants to both. The grants of a new instance start as a copy of the app's grants; each instance can narrow them. The Hub shows the instance name with the app name ("Mail — Work"). A native export takes `--instance <name>`; the web Hub puts the instance in the URL.
+
+**Trusted and untrusted hosts.** The host shell sees all data that goes through it. So the data of a profile goes only to hosts that the user trusts:
+
+| Host | Who controls the host shell | Data |
+|---|---|---|
+| The Hub (desktop, mobile, web) | Plinth, installed by the user | The user's profile (§2.1); synced across the user's devices. |
+| A native export (`plinth native`) on a machine with a profile | Plinth's host code inside the export | On that machine, the same per-user store as the Hub, if the package is signed with the same publisher key: it is the same app identity. An unsigned export gets its own store, keyed by its package digest. A native export has no consent screen: it gets its declared capabilities. |
+| A web export on a developer's site (SPEC §10.3) | The site owner (the parent page is their code) | Only that site's browser storage. Never the user's profile. |
+
+A later version can offer "Open in my Hub" on a web export: the app then runs in a trusted host with the user's data.
+
+Open questions:
+
+- ST-Q10: Does a native export on a machine without a Hub keep its data in the same place, so that a Hub that is installed later finds it?
+- ST-Q11: Instances and `plinth://` links: does a link name an instance, or does the Hub ask?
+- ST-Q12: Can an app ask the host to make an instance (for example "Add account"), or only the user?
+- ST-Q13: Grants for each instance: is the copy rule right, or should grants stay shared by all instances of an app?
+
 **Manifest.** An app declares the spaces that it wants and why, for example: `spaces = [{ name = "vault", mode = "read-write", reason = "Your notes" }]`. At install or first use, the user picks an existing space or makes a new one for each request. The app cannot name a provider or a location.
 
 ## 3. Isolation rules
