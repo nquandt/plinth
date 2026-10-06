@@ -1,0 +1,170 @@
+# Host APIs, capabilities, and the manifest
+
+A Plinth app cannot reach the outside world by itself. Every effect
+outside its own UI — storage, the clipboard, the network, even a modal
+dialog — goes through a **host API module** (`plinth:time`,
+`plinth:store`, `plinth:clipboard`, `plinth:dialog`, and, in progress,
+`plinth:net`). Most of these modules are gated by a **capability**:
+a named permission that the app must declare in `plinth.toml`, and that
+the user grants before the app can use it.
+
+## `plinth:time`
+
+Clocks and timers. No capability is needed.
+
+```ts
+import { now, monotonicNow, setTimeout, setInterval, clearTimeout, clearInterval } from "plinth:time";
+```
+
+| Function | Notes |
+|---|---|
+| `now()` | Milliseconds since the Unix epoch, UTC. For display and logging only. |
+| `monotonicNow()` | Monotonic milliseconds from an arbitrary origin; use it to measure elapsed time. Never goes backwards. |
+| `setTimeout(callback, ms)` / `setInterval(callback, ms)` | Return a timer id. |
+| `clearTimeout(id)` / `clearInterval(id)` | Canceling an unknown or already-fired timer is not an error. |
+
+The desktop host polls timers every 15 ms and delivers one firing per
+poll; it does not catch up missed ticks.
+
+## `plinth:store`
+
+A per-app key-value store. Needs the `store.kv` capability.
+
+```ts
+import { kv } from "plinth:store";
+
+kv.set("note", "hello");
+kv.get("note");     // "hello" | null
+kv.remove("note");
+kv.keys();           // string[], no particular order
+kv.lastError();        // the reason the last call was denied, or null
+```
+
+On the desktop host, the store is a JSON file at
+`%APPDATA%\plinthpps\<app id>\kv.json`.
+
+## `plinth:clipboard`
+
+The system clipboard. `writeText` needs `clipboard.write`; `readText`
+needs `clipboard.read` — declare whichever ones you use.
+
+```ts
+import { writeText, readText, lastError } from "plinth:clipboard";
+
+writeText("copied!");
+readText();  // string | null (null if the clipboard holds something other than text)
+```
+
+## `plinth:dialog`
+
+Host-owned modal dialogs. **No capability is needed** — a dialog is UI,
+not data access. Each call returns at once; the user's answer arrives
+later, through a `completion` event, and calls your `done` callback.
+
+```ts
+import { alert, confirm, prompt } from "plinth:dialog";
+
+alert("Saved.");                                   // done is optional
+confirm("Reset the count?", (ok) => { /* ok: boolean */ });
+prompt("Your name?", (value) => { /* value: string | null */ });
+```
+
+The desktop host shows one request at a time as a modal overlay: `alert`
+has an OK button; `confirm` has Cancel and OK; `prompt` adds a text
+field. Escape cancels and Enter confirms. The web host uses the
+browser's own `alert`/`confirm`/`prompt`.
+
+## `plinth:net` — in progress
+
+Planned `fetch`-like HTTP and WebSocket access, gated by
+`net:<host-pattern>` capabilities (for example `net:api.example.com`, or
+`net:*` for any host, which needs a stated reason). It is blocked on
+`async`/`await` landing in the compiler (see [language.md](language.md)),
+because a network call cannot finish synchronously. Do not depend on
+`plinth:net` yet — it is not implemented.
+
+## Declaring a capability
+
+Add a `[[capabilities]]` block to `plinth.toml` for each capability you
+use, with a plain-English `rationale` — this is the text a consent
+screen shows the user:
+
+```toml
+id        = "com.example.notes"
+name      = "Notes"
+version   = "0.1.0"
+publisher = "example"
+
+[[capabilities]]
+name      = "store.kv"
+rationale = "Save your notes on this device."
+
+[[capabilities]]
+name      = "clipboard.write"
+rationale = "Copy a note to share it."
+```
+
+## Undeclared calls are compile errors
+
+If your code calls a gated function without declaring its capability,
+`plinth check` rejects it — the mistake never reaches a user:
+
+```
+app/main.tsx(8,16): error PL1007: this call needs the `store.kv` capability, which `plinth.toml` does not declare
+  <Text>{kv.get("note") ?? "none"}</Text>
+         ^^^^^^^^^^^^^^
+  help: add `[[capabilities]]` with `name = "store.kv"` and a `rationale` to plinth.toml (SPEC.md §11)
+```
+
+## Denied calls never trap
+
+Even with a declared capability, a host can still refuse a call at run
+time (the user declined it, or the host does not support it). A denied
+call never throws or traps your app — it fails quietly, in a fixed way:
+
+| Module | On denial |
+|---|---|
+| `plinth:store` | `kv.get` returns `null`; `kv.set`/`kv.remove` do nothing; `kv.keys()` returns `[]`. |
+| `plinth:clipboard` | `readText()` returns `null`; `writeText()` does nothing. |
+
+Each denied module exposes `lastError()` (`kv.lastError()`,
+`clipboard`'s module-level `lastError()`), which returns one of:
+
+- `"denied:undeclared"` — the manifest does not declare the capability.
+- `"denied:refused"` — the user declined it.
+- `"denied:unsupported"` — this host does not implement the capability
+  (for example, the web host's clipboard and store are currently
+  stubs that always deny — see `web/README.md`).
+- `null` — the last call to that module succeeded. The value clears on
+  the next successful call, so check it right after a call whose result
+  you need to trust.
+
+Write your UI to treat a denied capability as a normal, visible state
+(for example, "Clipboard access was not granted") rather than assuming
+every call succeeds.
+
+## `plinth validate`: the capability report
+
+`plinth validate <file.plnt>` prints what a package declares and what
+it can actually reach, computed directly from its Wasm imports — not
+from trusting the manifest:
+
+```sh
+$ plinth validate dist/notes.plnt
+capabilities:
+  declared:
+    store.kv - Save your notes on this device.
+  reachable: store.kv
+ok: dist/notes.plnt
+```
+
+- **declared** is read from `plinth.toml`/`manifest.toml`.
+- **reachable** is computed by mapping each runtime function the app
+  module imports to the capability it needs. This is the same check a
+  hub or registry would run before listing the app (see
+  [architecture.md](architecture.md) and `docs/HUB.md`): a package
+  cannot hide a capability it can use, and a report of "declared but
+  not reachable" flags a capability you asked for but never use.
+
+A package with no capabilities (like the example in `plinth new`) prints
+`declared: none` and `reachable: none`.
