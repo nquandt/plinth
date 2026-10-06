@@ -24,6 +24,8 @@ pub const UI_NAMES: &[&str] = &[
     "Image", "Aspect",
     // UI API 1.4
     "Icon", "DatePicker",
+    // UI API 1.5
+    "Chart", "ChartPoint", "ChartSeriesDef",
 ];
 pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int", "JSON"];
 pub const TIME_NAMES: &[&str] = &["now", "monotonicNow", "setTimeout", "setInterval", "clearTimeout", "clearInterval"];
