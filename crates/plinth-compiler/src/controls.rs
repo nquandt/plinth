@@ -189,6 +189,7 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("subtitle", T::Str, false, P(prop::SUBTITLE)),
             p("icon", T::StrOneOf(ICONS), false, P(prop::ICON)),
             p("onPress", T::Callback0, false, Ev(event::PRESS)),
+            p("trailing", T::Str, false, P(prop::TRAILING)),
         ],
         children: ChildKind::Nodes,
     },

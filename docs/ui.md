@@ -83,7 +83,7 @@ is not listed in `primary` is reachable only through `push`.
 | Control | Props | Notes |
 |---|---|---|
 | `List<T>` | **items: T[]**, **key: (item: T) => string \| number**, **row: (item: T) => Element**, `empty?` | Virtualized, keyed. `empty` shows when `items` is empty. |
-| `Row` | **title**, `subtitle?`, `icon?: IconName`, `onPress?`, `children?` | The standard list row. |
+| `Row` | **title**, `subtitle?`, `icon?: IconName`, `onPress?`, `trailing?: string`, `children?` | The standard list row. |
 | `Grid<T>` | **items: T[]**, **key**, **cell: (item: T) => Element**, `empty?` | Like `List`, with a responsive column count instead of one row per item (2, 3, or 4 columns, by width class). |
 
 ## Content
@@ -106,11 +106,22 @@ default (hidden from AccessKit, `aria-hidden`); pass `label` to give it
 an accessible name and an AccessKit image role. `Row.icon` renders the
 same glyph inline and stays the simpler way to put an icon on a row.
 
+`Row.trailing` shows a muted value on the right of the row, after the
+title and subtitle and before any children, e.g. `trailing="12 items"`
+or `trailing="$4.50"`. A `Row`'s children render as trailing controls,
+after `trailing`: for example a `Toggle` or a `Badge` placed inside a
+`Row` appears on the row's trailing edge.
+
 `Image.src` must be a string literal naming a file under the project's
 `assets/` directory (otherwise `PL4008`); `alt` must not be empty
 (otherwise `PL4009`). `plinth build` copies the referenced files into
 the package under `assets/`. If the asset is missing at run time, the
 host shows a placeholder with the `alt` text.
+
+On compact windows an `Image` fills the content width at its aspect
+ratio. On regular and wide windows the host caps the image height
+(360 px for `square`/`tall`, 280 px for `wide`) and centers it
+horizontally, keeping the aspect ratio.
 
 ## Inputs
 

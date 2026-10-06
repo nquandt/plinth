@@ -59,6 +59,7 @@ export const Prop = {
   "src": 32,
   "alt": 33,
   "aspect": 34,
+  "trailing": 35,
 };
 
 export const Event = {

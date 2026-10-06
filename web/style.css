@@ -185,6 +185,12 @@ body {
   color: var(--pl-muted);
   font-size: 0.85rem;
 }
+.pl-row-trailing {
+  color: var(--pl-muted);
+  font-size: 0.85rem;
+  flex: none;
+  white-space: nowrap;
+}
 .pl-row-actions {
   display: flex;
   align-items: center;
@@ -291,6 +297,23 @@ body {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+/* Regular/wide: cap the image height and center it horizontally, keeping
+   the aspect ratio (SPEC.md §6.3). Compact keeps the full-width default. */
+@media (min-width: 600px) {
+  .pl-image-square,
+  .pl-image-tall {
+    width: auto;
+    max-width: 100%;
+    max-height: 360px;
+    margin: 0 auto;
+  }
+  .pl-image-wide {
+    width: auto;
+    max-width: 100%;
+    max-height: 280px;
+    margin: 0 auto;
+  }
 }
 .pl-image-placeholder {
   display: flex;
