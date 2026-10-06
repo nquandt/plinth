@@ -200,10 +200,19 @@ function hostImports(
     cancelTimerEvent,
     kvStore,
     capabilities = new Set(),
+    refused = new Set(),
     askDialog,
     completeRequest,
+    clipboard = null,
   } = {},
 ) {
+  // A capability is usable when the manifest declares it and the user did
+  // not refuse it (the web App Hub's consent, docs/web-hub.md). A refused
+  // call answers `denied(refused)`; it never traps (SPEC.md §8.5).
+  function capReason(name) {
+    if (!capabilities.has(name)) return DeniedReason.undeclared;
+    return refused.has(name) ? DeniedReason.refused : null;
+  }
   // plinth:dialog (core 1.3, SPEC.md §8.5): each call returns a request id at
   // once; the answer arrives later as a `completion` event.
   let nextRequest = 1;
@@ -236,10 +245,10 @@ function hostImports(
   }
   function netDeniedReason(host) {
     if (host === null) return DeniedReason.unsupported;
-    if (isPrivateNetHost(host)) {
-      return capabilities.has("net.local") ? null : DeniedReason.undeclared;
-    }
-    return capabilities.has(`net:${host}`) || capabilities.has("net:*") ? null : DeniedReason.undeclared;
+    const names = isPrivateNetHost(host) ? ["net.local"] : [`net:${host}`, "net:*"];
+    const reasons = names.map(capReason);
+    if (reasons.includes(null)) return null;
+    return reasons.includes(DeniedReason.refused) ? DeniedReason.refused : DeniedReason.undeclared;
   }
   function netResult(ok, status, text, error) {
     return [ok, status, text, error];
@@ -351,8 +360,16 @@ function hostImports(
 
   let nextTimer = 1;
   const timers = new Map(); // id -> JS handle
-  const hasStoreCap = capabilities.has("store.kv");
+  const storeReason = kvStore ? capReason("store.kv") : DeniedReason.undeclared;
   let clipboardCache = null;
+  // The clipboard: `navigator.clipboard` by default; the web App Hub's
+  // sandboxed frame gives its own (`{ writeText(text), readText() }`, both
+  // may return a promise) that asks the hub page.
+  const clip =
+    clipboard ??
+    (typeof navigator !== "undefined" && navigator.clipboard?.writeText
+      ? { writeText: (t) => navigator.clipboard.writeText(t), readText: () => navigator.clipboard.readText() }
+      : null);
 
   return {
     "plinth:app/ui@1.0.0": {
@@ -410,21 +427,22 @@ function hostImports(
     },
     "plinth:app/store@1.0.0": {
       "kv-get"(keyPtr, keyLen, retptr) {
-        if (!hasStoreCap || !kvStore) return writeDeniedAt4(retptr, DeniedReason.undeclared);
+        if (storeReason !== null) return writeDeniedAt4(retptr, storeReason);
         writeOkOptionString(retptr, kvStore.get(readString(keyPtr, keyLen)));
       },
       "kv-set"(keyPtr, keyLen, valPtr, valLen, retptr) {
-        if (!hasStoreCap || !kvStore) return writeDeniedUnit(retptr, DeniedReason.undeclared);
-        kvStore.set(readString(keyPtr, keyLen), readString(valPtr, valLen));
+        if (storeReason !== null) return writeDeniedUnit(retptr, storeReason);
+        // A store can refuse a write (`false`), for example over its quota.
+        if (kvStore.set(readString(keyPtr, keyLen), readString(valPtr, valLen)) === false) return writeDeniedUnit(retptr, DeniedReason.refused);
         writeOkUnit(retptr);
       },
       "kv-delete"(keyPtr, keyLen, retptr) {
-        if (!hasStoreCap || !kvStore) return writeDeniedUnit(retptr, DeniedReason.undeclared);
+        if (storeReason !== null) return writeDeniedUnit(retptr, storeReason);
         kvStore.delete(readString(keyPtr, keyLen));
         writeOkUnit(retptr);
       },
       "kv-keys"(retptr) {
-        if (!hasStoreCap || !kvStore) return writeDeniedAt4(retptr, DeniedReason.undeclared);
+        if (storeReason !== null) return writeDeniedAt4(retptr, storeReason);
         writeOkStringList(retptr, kvStore.keys());
       },
     },
@@ -464,20 +482,28 @@ function hostImports(
     },
     "plinth:app/clipboard@1.0.0": {
       "write-text"(ptr, len, retptr) {
+        const reason = capReason("clipboard.write");
+        if (reason !== null) return writeDeniedUnit(retptr, reason);
         const text = readString(ptr, len);
         clipboardCache = text;
-        if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        if (clip) {
           // Fire-and-forget: the Clipboard API is async, this host call is not.
-          navigator.clipboard.writeText(text).catch(() => {});
+          Promise.resolve()
+            .then(() => clip.writeText(text))
+            .catch(() => {});
         }
         writeOkUnit(retptr);
       },
       "read-text"(retptr) {
-        if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
+        const reason = capReason("clipboard.read");
+        if (reason !== null) return writeDeniedAt4(retptr, reason);
+        if (clip) {
           // Kick off a refresh for next time; this call answers from the cache now.
-          navigator.clipboard
-            .readText()
-            .then((v) => (clipboardCache = v))
+          Promise.resolve()
+            .then(() => clip.readText())
+            .then((v) => {
+              if (typeof v === "string") clipboardCache = v;
+            })
             .catch(() => {});
         }
         writeOkOptionString(retptr, clipboardCache);
@@ -654,6 +680,7 @@ export class PlinthApp {
       scheduleTimerEvent,
       completeRequest,
       capabilities,
+      refused: opts.refused ?? new Set(),
       kvStore,
       onCommit: (ops) => this.onCommit(ops),
     });

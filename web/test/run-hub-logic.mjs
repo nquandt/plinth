@@ -28,6 +28,7 @@ import {
   browserSupport,
 } from "../hub-logic.js";
 import { PlinthApp, readPlnt } from "../plinth-web.js";
+import { riskOf } from "../hub-consent.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const exe = path.join(root, "target/debug", process.platform === "win32" ? "plinth.exe" : "plinth");
@@ -97,6 +98,12 @@ async function main() {
     const utility = registry.apps.find((a) => a.name === "Utility");
     const risks = Object.fromEntries(capabilityRows(utility).map((r) => [r.name, r.risk]));
     assert.deepEqual(risks, { "clipboard.write": "low", "clipboard.read": "medium" });
+
+    // The consent logic has its own risk table (it must not trust the
+    // registry); it agrees with the shared capability map.
+    for (const app of registry.apps) {
+      for (const label of app.labels ?? []) assert.equal(riskOf(label.name), label.risk, `${app.id}: ${label.name}`);
+    }
 
     const counter = registry.apps.find((a) => a.name === "Counter");
     assert.deepEqual(capabilityRows(counter), []);
