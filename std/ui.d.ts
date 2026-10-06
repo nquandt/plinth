@@ -259,3 +259,14 @@ export declare function Image(props: {
 /** An icon from the runtime icon set (SPEC.md §6.3). Decorative by default
  * (hidden from screen readers); pass `label` to give it an accessible name. */
 export declare function Icon(props: { name: IconName; tone?: Tone; label?: string }): Element;
+
+/** A date, time or date-and-time field with a popover picker (SPEC.md §6.3).
+ * `value` holds ISO text: "YYYY-MM-DD" (date), "HH:MM" (time) or
+ * "YYYY-MM-DDTHH:MM" (datetime); an empty string means no value. A signal
+ * binds both ways. A string needs `onChange`. */
+export declare function DatePicker(props: {
+  label: string;
+  value: Signal<string> | string;
+  mode?: "date" | "time" | "datetime";
+  onChange?: (value: string) => void;
+}): Element;

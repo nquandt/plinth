@@ -7,7 +7,7 @@
 // This file is DOM-only: it does not touch wasm directly. `app.onCommit`
 // (from plinth-web.js) feeds it ops; it calls `app.onEvent(...)` back.
 
-import { ControlKind, Prop, Event, EnumAspect, EnumTone } from "./ui-api.js";
+import { ControlKind, Prop, Event, EnumAspect, EnumTone, EnumDatePickerMode } from "./ui-api.js";
 
 const ASPECT_RATIO = { [EnumAspect.square]: "1 / 1", [EnumAspect.wide]: "16 / 9", [EnumAspect.tall]: "3 / 4" };
 
@@ -295,6 +295,8 @@ export class DomRenderer {
         return this.renderImage(n);
       case "icon":
         return this.renderIcon(n);
+      case "datePicker":
+        return this.renderDatePicker(n);
       default:
         return this.renderChildren(n, el("div", `pl-${kname}`));
     }
@@ -613,6 +615,25 @@ export class DomRenderer {
       span.setAttribute("aria-hidden", "true");
     }
     return span;
+  }
+
+  /** `<DatePicker>` (SPEC.md §6.3, UI API 1.4): a native date/time input,
+   * two-way bound exactly like `TextField` (the host sets `input.value`
+   * first, then sends `change`, with no echo back from the guest). */
+  renderDatePicker(n) {
+    const wrap = el("label", "pl-field");
+    const label = n.props.get(Prop.label);
+    if (label) wrap.appendChild(el("span", "pl-field-label")).appendChild(text(label));
+    const mode = n.props.get(Prop.mode)?.enum ?? EnumDatePickerMode.date;
+    const type = mode === EnumDatePickerMode.time ? "time" : mode === EnumDatePickerMode.datetime ? "datetime-local" : "date";
+    const input = el("input", "pl-input", { type });
+    input.value = n.props.get(Prop.value) ?? "";
+    const handler = n.listeners.get(Event.change);
+    if (handler !== undefined) {
+      input.addEventListener("change", () => this.send(handler, Event.change, input.value));
+    }
+    wrap.appendChild(input);
+    return wrap;
   }
 
   /** `<Image>` (SPEC.md §6.3, §10.1): an asset from the package. Sized by

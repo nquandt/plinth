@@ -1,6 +1,7 @@
 //! The Plinth UI runtime: the semantic tree, the op applier, the adaptive
 //! shell and the control library on gpui-ce (SPEC.md §6 and §9.3).
 
+mod calendar;
 mod render;
 mod theme;
 pub mod tree;

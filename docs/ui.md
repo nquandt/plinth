@@ -138,6 +138,7 @@ plain value plus `onChange` for one-way control.
 | `Checkbox` | **label**, **value: Signal\<boolean\> \| boolean**, `onChange?`, `disabled?` |
 | `Picker` | **label**, **value: Signal\<string\> \| string**, **options: string[]**, `onChange?`, `disabled?` |
 | `Slider` | **label**, **value: Signal\<number\> \| number**, **min**, **max**, `step?`, `onChange?`, `disabled?` |
+| `DatePicker` | **label**, **value: Signal\<string\> \| string**, `mode?: "date" \| "time" \| "datetime"`, `onChange?` |
 
 Notes:
 - A `Signal` prop binds both ways: the host updates the control at
@@ -148,8 +149,16 @@ Notes:
   literals; the compiler joins them at compile time. Four options or
   fewer render as a segmented control; more render as a list.
 - `Slider` follows pointer drag on its track, snapped to `step`.
-- `DatePicker` is planned (see SPEC.md §9's open items) but not in
-  `std/ui.d.ts` yet — do not use it today.
+- `DatePicker.value` holds ISO text: `"YYYY-MM-DD"` for `mode="date"`
+  (the default), `"HH:MM"` for `mode="time"`, and
+  `"YYYY-MM-DDTHH:MM"` for `mode="datetime"`; an empty string means no
+  value. The desktop renderer shows the value in a readable English
+  form and opens an anchored popover: a month grid for `date`/
+  `datetime` (previous/next month, today marked, the selected day
+  highlighted, click or Enter to pick, arrow keys to move the focused
+  day, PageUp/PageDown to change month, Escape to close) and
+  hour/minute steppers for `time`/`datetime`. The web renderer uses a
+  native `<input type="date">`, `"time"`, or `"datetime-local">`.
 
 ## Actions
 

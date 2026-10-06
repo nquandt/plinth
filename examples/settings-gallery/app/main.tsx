@@ -12,6 +12,7 @@ import {
   Progress,
   Badge,
   Grid,
+  DatePicker,
 } from "plinth:ui";
 
 type Shortcut = { id: number; label: string };
@@ -31,6 +32,8 @@ function Settings() {
   const quantity = signal(3);
   const theme = signal("system");
   const plan = signal("free");
+  const due = signal("2026-10-06");
+  const reminder = signal("09:00");
 
   return (
     <Screen title="Settings">
@@ -51,6 +54,10 @@ function Settings() {
       <Section title="Appearance">
         <Picker label="Theme" value={theme} options={["system", "light", "dark"]} />
         <Picker label="Plan" value={plan} options={["free", "pro", "team", "enterprise", "custom"]} />
+      </Section>
+      <Section title="Pickers">
+        <DatePicker label="Due" value={due} />
+        <DatePicker label="Reminder" value={reminder} mode="time" />
       </Section>
       <Section title="Status">
         <Progress label="Sync progress" value={volume() / 100} />

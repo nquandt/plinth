@@ -145,6 +145,29 @@ fn icon_control() {
 }
 
 #[test]
+fn date_picker_control() {
+    // Good usage: a signal value, each mode.
+    let good = "import { app, Screen, DatePicker, signal } from \"plinth:ui\";\n\
+                function Home() {\n  const due = signal(\"2026-10-06\");\n  const at = signal(\"14:30\");\n  return <Screen title=\"Home\">\n    \
+                <DatePicker label=\"Due\" value={due} />\n    \
+                <DatePicker label=\"At\" value={at} mode=\"time\" />\n  </Screen>;\n}"
+        .to_owned()
+        + APP;
+    let f = frontend(&MemFs::default().with("app/main.tsx", &good));
+    assert!(f.diags.is_empty(), "{}", render(&f));
+    assert!(f.program.is_some());
+
+    // An unknown `mode` is rejected (SPEC.md §6.3: mode is "date" | "time"
+    // | "datetime").
+    let bad = "import { app, Screen, DatePicker, signal } from \"plinth:ui\";\n\
+               function Home() {\n  const due = signal(\"\");\n  return <Screen title=\"Home\"><DatePicker label=\"Due\" value={due} mode=\"year\" /></Screen>;\n}"
+        .to_owned()
+        + APP;
+    let f = frontend(&MemFs::default().with("app/main.tsx", &bad));
+    assert!(!f.diags.is_empty());
+}
+
+#[test]
 fn slider_number_picker_progress_badge() {
     // Good usage: all five check clean.
     let good = "import { app, Screen, Slider, NumberField, Picker, Progress, Badge, signal } from \"plinth:ui\";\n\

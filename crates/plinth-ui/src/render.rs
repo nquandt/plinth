@@ -15,9 +15,10 @@ use std::sync::Arc;
 use gpui::accesskit;
 use gpui_elements::editable_text::actions::Enter;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_area, text_input};
+use crate::calendar;
 use plinth_protocol::{
-    ControlKind, Event, NodeId, Op, Value, Writer, aspect, axis, button_role, button_size, decode_ops, event, prop,
-    text_align, text_style, tone,
+    ControlKind, Event, NodeId, Op, Value, Writer, aspect, axis, button_role, button_size, date_picker_mode, decode_ops,
+    event, prop, text_align, text_style, tone,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -192,6 +193,9 @@ pub struct PlinthRoot {
     /// The package's assets (SPEC.md §10.1), by path under `assets/`
     /// (without the prefix), for `<Image>`.
     assets: Arc<HashMap<String, Vec<u8>>>,
+    /// Open `DatePicker` popovers: the displayed `(year, month)` and the
+    /// keyboard-focused day of the month grid (UI API 1.4, SPEC.md §6.3).
+    date_cursor: HashMap<NodeId, (i32, u32, u32)>,
 }
 
 impl PlinthRoot {
@@ -226,6 +230,7 @@ impl PlinthRoot {
             focus: cx.focus_handle(),
             focused_once: false,
             assets,
+            date_cursor: HashMap::new(),
         };
         root.apply_commits(initial_commits);
         root.sync_dialog(cx);
@@ -247,6 +252,7 @@ impl PlinthRoot {
             focus: cx.focus_handle(),
             focused_once: false,
             assets: Arc::new(HashMap::new()),
+            date_cursor: HashMap::new(),
         }
     }
 
@@ -1002,6 +1008,7 @@ impl PlinthRoot {
             ControlKind::Action => self.render_action_item(node, t, false, cx),
             ControlKind::Image => self.render_image(node, t),
             ControlKind::Icon => self.render_icon(node, t),
+            ControlKind::DatePicker => self.render_date_picker(node, t, cx),
         }
     }
 
@@ -1848,6 +1855,391 @@ impl PlinthRoot {
             None => el.aria_hidden(),
         }
         .into_any_element()
+    }
+
+    /// `<DatePicker>` (SPEC.md §6.3, UI API 1.4): a labelled field that
+    /// shows the value in a readable English form and opens an anchored,
+    /// deferred popover (the `Menu` pattern) with a month grid, time
+    /// steppers, or both, depending on `mode`.
+    fn render_date_picker(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let id = node.id;
+        let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
+        warn_if_unlabeled("DatePicker", id, &label);
+        let mode = match node.enum_prop(prop::MODE) {
+            date_picker_mode::TIME => "time",
+            date_picker_mode::DATETIME => "datetime",
+            _ => "date",
+        };
+        let value = node.str_prop(prop::VALUE).unwrap_or("").to_owned();
+        let (date, time) = calendar::parse_value(mode, &value);
+        let display = match (date, time) {
+            (Some((y, m, d)), Some((h, mi))) => format!("{} {}", calendar::format_date_readable(y, m, d), calendar::format_time_readable(h, mi)),
+            (Some((y, m, d)), None) => calendar::format_date_readable(y, m, d),
+            (None, Some((h, mi))) => calendar::format_time_readable(h, mi),
+            (None, None) => "No date".to_owned(),
+        };
+        let open = self.open_menus.contains(&id);
+        let trigger = div()
+            .id(eid("dp-trigger", id))
+            .role(accesskit::Role::Button)
+            .aria_label(format!("{label}: {display}"))
+            .aria_expanded(open)
+            .cursor_pointer()
+            .w_full()
+            .px_3()
+            .py_2()
+            .rounded_lg()
+            .border_1()
+            .border_color(t.border)
+            .bg(t.background)
+            .text_color(t.text)
+            .text_sm()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(display)
+            .child(div().text_color(t.text_muted).child(icon_glyph(if mode == "time" { "clock" } else { "calendar" })))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                this.toggle_date_picker(id);
+                cx.notify();
+            }));
+        let trigger = keyboard_activatable(trigger, cx, move |this, cx| {
+            this.toggle_date_picker(id);
+            cx.notify();
+        });
+        let mut wrap = div().flex().flex_col().gap_1().child(trigger);
+        if open {
+            wrap = wrap.child(
+                deferred(
+                    anchored()
+                        .snap_to_window()
+                        .child(
+                            div()
+                                .id(eid("dp-popover", id))
+                                .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+                                .on_key_down(cx.listener(move |this, ev: &KeyDownEvent, _, cx| {
+                                    this.date_picker_key(id, mode, &ev.keystroke.key, cx);
+                                }))
+                                .child(self.render_date_picker_panel(id, mode, date, time, t, cx)),
+                        ),
+                )
+                .priority(1),
+            );
+        }
+        self.labelled(label, wrap, None, t)
+    }
+
+    fn toggle_date_picker(&mut self, id: NodeId) {
+        if self.open_menus.remove(&id) {
+            self.date_cursor.remove(&id);
+            return;
+        }
+        self.open_menus.clear();
+        self.date_cursor.clear();
+        self.open_menus.insert(id);
+        let mode = self.tree.get(id).map(|n| match n.enum_prop(prop::MODE) {
+            date_picker_mode::TIME => "time",
+            date_picker_mode::DATETIME => "datetime",
+            _ => "date",
+        }).unwrap_or("date");
+        let value = self.tree.get(id).and_then(|n| n.str_prop(prop::VALUE)).unwrap_or("").to_owned();
+        let (date, _) = calendar::parse_value(mode, &value);
+        let (y, m, d) = date.unwrap_or_else(calendar::today);
+        self.date_cursor.insert(id, (y, m, d));
+    }
+
+    /// Commits a new value for a `DatePicker` and fires `change`
+    /// (SPEC.md §8.4: the host sets its value first, then sends `change`).
+    fn commit_date_picker(&mut self, id: NodeId, mode: &str, date: Option<(i32, u32, u32)>, time: Option<(u32, u32)>, cx: &mut Context<Self>) {
+        let text = calendar::format_value(mode, date, time);
+        let handler = self.tree.get(id).and_then(|n| n.handler(event::CHANGE));
+        self.tree.set_local_prop(id, prop::VALUE, Value::Str(text.clone()));
+        match handler {
+            Some(h) => self.fire(h, event::CHANGE, Value::Str(text), cx),
+            None => cx.notify(),
+        }
+    }
+
+    /// Keyboard handling inside an open `DatePicker` popover (SPEC.md §6.3):
+    /// arrows move the focused day, PageUp/PageDown change month, Enter
+    /// picks, Escape closes.
+    fn date_picker_key(&mut self, id: NodeId, mode: &str, key: &str, cx: &mut Context<Self>) {
+        if mode == "time" {
+            if key == "escape" {
+                self.open_menus.remove(&id);
+                self.date_cursor.remove(&id);
+                cx.notify();
+            }
+            return;
+        }
+        let Some(&(mut y, mut m, mut focus_day)) = self.date_cursor.get(&id) else { return };
+        match key {
+            "left" => focus_day = focus_day.saturating_sub(1).max(1),
+            "right" => focus_day += 1,
+            "up" => focus_day = focus_day.saturating_sub(7).max(1),
+            "down" => focus_day += 7,
+            "pageup" => {
+                let (ny, nm) = calendar::add_months(y, m, -1);
+                y = ny;
+                m = nm;
+                focus_day = calendar::clamp_day(y, m, focus_day);
+            }
+            "pagedown" => {
+                let (ny, nm) = calendar::add_months(y, m, 1);
+                y = ny;
+                m = nm;
+                focus_day = calendar::clamp_day(y, m, focus_day);
+            }
+            "enter" => {
+                let value = self.tree.get(id).and_then(|n| n.str_prop(prop::VALUE)).unwrap_or("").to_owned();
+                let (_, time) = calendar::parse_value(mode, &value);
+                self.commit_date_picker(id, mode, Some((y, m, focus_day)), time, cx);
+                self.open_menus.remove(&id);
+                self.date_cursor.remove(&id);
+                cx.notify();
+                return;
+            }
+            "escape" => {
+                self.open_menus.remove(&id);
+                self.date_cursor.remove(&id);
+                cx.notify();
+                return;
+            }
+            _ => return,
+        }
+        // Rolling past the end/start of the visible month moves to the
+        // next/previous one, keeping the focused day in range.
+        let days = calendar::days_in_month(y, m);
+        if focus_day > days {
+            let (ny, nm) = calendar::add_months(y, m, 1);
+            y = ny;
+            m = nm;
+            focus_day = 1;
+        }
+        self.date_cursor.insert(id, (y, m, focus_day));
+        cx.notify();
+    }
+
+    /// The popover body: a month grid for `date`/`datetime`, hour/minute
+    /// steppers for `time`/`datetime`.
+    fn render_date_picker_panel(
+        &self,
+        id: NodeId,
+        mode: &str,
+        date: Option<(i32, u32, u32)>,
+        time: Option<(u32, u32)>,
+        t: &Tokens,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut panel = div().id(eid("dp-panel", id)).flex().flex_col().gap_3().p_3().mt_1().rounded_lg().bg(t.surface).border_1().border_color(t.border);
+        if mode != "time" {
+            panel = panel.child(self.render_date_grid(id, date, t, cx));
+        }
+        if mode != "date" {
+            panel = panel.child(self.render_time_steppers(id, mode, date, time, t, cx));
+        }
+        panel.into_any_element()
+    }
+
+    fn render_date_grid(&self, id: NodeId, date: Option<(i32, u32, u32)>, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let (year, month, focus_day) = self.date_cursor.get(&id).copied().unwrap_or_else(|| {
+            let (y, m, d) = date.unwrap_or_else(calendar::today);
+            (y, m, d)
+        });
+        let (today_y, today_m, today_d) = calendar::today();
+        let selected_day = date.filter(|&(y, m, _)| y == year && m == month).map(|(_, _, d)| d);
+        let prev = move |this: &mut Self, cx: &mut Context<Self>| {
+            if let Some(&(y, m, d)) = this.date_cursor.get(&id) {
+                let (ny, nm) = calendar::add_months(y, m, -1);
+                this.date_cursor.insert(id, (ny, nm, calendar::clamp_day(ny, nm, d)));
+                cx.notify();
+            }
+        };
+        let next = move |this: &mut Self, cx: &mut Context<Self>| {
+            if let Some(&(y, m, d)) = this.date_cursor.get(&id) {
+                let (ny, nm) = calendar::add_months(y, m, 1);
+                this.date_cursor.insert(id, (ny, nm, calendar::clamp_day(ny, nm, d)));
+                cx.notify();
+            }
+        };
+        let nav = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .id(eid("dp-prev", id))
+                    .role(accesskit::Role::Button)
+                    .aria_label("Previous month")
+                    .cursor_pointer()
+                    .px_2()
+                    .text_color(t.text)
+                    .child("\u{2039}")
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| prev(this, cx))),
+            )
+            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(format!("{} {year}", calendar::month_name(month))))
+            .child(
+                div()
+                    .id(eid("dp-next", id))
+                    .role(accesskit::Role::Button)
+                    .aria_label("Next month")
+                    .cursor_pointer()
+                    .px_2()
+                    .text_color(t.text)
+                    .child("\u{203A}")
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| next(this, cx))),
+            );
+        let weekday_header = div()
+            .flex()
+            .children(["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].iter().map(|d| {
+                div().flex_1().flex().items_center().justify_center().text_xs().text_color(t.text_muted).child(*d)
+            }));
+        let first_weekday = calendar::weekday_of(year, month, 1);
+        let days_in_month = calendar::days_in_month(year, month);
+        let mut cells: Vec<AnyElement> = Vec::new();
+        for _ in 0..first_weekday {
+            cells.push(div().flex_1().into_any_element());
+        }
+        for day in 1..=days_in_month {
+            let is_today = (year, month, day) == (today_y, today_m, today_d);
+            let is_selected = selected_day == Some(day);
+            let is_focused = day == focus_day;
+            let hover = t.hover;
+            let mut cell = div()
+                .id(eid("dp-day", (id as u64) * 1000 + day as u64))
+                .role(accesskit::Role::GridCell)
+                .aria_selected(is_selected)
+                .aria_label(calendar::format_date_readable(year, month, day))
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .py_1()
+                .mx_px()
+                .rounded_md()
+                .cursor_pointer()
+                .text_sm()
+                .hover(|s| s.bg(hover))
+                .when(is_selected, |d| d.bg(t.accent).text_color(t.on_accent))
+                .when(!is_selected, |d| d.text_color(t.text))
+                .when(is_today && !is_selected, |d| d.border_1().border_color(t.accent))
+                .when(is_focused, |d| d.border_1().border_color(t.text_muted))
+                .child(format!("{day}"));
+            cell = cell.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                let mode = this.tree.get(id).map(|n| match n.enum_prop(prop::MODE) {
+                    date_picker_mode::TIME => "time",
+                    date_picker_mode::DATETIME => "datetime",
+                    _ => "date",
+                }).unwrap_or("date");
+                let value = this.tree.get(id).and_then(|n| n.str_prop(prop::VALUE)).unwrap_or("").to_owned();
+                let (_, time) = calendar::parse_value(mode, &value);
+                this.commit_date_picker(id, mode, Some((year, month, day)), time, cx);
+                let close_now = mode != "datetime";
+                if close_now {
+                    this.open_menus.remove(&id);
+                    this.date_cursor.remove(&id);
+                }
+                cx.notify();
+            }));
+            cells.push(cell.into_any_element());
+        }
+        let total = first_weekday + days_in_month;
+        let trailing = (7 - total % 7) % 7;
+        for _ in 0..trailing {
+            cells.push(div().flex_1().into_any_element());
+        }
+        let mut grid_rows: Vec<AnyElement> = Vec::new();
+        let mut it = cells.into_iter();
+        loop {
+            let row: Vec<AnyElement> = it.by_ref().take(7).collect();
+            if row.is_empty() {
+                break;
+            }
+            grid_rows.push(div().flex().children(row).into_any_element());
+        }
+        div()
+            .id(eid("dp-grid", id))
+            .role(accesskit::Role::Grid)
+            .flex()
+            .flex_col()
+            .gap_1()
+            .w(px(240.))
+            .child(nav)
+            .child(weekday_header)
+            .children(grid_rows)
+            .into_any_element()
+    }
+
+    fn render_time_steppers(
+        &self,
+        id: NodeId,
+        mode: &str,
+        date: Option<(i32, u32, u32)>,
+        time: Option<(u32, u32)>,
+        t: &Tokens,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (hour, minute) = time.unwrap_or((0, 0));
+        let mode_owned = mode.to_owned();
+        let step = move |this: &mut Self, dh: i32, dm: i32, cx: &mut Context<Self>| {
+            let value = this.tree.get(id).and_then(|n| n.str_prop(prop::VALUE)).unwrap_or("").to_owned();
+            let (d, t) = calendar::parse_value(&mode_owned, &value);
+            let (h, m) = t.unwrap_or((0, 0));
+            let nh = ((h as i32 + dh).rem_euclid(24)) as u32;
+            let nm = ((m as i32 + dm).rem_euclid(60)) as u32;
+            this.commit_date_picker(id, &mode_owned, d, Some((nh, nm)), cx);
+            cx.notify();
+        };
+        let step_h_up = step.clone();
+        let hour_up = move |this: &mut Self, cx: &mut Context<Self>| step_h_up(this, 1, 0, cx);
+        let step_h_down = step.clone();
+        let hour_down = move |this: &mut Self, cx: &mut Context<Self>| step_h_down(this, -1, 0, cx);
+        let step_m_up = step.clone();
+        let min_up = move |this: &mut Self, cx: &mut Context<Self>| step_m_up(this, 0, 1, cx);
+        let step_m_down = step.clone();
+        let min_down = move |this: &mut Self, cx: &mut Context<Self>| step_m_down(this, 0, -1, cx);
+        let stepper = |value: String, up: Box<dyn Fn(&mut Self, &mut Context<Self>)>, down: Box<dyn Fn(&mut Self, &mut Context<Self>)>, label: &'static str, cx: &mut Context<Self>| {
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .id(SharedString::from(format!("{label}-up-{id}")))
+                        .role(accesskit::Role::Button)
+                        .aria_label(format!("Increase {label}"))
+                        .cursor_pointer()
+                        .px_2()
+                        .text_color(t.text)
+                        .child("+")
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| up(this, cx))),
+                )
+                .child(div().w(px(36.)).text_center().text_sm().child(value))
+                .child(
+                    div()
+                        .id(SharedString::from(format!("{label}-down-{id}")))
+                        .role(accesskit::Role::Button)
+                        .aria_label(format!("Decrease {label}"))
+                        .cursor_pointer()
+                        .px_2()
+                        .text_color(t.text)
+                        .child("\u{2212}")
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| down(this, cx))),
+                )
+                .into_any_element()
+        };
+        let _ = date;
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .child(stepper(format!("{hour:02}"), Box::new(hour_up), Box::new(hour_down), "hour", cx))
+            .child(div().text_sm().child(":"))
+            .child(stepper(format!("{minute:02}"), Box::new(min_up), Box::new(min_down), "minute", cx))
+            .into_any_element()
     }
 
     // -- UI API 1.2 structure --
