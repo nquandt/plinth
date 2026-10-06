@@ -1,131 +1,139 @@
 # Handoff: Plinth
 
-This file gives a new agent what it needs to continue the work. Read it first. Then read `SPEC.md` (the design), `docs/HUB.md` (the app hub), `docs/REGISTRY.md` (registries), and `CONTRIBUTING.md` (commands). `docs/GAPS.md` lists the known language gaps. `docs/VALIDATION.md` is the plan for apps that test Plinth. `docs/STORAGE.md` is the draft storage model (spaces, providers, grants, sync). `docs/UI-ADVANCED.md` is the draft for styled primitives (advanced UI on gpui). `docs/EXPERIENCE.md` describes the user scenarios, the UI words, the defaults and the build order for the user experience.
+This file gives a new agent what it needs to continue the work. Read it first. Then read:
 
-## 0. Read this first: the push rule
+- `SPEC.md`: the design (ASD-STE100 Simplified Technical English; keep the style; status notes are inline, search "Status").
+- `CONTRIBUTING.md`: commands.
+- `docs/HUB.md` (the App Hub), `docs/REGISTRY.md` (registries), `docs/web-hub.md` (the web Hub).
+- `docs/GAPS.md`: known language gaps.
+- Design drafts from 2026-10-06: `docs/VALIDATION.md` (apps that test Plinth), `docs/STORAGE.md` (profiles, spaces, instances, sync, isolation), `docs/UI-ADVANCED.md` (Level 2 styled primitives on gpui), `docs/EXPERIENCE.md` (user scenarios, UI words, defaults, build order), SPEC §10.3 (web export, `<plinth-app>`, iframes).
 
-**Never push before `bash scripts/ci-local.sh full` passes locally.** CI runs the same script. The owner's GitHub Actions minutes are nearly used up (about 90 % of the month on 2026-10-06), and earlier pushes failed CI because only parts of the tests ran locally. Batch commits into few pushes, and ask the owner before a push.
+## 0. Read this first
 
-**Update (2026-10-06, later): the Actions minutes are fully used up.** Do not push. Keep commits local on `master`. Until the minutes reset or a self-hosted runner exists, the local `ci-local.sh full` pass is the only gate. At the end of 2026-10-06, `master` was 99 commits ahead of `origin/master`; `ci-local.sh full` and `node web/test/run-a11y.mjs` passed on it. The owner wants self-hosted runners later.
+**Do not push.** The owner's GitHub Actions minutes are used up (2026-10-06). Keep commits local on `master`. The only gate is a local pass of `bash scripts/ci-local.sh full` (CI runs the same script). For web changes, also run `node web/test/run-a11y.mjs`. When minutes come back, ask the owner before a push and push in one batch. The owner wants self-hosted runners later.
 
-**Owner decisions of 2026-10-06 (keep them):**
-- One implementation for all hosts: one `.plnt` runs everywhere; a host only supplies host APIs. Never build a second UI for one host (the web Hub was rebuilt for this reason).
-- Mobile hosts render with gpui. Only the web host renders to the DOM (SPEC M5, Q1).
-- Every web app runs in a sandboxed iframe; the parent page is the host shell (SPEC §10.3).
-- Advanced UI: typed style props, no raw pixels for now, semantic controls rebuilt on Level 2 later (`docs/UI-ADVANCED.md` §8).
-- Data belongs to the user: "your device or your storage, never the vendor's"; strong walls between apps; lasting cross-app access is deferred (`docs/STORAGE.md`).
+State at this handoff: `master` is about 100 commits ahead of `origin/master`. `ci-local.sh full` and `run-a11y.mjs` pass on it.
+
+**Owner decisions (keep them):**
+
+1. **One implementation for all hosts.** One `.plnt` runs on every host; a host only supplies host APIs and host-owned UI (consent window, error banner). Never build a second UI for one host. (The first web Hub was a hand-written page; it was replaced by the Hub app for this reason.)
+2. **Mobile hosts render with gpui.** Only the web host renders to the DOM (SPEC M5, Q1).
+3. **Every web app runs in a sandboxed iframe** (opaque origin); the parent page is the host shell (SPEC §10.3).
+4. **Advanced UI:** typed style props, no raw pixels for now, theme tokens; the semantic controls get rebuilt on Level 2 primitives later (`docs/UI-ADVANCED.md` §8). The runtime owns all controls (SPEC Q4).
+5. **Data belongs to the user:** "your device or your storage, never the vendor's"; strong walls between apps; lasting cross-app access is deferred (`docs/STORAGE.md` §3).
+6. **Plain UI words and safe defaults** (`docs/EXPERIENCE.md`).
 
 ## 1. What Plinth is
 
-Plinth is a framework for cross-platform apps. Authors write a strict subset of TypeScript with JSX ("Plinth TS"). The compiler turns an app into a `.plnt` package that holds **only app code** (a counter app is about 2 KB) and is the **same file on every platform**. A user installs a host one time: the `plinth` CLI, the `plinth-host` runner, or later the Plinth Hub app. The host has **runtime cores** (`plinth-rt` builds, which are Wasm and versioned like nvm), links each app into the core that it needs, runs it in wasmtime, and renders a semantic, adaptive UI with `gpui-ce` (the owner's fork at `../gpui-ce`). Apps declare intent; the runtime owns layout, spacing and color. A host can prove from an app's imports which capabilities the app can use, and the user approves them (the Hub's main idea, `docs/HUB.md` §1.1).
+Plinth is a framework for cross-platform apps. Authors write a strict subset of TypeScript with JSX ("Plinth TS"). The compiler turns an app into a `.plnt` package that holds **only app code** (a counter app is about 2 KB) and is the **same file on every platform**. A user installs a host one time: the `plinth` CLI, the `plinth-host` runner, or the Plinth Hub. The host has **runtime cores** (`plinth-rt` builds, Wasm, versioned like nvm), links each app into the core that it needs, runs it in wasmtime (desktop) or the browser (web), and renders a semantic, adaptive UI with `gpui-ce` (the owner's fork at `../gpui-ce`) or the DOM. Apps declare intent; the runtime owns layout, spacing and color. A host proves from an app's imports which capabilities the app can use, and the user approves them (`docs/HUB.md` §1.1).
 
-## 2. State (2026-10-06)
+## 2. State
 
 | Area | State |
 |---|---|
-| Packages and cores (SPEC §10.4, §10.5) | Done. Core version is **1.10** (1.9: the Hub calls of H3 step 3; 1.10: `uncaught`, `set_drain`, `report` for exceptions and `async`, branch `wt/lang5`). An app declares the lowest core that has the functions it imports. |
-| UI API (SPEC §6.3, `docs/ui.md`) | **1.5**: about 30 controls incl. Checkbox, TextArea, Slider, NumberField, Picker, Progress, Badge, Tabs, Sheet, Dialog, Menu (anchored popover), Grid, Action, Image (package assets), Icon, DatePicker, Chart (bar/line/pie), Row `trailing`. Stack navigation, screen actions, AccessKit roles, keyboard use. |
-| Lists | Keyed reconciler with a minimal-moves diff; host-side virtualization above 200 rows (variable row heights). 10,000 rows: about 4 ms per frame. |
-| Host APIs (SPEC §8.5, `docs/host-apis.md`) | `time` (timers, dates, time zone), `store` (kv), `clipboard`, `dialog` (async), `net` (HTTP fetch, per-host capabilities), `hub` (privileged). Async calls use request ids and `completion` events; without a `done` callback they return a `Promise`. Denied calls never trap. Uncaught app errors go to the host through `error.report`; the desktop host shows a dismissible banner. |
-| Compiler (SPEC §4) | Unions and narrowing (also on member paths), generic functions/interfaces/type aliases, classes with single inheritance and `instanceof`, `int`, `Map`/`Set` (iteration, `forEach`, `keys`/`values`/`entries`), fixed-length tuples, nullable boxing, `JSON.stringify`/`JSON.parse<T>`, fragments, `.map()` JSX children, checked `as` casts, many string and array methods (incl. stable `sort`, `splice`, `fill`, `flat`), dynamic-length `Chart` data, `try`/`catch`/`finally`/`throw` (generated exception path, built-in `Error`, uncaught errors reported and the app keeps running), `async`/`await` (continuation-passing transform in `check/asyncfn.rs`, promises and microtask queue as app code; `await` in every statement incl. `switch`, `do…while`, `try`/`finally`; `async` class methods; one shared `then`/`reject`/`settle` for all promise types), the `Promise` API (`then`/`catch`/`finally`, `new Promise`, `Promise.all` for arrays and tuples, `Promise.resolve`/`reject`; `check/promises.rs`), dynamic `Chart` `series`. Golden tests for every diagnostic code, and for the new `PL2009`/`PL2010`/`PL3001`/`PL3004`/`PL3007` messages. |
-| Hub (`docs/HUB.md`) | H0 (library, grants, blocks, groups, consent window, risk-level defaults, re-consent on update, global policy), H1 (Ed25519 publisher signing), H3 step 1 (several apps per host, privileged `plinth:hub` for packages signed by a trusted key), H3 step 2 (the Hub UI app `examples/hub`, core 1.8 hub calls incl. async `search`/`install`, the host poll loop that opens launches in new windows, in-process consent, `plinth hub ui|open|shortcut|register-scheme`, `plinth://` links on Windows), H3 step 3 (core 1.9: `appInfo`, `pin`, publisher blocks, async `checkUpdates`/`update`; the Hub UI checks for updates on start, shows a count in the Library and "Update available" on the App screen, updates with re-consent, pins versions, blocks publishers; `.lnk` shortcuts with the app icon and Start menu entries; the `plinthw` launcher with no console window). |
-| Registry (`docs/REGISTRY.md`) | Draft 1: static or dynamic registries, `plinth registry build|serve`, `plinth hub source|search|install|update`. The app list has capability `labels` (risk, description, reason) and copied icons. |
-| Web App Hub (`docs/web-hub.md`) | One Hub UI: `web/hub.html` is a thin bootstrap that runs the Hub app (`examples/hub`) from the registry; `hub.manage` only for a signature by a key in the registry's static `hub.json` (`plinth registry build --hub-trusted-key`). Browse mode: the library is the registry listing; the web `plinth:hub` backend (`web/hub-host.js`) keeps grants, blocks, pins, groups in IndexedDB. A host consent window, then each app in a sandboxed iframe (opaque origin) through the reusable frame pair (`web/app-frame.js` + `web/frame-host.js`, bridge in `web/README.md`): kv per app in the page, `net`/clipboard/dialogs through the page. Digest and Ed25519 checks with WebCrypto. `plinth registry serve --web` is a static server (web files embedded, CORS on `/web/`). `bash scripts/web-hub-demo.sh` signs the Hub with a throwaway key in `target/` and serves the examples on port 8787; `cloudflared tunnel --url http://127.0.0.1:8787` for another device (public URL). |
-| Tooling | Hot reload that keeps signal state, headless screenshots (`plinth-shoot`), GC stress mode, `plinth native` single-file executables, VS Code extension (`editors/vscode`, not published), npm packages (smoke-tested locally, not published). |
-| Web host (`web/`) | Runs the same `.plnt` and core file in a browser: all UI API 1.5 controls, timers, kv, clipboard, dialogs, net, `plinth:hub` (with the web backend). Renders semantic HTML, not `gpui_web` (SPEC M5 decision), and updates one element per node in place: focus, caret, selection and hover stay; one changed row of big-list's 10,000 costs about 1 ms in the renderer. Every app in the Hub runs in a sandboxed iframe; `index.html` is the stand-alone page for tests and development. axe-core: 0 serious violations on 5 apps and on the Hub views. |
-| CI | `.github/workflows/ci.yml` runs `scripts/ci-local.sh` on Windows (full) and Linux (no GUI); macOS weekly or by hand. |
-| Platforms | Windows: everything. Linux and macOS: compiler, cores, runner, hub and registry tests pass; no GUI window has been opened there yet. Mobile: not started. |
+| Packages and cores (SPEC §10.4, §10.5) | Core **1.10**. An app declares the lowest core that has the functions it imports. |
+| UI API (SPEC §6.3, `docs/ui.md`) | **1.5**: about 30 controls (Checkbox, TextArea, Slider, NumberField, Picker, Progress, Badge, Tabs, Sheet, Dialog, Menu, Grid, Action, Image, Icon, DatePicker, Chart bar/line/pie, Row `trailing`, …). Stack navigation, screen actions, AccessKit roles, keyboard use. Charts: real path geometry on the desktop (`crates/plinth-ui/src/chart.rs`), a zero line for negative values, pie legends with percents, on both hosts. |
+| Lists | Keyed reconciler with a minimal-moves diff; host-side virtualization above 200 rows. 10,000 rows: about 4 ms per frame on the desktop. |
+| Host APIs (SPEC §8.5, `docs/host-apis.md`) | `time`, `store` (kv), `clipboard`, `dialog`, `net`, `hub` (privileged), `error.report`. Async calls use request ids and `completion` events; without a `done` callback they return a `Promise`. Denied calls never trap. The desktop shows a banner for uncaught app errors. |
+| Compiler (SPEC §4) | Unions and narrowing, generics, classes with inheritance, `int`, `Map`/`Set` (with `entries`), tuples, nullable boxing, JSON, fragments, `.map()` JSX children, checked casts, many string and array methods (`sort`, `splice`, `fill`, `flat`), `try`/`catch`/`finally`/`throw` (generated, built-in `Error`), `async`/`await` (`check/asyncfn.rs`; `await` in every statement; async methods), the `Promise` API (`then`/`catch`/`finally`, `new Promise`, `Promise.all`, `resolve`/`reject`; `check/promises.rs`), dynamic `Chart` `data` and `series`. Golden tests for every diagnostic. |
+| Desktop Hub (`docs/HUB.md`) | H0, H1 (Ed25519 signing), H3 steps 1–3: the Hub app `examples/hub` (Library, App, Discover screens), launches in new windows with in-process consent, updates with re-consent, version pins, publisher blocks, `plinth://` links, `.lnk` shortcuts and Start menu entries, the `plinthw` launcher. |
+| Registry (`docs/REGISTRY.md`) | Static or dynamic registries; `plinth registry build|serve`; capability labels and icons in the app list; a static `hub.json` (`--hub-trusted-key`) for the web Hub. |
+| Web host (`web/`) | The same `.plnt` and core file in a browser. Semantic HTML, updated in place (one element per node; focus, caret, selection and hover stay; one changed row of 10,000 costs about 1 ms). Stand-alone page `index.html?app=…&core=…` for tests and development. |
+| Web Hub (`docs/web-hub.md`) | The same Hub app in the browser (`web/hub.html` + `hub-shell.js`). Browse mode: the library is the registry listing; `web/hub-host.js` implements `plinth:hub` with IndexedDB. A host consent window, then each app in a sandboxed iframe through the reusable frame pair `web/app-frame.js` + `web/frame-host.js` (bridge documented in `web/README.md`): kv per app, `net`, clipboard and dialogs through the page. Digest and Ed25519 checks with WebCrypto. `plinth registry serve --web` is a static server. |
+| Tooling | Hot reload with kept signal state, `plinth-shoot` headless screenshots, GC stress mode, `plinth native` single-file executables, VS Code extension (not published), npm packages (not published). |
+| Platforms | Windows: everything. Linux and macOS: compiler, cores, runner, hub and registry tests pass; no GUI window opened yet. Mobile: not started. |
 
-Example apps (all valid TypeScript, all checked by CI): `counter`, `todo`, `notes`, `calculator`, `settings-gallery`, `contacts`, `timer`, `gallery`, `dialogs`, `budget` (data-driven, charts), `utility` (desktop helper), `quotes` (net), `big-list`, `gc-torture`, `hub` (the Hub UI; privileged, see its README).
+Example apps (valid TypeScript, all built by the check script): `counter`, `todo`, `notes`, `calculator`, `settings-gallery`, `contacts`, `timer`, `gallery`, `dialogs`, `budget`, `utility`, `quotes`, `big-list`, `gc-torture`, `hub`.
 
 ## 3. Build, run, test
 
-Prerequisites: Rust stable, `rustup target add wasm32-unknown-unknown`, `../gpui-ce` checked out, Node 22. Windows is the main platform.
+Prerequisites: Rust stable, `rustup target add wasm32-unknown-unknown`, `../gpui-ce` checked out, Node 22, Edge (for the browser tests). Windows is the main platform.
 
 ```sh
-bash scripts/ci-local.sh full            # THE check before any push (2–3 min with a warm cache)
+bash scripts/ci-local.sh full            # THE check (2–3 min with a warm cache)
 bash scripts/ci-local.sh full --shoot    # also headless screenshot tests (needs a GPU)
+node web/test/run-a11y.mjs               # headless Edge: axe, renderer checks, the web Hub (needs the axe CDN)
+node web/test/run-a11y.mjs --typing-only # only the renderer checks; --hub-only: only the Hub
 
-cargo build -p plinth-cli -p plinth-shoot
-plinth new C:/path/my-app ; plinth dev <dir> ; plinth check|build <dir> ; plinth run <app.plnt>
+plinth new <dir> ; plinth dev <dir> ; plinth check|build <dir> ; plinth run <app.plnt>
 plinth native <app.plnt|dir> -o app.exe
-plinth validate <app.plnt>               # signature, declared vs reachable capabilities
+plinth validate <app.plnt>
 plinth core list|install|export
 plinth publisher init|show ; plinth sign <app.plnt> ; plinth build --sign
 plinth hub add|list|run|ui|open|remove|grants|block|unblock|block-publisher|policy|groups|source|search|install|update|pin|shortcut|register-scheme
-plinth registry build <folder> [--with-core] ; plinth registry serve <folder> [--web] [--port N]
-bash scripts/web-hub-demo.sh             # the web App Hub with the examples on http://localhost:8787/
-plinth-shoot <app.plnt> <out-dir>        # PNGs of every screen at compact/regular/wide
-node web/test/run-a11y.mjs               # axe-core in headless Edge, also the web App Hub (local only; needs the CDN; --hub-only)
+plinth registry build <folder> [--with-core] [--hub-trusted-key <id>] ; plinth registry serve <folder> [--web] [--port N]
+bash scripts/web-hub-demo.sh             # web Hub with the examples on http://127.0.0.1:8787/
+powershell -File scripts/dev-hub.ps1     # desktop Hub: sign a copy of the Hub app, fill the library, start it
+plinth-shoot <app.plnt> <out-dir>
 ```
 
-**The owner's machine (set up on 2026-10-06):** `plinth` and `plinthw` are installed with `cargo install --path crates/plinth-cli --locked --force` in `%USERPROFILE%\.cargo\bin` (on the PATH); reinstall after CLI changes. A personal publisher key "Nate" exists, and `PLINTH_HUB_TRUSTED_KEYS` is a user environment variable with its id. `powershell -File scripts/dev-hub.ps1` rebuilds and signs a copy of the Hub app in `target/dev-hub` (no tracked file changes), fills the library, and starts the desktop Hub. The web demo (`scripts/web-hub-demo.sh`) signs the Hub with a throwaway key in `target/web-hub-demo-key`. A Cloudflare quick tunnel (`cloudflared tunnel --url http://127.0.0.1:8787`) gives a public URL for tests from other devices; start it only when the owner asks. When the demo server runs, `target/debug/plinth.exe` is locked: rename it before a rebuild.
+**The owner's machine:** `plinth` and `plinthw` are installed in `%USERPROFILE%\.cargo\bin` with `cargo install --path crates/plinth-cli --locked --force` (reinstall after CLI changes). A personal publisher key "Nate" exists; `PLINTH_HUB_TRUSTED_KEYS` is a user environment variable with its id. The web demo signs the Hub with a throwaway key in `target/web-hub-demo-key`. A Cloudflare quick tunnel (`cloudflared tunnel --url http://127.0.0.1:8787`) gives a public URL; start it only when the owner asks. While the demo server runs, `target/debug/plinth.exe` is locked: rename it before a rebuild.
 
-Test crates must run **one at a time** on Windows (linker errors LNK1318/LNK1201 otherwise); the script does this. Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`, `PLINTH_HUB_TRUSTED_KEYS`, `PLINTH_BLESS=1` (rewrite diagnostic goldens), `PLINTH_TRACE_RENDER=1` (frame times).
+Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`, `PLINTH_HUB_TRUSTED_KEYS`, `PLINTH_BLESS=1` (rewrite diagnostic goldens), `PLINTH_TRACE_RENDER=1` (frame times).
 
 ## 4. Repository map
 
 | Path | What |
 |---|---|
-| `SPEC.md` | The design, in ASD-STE100 Simplified Technical English (keep the style). Status notes are inline (search "Status"). |
-| `docs/` | `HUB.md`, `REGISTRY.md`, `GAPS.md`, `language.md`, `ui.md`, `host-apis.md`, `getting-started.md`, `architecture.md`, `RELEASING.md`. |
+| `SPEC.md`, `docs/` | The design and the docs (see the list at the top). |
 | `wit/plinth/app.wit` | Guest/host interfaces: `ui`, `dev`, `error`, `time`, `store`, `clipboard`, `dialog`, `net`, `hub`. |
-| `wit/plinth/ui-api.toml` | Single source of truth for control, prop, event and enum ids (UI API 1.5). Append only; never renumber. `node scripts/gen-web-ids.mjs` regenerates `web/ui-api.js`. |
-| `std/*.d.ts` | Typings for `plinth:ui`, `core`, `time`, `store`, `clipboard`, `dialog`, `net`, `hub`, and `lib.d.ts`. `std_typings_match` keeps them equal to the compiler. |
-| `crates/plinth-rt` | The core (Rust → wasm32, `no_std`). Its `CORE_VERSION` section must equal `CORE_MINOR`. |
-| `crates/plinth-link` | Embedded cores, `rt_abi.rs` (the app ABI, append-only, `ADDED_IN` per function), `link.rs`, `split.rs`, `cores.rs`, `capabilities.rs` (capability map, risk levels). No compiler. |
-| `crates/plinth-compiler` | Parser (oxc), checker, lowering, codegen. Tests in `tests/`: lang, e2e, golden, apps, hostapi, net, async, async_await, errors, gc_stress, hotreload, split, capabilities, list_diff, perf (ignored), grid, regions. |
-| `crates/plinth-ui` | Semantic tree, renderer on gpui-ce, theme, calendar math. |
-| `crates/plinth-runner-wasmtime` | Runner, `Policy` (incl. `check_net`), kv, timers, request queue, net worker, hub backend trait. |
-| `crates/plinth-host-desktop` | Host library (`open_app`, `run`, `run_from_hub`, consent window) and the `plinth-host` runner. |
-| `crates/plinth-hub` | Library, grants, blocks, groups, sources, `HubService`. |
-| `crates/plinth-registry` | Registry documents, source client, static generator, static server. |
+| `wit/plinth/ui-api.toml` | Control, prop, event and enum ids (UI API 1.5). Append only. `node scripts/gen-web-ids.mjs` regenerates `web/ui-api.js`. |
+| `std/*.d.ts` | Typings for the `plinth:*` modules and `lib.d.ts`. `std_typings_match` keeps them equal to the compiler. |
+| `crates/plinth-rt` | The core (Rust → wasm32, `no_std`). `CORE_VERSION` must equal `CORE_MINOR`. |
+| `crates/plinth-link` | Embedded cores, `rt_abi.rs` (append-only, `ADDED_IN`), `link.rs`, `split.rs`, `cores.rs`, `capabilities.rs`. |
+| `crates/plinth-compiler` | Parser (oxc), checker (`check/`: `asyncfn.rs`, `promises.rs`, `jsx.rs`, …), lowering, codegen. Tests in `tests/`. |
+| `crates/plinth-ui` | Semantic tree, gpui renderer, theme, charts, calendar math. |
+| `crates/plinth-runner-wasmtime` | Runner, `Policy`, kv, timers, request queue, net worker, hub backend trait. |
+| `crates/plinth-host-desktop` | Host library (`open_app`, `run`, `run_from_hub`, `poll_hub_launches`, consent window) and `plinth-host`. |
+| `crates/plinth-hub` | Library, grants, blocks, groups, sources, updates, pins, OS integration (scheme, shortcuts), `HubService`. |
+| `crates/plinth-registry` | Registry documents, source client, static generator (incl. `hub.json`), static server with embedded web files. |
 | `crates/plinth-package` | `.plnt` zip, manifest, signatures, publisher keys, single-file payloads. |
-| `crates/plinth-cli` | The `plinth` binary and the `plinth new` template. |
+| `crates/plinth-cli` | `plinth` and `plinthw`, and the `plinth new` template. |
 | `crates/plinth-shoot` | Headless screenshots and GPU tests (not a default member). |
-| `web/` | Browser host (core + app as side modules, DOM renderer); node tests in `web/test/`. |
-| `editors/vscode/` | VS Code extension (diagnostics from `plinth check --json`). |
-| `npm/`, `scripts/` | npm packages for 4 platforms, pack and version scripts, `ci-local.sh`. |
+| `web/` | Browser host: `plinth-web.js`, `protocol.js`, `dom-renderer.js`, `zip.js`, the frame pair, the Hub shell and backend; node tests and `run-a11y.mjs` in `web/test/`. |
+| `editors/vscode/`, `npm/`, `scripts/` | VS Code extension; npm packages; `ci-local.sh`, demo and dev scripts. |
 
 ## 5. Pipeline in one paragraph
 
-`compile_ex(fs, capabilities, dev)`: parse → check (types, narrowing, JSX against `controls.rs`, capability checks `PL1007`, lints) → lower (signals, effects, JSX, hot-reload keys in dev) → codegen against `split::app_layout` (runtime functions are imports; table indices are relative to `table_base`) → `split::encode_app` writes `app.wasm` with the lowest needed core version → the compiler links it as a host would (`load_app` + `link` + `componentize`), so every build tests the load path. A host picks a core (`cores::link_app`), checks the imports against that core's exports, checks that reachable capabilities ⊆ declared ones, verifies the signature, and links.
+`compile_ex(fs, capabilities, dev)`: parse → check (types, narrowing, JSX against `controls.rs`, capability checks `PL1007`, lints; async and promise rewrites) → lower (signals, effects, JSX, hot-reload keys in dev) → codegen against `split::app_layout` (runtime functions are imports; table indices relative to `table_base`) → `split::encode_app` writes `app.wasm` with the lowest needed core version → the compiler links it as a host would, so every build tests the load path. A host picks a core (`cores::link_app`), checks the imports, checks reachable ⊆ declared capabilities, verifies the signature, and links. The web host does the same in JavaScript, with the core and the app as side modules.
 
-## 6. Decisions to keep
+## 6. Rules to keep
 
-- A `.plnt` holds only app code and is universal. Never tie it to one runtime build.
-- Cores: inside a major version only add functions; each addition increments `CORE_MINOR`, gets an `ADDED_IN` entry, and needs every host (the desktop runner AND `web/plinth-web.js`) to supply any new WIT function. When parallel branches add functions, the coordinator renumbers the minors at merge.
-- App artifact size counts, not raw core size; new runtime features go in separate functions (the linker stubs what an app does not reach). No `core::fmt`, `format!`, `HashMap` or Unicode tables in `plinth-rt`.
-- New UI is intent props; never pixels or colors. Ids in `ui-api.toml` are append-only.
-- Denied host calls never trap.
-- `hub.manage` is granted only to packages signed by a trusted Hub key.
+- A `.plnt` holds only app code and is universal.
+- Cores: inside a major version only add functions; each addition increments `CORE_MINOR`, gets an `ADDED_IN` entry, and needs every host (desktop runner AND `web/plinth-web.js`) to supply new WIT functions. Parallel branches: the coordinator renumbers at merge. Prefer generated code over new runtime functions.
+- Size: the linked runtime of the counter app stays within 60 KiB (`tests/e2e.rs`, SPEC §5.5). No `core::fmt`, `format!`, `HashMap` or Unicode tables in `plinth-rt`.
+- New UI is intent props or typed Level 2 style props from tokens; never raw pixels or colors. `ui-api.toml` ids are append-only.
+- Denied host calls never trap. `hub.manage` only for packages signed by a trusted Hub key.
 - Linear memory and a Rust runtime; the GC runs only between events.
 
 ## 7. Gotchas
 
-- Windows linker: one test crate at a time (`CARGO_BUILD_JOBS` 3–6).
+- Windows linker: test crates run one at a time (the script does it; `CARGO_BUILD_JOBS` 3–6).
 - `plinth-link/build.rs` builds `plinth-rt` into `target/rt` and `target/rt-dev`.
-- Generated `.plinth/` typings are ignored by git; do not commit them.
-- Diagnostic goldens (`tests/golden/`) change when a message changes (for example a new control in the "the controls are: …" help). Re-bless with `PLINTH_BLESS=1 cargo test -p plinth-compiler --test golden` and read the diff.
-- Long bash heredocs with Python and backslashes break; put scripts in files (the scratchpad).
-- Headless Chromium `--virtual-time-budget` stalls on real Wasm work; `web/test/run-a11y.mjs` uses the DevTools protocol instead.
-- Headless Edge cannot shrink below about 500 px; check "compact" at 560 px.
-- Live GUI clicks from an agent session often do not reach the window; prefer headless tests (`crates/plinth-shoot/tests/*.rs` show how to drive a headless window through AccessKit bounds).
+- Generated `.plinth/` typings are ignored by git.
+- Goldens change when a message changes; re-bless with `PLINTH_BLESS=1 cargo test -p plinth-compiler --test golden` and read the diff.
+- Long bash heredocs with Python and backslashes break; put scripts in files in the scratchpad.
+- Headless Edge: use the DevTools protocol, not `--virtual-time-budget`; it cannot shrink below about 500 px; close it with CDP `Browser.close` (a plain kill leaves ghost tabs in Windows Alt+Tab); it sometimes drops the first click into a new iframe, so the tests retry.
+- Windows PowerShell 5.1 reads files as ANSI by default; use `[IO.File]::ReadAllText(..., UTF8)` in scripts.
+- Live GUI clicks from an agent session often do not reach the window; prefer headless tests.
 
 ## 8. Working conventions (from the owner)
 
-- Validate locally before every push (§0). Commit after each tested step. No GPG signing; no attribution lines.
+- Commit after each tested step. No GPG signing; no attribution lines.
 - The owner may edit `SPEC.md`; diff it before you change it.
-- Parallel agents: use sibling worktrees (`C:\repos\plinth-wt-<name>`, so `../gpui-ce` resolves), copy `target/debug` and `target/rt` into a new worktree to reuse the build cache, give each agent one or two items, and require `bash scripts/ci-local.sh full` before it reports. Agents never push. Merge their branches locally, run the script, then push in one batch with the owner's approval.
+- Parallel agents: sibling worktrees `C:\repos\plinth-wt-<name>` (so `../gpui-ce` resolves; existing ones: `-lang`, `-rtfix`, `-structure`, `-a11y`, `-ci`, `-hostapi`, `-inputs`, all merged), one or two items per agent, a full `ci-local.sh` pass before it reports, never a push. Brief agents in terms of host APIs, not per-host UIs (§0 decision 1). Merge locally, run the script, then report.
 
-## 9. Next steps (suggested order)
+## 9. Next steps (in order)
 
-1. **Push the local commits** (§0) when CI minutes are available again and the owner agrees. CI run `37517664495` (commit `38004ef`) was still running at handoff; check it first.
-2. **Open decisions for the owner:** the license (Cargo.toml says Apache-2.0; there is no LICENSE file yet; "MIT OR Apache-2.0" is the Rust norm), and whether to use a self-hosted CI runner.
-3. **Hub, after H3 step 3:** a Plinth project Hub key (the owner's decision; so the Hub UI needs no `PLINTH_HUB_TRUSTED_KEYS`), first-use prompts (H5; the design needs an answer to `docs/HUB.md` H-Q4 first, and a synchronous call such as `clipboard.readText` cannot wait for a prompt), `addShortcut` from the Hub UI, automatic or daily update checks, and a live GUI check of the Hub UI by a person (the tests are headless; a `.lnk` shortcut was opened by hand once and started the app through `plinthw` with no console window).
-3a. **Validation apps (SPEC M9, `docs/VALIDATION.md`):** V1 7GUIs (`examples/7guis/`; Cells and Circle drawer need Grid virtualization and a `Canvas` control), then V2 a flagship notes app (rich text decision first), then V3 several apps in one host (lifecycle, crash isolation, sharing, fairness, permissions, start time and memory). Do this before new features that no app asks for.
-4. **Compiler:** `Promise.race`/`any`/`allSettled`; an error banner for `error.report` in the web host (the desktop host has one); the order of a synchronous `finally` inside an asynchronous `try`/`finally` on `return` (`docs/GAPS.md`); a smaller `async` code size (each `await` site still has its own rejected-check continuation); tuples with optional or rest elements, `flat(depth > 1)`. Done on `wt/lang6`: `await` in `switch`/`do…while`/`try`/`finally`, the `Promise` API, `async` methods, shared promise helpers (`examples/dialogs` 6075 → 5673 B), dynamic `Chart` `series`, the desktop error banner. Note: `tests/e2e.rs` now limits the *linked runtime* of the counter (core module less app code) to 60 KiB, the SPEC §5.5 wording; master was already at 61366 B of the old whole-module limit of 61440 B.
-4a. **Web Hub (`docs/web-hub.md` §7):** a PWA, first-use prompts, session grants in browse mode, a notice to the Hub app when the host changes a grant, `plinth.js` / `<plinth-app>` on top of the frame pair (`web/README.md`, "The app-frame bridge").
-5. **Platforms:** open a GUI window on Linux and macOS and fix what breaks; then mobile (SPEC Q1, Q3).
-6. **Distribution:** publish the npm packages and a first registry; Hub H2 (signed indexes, transparency log); key rotation.
-7. ~~**Charts:** real path-based line and pie geometry on the desktop~~ done (`crates/plinth-ui/src/chart.rs`, test `plinth-shoot/tests/chart_geometry.rs`).
+1. **Web export** (SPEC §10.3): `plinth.js` (one ES module) and the `<plinth-app src>` element on top of the frame pair; `plinth build <dir> --target web` (folder) and `--single-file` (one HTML file); tests that load both outputs from a plain static server and from disk in headless Edge. Then make `web/hub.html` a `<plinth-app>` page.
+2. **7GUIs, tasks 1–5** (`docs/VALIDATION.md` V1) in `examples/7guis/`, on both hosts, with tests; record the numbers in VALIDATION §6.
+3. **Level 2 UI, phase U1** (`docs/UI-ADVANCED.md`): `Box`, `Span`, `Pressable`, `Scroll` with typed props and tokens, on gpui and the DOM, a gallery, screenshot tests.
+4. **Storage, first slice** (`docs/STORAGE.md` §6): `plinth:files` on a private space and a granted `vault` space, local folder and OPFS providers, host sync to rustfs and Azurite in Docker, Hub UI for spaces, isolation tests. Editor: Markdown source plus a `Markdown` display control. Then the notes app (VALIDATION V2).
+5. **7GUIs tasks 6–7:** `Canvas` (U4) for Circle drawer; Grid virtualization for Cells.
+6. **Experience build order** (`docs/EXPERIENCE.md` §7): plain words and defaults, Try and Keep, the Privacy page, folder sync with encryption and pairing.
+7. **Compiler:** `Promise.race`/`any`/`allSettled`; the web host error banner; the `finally` order bug in `docs/GAPS.md`; smaller async code; tuples with optional or rest elements; `flat(depth > 1)`.
+8. **Web Hub** (`docs/web-hub.md` §7): PWA, first-use prompts, session grants in browse mode, a notice to the Hub app when the host changes a grant.
+9. **Platforms:** a GUI window on Linux and macOS; then mobile (SPEC Q1, Q3).
+10. **Distribution:** publish the npm packages and a first registry; Hub H2 (signed indexes, transparency log); key rotation.
+
+**Open decisions for the owner:** the license (Cargo.toml says Apache-2.0; no LICENSE file; "MIT OR Apache-2.0" is the Rust norm); the project Hub key; self-hosted runners; `docs/HUB.md` H-Q4 (consent while an app waits); the open questions in the design drafts (ST-Q*, UA-Q*, UX-Q*).
