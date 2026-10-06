@@ -11,6 +11,7 @@ anyhow.workspace = true
 wasm-encoder.workspace = true
 wasmparser.workspace = true
 wit-component.workspace = true
+sha2.workspace = true
 oxc_allocator = "0.153"
 oxc_ast = "0.153"
 oxc_parser = "0.153"

@@ -448,6 +448,15 @@ fn stub_unused(rt: &[u8], layout: &Layout, rt_code: &[u8], app_code: &[u8], app_
     Ok(out)
 }
 
+/// The functions that one encoded code body (with its size prefix) calls or
+/// takes with `ref.func`.
+pub(crate) fn callees_of(encoded: &[u8]) -> Result<Vec<u32>> {
+    let mut r = BinaryReader::new(encoded, 0);
+    let size = r.read_var_u32()? as usize;
+    let start = r.original_position();
+    callees(&encoded[start..start + size])
+}
+
 /// The functions that one code body calls or takes with `ref.func`.
 fn callees(body: &[u8]) -> Result<Vec<u32>> {
     let body = wasmparser::FunctionBody::new(BinaryReader::new(body, 0));

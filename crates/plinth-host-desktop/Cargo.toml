@@ -16,6 +16,7 @@ path = "src/main.rs"
 plinth-ui.workspace = true
 plinth-runner-wasmtime.workspace = true
 plinth-package.workspace = true
+plinth-compiler.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true

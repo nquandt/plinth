@@ -27,13 +27,15 @@ pub struct HostApp {
 }
 
 impl HostApp {
-    /// Reads a `.plnt` package or a bare `app.wasm` component.
+    /// Reads a `.plnt` package, a bare app module or a bare component. An
+    /// app module holds only the app code; the host links it into its own
+    /// runtime (SPEC.md §10.1).
     pub fn load(path: &Path) -> Result<HostApp> {
         let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
         if plinth_package::is_package(&bytes) {
             let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("open {}", path.display()))?;
             Ok(HostApp {
-                component: pkg.component,
+                component: with_runtime(pkg.component).with_context(|| format!("load {}", path.display()))?,
                 title: pkg.manifest.name,
                 accent: pkg.manifest.accent.unwrap_or_else(|| "teal".into()),
                 app_id: pkg.manifest.id,
@@ -41,9 +43,17 @@ impl HostApp {
             })
         } else {
             let title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-            Ok(HostApp { component: bytes, title: title.clone(), accent: "teal".into(), app_id: format!("dev.{title}"), capabilities: Vec::new() })
+            let component = with_runtime(bytes).with_context(|| format!("load {}", path.display()))?;
+            Ok(HostApp { component, title: title.clone(), accent: "teal".into(), app_id: format!("dev.{title}"), capabilities: Vec::new() })
         }
     }
+}
+
+/// Links an app module into the runtime of this host. A component passes
+/// through unchanged.
+fn with_runtime(entry: Vec<u8>) -> Result<Vec<u8>> {
+    use plinth_compiler::{link, split};
+    if split::is_app_module(&entry) { split::link_app(link::runtime(), &entry) } else { Ok(entry) }
 }
 
 /// A `Clipboard` backed by the real system clipboard (`arboard`), used

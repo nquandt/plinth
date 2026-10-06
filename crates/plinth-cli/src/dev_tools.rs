@@ -44,7 +44,7 @@ pub fn componentize(core: &[u8]) -> Result<Vec<u8>> {
         .context("encode the component")
 }
 
-/// Validates a `.plnt` package or a bare component.
+/// Validates a `.plnt` package, a bare app module or a bare component.
 pub fn validate_file(path: &Path) -> Result<()> {
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     if plinth_package::is_package(&bytes) {
@@ -52,9 +52,21 @@ pub fn validate_file(path: &Path) -> Result<()> {
         if pkg.manifest.ui_api.split('.').next() != plinth_protocol::UI_API_VERSION.split('.').next() {
             bail!("the package needs UI API {}, but this host has {}", pkg.manifest.ui_api, plinth_protocol::UI_API_VERSION);
         }
-        validate_component(&pkg.component)
+        validate_entry(&pkg.component)
     } else {
-        validate_component(&bytes)
+        validate_entry(&bytes)
+    }
+}
+
+/// An app module must link into this runtime (SPEC.md §10.1); a component
+/// must import only the plinth:app world.
+fn validate_entry(bytes: &[u8]) -> Result<()> {
+    use plinth_compiler::{link, split};
+    if split::is_app_module(bytes) {
+        let component = split::link_app(link::runtime(), bytes)?;
+        validate_component(&component)
+    } else {
+        validate_component(bytes)
     }
 }
 

@@ -273,6 +273,10 @@ fn sources_stamp(dir: &Path) -> u64 {
 
 struct Built {
     config: ProjectConfig,
+    /// The app module for the package: only the app code.
+    app: Vec<u8>,
+    runtime: String,
+    /// The app linked into the runtime, for the dev host.
     component: Vec<u8>,
     accent: Option<String>,
 }
@@ -287,7 +291,7 @@ fn compile(dir: &Path) -> Result<Option<Built>> {
             if w > 0 {
                 eprintln!("{}", summary(e, w));
             }
-            Ok(Some(Built { config, component: a.component, accent: a.accent }))
+            Ok(Some(Built { config, app: a.app, runtime: a.runtime, component: a.component, accent: a.accent }))
         }
         None => {
             eprintln!("{}", summary(e, w));
@@ -299,8 +303,8 @@ fn compile(dir: &Path) -> Result<Option<Built>> {
 fn build(dir: &Path, out: Option<PathBuf>) -> Result<bool> {
     let started = std::time::Instant::now();
     let Some(b) = compile(dir)? else { return Ok(false) };
-    let manifest = b.config.manifest(plinth_protocol::UI_API_VERSION, b.accent, &b.component);
-    let pkg = Package { manifest, component: b.component, assets: Vec::new() };
+    let manifest = b.config.manifest(plinth_protocol::UI_API_VERSION, &b.runtime, b.accent, &b.app);
+    let pkg = Package { manifest, component: b.app, assets: Vec::new() };
     let bytes = pkg.write()?;
     let out = out.unwrap_or_else(|| {
         let slug = b.config.id.rsplit('.').next().unwrap_or("app").to_owned();
@@ -311,10 +315,10 @@ fn build(dir: &Path, out: Option<PathBuf>) -> Result<bool> {
     }
     std::fs::write(&out, &bytes).with_context(|| format!("write {}", out.display()))?;
     println!(
-        "built {} in {} ms (component {} KiB, package {} KiB)",
+        "built {} in {} ms (app {} B, package {} KiB)",
         out.display(),
         started.elapsed().as_millis(),
-        pkg.component.len().div_ceil(1024),
+        pkg.component.len(),
         bytes.len().div_ceil(1024)
     );
     Ok(true)

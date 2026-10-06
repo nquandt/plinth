@@ -64,7 +64,7 @@ pub struct Manifest {
     pub accent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
-    /// The SHA-256 of the entry component, in hex.
+    /// The SHA-256 of the entry module, in hex.
     pub digest: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<Capability>,
@@ -97,19 +97,20 @@ impl ProjectConfig {
         Ok(())
     }
 
-    /// The manifest for a built component.
-    pub fn manifest(&self, ui_api: &str, accent: Option<String>, component: &[u8]) -> Manifest {
+    /// The manifest for a built app module. `runtime` is the id of the
+    /// runtime build that the app needs (SPEC.md §10.2).
+    pub fn manifest(&self, ui_api: &str, runtime: &str, accent: Option<String>, app: &[u8]) -> Manifest {
         Manifest {
             id: self.id.clone(),
             name: self.name.clone(),
             version: self.version.clone(),
             publisher: self.publisher.clone(),
             ui_api: ui_api.to_owned(),
-            runtime: format!(">={RUNTIME_VERSION}"),
+            runtime: runtime.to_owned(),
             entry: "app.wasm".into(),
             accent,
             icon: self.icon.clone(),
-            digest: hex(&Sha256::digest(component)),
+            digest: hex(&Sha256::digest(app)),
             capabilities: self.capabilities.clone(),
         }
     }
@@ -244,7 +245,7 @@ mod tests {
     fn round_trip() {
         let wasm = b"\0asm fake component".to_vec();
         let pkg = Package {
-            manifest: config().manifest("1.0", Some("teal".into()), &wasm),
+            manifest: config().manifest("1.0", "plinth-rt/test", Some("teal".into()), &wasm),
             component: wasm.clone(),
             assets: vec![("assets/a.txt".into(), b"hi".to_vec())],
         };
@@ -262,7 +263,7 @@ mod tests {
             assert!(check_path(p).is_err(), "{p}");
         }
         let wasm = b"abc".to_vec();
-        let mut pkg = Package { manifest: config().manifest("1.0", None, &wasm), component: wasm, assets: Vec::new() };
+        let mut pkg = Package { manifest: config().manifest("1.0", "plinth-rt/test", None, &wasm), component: wasm, assets: Vec::new() };
         pkg.component = b"tampered".to_vec();
         assert!(Package::read(&pkg.write().unwrap()).is_err());
     }

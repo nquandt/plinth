@@ -125,7 +125,7 @@ impl Harness {
 #[test]
 fn counter_behaves_like_m0() {
     let art = build("counter");
-    eprintln!("counter: core {} KiB, component {} KiB", art.core_size / 1024, art.component.len() / 1024);
+    eprintln!("counter: app {} B, core {} KiB, component {} KiB", art.app.len(), art.core_size / 1024, art.component.len() / 1024);
     // SPEC.md §5.5 size targets.
     // The size of the app artifacts is what counts (SPEC.md §5.5). The linker
     // stubs the runtime functions that an app does not reach, so the raw
@@ -166,7 +166,7 @@ fn counter_behaves_like_m0() {
 #[test]
 fn todo_behaves_like_m0() {
     let art = build("todo");
-    eprintln!("todo: core {} KiB, component {} KiB", art.core_size / 1024, art.component.len() / 1024);
+    eprintln!("todo: app {} B, core {} KiB, component {} KiB", art.app.len(), art.core_size / 1024, art.component.len() / 1024);
     let mut h = Harness::start(&art.component);
     assert_eq!(h.tree.screens().count(), 2);
     assert_eq!(h.row_titles(), ["Read SPEC.md", "Build the M0 host", "Write the compiler"]);
