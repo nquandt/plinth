@@ -320,7 +320,7 @@ pub fn check_capabilities(app: &[u8], declared: &[String]) -> Result<()> {
     let reachable = reachable_capabilities(app)?;
     for cap in &reachable {
         ensure!(
-            declared.iter().any(|d| d == cap),
+            declared.iter().any(|d| crate::capabilities::covers(d, cap)),
             "the app can reach the `{cap}` capability, which its manifest does not declare"
         );
     }

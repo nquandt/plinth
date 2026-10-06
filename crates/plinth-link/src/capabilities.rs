@@ -114,7 +114,30 @@ pub const FUNCTION_CAPABILITIES: &[(&str, &str)] = &[
     // `hub_last_error` needs no capability, like `kv_last_error` above.
 ];
 
+/// True if the declared capability `declared` covers the reachable
+/// capability `reachable` (`docs/HUB.md` §7.1): the same name, or any
+/// `net:<host>` or `net.local` for the generic `net` marker (the host is a
+/// run-time value; the runner checks it at call time).
+pub fn covers(declared: &str, reachable: &str) -> bool {
+    declared == reachable || (reachable == NET && (declared.starts_with("net:") || declared == NET_LOCAL))
+}
+
 /// The capability that a runtime function needs, if any.
 pub fn for_function(name: &str) -> Option<&'static str> {
     FUNCTION_CAPABILITIES.iter().find(|(n, _)| *n == name).map(|(_, c)| *c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn net_hosts_cover_the_net_marker() {
+        assert!(covers("store.kv", "store.kv"));
+        assert!(covers("net:api.example.com", NET));
+        assert!(covers("net:*", NET));
+        assert!(covers(NET_LOCAL, NET));
+        assert!(!covers("store.kv", NET));
+        assert!(!covers("net:api.example.com", STORE_KV));
+    }
 }
