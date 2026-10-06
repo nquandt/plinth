@@ -210,6 +210,31 @@ export class DomRenderer {
         return this.renderGroup(n);
       case "empty":
         return this.renderEmpty(n);
+      case "checkbox":
+        return this.renderCheckbox(n);
+      case "textArea":
+        return this.renderTextArea(n);
+      case "slider":
+        return this.renderSlider(n);
+      case "numberField":
+        return this.renderNumberField(n);
+      case "picker":
+        return this.renderPicker(n);
+      case "progress":
+        return this.renderProgress(n);
+      case "badge":
+        return this.renderBadge(n);
+      case "tabs":
+        return this.renderTabs(n);
+      case "sheet":
+      case "dialog":
+        return this.renderSheetOrDialog(n, kname);
+      case "menu":
+        return this.renderMenu(n);
+      case "grid":
+        return this.renderGrid(n);
+      case "action":
+        return this.renderActionStandalone(n);
       default:
         return this.renderChildren(n, el("div", `pl-${kname}`));
     }
@@ -225,9 +250,57 @@ export class DomRenderer {
 
   renderScreen(n) {
     const container = el("section", "pl-screen-body");
+    const header = el("div", "pl-screen-header");
+    if (this.tree.stack.length > 0) {
+      const back = el("button", "pl-back");
+      back.setAttribute("aria-label", "Back");
+      back.textContent = "← Back";
+      back.addEventListener("click", () => {
+        this.tree.stack.pop();
+        this.render();
+      });
+      header.appendChild(back);
+    }
     const title = n.props.get(Prop.title);
-    if (title) container.appendChild(el("h1", "pl-title")).appendChild(text(title));
-    return this.renderChildren(n, container);
+    if (title) header.appendChild(el("h1", "pl-title")).appendChild(text(title));
+    container.appendChild(header);
+    // Actions become `action`-kind child nodes (SPEC.md §6.3 UI API 1.2); render
+    // them as a toolbar above the other children rather than inline.
+    const actionChildren = n.children.map((cid) => this.tree.node(cid)).filter((c) => c && kindName[c.kind] === "action");
+    if (actionChildren.length) {
+      const toolbar = el("div", "pl-toolbar");
+      for (const a of actionChildren) toolbar.appendChild(this.renderActionButton(a));
+      container.appendChild(toolbar);
+    }
+    for (const cid of n.children) {
+      const c = this.tree.node(cid);
+      if (c && kindName[c.kind] !== "action") container.appendChild(this.renderNode(c));
+    }
+    return container;
+  }
+
+  /** An `Action` child's button, used in a toolbar (Screen/Menu) or a Dialog's action row. */
+  renderActionButton(n) {
+    const b = el("button", "pl-action");
+    b.textContent = n.props.get(Prop.label) ?? "";
+    const role = n.props.get(Prop.role);
+    if (role && role.enum === 2) b.classList.add("pl-action-destructive");
+    const handler = n.listeners.get(Event.press);
+    if (handler !== undefined) {
+      b.addEventListener("click", () => {
+        const destructive = role && role.enum === 2;
+        const confirmProp = n.props.get(Prop.confirm);
+        const needsConfirm = destructive && confirmProp !== false;
+        if (needsConfirm && !window.confirm(`${b.textContent}?`)) return;
+        this.send(handler, Event.press, null);
+      });
+    }
+    return b;
+  }
+
+  /** An `Action` rendered where no container (Screen/Dialog/Menu) claimed it as chrome. */
+  renderActionStandalone(n) {
+    return this.renderActionButton(n);
   }
 
   renderSection(n) {
@@ -329,5 +402,218 @@ export class DomRenderer {
     if (title) wrap.appendChild(el("p", "pl-empty-title")).appendChild(text(title));
     if (message) wrap.appendChild(el("p", "pl-empty-message")).appendChild(text(message));
     return wrap;
+  }
+
+  renderCheckbox(n) {
+    const wrap = el("label", "pl-checkbox-field");
+    const input = el("input", "pl-checkbox", { type: "checkbox" });
+    input.checked = !!n.props.get(Prop.value);
+    const handler = n.listeners.get(Event.change);
+    if (handler !== undefined) {
+      input.addEventListener("change", () => this.send(handler, Event.change, input.checked));
+    }
+    wrap.appendChild(input);
+    const label = n.props.get(Prop.label);
+    if (label) wrap.appendChild(el("span", "pl-checkbox-label")).appendChild(text(label));
+    return wrap;
+  }
+
+  renderTextArea(n) {
+    const wrap = el("label", "pl-field");
+    const label = n.props.get(Prop.label);
+    if (label) wrap.appendChild(el("span", "pl-field-label")).appendChild(text(label));
+    const input = el("textarea", "pl-textarea");
+    input.value = n.props.get(Prop.value) ?? "";
+    input.placeholder = n.props.get(Prop.placeholder) ?? "";
+    const handler = n.listeners.get(Event.change);
+    if (handler !== undefined) {
+      input.addEventListener("input", () => this.send(handler, Event.change, input.value));
+    }
+    wrap.appendChild(input);
+    return wrap;
+  }
+
+  renderSlider(n) {
+    const wrap = el("label", "pl-field pl-slider-field");
+    const label = n.props.get(Prop.label);
+    if (label) wrap.appendChild(el("span", "pl-field-label")).appendChild(text(label));
+    const input = el("input", "pl-slider", { type: "range" });
+    input.min = String(n.props.get(Prop.min) ?? 0);
+    input.max = String(n.props.get(Prop.max) ?? 100);
+    const step = n.props.get(Prop.step);
+    if (step != null) input.step = String(step);
+    input.value = String(n.props.get(Prop.value) ?? 0);
+    const handler = n.listeners.get(Event.change);
+    if (handler !== undefined) {
+      // Pointer drag on the track is native <input type=range> behavior,
+      // snapped to `step` by the browser (SPEC.md §6.3).
+      input.addEventListener("input", () => this.send(handler, Event.change, Number(input.value)));
+    }
+    wrap.appendChild(input);
+    return wrap;
+  }
+
+  renderNumberField(n) {
+    const wrap = el("label", "pl-field");
+    const label = n.props.get(Prop.label);
+    if (label) wrap.appendChild(el("span", "pl-field-label")).appendChild(text(label));
+    const input = el("input", "pl-input", { type: "number" });
+    const min = n.props.get(Prop.min);
+    const max = n.props.get(Prop.max);
+    const step = n.props.get(Prop.step);
+    if (min != null) input.min = String(min);
+    if (max != null) input.max = String(max);
+    if (step != null) input.step = String(step);
+    input.value = String(n.props.get(Prop.value) ?? 0);
+    const handler = n.listeners.get(Event.change);
+    if (handler !== undefined) {
+      input.addEventListener("input", () => {
+        const v = input.valueAsNumber;
+        if (!Number.isNaN(v)) this.send(handler, Event.change, v);
+      });
+    }
+    wrap.appendChild(input);
+    return wrap;
+  }
+
+  /** `Picker.options` arrive joined with U+001F (SPEC.md §6.3 UI API 1.2). */
+  renderPicker(n) {
+    const options = (n.props.get(Prop.options) ?? "").split("\u001f").filter((s) => s.length > 0);
+    const wrap = el("div", "pl-field pl-picker-field");
+    const label = n.props.get(Prop.label);
+    const current = n.props.get(Prop.value) ?? "";
+    const handler = n.listeners.get(Event.change);
+    if (label) wrap.appendChild(el("span", "pl-field-label")).appendChild(text(label));
+    if (options.length <= 4) {
+      // A segmented control (SPEC.md §6.3: four options or less).
+      const group = el("div", "pl-segmented", { role: "radiogroup", "aria-label": label ?? "" });
+      for (const opt of options) {
+        const optLabel = el("label", "pl-segment");
+        const radio = el("input", "pl-segment-input", { type: "radio", name: `picker-${n.id}` });
+        radio.checked = opt === current;
+        if (handler !== undefined) {
+          radio.addEventListener("change", () => this.send(handler, Event.change, opt));
+        }
+        optLabel.appendChild(radio);
+        optLabel.appendChild(el("span", "pl-segment-label")).appendChild(text(opt));
+        group.appendChild(optLabel);
+      }
+      wrap.appendChild(group);
+    } else {
+      const select = el("select", "pl-select");
+      for (const opt of options) {
+        const o = el("option");
+        o.value = opt;
+        o.textContent = opt;
+        if (opt === current) o.selected = true;
+        select.appendChild(o);
+      }
+      if (handler !== undefined) {
+        select.addEventListener("change", () => this.send(handler, Event.change, select.value));
+      }
+      wrap.appendChild(select);
+    }
+    return wrap;
+  }
+
+  renderProgress(n) {
+    const wrap = el("div", "pl-progress-field");
+    const label = n.props.get(Prop.label);
+    if (label) wrap.appendChild(el("span", "pl-field-label")).appendChild(text(label));
+    const value = n.props.get(Prop.value);
+    const attrs = value == null ? {} : { value: String(value), max: "1" };
+    const progress = el("progress", "pl-progress", attrs);
+    if (label) progress.setAttribute("aria-label", label);
+    wrap.appendChild(progress);
+    return wrap;
+  }
+
+  renderBadge(n) {
+    const b = el("span", "pl-badge");
+    b.textContent = n.props.get(Prop.label) ?? n.props.get(Prop.title) ?? "";
+    return b;
+  }
+
+  /** `Tabs.items` arrive joined with U+001F; `value` is the selected item's text. */
+  renderTabs(n) {
+    const items = (n.props.get(Prop.items) ?? "").split("\u001f").filter((s) => s.length > 0);
+    const current = n.props.get(Prop.value) ?? items[0];
+    const handler = n.listeners.get(Event.change);
+    const list = el("div", "pl-tabs", { role: "tablist" });
+    for (const item of items) {
+      const tab = el("button", "pl-tab", { role: "tab", "aria-selected": item === current ? "true" : "false" });
+      tab.textContent = item;
+      if (item === current) tab.classList.add("pl-tab-selected");
+      if (handler !== undefined) {
+        tab.addEventListener("click", () => this.send(handler, Event.change, item));
+      }
+      list.appendChild(tab);
+    }
+    return this.renderChildren(n, (() => {
+      const wrap = el("div", "pl-tabs-wrap");
+      wrap.appendChild(list);
+      return wrap;
+    })());
+  }
+
+  /** `Sheet`/`Dialog` bind `open` both ways (SPEC.md §6.3 UI API 1.2): a native `<dialog>`. */
+  renderSheetOrDialog(n, kname) {
+    const dialog = el("dialog", `pl-${kname}`);
+    const title = n.props.get(Prop.title);
+    if (title) dialog.appendChild(el("h2", "pl-title")).appendChild(text(title));
+    for (const cid of n.children) {
+      const c = this.tree.node(cid);
+      if (c) dialog.appendChild(this.renderNode(c));
+    }
+    const closeHandler = n.listeners.get(Event.close);
+    const onDialogClose = () => {
+      if (closeHandler !== undefined) this.send(closeHandler, Event.close, null);
+    };
+    dialog.addEventListener("close", onDialogClose);
+    dialog.addEventListener("cancel", onDialogClose); // Escape
+    const open = !!n.props.get(Prop.value);
+    // Open/close after the element is in the document (showModal needs that).
+    queueMicrotask(() => {
+      if (open && !dialog.open) dialog.showModal();
+      if (!open && dialog.open) dialog.close();
+    });
+    return dialog;
+  }
+
+  /** `Menu` is an anchored popover (SPEC.md §6.3): label button + its `action` children. */
+  renderMenu(n) {
+    const wrap = el("div", "pl-menu");
+    const trigger = el("button", "pl-menu-trigger", { "aria-haspopup": "menu" });
+    trigger.textContent = n.props.get(Prop.label) ?? "";
+    const popover = el("div", "pl-menu-popover", { role: "menu" });
+    popover.hidden = true;
+    const actions = n.children.map((cid) => this.tree.node(cid)).filter((c) => c && kindName[c.kind] === "action");
+    for (const a of actions) {
+      const item = this.renderActionButton(a);
+      item.setAttribute("role", "menuitem");
+      item.classList.add("pl-menu-item");
+      item.addEventListener("click", () => {
+        popover.hidden = true;
+      });
+      popover.appendChild(item);
+    }
+    const close = (e) => {
+      if (!wrap.contains(e.target)) {
+        popover.hidden = true;
+        document.removeEventListener("click", close);
+      }
+    };
+    trigger.addEventListener("click", () => {
+      popover.hidden = !popover.hidden;
+      if (!popover.hidden) document.addEventListener("click", close);
+    });
+    wrap.appendChild(trigger);
+    wrap.appendChild(popover);
+    return wrap;
+  }
+
+  /** CSS grid, column count by width class (SPEC.md §6.3: 2/3/4 columns). */
+  renderGrid(n) {
+    return this.renderChildren(n, el("div", "pl-grid"));
   }
 }

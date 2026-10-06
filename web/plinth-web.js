@@ -92,43 +92,154 @@ function manifestEntry(manifestText) {
 const DeniedReason = { undeclared: 0, refused: 1, unsupported: 2 };
 
 /**
+ * A `Map`-backed implementation of the kv storage interface `hostImports`
+ * expects ({get,set,delete,keys}, all synchronous). Used as the Node
+ * default (SPEC.md §18.3: no DOM, so no `localStorage`); two `PlinthApp`s
+ * given the SAME `Map` see each other's writes, same as two tabs sharing
+ * `localStorage`.
+ */
+export function mapKvStore(map = new Map()) {
+  return {
+    get(key) {
+      return map.has(key) ? map.get(key) : null;
+    },
+    set(key, value) {
+      map.set(key, value);
+    },
+    delete(key) {
+      map.delete(key);
+    },
+    keys() {
+      return [...map.keys()];
+    },
+  };
+}
+
+/**
+ * A `localStorage`-backed implementation of the kv storage interface, one
+ * key prefix per app id (so several installed/browsed apps sharing one
+ * `localStorage` origin do not collide, SPEC.md §18).
+ */
+export function localStorageKvStore(storage, prefix) {
+  return {
+    get(key) {
+      return storage.getItem(prefix + key);
+    },
+    set(key, value) {
+      storage.setItem(prefix + key, value);
+    },
+    delete(key) {
+      storage.removeItem(prefix + key);
+    },
+    keys() {
+      const out = [];
+      for (let i = 0; i < storage.length; i++) {
+        const k = storage.key(i);
+        if (k && k.startsWith(prefix)) out.push(k.slice(prefix.length));
+      }
+      return out;
+    },
+  };
+}
+
+/** Parses just enough of a `.plnt` manifest to get the app id and declared capability names. */
+export function parseManifest(manifestText) {
+  const idMatch = manifestText.match(/^id\s*=\s*"([^"]*)"/m);
+  const capabilities = new Set();
+  const capRe = /\[\[capabilities\]\]\s*\r?\n\s*name\s*=\s*"([^"]*)"/g;
+  let m;
+  while ((m = capRe.exec(manifestText))) capabilities.add(m[1]);
+  return { id: idMatch ? idMatch[1] : "", capabilities };
+}
+
+/**
  * Builds the JS implementations of the core's WIT-level host imports
  * (`plinth:app/{ui,dev,time,store,clipboard}@1.0.0`, SPEC.md §8.5). `onCommit`
  * is called with a decoded op list for every `ui.commit`. `log` defaults to
  * `console.log`.
  *
- * Store and clipboard are stubs: every call returns `denied(unsupported)`,
- * same as a host build with no implementation (SPEC.md §11). Timers are
+ * `store.kv` is backed by `kvStore` ({get,set,delete,keys}, synchronous),
+ * gated on the manifest declaring the `store.kv` capability (`capabilities`,
+ * a `Set<string>`): when it is not declared every call returns
+ * `denied(undeclared)`, same shape a host with no grant returns (SPEC.md
+ * §11). `clipboard` backs onto `navigator.clipboard`: its APIs are async
+ * and this call is sync, so `writeText` is fire-and-forget (it also updates
+ * a local cache immediately) and `readText` returns the cached value (and
+ * kicks off an async read to refresh the cache for next time). Timers are
  * real (JS `setTimeout`/`setInterval`), driven by `scheduleTimerEvent`.
  */
-function hostImports(getMemory, onCommit, { log = (s) => console.log(s), scheduleTimerEvent, cancelTimerEvent } = {}) {
+function hostImports(
+  getExports,
+  onCommit,
+  { log = (s) => console.log(s), scheduleTimerEvent, cancelTimerEvent, kvStore, capabilities = new Set() } = {},
+) {
   function mem() {
-    return new DataView(getMemory().buffer);
+    return new DataView(getExports().memory.buffer);
   }
   function bytes() {
-    return new Uint8Array(getMemory().buffer);
+    return new Uint8Array(getExports().memory.buffer);
   }
   function readString(ptr, len) {
     return new TextDecoder().decode(bytes().subarray(ptr, ptr + len));
   }
+  function alloc(size) {
+    return getExports().cabi_realloc(0, 0, 1, size || 1);
+  }
+  function writeString(s) {
+    const encoded = new TextEncoder().encode(s);
+    const ptr = alloc(encoded.length || 1);
+    bytes().set(encoded, ptr);
+    return { ptr, len: encoded.length };
+  }
   // result<_, host-error>: tag@0 (1 byte), err payload (host-error: tag@1, reason@2).
-  function writeDeniedUnit(retptr) {
+  function writeDeniedUnit(retptr, reason = DeniedReason.unsupported) {
     const v = mem();
     v.setUint8(retptr, 1);
     v.setUint8(retptr + 1, 0);
-    v.setUint8(retptr + 2, DeniedReason.unsupported);
+    v.setUint8(retptr + 2, reason);
+  }
+  function writeOkUnit(retptr) {
+    mem().setUint8(retptr, 0);
   }
   // result<T, host-error> where T contains an i32 (option<string>, list<string>, u32):
   // outer align is 4, so tag@0 and the payload (ok or err) start at offset 4.
-  function writeDeniedAt4(retptr) {
+  function writeDeniedAt4(retptr, reason = DeniedReason.unsupported) {
     const v = mem();
     v.setUint8(retptr, 1);
     v.setUint8(retptr + 4, 0);
-    v.setUint8(retptr + 5, DeniedReason.unsupported);
+    v.setUint8(retptr + 5, reason);
+  }
+  // Ok(option<string>): tag@0=0, option-tag@4 (0=none,1=some), string ptr@8/len@12 if some.
+  function writeOkOptionString(retptr, value) {
+    const v = mem();
+    v.setUint8(retptr, 0);
+    if (value === null || value === undefined) {
+      v.setUint8(retptr + 4, 0);
+      return;
+    }
+    v.setUint8(retptr + 4, 1);
+    const { ptr, len } = writeString(value);
+    v.setUint32(retptr + 8, ptr, true);
+    v.setUint32(retptr + 12, len, true);
+  }
+  // Ok(list<string>): tag@0=0, list ptr@4/len@8; each element is (ptr: i32, len: i32).
+  function writeOkStringList(retptr, values) {
+    const v = mem();
+    v.setUint8(retptr, 0);
+    const arrPtr = alloc(Math.max(values.length, 1) * 8);
+    for (let i = 0; i < values.length; i++) {
+      const { ptr, len } = writeString(values[i]);
+      v.setUint32(arrPtr + i * 8, ptr, true);
+      v.setUint32(arrPtr + i * 8 + 4, len, true);
+    }
+    v.setUint32(retptr + 4, arrPtr, true);
+    v.setUint32(retptr + 8, values.length, true);
   }
 
   let nextTimer = 1;
   const timers = new Map(); // id -> JS handle
+  const hasStoreCap = capabilities.has("store.kv");
+  let clipboardCache = null;
 
   return {
     "plinth:app/ui@1.0.0": {
@@ -172,25 +283,44 @@ function hostImports(getMemory, onCommit, { log = (s) => console.log(s), schedul
       },
     },
     "plinth:app/store@1.0.0": {
-      "kv-get"(_keyPtr, _keyLen, retptr) {
-        writeDeniedAt4(retptr);
+      "kv-get"(keyPtr, keyLen, retptr) {
+        if (!hasStoreCap || !kvStore) return writeDeniedAt4(retptr, DeniedReason.undeclared);
+        writeOkOptionString(retptr, kvStore.get(readString(keyPtr, keyLen)));
       },
-      "kv-set"(_keyPtr, _keyLen, _valPtr, _valLen, retptr) {
-        writeDeniedUnit(retptr);
+      "kv-set"(keyPtr, keyLen, valPtr, valLen, retptr) {
+        if (!hasStoreCap || !kvStore) return writeDeniedUnit(retptr, DeniedReason.undeclared);
+        kvStore.set(readString(keyPtr, keyLen), readString(valPtr, valLen));
+        writeOkUnit(retptr);
       },
-      "kv-delete"(_keyPtr, _keyLen, retptr) {
-        writeDeniedUnit(retptr);
+      "kv-delete"(keyPtr, keyLen, retptr) {
+        if (!hasStoreCap || !kvStore) return writeDeniedUnit(retptr, DeniedReason.undeclared);
+        kvStore.delete(readString(keyPtr, keyLen));
+        writeOkUnit(retptr);
       },
       "kv-keys"(retptr) {
-        writeDeniedAt4(retptr);
+        if (!hasStoreCap || !kvStore) return writeDeniedAt4(retptr, DeniedReason.undeclared);
+        writeOkStringList(retptr, kvStore.keys());
       },
     },
     "plinth:app/clipboard@1.0.0": {
-      "write-text"(_ptr, _len, retptr) {
-        writeDeniedUnit(retptr);
+      "write-text"(ptr, len, retptr) {
+        const text = readString(ptr, len);
+        clipboardCache = text;
+        if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+          // Fire-and-forget: the Clipboard API is async, this host call is not.
+          navigator.clipboard.writeText(text).catch(() => {});
+        }
+        writeOkUnit(retptr);
       },
       "read-text"(retptr) {
-        writeDeniedAt4(retptr);
+        if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
+          // Kick off a refresh for next time; this call answers from the cache now.
+          navigator.clipboard
+            .readText()
+            .then((v) => (clipboardCache = v))
+            .catch(() => {});
+        }
+        writeOkOptionString(retptr, clipboardCache);
       },
     },
   };
@@ -204,7 +334,7 @@ function hostImports(getMemory, onCommit, { log = (s) => console.log(s), schedul
  */
 export async function loadCore(coreWasmBytes, opts = {}) {
   let instanceRef;
-  const imports = hostImports(() => instanceRef.exports.memory, opts.onCommit ?? (() => {}), opts);
+  const imports = hostImports(() => instanceRef.exports, opts.onCommit ?? (() => {}), opts);
   const { instance } = await WebAssembly.instantiate(coreWasmBytes, imports);
   instanceRef = instance;
   const tableExportName = Object.keys(instance.exports).find(
@@ -265,9 +395,33 @@ export class PlinthApp {
     this.onCommit = () => {};
   }
 
-  /** `corePromiseOrBytes` and `appPromiseOrBytes` are `Uint8Array`s (already fetched). */
+  /**
+   * `corePromiseOrBytes` and `appPromiseOrBytes` are `Uint8Array`s (already
+   * fetched). Unless the caller supplies its own `scheduleTimerEvent`, a
+   * fired timer is delivered back into the app as a `timer` event (SPEC.md
+   * §8.4 code 0x03) through `on-event`, same as any other host event.
+   *
+   * `opts.manifestText` (the `.plnt`'s `manifest.toml`, from `readPlnt`) is
+   * parsed for the app id and declared capabilities, so `store.kv` is only
+   * granted when the manifest declares it (SPEC.md §11). `opts.kvStore`
+   * overrides the backing store directly; otherwise one is built from
+   * `opts.storage` (a `localStorage`-shaped object) keyed by the app id, or
+   * an in-memory `Map` (`mapKvStore()`) when no `storage` is given — the
+   * Node default, and also handy for sharing storage between two `PlinthApp`
+   * instances in a test.
+   */
   async load(coreBytes, appBytes, opts = {}) {
-    this.core = await loadCore(coreBytes, { ...opts, onCommit: (ops) => this.onCommit(ops) });
+    const scheduleTimerEvent = opts.scheduleTimerEvent ?? ((id) => this.onEvent({ kind: "timer", timer: id }));
+    const { id: appId, capabilities } = opts.manifestText ? parseManifest(opts.manifestText) : { id: "", capabilities: new Set() };
+    const kvStore =
+      opts.kvStore ?? (opts.storage ? localStorageKvStore(opts.storage, `plinth:${appId}:`) : mapKvStore(opts.sharedMap));
+    this.core = await loadCore(coreBytes, {
+      ...opts,
+      scheduleTimerEvent,
+      capabilities,
+      kvStore,
+      onCommit: (ops) => this.onCommit(ops),
+    });
     this.appInstance = await linkApp(this.core, appBytes);
     return this;
   }
