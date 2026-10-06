@@ -5,18 +5,19 @@
 use crate::theme::{Tokens, WidthClass, icon_glyph, with_alpha};
 use crate::tree::{Node, Tree};
 use gpui::{
-    AnyElement, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FocusHandle, FontWeight, IntoElement,
-    KeyDownEvent, MouseButton, Pixels, Render, SharedString, Stateful, Subscription, Window, anchored, deferred, div,
-    prelude::*, px,
+    AnyElement, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FocusHandle, FontWeight, Image, ImageFormat,
+    IntoElement, KeyDownEvent, MouseButton, ObjectFit, Pixels, Render, SharedString, Stateful, Subscription, Window, anchored,
+    deferred, div, img, prelude::*, px,
 };
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 use gpui::accesskit;
 use gpui_elements::editable_text::actions::Enter;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_area, text_input};
 use plinth_protocol::{
-    ControlKind, Event, NodeId, Op, Value, Writer, axis, button_role, button_size, decode_ops, event, prop, text_align,
-    text_style, tone,
+    ControlKind, Event, NodeId, Op, Value, Writer, aspect, axis, button_role, button_size, decode_ops, event, prop,
+    text_align, text_style, tone,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -56,6 +57,19 @@ struct Field {
 /// `.0` for whole numbers (SPEC.md §6.3).
 fn format_num(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
+}
+
+/// The gpui-ce image format for an asset's file extension, or `None` for
+/// an extension the renderer does not know how to decode.
+fn image_format(path: &str) -> Option<ImageFormat> {
+    match path.rsplit('.').next()?.to_ascii_lowercase().as_str() {
+        "png" => Some(ImageFormat::Png),
+        "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
+        "webp" => Some(ImageFormat::Webp),
+        "svg" => Some(ImageFormat::Svg),
+        "gif" => Some(ImageFormat::Gif),
+        _ => None,
+    }
 }
 
 /// Snaps a raw `Slider` value to the nearest multiple of `step` from `min`,
@@ -125,6 +139,9 @@ pub struct PlinthRoot {
     /// back) fires without depending on a focusable child being focused.
     focus: FocusHandle,
     focused_once: bool,
+    /// The package's assets (SPEC.md §10.1), by path under `assets/`
+    /// (without the prefix), for `<Image>`.
+    assets: Arc<HashMap<String, Vec<u8>>>,
 }
 
 impl PlinthRoot {
@@ -133,6 +150,17 @@ impl PlinthRoot {
         guest: Box<dyn GuestPort>,
         initial_commits: Vec<Vec<u8>>,
         accent: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::with_assets(guest, initial_commits, accent, Arc::new(HashMap::new()), cx)
+    }
+
+    /// Like [`Self::new`], with the package's assets for `<Image>`.
+    pub fn with_assets(
+        guest: Box<dyn GuestPort>,
+        initial_commits: Vec<Vec<u8>>,
+        accent: impl Into<SharedString>,
+        assets: Arc<HashMap<String, Vec<u8>>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut root = Self {
@@ -146,6 +174,7 @@ impl PlinthRoot {
             confirm: None,
             focus: cx.focus_handle(),
             focused_once: false,
+            assets,
         };
         root.apply_commits(initial_commits);
         root
@@ -164,6 +193,7 @@ impl PlinthRoot {
             confirm: None,
             focus: cx.focus_handle(),
             focused_once: false,
+            assets: Arc::new(HashMap::new()),
         }
     }
 
@@ -742,6 +772,7 @@ impl PlinthRoot {
             ControlKind::Menu => self.render_menu(node, t, cx),
             ControlKind::Grid => self.render_grid(node, t, cx),
             ControlKind::Action => self.render_action_item(node, t, false, cx),
+            ControlKind::Image => self.render_image(node, t),
         }
     }
 
@@ -1438,6 +1469,54 @@ impl PlinthRoot {
             .font_weight(FontWeight::MEDIUM)
             .child(label)
             .into_any_element()
+    }
+
+    /// `<Image>` (SPEC.md §6.3, §10.1): an asset from the package. The
+    /// runtime sizes it by `aspect`, not pixels. A missing or unreadable
+    /// asset falls back to a placeholder box with the `alt` text, so a
+    /// broken image never breaks accessibility.
+    fn render_image(&self, node: &Node, t: &Tokens) -> AnyElement {
+        let src = node.str_prop(prop::SRC).unwrap_or("");
+        let alt = node.str_prop(prop::ALT).unwrap_or("").to_owned();
+        let ratio = match node.enum_prop(prop::ASPECT) {
+            aspect::WIDE => 16.0 / 9.0,
+            aspect::TALL => 3.0 / 4.0,
+            _ => 1.0,
+        };
+        let id = eid("image", node.id);
+        match self.assets.get(src).and_then(|bytes| image_format(src).map(|f| (f, bytes))) {
+            Some((format, bytes)) => div()
+                .id(id)
+                .role(accesskit::Role::Image)
+                .aria_label(alt)
+                .w_full()
+                .aspect_ratio(ratio as f32)
+                .overflow_hidden()
+                .rounded_md()
+                .child(
+                    img(Arc::new(Image::from_bytes(format, bytes.clone())))
+                        .w_full()
+                        .h_full()
+                        .object_fit(ObjectFit::Cover),
+                )
+                .into_any_element(),
+            None => div()
+                .id(id)
+                .role(accesskit::Role::Image)
+                .aria_label(alt.clone())
+                .w_full()
+                .aspect_ratio(ratio as f32)
+                .rounded_md()
+                .bg(t.surface_alt)
+                .border_1()
+                .border_color(t.border)
+                .flex()
+                .items_center()
+                .justify_center()
+                .p_2()
+                .child(div().text_xs().text_color(t.text_muted).child(alt))
+                .into_any_element(),
+        }
     }
 
     // -- UI API 1.2 structure --

@@ -16,6 +16,8 @@ pub const UI_NAMES: &[&str] = &[
     "Checkbox", "TextArea", "Slider", "NumberField", "Picker", "Progress", "Badge",
     // UI API 1.2
     "Tabs", "Sheet", "Dialog", "Menu", "Grid", "Action",
+    // UI API 1.3
+    "Image", "Aspect",
 ];
 pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int", "JSON"];
 pub const TIME_NAMES: &[&str] = &["now", "monotonicNow", "setTimeout", "setInterval", "clearTimeout", "clearInterval"];
@@ -62,6 +64,7 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "IconName" => Binding::Type(Type::str_lits(controls::ICONS.iter().map(|s| s.to_string()).collect())),
             "Align" => Binding::Type(Type::str_lits(["start", "center", "end"].iter().map(|s| s.to_string()).collect())),
             "Tone" => Binding::Type(Type::str_lits(["default", "muted", "danger", "success"].iter().map(|s| s.to_string()).collect())),
+            "Aspect" => Binding::Type(Type::str_lits(["square", "wide", "tall"].iter().map(|s| s.to_string()).collect())),
             "App" => Binding::Type(Type::App),
             // Config shapes exist for the editor only.
             "ScreenDef" | "AppConfig" => Binding::Type(Type::Error),

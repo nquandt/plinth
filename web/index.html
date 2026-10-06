@@ -30,14 +30,14 @@
           fetch(appUrl).then((r) => r.arrayBuffer()).then((b) => new Uint8Array(b)),
           fetch(coreUrl).then((r) => r.arrayBuffer()).then((b) => new Uint8Array(b)),
         ]);
-        const { appWasm, manifestText } = await readPlnt(pltBytes);
+        const { appWasm, manifestText, assets } = await readPlnt(pltBytes);
 
         const app = new PlinthApp();
         const tree = new Tree();
         app.onCommit = (ops) => tree.apply(ops);
         await app.load(coreBytes, appWasm, { log: (s) => console.log("[app]", s), manifestText, storage: window.localStorage });
 
-        new DomRenderer(tree, container, app);
+        new DomRenderer(tree, container, app, assets);
         app.init([]);
       }
 

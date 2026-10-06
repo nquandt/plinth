@@ -237,3 +237,17 @@ export declare function Grid<T>(props: {
   cell: (item: T) => Element;
   empty?: Element;
 }): Element;
+
+// -- UI API 1.3 -----------------------------------------------------------
+
+export type Aspect = "square" | "wide" | "tall";
+
+/** An image from the project's `assets/` (SPEC.md §6.3, §10.1). `src` must
+ * be a string literal naming a file under `assets/`. */
+export declare function Image(props: {
+  /** A file name under `assets/`, for example "logo.png". */
+  src: string;
+  /** Required: a non-empty description, for people using a screen reader. */
+  alt: string;
+  aspect?: Aspect;
+}): Element;

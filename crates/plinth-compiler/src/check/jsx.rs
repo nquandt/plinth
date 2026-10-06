@@ -134,7 +134,39 @@ impl Checker<'_> {
                 _ => 0,
             };
             let (target, te) = match ps.ty {
-                PropTy::Str => (PropTarget::Str(id), self.typed(&value, &Type::String)),
+                PropTy::Str => {
+                    let te = self.typed(&value, &Type::String);
+                    if ps.name == "alt" {
+                        match &value.kind {
+                            ExprKind::Str(s) if s.trim().is_empty() => self.err_help(
+                                code::EMPTY_ALT,
+                                value.span,
+                                "`alt` must not be empty",
+                                "describe the image for people using a screen reader",
+                            ),
+                            _ => {}
+                        }
+                    }
+                    (PropTarget::Str(id), te)
+                }
+                PropTy::Asset => {
+                    let te = self.typed(&value, &Type::String);
+                    match &value.kind {
+                        ExprKind::Str(s) if self.assets.contains(s.as_str()) => {}
+                        ExprKind::Str(s) => {
+                            let mut names: Vec<&str> = self.assets.iter().map(|s| s.as_str()).collect();
+                            names.sort_unstable();
+                            let help = if names.is_empty() {
+                                "the project has no files under assets/".to_string()
+                            } else {
+                                format!("the assets are: {}", names.join(", "))
+                            };
+                            self.err_help(code::BAD_ASSET, value.span, format!("there is no asset `{s}`"), help);
+                        }
+                        _ => self.err(code::TYPE_MISMATCH, value.span, format!("`{}` must be a string literal", ps.name)),
+                    }
+                    (PropTarget::Str(id), te)
+                }
                 PropTy::StrOneOf(names) => {
                     let t = Type::str_lits(names.iter().map(|s| s.to_string()).collect());
                     let te = self.typed(&value, &t);

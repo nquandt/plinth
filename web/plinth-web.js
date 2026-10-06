@@ -81,7 +81,14 @@ export async function readPlnt(bytes) {
   const zip = openZip(bytes);
   const manifestText = new TextDecoder().decode(await zip.read("manifest.toml"));
   const appWasm = await zip.read(zip.has("app.wasm") ? "app.wasm" : manifestEntry(manifestText));
-  return { manifestText, appWasm };
+  // Assets (SPEC.md §10.1), by path under `assets/` without the prefix, for
+  // `<Image>`. Read eagerly: packages are small and this keeps the DOM
+  // renderer synchronous.
+  const assets = new Map();
+  for (const name of zip.names()) {
+    if (name.startsWith("assets/")) assets.set(name.slice("assets/".length), await zip.read(name));
+  }
+  return { manifestText, appWasm, assets };
 }
 
 function manifestEntry(manifestText) {
