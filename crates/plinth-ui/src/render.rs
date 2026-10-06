@@ -5,8 +5,9 @@
 use crate::theme::{Tokens, WidthClass, icon_glyph, with_alpha};
 use crate::tree::{Node, Tree};
 use gpui::{
-    AnyElement, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FontWeight, IntoElement, KeyDownEvent,
-    MouseButton, Pixels, Render, SharedString, Stateful, Subscription, Window, div, prelude::*, px,
+    AnyElement, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FocusHandle, FontWeight, IntoElement,
+    KeyDownEvent, MouseButton, Pixels, Render, SharedString, Stateful, Subscription, Window, anchored, deferred, div,
+    prelude::*, px,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -119,6 +120,10 @@ pub struct PlinthRoot {
     open_menus: HashSet<NodeId>,
     /// The destructive action the host is confirming, if any.
     confirm: Option<PendingConfirm>,
+    /// Holds keyboard focus so `on_key_down` (Escape to close a menu or go
+    /// back) fires without depending on a focusable child being focused.
+    focus: FocusHandle,
+    focused_once: bool,
 }
 
 impl PlinthRoot {
@@ -127,7 +132,7 @@ impl PlinthRoot {
         guest: Box<dyn GuestPort>,
         initial_commits: Vec<Vec<u8>>,
         accent: impl Into<SharedString>,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Self {
         let mut root = Self {
             tree: Tree::new(),
@@ -138,13 +143,15 @@ impl PlinthRoot {
             class: WidthClass::Wide,
             open_menus: HashSet::new(),
             confirm: None,
+            focus: cx.focus_handle(),
+            focused_once: false,
         };
         root.apply_commits(initial_commits);
         root
     }
 
     /// Makes the view for a guest that trapped in `init`.
-    pub fn stopped(guest: Box<dyn GuestPort>, error: String, accent: impl Into<SharedString>) -> Self {
+    pub fn stopped(guest: Box<dyn GuestPort>, error: String, accent: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         Self {
             tree: Tree::new(),
             guest,
@@ -154,6 +161,8 @@ impl PlinthRoot {
             class: WidthClass::Wide,
             open_menus: HashSet::new(),
             confirm: None,
+            focus: cx.focus_handle(),
+            focused_once: false,
         }
     }
 
@@ -366,6 +375,10 @@ impl Render for PlinthRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.class = WidthClass::from_width(window.viewport_size().width);
         self.ensure_fields(cx);
+        if !self.focused_once {
+            self.focused_once = true;
+            window.focus(&self.focus, cx);
+        }
         let t = Tokens::new(window.appearance(), &self.accent);
 
         let content = div()
@@ -388,10 +401,21 @@ impl Render for PlinthRoot {
 
         let screens: Vec<(u32, NodeId)> = self.tree.primary_screens().collect();
         let shell = div()
+            .id("shell")
+            .track_focus(&self.focus)
             .size_full()
             .flex()
             .bg(t.background)
             .text_color(t.text)
+            // A click anywhere outside a menu's trigger or panel closes it
+            // (SPEC.md §6.3); the trigger and the panel itself stop this
+            // click from bubbling here.
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                if !this.open_menus.is_empty() {
+                    this.open_menus.clear();
+                    cx.notify();
+                }
+            }))
             .on_key_down({
                 let entity = cx.entity();
                 move |ev: &gpui::KeyDownEvent, _, cx| {
@@ -399,7 +423,9 @@ impl Render for PlinthRoot {
                         || (ev.keystroke.key == "left" && ev.keystroke.modifiers.alt);
                     if back {
                         entity.update(cx, |this, cx| {
-                            if this.confirm.is_some() {
+                            if !this.open_menus.is_empty() {
+                                this.open_menus.clear();
+                            } else if this.confirm.is_some() {
                                 this.confirm = None;
                             } else {
                                 this.tree.go_back();
@@ -551,19 +577,22 @@ impl PlinthRoot {
             .flex()
             .items_center()
             .gap_2()
-            .children(visible.iter().filter_map(|&id| self.tree.get(id)).map(|n| self.render_action_item(n, t, cx)));
+            .children(visible.iter().filter_map(|&id| self.tree.get(id)).map(|n| self.render_action_item(n, t, false, cx)));
         if overflow.is_empty() {
             return bar.into_any_element();
         }
         let open = self.open_menus.contains(&owner);
         let more = div()
             .id(eid("more", owner))
+            .role(accesskit::Role::Button)
+            .aria_expanded(open)
             .cursor_pointer()
             .px_2()
             .text_sm()
             .text_color(t.text_muted)
             .child("\u{22EF}")
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
                 this.toggle_menu(owner);
                 cx.notify();
             }));
@@ -573,32 +602,45 @@ impl PlinthRoot {
             .items_end()
             .gap_1()
             .child(bar.child(more))
-            .when(open, |d| d.child(self.render_menu_panel(overflow, t, cx)))
+            .when(open, |d| {
+                d.child(
+                    deferred(anchored().snap_to_window().child(self.render_menu_panel(overflow, t, cx))).priority(1),
+                )
+            })
             .into_any_element()
     }
 
+    /// The floating panel of a `<Menu>` or the screen-toolbar overflow: an
+    /// anchored, deferred popover (SPEC.md §6.3) so it floats below its
+    /// trigger, above other content, instead of pushing the layout down.
     fn render_menu_panel(&self, actions: &[NodeId], t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         div()
+            .id("menu-panel")
+            .role(accesskit::Role::Menu)
             .flex()
             .flex_col()
             .gap_1()
             .p_2()
+            .mt_1()
             .rounded_lg()
             .bg(t.surface)
             .border_1()
             .border_color(t.border)
-            .children(actions.iter().filter_map(|&id| self.tree.get(id)).map(|n| self.render_action_item(n, t, cx)))
+            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+            .children(actions.iter().filter_map(|&id| self.tree.get(id)).map(|n| self.render_action_item(n, t, true, cx)))
             .into_any_element()
     }
 
-    /// One `<Action>`: a toolbar button or a menu row.
-    fn render_action_item(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+    /// One `<Action>`: a toolbar button, or a menu row when `in_menu`.
+    fn render_action_item(&self, node: &Node, t: &Tokens, in_menu: bool, cx: &mut Context<Self>) -> AnyElement {
         let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
         let glyph = node.str_prop(prop::ICON).map(icon_glyph);
         let destructive = node.enum_prop(prop::ROLE) == button_role::DESTRUCTIVE;
         let id = node.id;
         div()
             .id(eid("action", id))
+            .role(if in_menu { accesskit::Role::MenuItem } else { accesskit::Role::Button })
+            .aria_label(label.clone())
             .cursor_pointer()
             .px_2()
             .py_1()
@@ -611,7 +653,10 @@ impl PlinthRoot {
             .gap_1()
             .when_some(glyph, |d, g| d.child(g))
             .child(label)
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.press_action(id, cx)))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                this.press_action(id, cx);
+            }))
             .into_any_element()
     }
 
@@ -658,7 +703,7 @@ impl PlinthRoot {
             ControlKind::Tabs => self.render_tabs(node, t, cx),
             ControlKind::Menu => self.render_menu(node, t, cx),
             ControlKind::Grid => self.render_grid(node, t, cx),
-            ControlKind::Action => self.render_action_item(node, t, cx),
+            ControlKind::Action => self.render_action_item(node, t, false, cx),
         }
     }
 
@@ -1521,7 +1566,7 @@ impl PlinthRoot {
             .border_color(t.border)
             .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(title))
             .when_some(message, |d, m| d.child(div().text_sm().text_color(t.text_muted).child(m)))
-            .child(div().flex().justify_end().gap_2().children(actions.into_iter().map(|a| self.render_action_item(a, t, cx))));
+            .child(div().flex().justify_end().gap_2().children(actions.into_iter().map(|a| self.render_action_item(a, t, false, cx))));
         div()
             .id(eid("dialog-backdrop", id))
             .absolute()
@@ -1644,11 +1689,14 @@ impl PlinthRoot {
                     .text_sm()
                     .child(label)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
                         this.toggle_menu(id);
                         cx.notify();
                     })),
             )
-            .when(open, |d| d.child(self.render_menu_panel(&actions, t, cx)))
+            .when(open, |d| {
+                d.child(deferred(anchored().snap_to_window().child(self.render_menu_panel(&actions, t, cx))).priority(1))
+            })
             .into_any_element()
     }
 
