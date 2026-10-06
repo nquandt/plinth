@@ -17,3 +17,6 @@ log.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true, features = ["test-support"] }
 gpui_wgpu = { path = "../../../gpui-ce/crates/gpui_wgpu", package = "gpui_ce_wgpu", features = ["test-support"] }
+
+[dev-dependencies]
+plinth-compiler.workspace = true

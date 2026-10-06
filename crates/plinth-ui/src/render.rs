@@ -5,9 +5,10 @@
 use crate::theme::{Tokens, WidthClass, icon_glyph, with_alpha};
 use crate::tree::{Node, Tree};
 use gpui::{
-    AnyElement, ClickEvent, Context, ElementId, Entity, FontWeight, IntoElement, Render,
-    SharedString, Subscription, Window, div, prelude::*, px, relative,
+    AnyElement, ClickEvent, Context, ElementId, Entity, FontWeight, IntoElement, KeyDownEvent, Render,
+    SharedString, Stateful, Subscription, Window, div, prelude::*, px, relative,
 };
+use gpui::accesskit;
 use gpui_elements::editable_text::actions::Enter;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_area, text_input};
 use plinth_protocol::{
@@ -283,6 +284,39 @@ fn eid(prefix: &'static str, id: impl Into<u64>) -> ElementId {
     ElementId::NamedInteger(prefix.into(), id.into())
 }
 
+/// Warns once per render that an interactive node has no label (a cheap hub
+/// lint, SPEC.md §12 item 5). Screen readers announce such a node with no
+/// name, which makes it useless to a non-sighted user.
+fn warn_if_unlabeled(control: &'static str, id: NodeId, label: &str) {
+    if label.trim().is_empty() {
+        log::warn!("a11y: {control} #{id} has no label; assistive technology cannot announce it");
+    }
+}
+
+/// Adds keyboard reachability (Tab order) and activation (Enter/Space) to a
+/// stateful element that already has an `on_click` handler, so pointer and
+/// keyboard input drive the same code path (SPEC.md §6.1 item 3, §9.3).
+fn keyboard_activatable<E>(
+    d: Stateful<E>,
+    cx: &mut Context<PlinthRoot>,
+    on_activate: impl Fn(&mut PlinthRoot, &mut Context<PlinthRoot>) + 'static,
+) -> Stateful<E>
+where
+    E: IntoElement + 'static,
+    Stateful<E>: InteractiveElement,
+{
+    let entity = cx.entity();
+    d.tab_index(0).on_key_down(move |ev: &KeyDownEvent, _window, cx| {
+        if ev.keystroke.key == "enter" || ev.keystroke.key == "space" {
+            let entity = entity.clone();
+            entity.update(cx, |this, cx| {
+                on_activate(this, cx);
+                cx.notify();
+            });
+        }
+    })
+}
+
 impl Render for PlinthRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.class = WidthClass::from_width(window.viewport_size().width);
@@ -437,7 +471,16 @@ impl PlinthRoot {
                         }))
                     }),
             )
-            .child(div().flex_1().text_2xl().font_weight(FontWeight::BOLD).child(title))
+            .child(
+                div()
+                    .id(eid("screen-title", screen.id))
+                    .role(accesskit::Role::Heading)
+                    .aria_label(title.clone())
+                    .flex_1()
+                    .text_2xl()
+                    .font_weight(FontWeight::BOLD)
+                    .child(title),
+            )
             .child(self.render_actions_bar(screen.id, &actions, t, cx));
         div()
             .id(eid("screen", screen.id))
@@ -575,15 +618,19 @@ impl PlinthRoot {
     }
 
     fn render_section(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
-        let title = node.str_prop(prop::TITLE).map(str::to_uppercase);
+        let title = node.str_prop(prop::TITLE).map(str::to_owned);
         let footer = node.str_prop(prop::FOOTER).map(str::to_owned);
+        let heading = title.clone().map(|s| s.to_uppercase());
         div()
             .flex()
             .flex_col()
             .gap_2()
-            .when_some(title, |d, title| d.child(div().px_1().text_xs().text_color(t.text_muted).child(title)))
+            .when_some(heading, |d, h| d.child(div().px_1().text_xs().text_color(t.text_muted).child(h)))
             .child(
                 div()
+                    .id(eid("section", node.id))
+                    .role(accesskit::Role::Group)
+                    .when_some(title.clone(), |d, label| d.aria_label(label))
                     .flex()
                     .flex_col()
                     .gap_3()
@@ -606,7 +653,7 @@ impl PlinthRoot {
             _ => t.text,
         };
         let text = node.text.clone().unwrap_or_default();
-        let d = aligned(div().text_color(color), node);
+        let d = aligned(div().id(eid("text", node.id)).role(accesskit::Role::Label).aria_label(text.clone()).text_color(color), node);
         match node.enum_prop(prop::STYLE) {
             text_style::CAPTION => d.text_xs(),
             text_style::MONO => d.text_sm().font_family("monospace"),
@@ -619,7 +666,10 @@ impl PlinthRoot {
     fn render_heading(&self, node: &Node) -> AnyElement {
         let level = node.prop(prop::LEVEL).and_then(Value::as_int).unwrap_or(2);
         let text = node.text.clone().unwrap_or_default();
-        let d = aligned(div().font_weight(FontWeight::SEMIBOLD), node);
+        let d = aligned(
+            div().id(eid("heading", node.id)).role(accesskit::Role::Heading).aria_label(text.clone()).font_weight(FontWeight::SEMIBOLD),
+            node,
+        );
         match level {
             1 => d.text_2xl().font_weight(FontWeight::BOLD),
             2 => d.text_xl(),
@@ -639,8 +689,12 @@ impl PlinthRoot {
         };
         let handler = node.handler(event::PRESS);
         let large = node.enum_prop(prop::SIZE) == button_size::LARGE;
-        div()
+        warn_if_unlabeled("Button", node.id, &label);
+        let mut d = div()
             .id(eid("btn", node.id))
+            .role(accesskit::Role::Button)
+            .aria_label(label.clone())
+            .aria_disabled(disabled)
             .flex()
             .flex_none()
             .items_center()
@@ -653,11 +707,17 @@ impl PlinthRoot {
             .font_weight(FontWeight::MEDIUM)
             .child(label)
             .when(disabled, |d| d.opacity(0.5))
-            .when(!disabled, |d| d.cursor_pointer().hover(move |s| s.bg(hover)))
-            .when_some(handler.filter(|_| !disabled), |d, h| {
-                d.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.fire(h, event::PRESS, Value::Null, cx)))
-            })
-            .into_any_element()
+            .when(!disabled, |d| d.cursor_pointer().hover(move |s| s.bg(hover)));
+        if let Some(h) = handler.filter(|_| !disabled) {
+            d = d
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.fire(h, event::PRESS, Value::Null, cx)))
+                .on_a11y_action(accesskit::Action::Click, {
+                    let entity = cx.entity();
+                    move |_, _, cx| entity.update(cx, |this, cx| this.fire(h, event::PRESS, Value::Null, cx))
+                });
+            d = keyboard_activatable(d, cx, move |this, cx| this.fire(h, event::PRESS, Value::Null, cx));
+        }
+        d.into_any_element()
     }
 
     /// A labelled field. The label goes above the input on compact and beside
@@ -725,8 +785,23 @@ impl PlinthRoot {
         let on = node.bool_prop(prop::VALUE);
         let disabled = node.bool_prop(prop::DISABLED) || self.stopped.is_some();
         let id = node.id;
-        let switch = div()
+        warn_if_unlabeled("Toggle", id, &label);
+        let flip = move |this: &mut Self, cx: &mut Context<Self>| {
+            let Some(node) = this.tree.get(id) else { return };
+            let next = !node.bool_prop(prop::VALUE);
+            let handler = node.handler(event::CHANGE);
+            this.tree.set_local_prop(id, prop::VALUE, Value::Bool(next));
+            match handler {
+                Some(h) => this.fire(h, event::CHANGE, Value::Bool(next), cx),
+                None => cx.notify(),
+            }
+        };
+        let mut switch = div()
             .id(eid("toggle", id))
+            .role(accesskit::Role::Switch)
+            .aria_label(label.clone())
+            .aria_toggled(if on { accesskit::Toggled::True } else { accesskit::Toggled::False })
+            .aria_disabled(disabled)
             .flex_none()
             .w(px(44.))
             .h(px(26.))
@@ -736,19 +811,17 @@ impl PlinthRoot {
             .when(on, |d| d.justify_end())
             .bg(if on { t.accent } else { t.track })
             .child(div().size(px(20.)).rounded_full().bg(t.knob))
-            .when(disabled, |d| d.opacity(0.5))
-            .when(!disabled, |d| {
-                d.cursor_pointer().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    let Some(node) = this.tree.get(id) else { return };
-                    let next = !node.bool_prop(prop::VALUE);
-                    let handler = node.handler(event::CHANGE);
-                    this.tree.set_local_prop(id, prop::VALUE, Value::Bool(next));
-                    match handler {
-                        Some(h) => this.fire(h, event::CHANGE, Value::Bool(next), cx),
-                        None => cx.notify(),
-                    }
-                }))
-            });
+            .when(disabled, |d| d.opacity(0.5));
+        if !disabled {
+            switch = switch.cursor_pointer().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| flip(this, cx))).on_a11y_action(
+                accesskit::Action::Click,
+                {
+                    let entity = cx.entity();
+                    move |_, _, cx| entity.update(cx, |this, cx| flip(this, cx))
+                },
+            );
+            switch = keyboard_activatable(switch, cx, flip);
+        }
         div()
             .flex()
             .items_center()
@@ -767,7 +840,14 @@ impl PlinthRoot {
                 .child(self.render_node(c, t, cx))
         });
         // Rows run edge to edge inside the section card.
-        div().flex().flex_col().mx(px(-8.)).children(rows.collect::<Vec<_>>()).into_any_element()
+        div()
+            .id(eid("list", node.id))
+            .role(accesskit::Role::List)
+            .flex()
+            .flex_col()
+            .mx(px(-8.))
+            .children(rows.collect::<Vec<_>>())
+            .into_any_element()
     }
 
     fn render_row(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
@@ -776,8 +856,10 @@ impl PlinthRoot {
         let glyph = node.str_prop(prop::ICON).map(icon_glyph);
         let handler = node.handler(event::PRESS).filter(|_| self.stopped.is_none());
         let hover = t.hover;
-        div()
+                let row_el = div()
             .id(eid("row", node.id))
+            .role(accesskit::Role::ListItem)
+            .aria_label(title.clone())
             .flex()
             .items_center()
             .gap_3()
@@ -795,13 +877,18 @@ impl PlinthRoot {
                     .child(div().text_sm().child(title))
                     .when_some(subtitle, |d, s| d.child(div().text_xs().text_color(t.text_muted).child(s))),
             )
-            .child(div().flex().flex_none().items_center().gap_2().children(self.render_children(node, t, cx)))
-            .when_some(handler, |d, h| {
-                d.cursor_pointer()
-                    .hover(move |s| s.bg(hover))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.fire(h, event::PRESS, Value::Null, cx)))
-            })
-            .into_any_element()
+            .child(div().flex().flex_none().items_center().gap_2().children(self.render_children(node, t, cx)));
+        let row_el = match handler {
+            Some(h) => keyboard_activatable(
+                row_el.cursor_pointer().hover(move |s| s.bg(hover)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.fire(h, event::PRESS, Value::Null, cx)
+                })),
+                cx,
+                move |this, cx| this.fire(h, event::PRESS, Value::Null, cx),
+            ),
+            None => row_el,
+        };
+        row_el.into_any_element()
     }
 
     /// A group (UI API 1.1). In a row, each child gets the same width; the
@@ -847,8 +934,23 @@ impl PlinthRoot {
         let checked = node.bool_prop(prop::VALUE);
         let disabled = node.bool_prop(prop::DISABLED) || self.stopped.is_some();
         let id = node.id;
-        let box_el = div()
+        warn_if_unlabeled("Checkbox", id, &label);
+        let flip = move |this: &mut Self, cx: &mut Context<Self>| {
+            let Some(node) = this.tree.get(id) else { return };
+            let next = !node.bool_prop(prop::VALUE);
+            let handler = node.handler(event::CHANGE);
+            this.tree.set_local_prop(id, prop::VALUE, Value::Bool(next));
+            match handler {
+                Some(h) => this.fire(h, event::CHANGE, Value::Bool(next), cx),
+                None => cx.notify(),
+            }
+        };
+        let mut box_el = div()
             .id(eid("checkbox", id))
+            .role(accesskit::Role::CheckBox)
+            .aria_label(label.clone())
+            .aria_toggled(if checked { accesskit::Toggled::True } else { accesskit::Toggled::False })
+            .aria_disabled(disabled)
             .flex_none()
             .size(px(18.))
             .rounded_sm()
@@ -859,19 +961,17 @@ impl PlinthRoot {
             .items_center()
             .justify_center()
             .when(checked, |d| d.child(div().text_xs().text_color(t.knob).child("✓")))
-            .when(disabled, |d| d.opacity(0.5))
-            .when(!disabled, |d| {
-                d.cursor_pointer().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    let Some(node) = this.tree.get(id) else { return };
-                    let next = !node.bool_prop(prop::VALUE);
-                    let handler = node.handler(event::CHANGE);
-                    this.tree.set_local_prop(id, prop::VALUE, Value::Bool(next));
-                    match handler {
-                        Some(h) => this.fire(h, event::CHANGE, Value::Bool(next), cx),
-                        None => cx.notify(),
-                    }
-                }))
-            });
+            .when(disabled, |d| d.opacity(0.5));
+        if !disabled {
+            box_el = box_el.cursor_pointer().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| flip(this, cx))).on_a11y_action(
+                accesskit::Action::Click,
+                {
+                    let entity = cx.entity();
+                    move |_, _, cx| entity.update(cx, |this, cx| flip(this, cx))
+                },
+            );
+            box_el = keyboard_activatable(box_el, cx, flip);
+        }
         div().flex().items_center().gap_2().child(box_el).child(div().text_sm().text_color(t.text).child(label)).into_any_element()
     }
 
@@ -948,13 +1048,47 @@ impl PlinthRoot {
         let value = node.num_prop(prop::VALUE).unwrap_or(min).clamp(min, max);
         let disabled = node.bool_prop(prop::DISABLED) || self.stopped.is_some();
         let id = node.id;
+        warn_if_unlabeled("Slider", id, &label);
         let frac = if max > min { ((value - min) / (max - min)).clamp(0.0, 1.0) } else { 0.0 };
         let track = div()
+            .id(eid("slider-track", id))
+            .role(accesskit::Role::Slider)
+            .aria_label(label.clone())
+            .aria_numeric_value(value)
+            .aria_numeric_value_step(step)
+            .aria_disabled(disabled)
             .flex_1()
             .h(px(8.))
             .rounded_full()
             .bg(t.track)
             .child(div().h_full().rounded_full().bg(t.accent).w(gpui::relative(frac as f32)));
+        let track = if disabled {
+            track
+        } else {
+            let inc = move |this: &mut Self, cx: &mut Context<Self>| this.step_value(id, step, cx);
+            let dec = move |this: &mut Self, cx: &mut Context<Self>| this.step_value(id, -step, cx);
+            let track = track
+                .on_a11y_action(accesskit::Action::Increment, {
+                    let entity = cx.entity();
+                    move |_, _, cx| entity.update(cx, |this, cx| inc(this, cx))
+                })
+                .on_a11y_action(accesskit::Action::Decrement, {
+                    let entity = cx.entity();
+                    move |_, _, cx| entity.update(cx, |this, cx| dec(this, cx))
+                });
+            let entity = cx.entity();
+            track.tab_index(0).on_key_down(move |ev: &KeyDownEvent, _window, cx| {
+                let delta = match ev.keystroke.key.as_str() {
+                    "right" | "up" => Some(step),
+                    "left" | "down" => Some(-step),
+                    _ => None,
+                };
+                if let Some(d) = delta {
+                    let entity = entity.clone();
+                    entity.update(cx, |this, cx| this.step_value(id, d, cx));
+                }
+            })
+        };
         let row = div()
             .flex()
             .items_center()
@@ -972,7 +1106,19 @@ impl PlinthRoot {
         let disabled = node.bool_prop(prop::DISABLED) || self.stopped.is_some();
         let id = node.id;
         let Some(field) = self.fields.get(&id) else { return div().into_any_element() };
-        let input = div().id(eid("nf-wrap", id)).flex().items_center().gap_1().child(self.step_button(id, "-", -step, disabled, t, cx)).child(
+        warn_if_unlabeled("NumberField", id, &label);
+        let input = div()
+            .id(eid("nf-wrap", id))
+            .role(accesskit::Role::SpinButton)
+            .aria_label(label.clone())
+            .aria_numeric_value(node.num_prop(prop::VALUE).unwrap_or(0.0))
+            .aria_numeric_value_step(step)
+            .aria_disabled(disabled)
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(self.step_button(id, "-", -step, disabled, t, cx))
+            .child(
             text_input(eid("nf", id))
                 .state(field.state.downgrade())
                 .accepts_input(self.stopped.is_none())
@@ -1001,6 +1147,7 @@ impl PlinthRoot {
         let current = node.str_prop(prop::VALUE).unwrap_or("").to_owned();
         let disabled = node.bool_prop(prop::DISABLED) || self.stopped.is_some();
         let id = node.id;
+        warn_if_unlabeled("Picker", id, &label);
         let options: Vec<String> = node.str_prop(prop::OPTIONS).unwrap_or("").split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_owned).collect();
         let select = move |this: &mut Self, opt: String, cx: &mut Context<Self>| {
             let handler = this.tree.get(id).and_then(|n| n.handler(event::CHANGE));
@@ -1016,6 +1163,10 @@ impl PlinthRoot {
                 let opt_for_click = opt.clone();
                 div()
                     .id(eid("picker-opt", (id as u64) * 100 + i as u64))
+                    .role(accesskit::Role::RadioButton)
+                    .aria_label(opt.clone())
+                    .aria_selected(selected)
+                    .aria_disabled(disabled)
                     .flex_1()
                     .flex()
                     .items_center()
@@ -1066,7 +1217,14 @@ impl PlinthRoot {
     fn render_progress(&self, node: &Node, t: &Tokens) -> AnyElement {
         let label = node.str_prop(prop::LABEL).map(str::to_owned);
         let value = node.num_prop(prop::VALUE).map(|v| v.clamp(0.0, 1.0) as f32);
-        let bar = div().w_full().h(px(6.)).rounded_full().bg(t.track).child(match value {
+        let mut bar = div().id(eid("progress", node.id)).role(accesskit::Role::ProgressIndicator);
+        if let Some(l) = &label {
+            bar = bar.aria_label(l.clone());
+        }
+        if let Some(v) = value {
+            bar = bar.aria_numeric_value(v as f64);
+        }
+        let bar = bar.w_full().h(px(6.)).rounded_full().bg(t.track).child(match value {
             Some(frac) => div().h_full().rounded_full().bg(t.accent).w(gpui::relative(frac)).into_any_element(),
             // Indeterminate: a fixed-width segment. There is no animation yet.
             None => div().h_full().rounded_full().bg(t.accent).w(gpui::relative(0.3)).into_any_element(),
@@ -1250,6 +1408,9 @@ impl PlinthRoot {
         let actions: Vec<&Node> = node.children.iter().filter_map(|&c| self.tree.get(c)).collect();
         let panel = div()
             .id(eid("dialog", id))
+            .role(accesskit::Role::Dialog)
+            .aria_modal(true)
+            .aria_label(title.clone())
             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
             .w(px(360.))
             .p_5()
@@ -1290,6 +1451,9 @@ impl PlinthRoot {
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.close_overlay(id, cx)));
         let panel = div()
             .id(eid("sheet", id))
+            .role(accesskit::Role::Dialog)
+            .aria_modal(true)
+            .aria_label(title.clone())
             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
             .flex()
             .flex_col()
@@ -1321,6 +1485,8 @@ impl PlinthRoot {
         let current = node.str_prop(prop::VALUE).unwrap_or("").to_owned();
         let id = node.id;
         div()
+            .id(eid("tablist", id))
+            .role(accesskit::Role::TabList)
             .flex()
             .p_1()
             .gap_1()
@@ -1332,6 +1498,9 @@ impl PlinthRoot {
                 let value = item.clone();
                 div()
                     .id(eid("tab", id as u64 * 1000 + i as u64))
+                    .role(accesskit::Role::Tab)
+                    .aria_label(item.clone())
+                    .aria_selected(selected)
                     .flex_1()
                     .cursor_pointer()
                     .text_center()
@@ -1366,6 +1535,9 @@ impl PlinthRoot {
             .child(
                 div()
                     .id(eid("menu", id))
+                    .role(accesskit::Role::Button)
+                    .aria_label(label.clone())
+                    .aria_expanded(open)
                     .cursor_pointer()
                     .px_3()
                     .py_2()
@@ -1402,7 +1574,7 @@ impl PlinthRoot {
 }
 
 /// Applies the `align` prop of Text and Heading (UI API 1.1).
-fn aligned(d: gpui::Div, node: &Node) -> gpui::Div {
+fn aligned<D: Styled>(d: D, node: &Node) -> D {
     match node.enum_prop(prop::ALIGN) {
         text_align::CENTER => d.text_center(),
         text_align::END => d.text_right(),
