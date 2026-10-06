@@ -262,6 +262,22 @@ small local change), per the dogfooding task's scope.
   `PL2011`. No new runtime function. `std/lib.d.ts` has `entries():
   [K, V][]`. Tests: `crates/plinth-compiler/tests/collections.rs`.
 
+- **`Map` and `Set` iteration types for `tsc` (HANDOFF.md §9 item 4).**
+  The Plinth compiler accepted `for (const [k, v] of m)` before, but `tsc`
+  did not (`TS2802`), so the examples could not use it. `std/lib.d.ts` now
+  declares `[Symbol.iterator]()` on `Map` (`Iterator<[K, V]>`) and `Set`
+  (`Iterator<T>`), and a global `Iterable`. `tsc` finds the global
+  `Iterator` and `Iterable` types only when they have three type
+  parameters (the ES2015 library shape), so both have `TReturn` and
+  `TNext` with defaults; Plinth uses only `T`. `examples/budget` now
+  groups the monthly totals with a `Map` and reads them back with
+  `for…of` (CI runs `tsc` on it). Writing this example found a bug:
+  `m.set(k, (m.get(k) ?? 0) + 1)` for a new key pushed the key before it
+  evaluated the value, so `get` read out of bounds. `set` now evaluates
+  the value first. Test: `map_set_with_a_value_that_reads_the_same_new_key`
+  and `lib_d_ts_declares_map_and_set_iterable` in
+  `crates/plinth-compiler/tests/collections.rs`.
+
 - #5 (fixed): `plinth:time` gained date/time support: `timezoneOffset`
   (a new host function, `plinth:app@1.0.0`'s `time` interface, core
   1.6), `dateParts`/`weekday` and `makeDate` (Howard Hinnant's
@@ -280,9 +296,8 @@ small local change), per the dogfooding task's scope.
   `crates/plinth-compiler/tests/hostapi.rs`). Used in
   `examples/utility`'s new "Timestamps" tab and in `examples/budget`
   (`DatePicker` for transaction dates, `dateParts` for the "by month"
-  breakdown in `stats.tsx`; grouping uses a linear-scan array rather
-  than `Map` for…of, since `std/lib.d.ts`'s `Map` is not declared
-  `Iterable` for `tsc`, see "Larger items" above).
+  breakdown in `stats.tsx`; grouping now uses a `Map` and `for…of`, see
+  "Map and Set iteration types for `tsc`" below).
 
 ## Found later
 

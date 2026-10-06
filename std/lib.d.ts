@@ -77,6 +77,8 @@ declare class Map<K, V> {
   /** A new array of `[key, value]` pairs, in insertion order. */
   entries(): [K, V][];
   readonly size: number;
+  /** `for (const [k, v] of m)`: the entries in insertion order. */
+  [Symbol.iterator](): Iterator<[K, V]>;
 }
 
 /** An element must be `string`, `int`, `number`, `boolean` or an enum. */
@@ -90,6 +92,8 @@ declare class Set<T> {
   keys(): T[];
   values(): T[];
   readonly size: number;
+  /** `for (const v of s)`: the elements in insertion order. */
+  [Symbol.iterator](): Iterator<T>;
 }
 
 interface Boolean {}
@@ -109,8 +113,14 @@ interface IteratorResult<T> {
   done?: boolean;
   value: T;
 }
-interface Iterator<T> {
+// `tsc` accepts `for…of` over a type other than an array (`Map`, `Set`) only
+// when the global `Iterator` and `Iterable` types exist with these three
+// type parameters (the ES2015 library shape). Plinth uses only `T`.
+interface Iterator<T, TReturn = unknown, TNext = unknown> {
   next(): IteratorResult<T>;
+}
+interface Iterable<T, TReturn = unknown, TNext = unknown> {
+  [Symbol.iterator](): Iterator<T, TReturn, TNext>;
 }
 
 declare namespace JSX {

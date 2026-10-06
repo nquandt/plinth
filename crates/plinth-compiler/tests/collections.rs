@@ -243,3 +243,18 @@ fn map_set_with_a_value_that_reads_the_same_new_key() {
     let body = "const xs = [\"a\", \"b\", \"a\"]; const m = new Map<string, number>(); for (const t of xs) { m.set(t, (m.get(t) ?? 0) + 1); } let out = \"\"; for (const [k, v] of m) { out = out + k + v; }";
     assert_eq!(shown(body, "out"), "a2b1");
 }
+
+// -- `std/lib.d.ts` iteration types ------------------------------------------
+
+/// `tsc` accepts `for…of` over a `Map`/`Set` only with these declarations
+/// (CI runs `tsc` on `examples/budget`, which uses it). This guards against
+/// an edit that removes them.
+#[test]
+fn lib_d_ts_declares_map_and_set_iterable() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../std/lib.d.ts");
+    let lib = std::fs::read_to_string(path).unwrap();
+    assert!(lib.contains("[Symbol.iterator](): Iterator<[K, V]>;"), "Map is not iterable");
+    assert!(lib.contains("[Symbol.iterator](): Iterator<T>;"), "Set is not iterable");
+    assert!(lib.contains("interface Iterable<T, TReturn = unknown, TNext = unknown>"), "the global Iterable needs three type parameters");
+    assert!(lib.contains("interface Iterator<T, TReturn = unknown, TNext = unknown>"), "the global Iterator needs three type parameters");
+}

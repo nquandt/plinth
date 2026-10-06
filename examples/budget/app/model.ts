@@ -133,21 +133,17 @@ export interface MonthTotal {
 }
 
 /** Net total per month, in the order months first appear among
- * `transactions()`. A plain array, not a `Map`: `Map` has no `.keys()`/
- * for…of in `std/lib.d.ts` (`tsc` needs it declared there, which the
- * host's special-cased `for…of` over `Map` is not), so this groups with
- * a linear `find`, the same pattern `totalsByCategory` would use without
- * the fixed `categories` list. */
+ * `transactions()`. Groups with a `Map` and reads it back with `for…of`
+ * (`std/lib.d.ts` declares `Map` iterable, so `tsc` accepts this too). */
 export const monthlyTotals = computed(() => {
-  const result: MonthTotal[] = [];
+  const totals = new Map<string, number>();
   for (const t of transactions()) {
     const key = monthKey(t.date);
-    const existing = result.find((r) => r.month === key);
-    if (existing === null) {
-      result.push({ month: key, total: t.amount });
-    } else {
-      existing.total += t.amount;
-    }
+    totals.set(key, (totals.get(key) ?? 0) + t.amount);
+  }
+  const result: MonthTotal[] = [];
+  for (const [month, total] of totals) {
+    result.push({ month, total });
   }
   return result;
 });
