@@ -7,6 +7,9 @@
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
+    <nav class="pl-host-bar" id="host-bar" aria-label="Web App Hub" hidden>
+      <a id="host-back" href="hub.html">&larr; All apps</a>
+    </nav>
     <div id="app">Loading&hellip;</div>
     <script type="module">
       import { PlinthApp, readPlnt } from "./plinth-web.js";
@@ -16,6 +19,14 @@
 
       function param(name, fallback) {
         return new URLSearchParams(location.search).get(name) ?? fallback;
+      }
+
+      // `back` (from the web App Hub, docs/web-hub.md): a link back to the
+      // app list. Only a relative link to hub.html is used.
+      const back = param("back");
+      if (back && /^hub\.html(#[^:]*)?$/.test(back)) {
+        document.getElementById("host-back").setAttribute("href", back);
+        document.getElementById("host-bar").hidden = false;
       }
 
       async function main() {

@@ -568,3 +568,13 @@ body {
     text-align: right;
   }
 }
+
+/* The bar above an app that the web App Hub opened (docs/web-hub.md). */
+.pl-host-bar {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--pl-border);
+  background: var(--pl-surface);
+}
+.pl-host-bar a {
+  color: var(--pl-text);
+}

@@ -96,6 +96,16 @@ fn add_package(folder: &Path, bytes: &[u8], report: &mut Report) -> Result<()> {
     });
     doc.name = pkg.manifest.name.clone();
     doc.publisher = pkg.manifest.publisher.clone();
+    // The icon (`docs/REGISTRY.md` §3, §8): the package asset that the
+    // manifest names, copied next to the app document at the same relative
+    // path, so `icon` resolves both in the package and in the registry.
+    if let Some(icon) = &pkg.manifest.icon
+        && let Some((_, bytes)) = pkg.assets.iter().find(|(path, _)| path == icon)
+        && !icon.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        write_atomic(&app_dir.join(icon), bytes)?;
+        doc.icon = Some(icon.clone());
+    }
 
     if let Some(existing) = doc.versions.iter().find(|v| v.version == pkg.manifest.version) {
         if existing.sha256 != digest {
@@ -193,6 +203,7 @@ fn regenerate_indexes(folder: &Path) -> Result<()> {
                 categories: Vec::new(),
                 icon: doc.icon.clone().map(|i| format!("apps/{}/{}", doc.id, i)),
                 capabilities: latest.capabilities.iter().map(|c| c.name.clone()).collect(),
+                labels: latest.capabilities.iter().map(|c| crate::capability_label(&c.name, &c.rationale)).collect(),
                 updated: latest.published.clone(),
             });
         }

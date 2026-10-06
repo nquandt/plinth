@@ -5,6 +5,7 @@
 pub mod build;
 pub mod serve;
 pub mod source;
+pub mod web_files;
 
 use serde::{Deserialize, Serialize};
 
@@ -69,7 +70,53 @@ pub struct AppSummary {
     pub icon: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
+    /// The capability label of the latest version (`docs/HUB.md` §7.2):
+    /// each capability with its risk level and plain-language description
+    /// from the shared capability map, and the app's reason. The generator
+    /// computes it again on each run, so a list view (for example the web
+    /// App Hub, `docs/web-hub.md`) needs no second request and no copy of
+    /// the capability table. Optional: a client that does not know it
+    /// ignores it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<CapabilityLabel>,
     pub updated: String,
+}
+
+/// One line of a capability label (`docs/HUB.md` §7.2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CapabilityLabel {
+    pub name: String,
+    /// `none`, `low`, `medium` or `high`.
+    pub risk: String,
+    /// The fixed description, the same for every app ("save data on this
+    /// device").
+    pub description: String,
+    /// The app's own reason, from its manifest.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rationale: String,
+}
+
+/// The risk level and description of a capability name: the shared map
+/// (`plinth_link::capabilities`) for the fixed names, and the rules of
+/// `docs/HUB.md` §7.2 for the dynamic `net:` names (`net:<host>` is medium
+/// and names the host; `net:*` is high). An unknown name is medium.
+pub fn capability_label(name: &str, rationale: &str) -> CapabilityLabel {
+    use plinth_link::capabilities::Risk;
+    let (risk, description) = match plinth_link::capabilities::info(name) {
+        Some(info) => (info.risk, info.description.to_owned()),
+        None => match name.strip_prefix("net:") {
+            Some("*") => (Risk::High, "connect to any host on the internet".to_owned()),
+            Some(host) => (Risk::Medium, format!("connect to {host}")),
+            None => (Risk::Medium, format!("use {name}")),
+        },
+    };
+    let risk = match risk {
+        Risk::None => "none",
+        Risk::Low => "low",
+        Risk::Medium => "medium",
+        Risk::High => "high",
+    };
+    CapabilityLabel { name: name.to_owned(), risk: risk.to_owned(), description, rationale: rationale.to_owned() }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -232,6 +279,17 @@ mod tests {
         sort_versions(&mut v);
         let order: Vec<&str> = v.iter().map(|e| e.version.as_str()).collect();
         assert_eq!(order, vec!["1.2.0", "1.1.5", "1.0.0"]);
+    }
+
+    #[test]
+    fn capability_labels() {
+        let l = capability_label("store.kv", "Save notes.");
+        assert_eq!((l.risk.as_str(), l.description.as_str(), l.rationale.as_str()), ("low", "save data on this device", "Save notes."));
+        assert_eq!(capability_label("net:api.example.com", "").description, "connect to api.example.com");
+        assert_eq!(capability_label("net:api.example.com", "").risk, "medium");
+        assert_eq!(capability_label("net:*", "").risk, "high");
+        assert_eq!(capability_label("hub.manage", "").risk, "high");
+        assert_eq!(capability_label("camera", "").risk, "medium");
     }
 
     #[test]
