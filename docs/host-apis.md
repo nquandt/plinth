@@ -89,6 +89,12 @@ import { alert, confirm, prompt } from "plinth:dialog";
 alert("Saved.");                                   // done is optional
 confirm("Reset the count?", (ok) => { /* ok: boolean */ });
 prompt("Your name?", (value) => { /* value: string | null */ });
+
+// Without `done`, each call returns a Promise (core 1.10, language.md
+// "Async functions and `await`"):
+const ok = await confirm("Reset the count?");      // boolean
+const name = await prompt("Your name?");           // string | null
+await alert("Saved.");
 ```
 
 The desktop host shows one request at a time as a modal overlay: `alert`
@@ -96,14 +102,16 @@ has an OK button; `confirm` has Cancel and OK; `prompt` adds a text
 field. Escape cancels and Enter confirms. The web host uses the
 browser's own `alert`/`confirm`/`prompt`.
 
-## `plinth:net` — in progress
+## `plinth:net`
 
-Planned `fetch`-like HTTP and WebSocket access, gated by
-`net:<host-pattern>` capabilities (for example `net:api.example.com`, or
-`net:*` for any host, which needs a stated reason). It is blocked on
-`async`/`await` landing in the compiler (see [language.md](language.md)),
-because a network call cannot finish synchronously. Do not depend on
-`plinth:net` yet — it is not implemented.
+HTTP `fetch` (SPEC.md §4.7, core 1.5), gated by `net:<host>` capabilities
+(for example `net:api.example.com`, or `net:*` for any host, which needs
+a stated reason; a private or loopback address also needs `net.local`).
+`fetch(url, options, done)` calls `done` with `{ ok, status, text, error }`.
+Without `done`, `fetch(url, options)` returns a `Promise<Response>` for
+`await` (core 1.10). A denied or failed request never throws and never
+rejects: `ok` is `false` and `error` gives the reason. WebSocket is not
+implemented.
 
 ## `plinth:hub` (privileged)
 
@@ -135,7 +143,8 @@ last check found, or `""`), and `updateCapabilities` (the capabilities
 that the update adds).
 
 `search`, `install`, `checkUpdates` and `update` use the same request id
-and `completion` event as `plinth:dialog`. The web host answers every
+and `completion` event as `plinth:dialog`. Without `done`, each returns a
+`Promise<string | null>` of the same value, for `await`. The web host answers every
 `plinth:hub` call with "unsupported" and does not trap (the web Hub is
 phase H6).
 
@@ -144,6 +153,8 @@ phase H6).
 An exception that the app does not catch (SPEC.md §5.6) does not stop
 the app. The guest sends the text, for example `Uncaught Error: no
 network`, to the host through `error.report` (core 1.10; no capability).
+A rejected promise that nothing awaits is reported the same way, as
+`Uncaught (in promise) Error: …`, at the end of the event.
 The desktop runner logs it as an error and keeps it for tests
 (`Guest::take_errors`). The web host calls `reportError`, which is
 `console.error` by default. The app continues with the next event.

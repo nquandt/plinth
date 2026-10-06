@@ -31,15 +31,15 @@ large enough to write real apps; see the examples in `examples/`.
 | union types | Tagged. Narrow with `typeof`, a discriminant field, `instanceof`, or `=== null`. |
 | enums, string literal unions | Compile to `i32`/interned ids. |
 | generics | Monomorphized: functions, interfaces, and type aliases. No constraints, no defaults, no conditional or mapped types. |
-| `Promise<T>` | Reserved for `async`/`await`, not yet implemented (see "Not yet" below). |
+| `Promise<T>` | The result of an `async` function, or of a host call without a `done` callback. Read it with `await`. There is no `then`, `catch`, `new Promise` or `Promise.all` yet. See "Async functions and `await`". |
 
 **Status (current).** Implemented: `int`; `T | null` everywhere except
 signals; discriminated unions with narrowing; generic functions,
 interfaces, and type aliases; `Map`/`Set`; classes with single
 inheritance and `instanceof`; `JSON.stringify`/`JSON.parse<T>`;
-`try`/`catch`/`finally`/`throw` (see "Errors and exceptions"). **Not
-yet:** static members, getters/setters, generic classes,
-`async`/`await`.
+`try`/`catch`/`finally`/`throw` (see "Errors and exceptions");
+`async`/`await` (see "Async functions and `await`"). **Not yet:** static
+members, getters/setters, generic classes, async methods, `Promise.all`.
 
 ## Supported syntax
 
@@ -110,7 +110,83 @@ yet:** static members, getters/setters, generic classes,
   types the checker cannot relate this way, is still rejected with
   `PL2006`.
 
-Planned for a later compiler version: `async`/`await`, `Promise.all`.
+Planned for a later compiler version: `Promise.all`, async methods.
+
+## Async functions and `await`
+
+An `async` function returns a `Promise<T>`. Inside it, `await p` stops
+the function until the promise `p` settles, and gives its value. Other
+code (event handlers, timers) runs while the function waits.
+
+```ts
+import { confirm, prompt, alert } from "plinth:dialog";
+import { fetch } from "plinth:net";
+
+async function greet(): Promise<string> {
+  const name = await prompt("Your name?");      // string | null
+  if (name === null) {
+    return "nobody";
+  }
+  if (await confirm(`Greet ${name}?`)) {
+    await alert(`Hello, ${name}!`);
+  }
+  return name;
+}
+
+<Button label="Greet" onPress={async () => status.set(await greet())} />
+```
+
+Rules:
+
+- **Host calls.** A host call without its `done` callback returns a
+  promise: `alert(m)` (`Promise<void>`), `confirm(m)`
+  (`Promise<boolean>`), `prompt(m)` (`Promise<string | null>`),
+  `fetch(url, options)` (`Promise<Response>`), and `plinth:hub`'s
+  `search`, `install`, `checkUpdates` and `update`
+  (`Promise<string | null>`). The forms with `done` do not change. These
+  promises never reject: a denied call gives its normal denied value.
+- **`async` functions.** `async function`, `async` arrow functions and
+  `async` function expressions. Write the return type as `Promise<T>`, or
+  let the compiler infer it. An `async` arrow function where the context
+  expects a function that returns `void` (an event handler, a `forEach`
+  callback) returns nothing: its promise is detached. Async class methods
+  and generators are the error `PL2009`.
+- **Where `await` can be.** In any expression of an `async` function,
+  also inside `if`, `while`, `for`, `for…of`, blocks and `try`/`catch`.
+  The compiler keeps the order of evaluation: the parts of an expression
+  before an `await` are evaluated before it waits, and the right side of
+  `&&`, `||` or `?:` waits only if it runs. `await` inside `switch`,
+  `do…while` or `try`/`finally` is the error `PL2009` (use `if`, `while`,
+  or `try`/`catch`). `await` outside an `async` function is `PL2009` (at
+  the top level of a module) or a syntax error (`PL1000`).
+- **Errors.** A `throw` in an `async` function rejects its promise.
+  `await` of a rejected promise throws its error, so `try`/`catch` works
+  around `await`. A rejected promise that nothing awaits is reported to
+  the host as `Uncaught (in promise) Error: …` at the end of the event;
+  the app keeps running.
+- **Order.** As in JavaScript, the code after an `await` always runs
+  later, as a microtask, even when the promise has already settled. The
+  runtime runs the microtasks after each event and before it renders, so
+  a signal that the code after an `await` sets shows in the same frame.
+- **Memory.** The variables that the code after an `await` uses move to
+  the heap. A waiting function stays alive while the host request that
+  it waits on is open.
+
+**How it works.** The compiler rewrites an `async` function into
+closures (a continuation-passing transform, `check/asyncfn.rs`): the code
+after each `await` becomes a continuation that the promise calls when it
+settles. A loop with an `await` becomes a loop closure. An iteration that
+does not wait stays in one Wasm loop; a continuation starts the next
+iteration as a new microtask, so a long loop does not grow the stack.
+`Promise<T>`, the microtask queue and the unhandled-rejection list are
+generated app code. The runtime only calls the queue's drain function
+after each event (core 1.10: `set_drain`, `report`), so an app without
+`async` code pays nothing.
+
+**Cost.** Each `async` function allocates a promise and a few closures
+per call, and the first use of each `Promise<T>` type adds three small
+functions to the app. `examples/dialogs` grew from about 3 KB to 6 KB of
+app code when it changed to `await`.
 
 ## Errors and exceptions
 
@@ -311,6 +387,10 @@ Rules:
   There is no `==`.
 - **Property order.** Object literal fields keep their declared order.
   Iterating over an object's keys is not supported; use a `Map`.
+- **`await` and microtasks.** The code after an `await` runs as a
+  microtask, as in JavaScript. A continuation of a loop iteration that
+  did not really wait also starts the next iteration as a microtask, not
+  at once. There is no `Promise.all`, `then` or `new Promise`.
 - **Errors.** `throw` takes only an `Error` (or a subclass); a thrown
   string becomes an `Error`. A `catch` variable is an `Error`, not
   `unknown`, and you cannot assign to it. Runtime errors (null
@@ -347,7 +427,7 @@ accurate.
 | `plinth:store` | `kv.get`/`kv.set`/`kv.remove`/`kv.keys`, `kv.lastError()` | `store.kv` |
 | `plinth:clipboard` | `writeText`, `readText`, `lastError()` | `clipboard.write` / `clipboard.read` |
 | `plinth:dialog` | `alert`, `confirm`, `prompt` (host-owned modal dialogs) | none |
-| `plinth:net` | HTTP/WebSocket | `net:<host pattern>` — **in progress**, needs `async`/`await` |
+| `plinth:net` | `fetch` (HTTP, text bodies), with a `done` callback or as a `Promise` | `net:<host>` or `net:*`, and `net.local` for a private address |
 | `plinth:hub` | `listApps`, `appInfo`, `launch`, `setGrant`, `block`/`unblock`, `blockPublisher`/`unblockPublisher`, `pin`, `listGroups`, `createGroup`, `setGroup`, `remove`, `search`, `install`, `checkUpdates`, `update`, `lastError` (the Hub UI only, see [host-apis.md](host-apis.md)) | `hub.manage`, for a package that a trusted Hub key signed |
 
 See [host-apis.md](host-apis.md) for how capabilities, denial, and the
@@ -369,7 +449,7 @@ Codes are grouped by range:
 | Range | Meaning |
 |---|---|
 | `PL1000`–`PL1007` | Modules and the closed world (SPEC.md §4.1): parse errors, the import graph (bare imports, missing modules, cycles), unknown std modules, a missing `app/main.tsx`, and undeclared capabilities (SPEC.md §11). |
-| `PL2000`–`PL2024` | Rejected language features (SPEC.md §4.4): TypeScript/JavaScript syntax Plinth does not support yet or ever — `any`, classes (restricted subset), `this`, non-null assertions, type assertions, `for…in`, `delete`, `async`, a typed or destructured `catch` variable, computed member access, advanced types, namespaces, `var`, user generics, getters/setters, labels, regular expressions, `BigInt`, non-reactive signal reads, unbound methods, and the class `extends`/`super`/`override` rules. |
+| `PL2000`–`PL2024` | Rejected language features (SPEC.md §4.4): TypeScript/JavaScript syntax Plinth does not support yet or ever — `any`, classes (restricted subset), `this`, non-null assertions, type assertions, `for…in`, `delete`, async methods, generators and unsupported `await` places, a typed or destructured `catch` variable, computed member access, advanced types, namespaces, `var`, user generics, getters/setters, labels, regular expressions, `BigInt`, non-reactive signal reads, unbound methods, and the class `extends`/`super`/`override` rules. |
 | `PL3000`–`PL3013` | Types (SPEC.md §4, §4.3): the structural type checker — mismatches, unknown names/types, missing properties or fields, uncallable values, wrong argument counts, uninferable types, assigning to `const`, nullability, duplicate definitions, and missing `return`s. (`PL3011`, struct layout, is reserved but not emitted by any check today.) |
 | `PL4000`–`PL4009` | JSX and the UI API (SPEC.md §6, §7.2): unknown controls, props, and children; missing required props; bad two-way bindings; the `app({...})` config; `navigate` targets; and image assets (missing, or an empty `alt`). |
 

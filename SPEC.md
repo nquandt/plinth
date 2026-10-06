@@ -180,6 +180,8 @@ The compiler rejects these features, and each one has a clear error message and 
 
 `async` functions compile to state machines that live on the GC heap. A host API call that cannot finish at once returns a request id. The host later sends a `completion` event (§8.4), and the guest scheduler resumes the waiting task. There are no threads in the guest. All guest code runs on one logical thread, between events.
 
+**Status (core 1.10):** `async`/`await` work. The compiler rewrites an `async` function into continuation closures on the GC heap (`docs/language.md`, "Async functions and `await`"). A host call without its `done` callback (`alert`, `confirm`, `prompt`, `fetch`, and the asynchronous `plinth:hub` calls) returns a `Promise`. The promises and the microtask queue are app code; after each event, the runtime calls the app's drain function (`set_drain`) and then flushes the reactive graph. A rejected promise that nothing awaits goes to the host through `error.report`. Not yet: `Promise.all`, async methods, `await` inside `switch`, `do…while` and `try`/`finally`.
+
 ### 4.6 Documented deviations from ECMAScript
 
 - **Number semantics:** `int` arithmetic wraps at 32 bits. `number` behaves as IEEE 754 `f64`.

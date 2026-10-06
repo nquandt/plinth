@@ -21,10 +21,9 @@ small local change), per the dogfooding task's scope.
 
 ## Larger items (not started, out of scope here)
 
-- `async`/`await`: neither app needed it (no host calls that return a
-  promise in the current API surface), but any future host API that is
-  naturally asynchronous (beyond the existing `plinth:dialog` callback
-  style) will want it. `try`/`catch` is done (see "Fixed in this pass").
+- `async`/`await` and `try`/`catch`: done (see "Fixed in this pass").
+  Still open: `Promise.all`, async methods, `await` inside `switch`,
+  `do…while` and `try`/`finally`.
 - Regular expressions: not needed by either app; the text-tools screen used
   manual character scans instead of `RegExp` (which `lib.d.ts` declares as
   an empty, unusable interface).
@@ -338,6 +337,32 @@ small local change), per the dogfooding task's scope.
   no extra code and keeps its old core version. The reasons are in
   `docs/language.md` ("Errors and exceptions"). Tests:
   `crates/plinth-compiler/tests/errors.rs`.
+
+- **`async`/`await` (HANDOFF.md §9 item 4, SPEC.md §4.5, core 1.10).**
+  `async` functions, arrows and function expressions return
+  `Promise<T>` (a struct with `#state`, `#error`, `#waiters`,
+  `#handled`, `#value`; app code cannot read the fields). Host calls
+  without `done` return promises: `alert`/`confirm`/`prompt`, `fetch`,
+  and `plinth:hub`'s `search`/`install`/`checkUpdates`/`update`
+  (`std/*.d.ts` have both overloads; `std/lib.d.ts` declares `Promise`,
+  `PromiseLike` and a `Promise` value so `tsc` accepts `async`). After
+  checking, `check/asyncfn.rs` rewrites an `async` body into
+  continuation closures: an `await` deep in an expression is moved out
+  first with the evaluation order kept (`lin`), `if`/blocks/`try`/`catch`
+  with an `await` get continuations for the code after them, and loops
+  become loop closures that queue the next iteration as a microtask (no
+  stack growth). Each continuation runs in a `try` that rejects the
+  promise or calls the enclosing `catch` closure; `await` of a rejected
+  promise throws. The microtask queue, the unhandled-rejection list and
+  the drain are generated app code; the runtime only calls the drain
+  after each event before the reactive flush (`set_drain`) and the drain
+  reports unhandled rejections (`report`). Pending continuations are
+  reachable from the host request that settles them (GC stress test).
+  An `async` arrow where `void` is expected is detached. Not done:
+  `Promise.all`, `then`/`new Promise`, async methods, `await` in
+  `switch`/`do…while`/`try…finally` (`PL2009`). `examples/dialogs` uses
+  `await`; `web/test/run-net.mjs` awaits two fetches in the browser host.
+  Tests: `crates/plinth-compiler/tests/async_await.rs`.
 
 ## Found later
 
