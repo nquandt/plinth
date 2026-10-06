@@ -297,11 +297,19 @@ pub enum PropTarget {
     Enum(u16, Vec<(String, u16)>),
     Event(u16),
     /// A two-way binding to a signal (`value={sig}`).
-    Bind { is_bool: bool },
+    Bind { kind: BindValKind },
     ListItems,
     ListKey,
     ListRow,
     ListEmpty,
+}
+
+/// The value type of a two-way binding (SPEC.md §8.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindValKind {
+    Str,
+    Bool,
+    Num,
 }
 
 #[derive(Debug, Clone)]

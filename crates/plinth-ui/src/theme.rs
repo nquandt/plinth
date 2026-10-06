@@ -58,7 +58,7 @@ fn c(hex: u32) -> Hsla {
     rgb_to_hsla(rgb(hex))
 }
 
-fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
+pub fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
     let mut color = color;
     color.alpha = alpha;
     color
@@ -126,6 +126,27 @@ pub fn icon_glyph(name: &str) -> &'static str {
         "star" => "★",
         "info" => "ⓘ",
         "number" | "counter" => "#",
+        // UI API 1.2
+        "search" => "🔍",
+        "edit" => "✎",
+        "close" => "✕",
+        "back" => "←",
+        "forward" => "→",
+        "calendar" => "📅",
+        "clock" => "🕐",
+        "user" => "👤",
+        "mail" => "✉",
+        "heart" => "♥",
+        "bell" => "🔔",
+        "share" => "⤴",
+        "download" => "⬇",
+        "upload" => "⬆",
+        "refresh" => "↻",
+        "filter" => "▾",
+        "menu" => "≡",
+        "more" => "…",
+        "lock" => "🔒",
+        "warning" => "⚠",
         _ => "•",
     }
 }

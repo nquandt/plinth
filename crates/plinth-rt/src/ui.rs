@@ -34,6 +34,7 @@ enum Handler {
 pub enum BindKind {
     Str,
     Bool,
+    Num,
 }
 
 struct Bind {
@@ -340,6 +341,7 @@ pub fn dispatch(handler: u32, value: &Value) {
             let v = match (kind, value) {
                 (BindKind::Bool, Value::Bool(x)) => Val::I32(*x as i32),
                 (BindKind::Str, Value::Str(_)) => value_to_val(value),
+                (BindKind::Num, Value::Number(_) | Value::Int(_)) => value_to_val(value),
                 _ => return,
             };
             let signal = with(|u| {

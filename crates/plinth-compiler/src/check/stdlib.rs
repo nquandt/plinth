@@ -13,6 +13,7 @@ use crate::types::Type;
 pub const UI_NAMES: &[&str] = &[
     "signal", "computed", "effect", "app", "navigate", "Signal", "Computed", "Accent", "IconName", "ScreenDef", "AppConfig",
     "App", "Tone", "Align", "Group", "Screen", "Section", "Text", "Heading", "Button", "TextField", "Toggle", "List", "Row", "Empty",
+    "Checkbox", "TextArea", "Slider", "NumberField", "Picker", "Progress", "Badge",
 ];
 pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console"];
 

@@ -471,8 +471,13 @@ impl Cx<'_> {
                             let thunk = thunk_of(&value);
                             out.push(rt_stmt("listen", vec![node(), i32c(id as i32), thunk, value]));
                         }
-                        PropTarget::Bind { is_bool } => {
-                            out.push(rt_stmt("bind", vec![node(), value, i32c(is_bool as i32)]));
+                        PropTarget::Bind { kind } => {
+                            let k = match kind {
+                                BindValKind::Str => 0,
+                                BindValKind::Bool => 1,
+                                BindValKind::Num => 2,
+                            };
+                            out.push(rt_stmt("bind", vec![node(), value, i32c(k)]));
                         }
                         PropTarget::ListItems => items = Some(value),
                         PropTarget::ListKey => key = Some(value),

@@ -342,7 +342,12 @@ abi! {
         ui::listen(id as u32, ev as u16, Callable { thunk: thunk as u32, env: env as u32 })
     }
     fn __plinth_rt_bind(id: i32, sig: i32, kind: i32) {
-        ui::bind(id as u32, sig as u32, if kind == 1 { ui::BindKind::Bool } else { ui::BindKind::Str })
+        let kind = match kind {
+            1 => ui::BindKind::Bool,
+            2 => ui::BindKind::Num,
+            _ => ui::BindKind::Str,
+        };
+        ui::bind(id as u32, sig as u32, kind)
     }
     fn __plinth_rt_list(id: i32, items_t: i32, items_e: i32, key_t: i32, key_e: i32, row_t: i32, row_e: i32, empty_t: i32, empty_e: i32) {
         let c = |t: i32, e: i32| Callable { thunk: t as u32, env: e as u32 };

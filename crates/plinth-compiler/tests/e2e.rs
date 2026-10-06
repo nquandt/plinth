@@ -248,3 +248,76 @@ fn notes_add_select_and_search() {
     h.fire(search, event::CHANGE, "zzzz-no-match".into());
     assert!(h.row_titles().is_empty());
 }
+
+#[test]
+fn settings_gallery_checkbox_and_text_area() {
+    let art = build("settings-gallery");
+    let mut h = Harness::start(&art.component);
+
+    let checkbox = h.one(ControlKind::Checkbox, |n| n.str_prop(prop::LABEL) == Some("Email notifications"));
+    assert!(h.tree.get(checkbox).unwrap().bool_prop(prop::VALUE));
+    let note = h.one(ControlKind::Text, |n| n.text.as_deref() == Some("You will get emails."));
+    assert_eq!(h.text_of(note), "You will get emails.");
+
+    // Toggling the checkbox flips its own signal (no `onChange` is given).
+    // The host sets the displayed value at once, as a real click would (SPEC.md §8.4).
+    h.tree.set_local_prop(checkbox, prop::VALUE, Value::Bool(false));
+    h.fire(checkbox, event::CHANGE, Value::Bool(false));
+    assert!(!h.tree.get(checkbox).unwrap().bool_prop(prop::VALUE));
+    let note = h.one(ControlKind::Text, |_| true);
+    assert_eq!(h.text_of(note), "Emails are off.");
+
+    // The text area is a two-way `value` binding, like TextField.
+    let bio = h.one(ControlKind::TextArea, |_| true);
+    assert_eq!(h.tree.get(bio).unwrap().str_prop(prop::PLACEHOLDER), Some("Tell us about yourself"));
+    h.tree.set_local_prop(bio, prop::VALUE, "Loves Rust".into());
+    h.fire(bio, event::CHANGE, "Loves Rust".into());
+    assert_eq!(h.tree.get(bio).unwrap().str_prop(prop::VALUE), Some("Loves Rust"));
+}
+
+#[test]
+fn settings_gallery_slider_number_picker_progress_badge() {
+    use plinth_protocol::{prop::MAX, prop::MIN, prop::OPTIONS, prop::STEP};
+
+    let art = build("settings-gallery");
+    let mut h = Harness::start(&art.component);
+
+    // The slider is a two-way `Signal<number>` binding (SPEC.md §8.4).
+    let volume = h.one(ControlKind::Slider, |n| n.str_prop(prop::LABEL) == Some("Volume"));
+    let node = h.tree.get(volume).unwrap();
+    assert_eq!(node.num_prop(prop::VALUE), Some(40.0));
+    assert_eq!(node.num_prop(MIN), Some(0.0));
+    assert_eq!(node.num_prop(MAX), Some(100.0));
+    assert_eq!(node.num_prop(STEP), Some(5.0));
+    h.tree.set_local_prop(volume, prop::VALUE, Value::Number(65.0));
+    h.fire(volume, event::CHANGE, Value::Number(65.0));
+    assert_eq!(h.tree.get(volume).unwrap().num_prop(prop::VALUE), Some(65.0));
+    // The progress bar reads the same signal through a plain (non-binding) prop.
+    let progress = h.one(ControlKind::Progress, |n| n.str_prop(prop::LABEL) == Some("Sync progress"));
+    assert_eq!(h.tree.get(progress).unwrap().num_prop(prop::VALUE), Some(0.65));
+
+    // The number field is a two-way `Signal<number>` binding too.
+    let quantity = h.one(ControlKind::NumberField, |n| n.str_prop(prop::LABEL) == Some("Items"));
+    assert_eq!(h.tree.get(quantity).unwrap().num_prop(prop::VALUE), Some(3.0));
+    h.tree.set_local_prop(quantity, prop::VALUE, Value::Number(7.0));
+    h.fire(quantity, event::CHANGE, Value::Number(7.0));
+    assert_eq!(h.tree.get(quantity).unwrap().num_prop(prop::VALUE), Some(7.0));
+
+    // The picker's `options` is a compile-time-joined string.
+    let theme = h.one(ControlKind::Picker, |n| n.str_prop(prop::LABEL) == Some("Theme"));
+    assert_eq!(h.tree.get(theme).unwrap().str_prop(OPTIONS), Some("system\u{1f}light\u{1f}dark"));
+    assert_eq!(h.tree.get(theme).unwrap().str_prop(prop::VALUE), Some("system"));
+    h.tree.set_local_prop(theme, prop::VALUE, "dark".into());
+    h.fire(theme, event::CHANGE, "dark".into());
+    assert_eq!(h.tree.get(theme).unwrap().str_prop(prop::VALUE), Some("dark"));
+    // Picking a new plan updates the badge through its own `onChange`-free binding.
+    let plan = h.one(ControlKind::Picker, |n| n.str_prop(prop::LABEL) == Some("Plan"));
+    h.tree.set_local_prop(plan, prop::VALUE, "pro".into());
+    h.fire(plan, event::CHANGE, "pro".into());
+    let badge = h.one(ControlKind::Badge, |_| true);
+    assert_eq!(h.tree.get(badge).unwrap().str_prop(prop::LABEL), Some("pro"));
+
+    // Indeterminate progress has no `value` prop at all.
+    let working = h.one(ControlKind::Progress, |n| n.str_prop(prop::LABEL) == Some("Working"));
+    assert_eq!(h.tree.get(working).unwrap().num_prop(prop::VALUE), None);
+}

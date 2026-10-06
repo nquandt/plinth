@@ -99,6 +99,14 @@ impl Value {
             _ => None,
         }
     }
+
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            Value::Number(n) => Some(*n),
+            Value::Int(i) => Some(*i as f64),
+            _ => None,
+        }
+    }
 }
 
 impl From<bool> for Value {
@@ -545,6 +553,6 @@ mod tests {
         assert_eq!(ControlKind::TextField.name(), "text-field");
         assert_eq!(prop::name(prop::VALUE), Some("value"));
         assert_eq!(button_role::DESTRUCTIVE, 2);
-        assert_eq!(UI_API_VERSION, "1.1");
+        assert_eq!(UI_API_VERSION, "1.2");
     }
 }

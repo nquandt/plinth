@@ -4,7 +4,7 @@
 # enum ids. The compiler, the guest runtime and the host all generate their
 # constants from it. Never reuse or renumber an id inside one major version.
 
-version = "1.1"
+version = "1.2"
 
 [controls]
 screen = 1
@@ -18,6 +18,13 @@ list = 8
 row = 9
 empty = 10
 group = 11       # UI API 1.1
+checkbox = 12    # UI API 1.2
+text-area = 13   # UI API 1.2
+slider = 14      # UI API 1.2
+number-field = 15 # UI API 1.2
+picker = 16      # UI API 1.2
+progress = 17    # UI API 1.2
+badge = 18       # UI API 1.2
 
 [props]
 title = 1        # string
@@ -37,6 +44,10 @@ error = 14       # string
 axis = 15        # enum axis (1.1)
 size = 16        # enum button-size (1.1)
 align = 17       # enum text-align (1.1)
+min = 18         # number (1.2)
+max = 19         # number (1.2)
+step = 20        # number (1.2)
+options = 21     # string, options joined with U+001F (1.2)
 
 [events]
 press = 1        # value: null

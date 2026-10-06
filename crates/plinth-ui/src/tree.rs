@@ -37,6 +37,10 @@ impl Node {
         self.prop(prop).and_then(Value::as_enum).unwrap_or(0)
     }
 
+    pub fn num_prop(&self, prop: u16) -> Option<f64> {
+        self.prop(prop).and_then(Value::as_number)
+    }
+
     pub fn handler(&self, event: u16) -> Option<u32> {
         self.listeners.iter().find(|(e, _)| *e == event).map(|(_, h)| *h)
     }

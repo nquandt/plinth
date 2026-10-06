@@ -59,6 +59,56 @@ fn jsx_errors() {
 }
 
 #[test]
+fn checkbox_and_text_area() {
+    // Good usage: both controls check clean.
+    let good = "import { app, Screen, Checkbox, TextArea, signal } from \"plinth:ui\";\n\
+                function Home() {\n  const on = signal(false);\n  const notes = signal(\"\");\n  return <Screen title=\"Home\">\n    <Checkbox label=\"Notify\" value={on} />\n    <TextArea label=\"Notes\" value={notes} placeholder=\"...\" />\n  </Screen>;\n}"
+        .to_owned()
+        + APP;
+    assert_eq!(codes(&good), Vec::<&str>::new());
+
+    // Bad usage: missing required value, and an unknown prop.
+    let bad = "import { app, Screen, Checkbox, TextArea } from \"plinth:ui\";\n\
+               function Home() { return <Screen title=\"Home\"><Checkbox label=\"x\" /><TextArea label=\"y\" value=\"\" rows={4} /></Screen>; }"
+        .to_owned()
+        + APP;
+    assert_eq!(codes(&bad), ["PL4003", "PL4002"]);
+}
+
+#[test]
+fn slider_number_picker_progress_badge() {
+    // Good usage: all five check clean.
+    let good = "import { app, Screen, Slider, NumberField, Picker, Progress, Badge, signal } from \"plinth:ui\";\n\
+                function Home() {\n  const v = signal(10);\n  const n = signal(1);\n  const t = signal(\"a\");\n  return <Screen title=\"Home\">\n    \
+                <Slider label=\"V\" value={v} min={0} max={100} />\n    \
+                <NumberField label=\"N\" value={n} />\n    \
+                <Picker label=\"T\" value={t} options={[\"a\", \"b\", \"c\"]} />\n    \
+                <Progress label=\"P\" value={0.5} />\n    \
+                <Badge label=\"new\" />\n  \
+                </Screen>;\n}"
+        .to_owned()
+        + APP;
+    assert_eq!(codes(&good), Vec::<&str>::new());
+
+    // Bad usage: missing required `min`/`max` on Slider, and a non-literal `options`.
+    let bad = "import { app, Screen, Slider, Picker, signal } from \"plinth:ui\";\n\
+               function Home() {\n  const v = signal(10);\n  const t = signal(\"a\");\n  const opts = [\"a\"];\n  return <Screen title=\"Home\">\n    \
+               <Slider label=\"V\" value={v} />\n    \
+               <Picker label=\"T\" value={t} options={opts} />\n  \
+               </Screen>;\n}"
+        .to_owned()
+        + APP;
+    assert_eq!(codes(&bad), ["PL4003", "PL4003", "PL3001"]);
+
+    // A computed value cannot bind both ways.
+    let computed = "import { app, Screen, Slider, signal, computed } from \"plinth:ui\";\n\
+                     function Home() {\n  const v = signal(10);\n  const c = computed(() => v() * 2);\n  return <Screen title=\"Home\"><Slider label=\"V\" value={c} min={0} max={100} /></Screen>;\n}"
+        .to_owned()
+        + APP;
+    assert_eq!(codes(&computed), ["PL4005"]);
+}
+
+#[test]
 fn missing_app() {
     assert_eq!(codes("const x = 1;"), ["PL1006"]);
 }
