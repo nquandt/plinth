@@ -33,6 +33,7 @@ fn main() -> Result<()> {
     let app = HostApp::load(input.as_ref())?;
     let out = PathBuf::from(out);
     std::fs::create_dir_all(&out).with_context(|| format!("create {}", out.display()))?;
+    let assets = Arc::new(app.assets.clone());
 
     let platform = gpui_platform::current_platform(true);
     let mut cx = HeadlessAppContext::with_platform(platform.text_system(), Arc::new(()), || {
@@ -51,7 +52,9 @@ fn main() -> Result<()> {
         let commits = guest.init(&[])?;
         let port = Box::new(WasmGuest { guest, _runner: runner });
         let accent = app.accent.clone();
-        let window = cx.open_window(size(px(w), px(h)), move |_, cx| cx.new(|cx| PlinthRoot::new(port, commits, accent, cx)))?;
+        let assets = assets.clone();
+        let window =
+            cx.open_window(size(px(w), px(h)), move |_, cx| cx.new(|cx| PlinthRoot::with_assets(port, commits, accent, assets, cx)))?;
         let screens: Vec<u32> = cx.update(|cx| window.read(cx).map(|r| r.tree().screens().map(|(s, _)| s).collect()))?;
         for screen in screens {
             cx.update(|cx| window.update(cx, |root, _, cx| root.select_screen(screen, cx)))?;

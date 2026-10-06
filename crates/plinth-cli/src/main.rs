@@ -229,6 +229,23 @@ fn write_typings(project: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Reads `<dir>/assets/*` into a map keyed by file name (SPEC.md §10.1).
+fn read_assets(dir: &Path) -> std::collections::HashMap<String, Vec<u8>> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(rd) = std::fs::read_dir(dir.join("assets")) else { return out };
+    for e in rd.flatten() {
+        let Ok(meta) = e.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let Some(name) = e.file_name().to_str().map(str::to_owned) else { continue };
+        if let Ok(bytes) = std::fs::read(e.path()) {
+            out.insert(name, bytes);
+        }
+    }
+    out
+}
+
 fn ensure_project(dir: &Path) -> Result<ProjectConfig> {
     let toml = dir.join("plinth.toml");
     let text = std::fs::read_to_string(&toml)
@@ -367,7 +384,8 @@ fn build_package(dir: &Path, out: Option<PathBuf>) -> Result<Option<PathBuf>> {
     let started = std::time::Instant::now();
     let Some(b) = compile(dir)? else { return Ok(None) };
     let manifest = b.config.manifest(plinth_protocol::UI_API_VERSION, &b.runtime, b.accent, &b.app);
-    let pkg = Package { manifest, component: b.app, assets: Vec::new() };
+    let assets: Vec<(String, Vec<u8>)> = read_assets(dir).into_iter().map(|(name, bytes)| (format!("assets/{name}"), bytes)).collect();
+    let pkg = Package { manifest, component: b.app, assets };
     let bytes = pkg.write()?;
     let out = out.unwrap_or_else(|| {
         let slug = b.config.id.rsplit('.').next().unwrap_or("app").to_owned();
@@ -506,6 +524,7 @@ fn dev(dir: &Path) -> Result<ExitCode> {
         accent: first.accent.unwrap_or_else(|| "teal".into()),
         app_id: first.config.id.clone(),
         capabilities: first.config.capabilities.iter().map(|c| c.name.clone()).collect(),
+        assets: read_assets(dir),
     };
     plinth_host_desktop::run(app, Some(rx))?;
     Ok(ExitCode::SUCCESS)

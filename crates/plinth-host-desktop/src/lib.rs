@@ -24,6 +24,10 @@ pub struct HostApp {
     /// The capability names the manifest (or `plinth.toml`) declares
     /// (SPEC.md §11). A bare `app.wasm` with no manifest gets none.
     pub capabilities: Vec<String>,
+    /// The package's assets (SPEC.md §10.1), by path under `assets/`
+    /// without the prefix, for `<Image>`. A bare `app.wasm` has none; the
+    /// `plinth dev` host adds the project's `assets/` itself.
+    pub assets: std::collections::HashMap<String, Vec<u8>>,
 }
 
 impl HostApp {
@@ -40,17 +44,26 @@ impl HostApp {
     pub fn from_bytes(bytes: Vec<u8>, path: &Path) -> Result<HostApp> {
         if plinth_package::is_package(&bytes) {
             let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("open {}", path.display()))?;
+            let assets = pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
             Ok(HostApp {
                 component: with_runtime(pkg.component).with_context(|| format!("load {}", path.display()))?,
                 title: pkg.manifest.name,
                 accent: pkg.manifest.accent.unwrap_or_else(|| "teal".into()),
                 app_id: pkg.manifest.id,
                 capabilities: pkg.manifest.capabilities.into_iter().map(|c| c.name).collect(),
+                assets,
             })
         } else {
             let title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
             let component = with_runtime(bytes).with_context(|| format!("load {}", path.display()))?;
-            Ok(HostApp { component, title: title.clone(), accent: "teal".into(), app_id: format!("dev.{title}"), capabilities: Vec::new() })
+            Ok(HostApp {
+                component,
+                title: title.clone(),
+                accent: "teal".into(),
+                app_id: format!("dev.{title}"),
+                capabilities: Vec::new(),
+                assets: std::collections::HashMap::new(),
+            })
         }
     }
 }
@@ -168,7 +181,8 @@ fn start(component: &[u8], app_id: &str, capabilities: &[String], args: &[u8]) -
 /// arrives on `reloads` replaces the running app (hot reload).
 pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
     let (port, init) = start(&app.component, &app.app_id, &app.capabilities, &[]);
-    let HostApp { title, accent, app_id, capabilities, .. } = app;
+    let HostApp { title, accent, app_id, capabilities, assets, .. } = app;
+    let assets = std::sync::Arc::new(assets);
 
     gpui_platform::application().run(move |cx: &mut App| {
         plinth_ui::init(cx);
@@ -188,7 +202,7 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
         let window = cx
             .open_window(options, move |_, cx| {
                 cx.new(move |cx| match init {
-                    Ok(commits) => PlinthRoot::new(port, commits, accent, cx),
+                    Ok(commits) => PlinthRoot::with_assets(port, commits, accent, assets, cx),
                     Err(e) => PlinthRoot::stopped(port, e, accent, cx),
                 })
             })

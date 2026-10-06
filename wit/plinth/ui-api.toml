@@ -4,7 +4,7 @@
 # enum ids. The compiler, the guest runtime and the host all generate their
 # constants from it. Never reuse or renumber an id inside one major version.
 
-version = "1.2"
+version = "1.3"
 
 [controls]
 screen = 1
@@ -31,6 +31,7 @@ dialog = 22        # UI API 1.2
 menu = 23        # UI API 1.2
 grid = 24        # UI API 1.2
 action = 25        # UI API 1.2 (a value, surfaced to the host as a child node)
+image = 26         # UI API 1.3
 
 [props]
 title = 1        # string
@@ -56,6 +57,9 @@ step = 20        # number (1.2)
 options = 21     # string, options joined with U+001F (1.2)
 items = 30       # string, items joined with U+001F (tabs, 1.2)
 confirm = 31     # bool, default true for a destructive action (UI API 1.2)
+src = 32         # string, an asset path under assets/ (image, UI API 1.3)
+alt = 33         # string, non-empty accessible description (image, UI API 1.3)
+aspect = 34      # enum aspect (image, UI API 1.3)
 
 [events]
 press = 1        # value: null
@@ -92,3 +96,8 @@ default = 0
 muted = 1
 danger = 2
 success = 3
+
+[enums.aspect]
+square = 0
+wide = 1
+tall = 2

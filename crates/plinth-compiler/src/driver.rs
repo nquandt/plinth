@@ -15,6 +15,11 @@ pub const ENTRY: &str = "app/main.tsx";
 /// root and use `/`.
 pub trait FileSystem {
     fn read(&self, path: &str) -> Option<String>;
+    /// File names under `assets/` (SPEC.md §10.1), used to check
+    /// `<Image src>`. The default is empty.
+    fn list_assets(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 pub struct DiskFs {
@@ -30,6 +35,22 @@ impl FileSystem for DiskFs {
             return None;
         }
         std::fs::read_to_string(p).ok()
+    }
+
+    fn list_assets(&self) -> Vec<String> {
+        let dir = self.root.join("assets");
+        let mut out = Vec::new();
+        let Ok(rd) = std::fs::read_dir(&dir) else { return out };
+        for e in rd.flatten() {
+            if let Ok(meta) = e.metadata() {
+                if meta.is_file() {
+                    if let Some(name) = e.file_name().to_str() {
+                        out.push(name.to_owned());
+                    }
+                }
+            }
+        }
+        out
     }
 }
 
@@ -47,6 +68,12 @@ impl MemFs {
 impl FileSystem for MemFs {
     fn read(&self, path: &str) -> Option<String> {
         self.0.get(path).cloned()
+    }
+
+    /// Any entry whose path starts with `assets/` counts as an asset; the
+    /// `with` text is unused but keeps a single map simple for tests.
+    fn list_assets(&self) -> Vec<String> {
+        self.0.keys().filter_map(|p| p.strip_prefix("assets/")).map(str::to_owned).collect()
     }
 }
 
@@ -201,7 +228,8 @@ pub fn frontend_with_capabilities(fs: &dyn FileSystem, capabilities: &[String]) 
         })
         .collect();
     let main = new_index[0];
-    let program = check::check(&modules, main, &mut diags, capabilities);
+    let assets = fs.list_assets();
+    let program = check::check_ex(&modules, main, &mut diags, capabilities, &assets);
     let ok = !diags.iter().any(|d| d.severity == Severity::Error);
     Frontend { sources, diags, program: ok.then_some(program) }
 }

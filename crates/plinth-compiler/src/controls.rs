@@ -2,7 +2,7 @@
 //! checks them. Keep this table in sync with `std/ui.d.ts`; the test
 //! `std_typings_match` compares them.
 
-use plinth_protocol::{ControlKind, axis, button_role, button_size, event, prop, text_align, text_style, tone};
+use plinth_protocol::{ControlKind, aspect, axis, button_role, button_size, event, prop, text_align, text_style, tone};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PropTy {
@@ -39,6 +39,9 @@ pub enum PropTy {
     /// `Menu` `actions`). The elements become child nodes; the renderer
     /// tells them apart from body children by their control kind.
     ActionList,
+    /// `Image.src`: a string literal that must name a file under `assets/`
+    /// (UI API 1.3, SPEC.md §6.3).
+    Asset,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +90,7 @@ const BUTTON_SIZES: &[(&str, u16)] = &[("default", button_size::DEFAULT), ("larg
 const ALIGNS: &[(&str, u16)] = &[("start", text_align::START), ("center", text_align::CENTER), ("end", text_align::END)];
 const TONES: &[(&str, u16)] =
     &[("default", tone::DEFAULT), ("muted", tone::MUTED), ("danger", tone::DANGER), ("success", tone::SUCCESS)];
+const ASPECTS: &[(&str, u16)] = &[("square", aspect::SQUARE), ("wide", aspect::WIDE), ("tall", aspect::TALL)];
 
 const fn p(name: &'static str, ty: PropTy, required: bool, target: Target) -> PropSpec {
     PropSpec { name, ty, required, target }
@@ -334,6 +338,17 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("icon", T::StrOneOf(ICONS), false, P(prop::ICON)),
             p("role", T::Enum(BUTTON_ROLES), false, P(prop::ROLE)),
             p("confirm", T::Bool, false, P(prop::CONFIRM)),
+        ],
+        children: ChildKind::None,
+    },
+    // -- UI API 1.3 --
+    ControlSpec {
+        name: "Image",
+        kind: ControlKind::Image,
+        props: &[
+            p("src", T::Asset, true, P(prop::SRC)),
+            p("alt", T::Str, true, P(prop::ALT)),
+            p("aspect", T::Enum(ASPECTS), false, P(prop::ASPECT)),
         ],
         children: ChildKind::None,
     },

@@ -82,6 +82,8 @@ pub mod code {
     pub const BAD_BINDING: &str = "PL4005";
     pub const BAD_APP: &str = "PL4006";
     pub const BAD_NAVIGATE: &str = "PL4007";
+    pub const BAD_ASSET: &str = "PL4008";
+    pub const EMPTY_ALT: &str = "PL4009";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

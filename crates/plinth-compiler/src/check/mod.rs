@@ -192,6 +192,9 @@ pub struct Checker<'d> {
     /// class fields; each method lowers to a top-level function with a
     /// synthetic `this` first parameter (static dispatch, v0: no `extends`).
     classes: HashMap<types::StructId, ClassInfo>,
+    /// Asset paths under `assets/` in the project (without the `assets/`
+    /// prefix), for checking `<Image src>` (SPEC.md §6.3, §10.1).
+    assets: HashSet<String>,
 }
 
 struct ClassInfo {
@@ -209,6 +212,12 @@ struct GenericTemplate {
 /// first); `main` is the index of `app/main.tsx`. `capabilities` are the
 /// capability names declared in the project's `plinth.toml`.
 pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>, capabilities: &[String]) -> Program {
+    check_ex(modules, main, diags, capabilities, &[])
+}
+
+/// Like [`check`], with the asset paths under `assets/` (SPEC.md §10.1),
+/// for checking `<Image src>`.
+pub fn check_ex(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>, capabilities: &[String], assets: &[String]) -> Program {
     let mut c = Checker {
         prog: Program::default(),
         diags,
@@ -234,6 +243,7 @@ pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>, ca
         alias_instantiations: Vec::new(),
         interface_instantiations: Vec::new(),
         classes: HashMap::new(),
+        assets: assets.iter().cloned().collect(),
     };
     c.prog.module_count = modules.len() as u32;
     for (i, m) in modules.iter().enumerate() {
