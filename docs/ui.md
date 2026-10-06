@@ -1,4 +1,4 @@
-# UI control reference (UI API 1.4)
+# UI control reference (UI API 1.5)
 
 Every control in this page is a typed JSX intrinsic exported from
 `plinth:ui`. Props in **bold** are required. This reference is checked
@@ -123,6 +123,54 @@ ratio. On regular and wide windows the host caps the image height
 (360 px for `square`/`tall`, 280 px for `wide`) and centers it
 horizontally, keeping the aspect ratio.
 
+## Chart (UI API 1.5)
+
+```ts
+interface ChartPoint { label: string; value: number }
+interface ChartSeriesDef { name: string; points: ChartPoint[] }
+
+declare function Chart(props: {
+  label: string;
+  kind: "bar" | "line" | "pie";
+  data: ChartPoint[];
+  series?: ChartSeriesDef[];
+}): Element;
+```
+
+A data-driven chart. As with every control, the app states intent only:
+`label`, `kind` and the data. The runtime (not the app) chooses the
+colors (from the theme's chart palette, derived from the app's accent
+and neutral tokens, distinguishable in light and dark), the height (by
+width class), axis ticks, value labels, and a legend when one is
+needed. There are no size, axis or color props.
+
+- **`label`** is required (SPEC.md §6.1 item 3: every control needs a
+  label for accessibility) and is the chart's accessible name.
+- **`data`** must be an array literal of `{ label, value }` object
+  literals — `data={[{ label: "Jan", value: total() }, ...]}`. The
+  compiler encodes it at compile time into one wire string; each
+  `value` expression can read a signal or a computed, so the chart
+  updates like any other reactive prop when a `data={...}` array
+  literal's values change. A plain `Signal<ChartPoint[]>` or a
+  `.map()`-built array is not accepted yet (v1 limitation) — write the
+  points out as a literal, as `examples/budget`'s `Statistics` screen
+  does for its six fixed categories.
+- **`series`** is optional: an array literal of `{ name, points }`
+  object literals (`points` in the same shape as `data`), for
+  overlaying several series on a `bar` or `line` chart (for example
+  "this year" vs "last year"). When present, the renderer draws every
+  series instead of `data`; `data` stays the single-series fallback a
+  host without `series` support can show. `pie` always uses `data`
+  (one series).
+- Empty data (no points, or every series empty) shows a "No data"
+  placeholder instead of an empty drawing.
+- Accessibility: the desktop renderer gives the chart the AccessKit
+  role `Figure`, named by `label`, plus a hidden text summary with
+  every `"label: value"` pair, so a screen reader gets the numbers
+  without relying on the drawing. The web renderer uses an inline SVG
+  with `<title>`/`<desc>` plus a visually hidden `<table>` of the same
+  data.
+
 ## Inputs
 
 Each input binds a `value`: pass a `Signal` for a two-way binding, or a
@@ -209,8 +257,8 @@ The control set is the **UI API**, versioned `MAJOR.MINOR`
 independently of the framework's own version. A minor version only adds
 controls or optional props; a major version can remove or change them.
 Your package declares the UI API version it was built against
-(`ui-api = "1.4"` in `plinth.toml`); a host supports a range. An unknown
+(`ui-api = "1.5"` in `plinth.toml`); a host supports a range. An unknown
 prop is a compile error; a host that sees a control kind newer than it
 supports renders a placeholder and logs an error — it does not crash.
 
-This page documents **UI API 1.4**, the version in `std/ui.d.ts` today.
+This page documents **UI API 1.5**, the version in `std/ui.d.ts` today.
