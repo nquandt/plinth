@@ -1,0 +1,4 @@
+app/main.tsx(2,8): error PL2001: `any` and `unknown` are not allowed
+  let x: any;
+         ^^^
+  help: write the real type

@@ -1,0 +1,4 @@
+app/main.tsx(2,17): error PL2023: this class has no base class
+  class C { m() { super.m(); } }
+                  ^^^^^^^^^
+  help: `super` only works in a subclass

@@ -1,0 +1,3 @@
+app/main.tsx(2,19): error PL2017: labels are not supported
+  function Home() { loop: for (;;) { break loop; } return <Screen title="Home" />; }
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

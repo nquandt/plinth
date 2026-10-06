@@ -1,0 +1,4 @@
+app/main.tsx(2,1): error PL3012: this function must return a value of type `number` on every path
+  function f(): number { }
+  ^^^^^^^^^^^^^^^^^^^^^^^^
+  help: add a `return` at the end

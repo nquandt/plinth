@@ -1,0 +1,3 @@
+app/main.tsx(2,29): error PL2019: BigInt is not supported
+  function Home() { const b = 1n; return <Screen title="Home" />; }
+                              ^^

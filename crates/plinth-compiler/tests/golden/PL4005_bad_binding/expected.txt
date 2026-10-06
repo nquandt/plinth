@@ -1,0 +1,3 @@
+app/main.tsx(2,74): error PL4005: `value` needs a `Signal<boolean>`, not `Signal<number>`
+  function Home() { const n = signal(1); return <Checkbox label="x" value={n} />; }
+                                                                           ^

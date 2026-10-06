@@ -1,0 +1,4 @@
+app/main.tsx(2,60): error PL2005: `!` non-null assertions are not allowed
+  function Home() { const n: number | null = null; const y = n!; return <Screen title="Home" />; }
+                                                             ^^
+  help: check for null first (`if (x !== null)`) or use `??`

@@ -1,0 +1,4 @@
+app/main.tsx(4,13): error PL2021: `m` is a method; it cannot be used without calling it
+  const f = c.m;
+              ^
+  help: write `() => c.m()`

@@ -1,0 +1,3 @@
+app/main.tsx(2,19): error PL1000: `continue` outside a loop
+  function Home() { continue; return <Screen title="Home" />; }
+                    ^^^^^^^^^

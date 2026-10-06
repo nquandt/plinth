@@ -1,0 +1,4 @@
+app/main.tsx(2,32): error PL4002: `<Text>` has no prop `bogus`
+  function Home() { return <Text bogus="x">hi</Text>; }
+                                 ^^^^^^^^^
+  help: the props are: style, tone, align

@@ -1,0 +1,11 @@
+app/main.tsx(2,37): error PL3001: type `string` is not assignable to `number`
+  function Home() { const n: number = "s"; const y = n.bogus; const z = q; return <Screen title="Home" />; }
+                                      ^^^
+
+app/main.tsx(2,54): error PL3004: `number` has no property `bogus`
+  function Home() { const n: number = "s"; const y = n.bogus; const z = q; return <Screen title="Home" />; }
+                                                       ^^^^^
+
+app/main.tsx(2,71): error PL3002: cannot find name `q`
+  function Home() { const n: number = "s"; const y = n.bogus; const z = q; return <Screen title="Home" />; }
+                                                                        ^

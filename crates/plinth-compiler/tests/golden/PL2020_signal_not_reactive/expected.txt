@@ -1,0 +1,4 @@
+app/main.tsx(2,50): warning PL2020: this signal read is not reactive: it runs once and will not update
+  function Home() { const s = signal(1); const x = s(); return <Screen title="Home" />; }
+                                                   ^^^
+  help: move the read into the JSX or a `computed`

@@ -1,0 +1,4 @@
+app/main.tsx(2,8): error PL2012: this literal type is not supported
+  let x: -1;
+         ^^
+  help: use `string`, `number` or `boolean` literal types

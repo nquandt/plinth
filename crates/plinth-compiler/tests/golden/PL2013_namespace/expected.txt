@@ -1,0 +1,3 @@
+app/main.tsx(2,1): error PL2013: namespaces and `declare` blocks are not allowed in app code
+  namespace Foo {}
+  ^^^^^^^^^^^^^^^^

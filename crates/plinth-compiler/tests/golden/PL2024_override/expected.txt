@@ -1,0 +1,4 @@
+app/main.tsx(3,21): error PL2024: `m` does not override the base class's method with a compatible signature
+  class B extends A { m(x: string): string { return x; } }
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  help: match the base method's parameter and return types

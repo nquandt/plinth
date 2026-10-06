@@ -1,0 +1,4 @@
+app/a.tsx(1,22): error PL1003: import cycle: `app/a.tsx` imports a module that imports it
+  import { Home } from "./main";
+                       ^^^^^^^^
+  help: move the shared code into a separate module

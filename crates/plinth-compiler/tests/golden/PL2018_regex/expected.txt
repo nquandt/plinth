@@ -1,0 +1,3 @@
+app/main.tsx(2,29): error PL2018: regular expressions are not supported
+  function Home() { const r = /abc/; return <Screen title="Home" />; }
+                              ^^^^^

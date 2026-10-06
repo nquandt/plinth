@@ -1,0 +1,4 @@
+app/main.tsx(2,19): error PL1001: cannot import `lodash`: Plinth apps cannot use npm packages
+  import { x } from "lodash";
+                    ^^^^^^^^
+  help: import `plinth:*` modules or relative files (`./x`); see SPEC.md §4.1

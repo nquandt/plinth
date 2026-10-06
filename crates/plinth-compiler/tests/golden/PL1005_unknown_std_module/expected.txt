@@ -1,0 +1,4 @@
+app/main.tsx(2,19): error PL1005: `plinth:bogus` is not a Plinth module yet
+  import { x } from "plinth:bogus";
+                    ^^^^^^^^^^^^^^
+  help: available modules: plinth:ui, plinth:core, plinth:time, plinth:store, plinth:clipboard, plinth:dialog

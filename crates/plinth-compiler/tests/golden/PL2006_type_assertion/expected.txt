@@ -1,0 +1,3 @@
+app/helper.ts(1,53): error PL2006: type assertions are not allowed
+  export function helper(x: number): number { return (<number>x); }
+                                                      ^^^^^^^^^

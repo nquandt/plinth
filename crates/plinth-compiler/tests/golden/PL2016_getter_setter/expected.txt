@@ -1,0 +1,4 @@
+app/main.tsx(2,13): error PL2016: getters and setters are not supported in classes yet
+  class Foo { get x(): number { return 1; } }
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  help: use a plain method

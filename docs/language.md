@@ -203,3 +203,24 @@ accurate.
 
 See [host-apis.md](host-apis.md) for how capabilities, denial, and the
 manifest work together.
+
+## Diagnostics
+
+Every rejected feature has a stable code (SPEC.md §5.2, §15). The text
+form matches `tsc`'s (`file(line,col): error PLnnnn: message`, with an
+optional `help:` line); `--json` gives the same data as JSON. The
+compiler's golden test suite
+(`crates/plinth-compiler/tests/golden/`) has one example per code — see
+`crates/plinth-compiler/tests/golden.rs` for the harness, and run it
+with `PLINTH_BLESS=1` to regenerate the expected output after a message
+change.
+
+Codes are grouped by range:
+
+| Range | Meaning |
+|---|---|
+| `PL1000`–`PL1007` | Modules and the closed world (SPEC.md §4.1): parse errors, the import graph (bare imports, missing modules, cycles), unknown std modules, a missing `app/main.tsx`, and undeclared capabilities (SPEC.md §11). |
+| `PL2000`–`PL2024` | Rejected language features (SPEC.md §4.4): TypeScript/JavaScript syntax Plinth does not support yet or ever — `any`, classes (restricted subset), `this`, non-null assertions, type assertions, `for…in`, `delete`, `async`, `try`/`catch`, computed member access, advanced types, namespaces, `var`, user generics, getters/setters, labels, regular expressions, `BigInt`, non-reactive signal reads, unbound methods, and the class `extends`/`super`/`override` rules. |
+| `PL3000`–`PL3013` | Types (SPEC.md §4, §4.3): the structural type checker — mismatches, unknown names/types, missing properties or fields, uncallable values, wrong argument counts, uninferable types, assigning to `const`, nullability, duplicate definitions, and missing `return`s. (`PL3011`, struct layout, is reserved but not emitted by any check today.) |
+| `PL4000`–`PL4009` | JSX and the UI API (SPEC.md §6, §7.2): unknown controls, props, and children; missing required props; bad two-way bindings; the `app({...})` config; `navigate` targets; and image assets (missing, or an empty `alt`). |
+

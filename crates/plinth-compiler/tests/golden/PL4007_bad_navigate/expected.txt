@@ -1,0 +1,4 @@
+app/main.tsx(2,69): error PL4007: there is no primary screen named "bogus"
+  function Home() { return <Action label="Go" onPress={() => navigate("bogus")} />; }
+                                                                      ^^^^^^^
+  help: the primary screens are: home

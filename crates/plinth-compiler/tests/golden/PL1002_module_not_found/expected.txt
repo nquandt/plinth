@@ -1,0 +1,3 @@
+app/main.tsx(2,19): error PL1002: cannot find module `./missing`
+  import { x } from "./missing";
+                    ^^^^^^^^^^^

@@ -503,7 +503,12 @@ impl Cx<'_> {
                 o::TSLiteral::NumericLiteral(n) => TypeAnn::NumLit(n.value, span),
                 o::TSLiteral::BooleanLiteral(b) => TypeAnn::BoolLit(b.value, span),
                 _ => {
-                    self.err(code::ADVANCED_TYPE, t_span(t), "this literal type is not supported");
+                    self.err_help(
+                        code::ADVANCED_TYPE,
+                        t_span(t),
+                        "this literal type is not supported",
+                        "use `string`, `number` or `boolean` literal types",
+                    );
                     return None;
                 }
             },
