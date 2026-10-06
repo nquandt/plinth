@@ -13,10 +13,12 @@ use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
 
 pub mod kv;
 pub mod policy;
+pub mod requests;
 pub mod timers;
 
 use kv::Kv;
 use policy::{DeniedReason, Policy};
+use requests::RequestQueue;
 use timers::TimerQueue;
 
 mod bindings {
@@ -56,6 +58,24 @@ fn require(policy: &Policy, capability: &str) -> Result<(), HostError> {
 pub trait Clipboard: Send {
     fn write_text(&mut self, text: &str);
     fn read_text(&mut self) -> Option<String>;
+}
+
+/// Which `plinth:dialog` call opened a pending dialog request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DialogKind {
+    Alert,
+    Confirm,
+    Prompt,
+}
+
+/// A dialog request the guest opened and the host has not answered yet.
+/// `plinth-host-desktop` shows it as a modal; tests answer it directly
+/// through `Guest::answer_dialog`.
+#[derive(Clone, Debug)]
+pub struct PendingDialog {
+    pub id: u32,
+    pub kind: DialogKind,
+    pub message: String,
 }
 
 /// An in-memory clipboard, for tests and hosts with no system clipboard.
@@ -102,6 +122,10 @@ struct HostState {
     timers: TimerQueue,
     clipboard: Box<dyn Clipboard>,
     monotonic_origin: Instant,
+    requests: RequestQueue,
+    /// Dialog requests the guest opened that no `completion` event has
+    /// answered yet (SPEC.md §8.4, §8.5).
+    dialogs: Vec<PendingDialog>,
 }
 
 impl bindings::plinth::app::ui::Host for HostState {
@@ -179,6 +203,26 @@ impl bindings::plinth::app::clipboard::Host for HostState {
     }
 }
 
+impl bindings::plinth::app::dialog::Host for HostState {
+    fn alert(&mut self, message: String) -> u32 {
+        let id = self.requests.open();
+        self.dialogs.push(PendingDialog { id, kind: DialogKind::Alert, message });
+        id
+    }
+
+    fn confirm(&mut self, message: String) -> u32 {
+        let id = self.requests.open();
+        self.dialogs.push(PendingDialog { id, kind: DialogKind::Confirm, message });
+        id
+    }
+
+    fn prompt(&mut self, message: String) -> u32 {
+        let id = self.requests.open();
+        self.dialogs.push(PendingDialog { id, kind: DialogKind::Prompt, message });
+        id
+    }
+}
+
 /// The engine is shared by all guests. It owns the epoch ticker thread.
 pub struct Runner {
     engine: Engine,
@@ -240,6 +284,8 @@ impl Runner {
             timers: TimerQueue::new(),
             clipboard,
             monotonic_origin: Instant::now(),
+            requests: RequestQueue::new(),
+            dialogs: Vec::new(),
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
@@ -318,6 +364,26 @@ impl Guest {
         for timer in due {
             w.event(&plinth_protocol::Event::Timer { timer });
         }
+        self.on_event(w.as_bytes())
+    }
+
+    /// The dialog requests the guest opened that are still waiting for an
+    /// answer (SPEC.md §8.4, §8.5). The desktop host polls this the same
+    /// way it polls timers; a test reads it to simulate the host answering.
+    pub fn pending_dialogs(&self) -> &[PendingDialog] {
+        &self.store.data().dialogs
+    }
+
+    /// Answers a request (for example a dialog) by delivering a
+    /// `completion` event (protocol `Event::Completion`, SPEC.md §8.4)
+    /// with `result`, and returns the committed op buffers. Answering an
+    /// id that is not open (already answered, or unknown) is not an error:
+    /// the guest ignores it (SPEC.md §8.4).
+    pub fn answer_dialog(&mut self, id: u32, result: plinth_protocol::Value) -> Result<Vec<Vec<u8>>> {
+        self.store.data_mut().requests.close(id);
+        self.store.data_mut().dialogs.retain(|d| d.id != id);
+        let mut w = plinth_protocol::Writer::new();
+        w.event(&plinth_protocol::Event::Completion { request: id, result });
         self.on_event(w.as_bytes())
     }
 
