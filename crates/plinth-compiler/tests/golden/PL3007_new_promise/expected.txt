@@ -1,0 +1,4 @@
+app/main.tsx(2,11): error PL3007: cannot infer the value type of `new Promise`
+  const p = new Promise((resolve: (v: number) => void) => resolve(1));
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  help: write `new Promise<T>((resolve, reject) => { ... })`

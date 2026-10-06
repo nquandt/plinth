@@ -60,11 +60,11 @@ use crate::tir::*;
 use crate::types::{Field, FuncType, StructDef, StructId, Type};
 use std::rc::Rc;
 
-const STATE: u32 = 0;
-const ERROR: u32 = 1;
+pub(super) const STATE: u32 = 0;
+pub(super) const ERROR: u32 = 1;
 const WAITERS: u32 = 2;
 const HANDLED: u32 = 3;
-const VALUE: u32 = 4;
+pub(super) const VALUE: u32 = 4;
 
 /// One `Promise<T>`: its struct and helper functions.
 #[derive(Clone, Debug)]
@@ -72,38 +72,38 @@ pub(crate) struct PromiseInfo {
     /// `T`.
     pub ty: Type,
     pub sid: StructId,
-    resolve: FuncId,
+    pub(super) resolve: FuncId,
 }
 
-fn bx(e: TExpr) -> Box<TExpr> {
+pub(super) fn bx(e: TExpr) -> Box<TExpr> {
     Box::new(e)
 }
 
-fn int(n: i32, span: Span) -> TExpr {
+pub(super) fn int(n: i32, span: Span) -> TExpr {
     TExpr::new(TExprKind::Num(n as f64), Type::Int, span)
 }
 
-fn waiter_ty() -> Type {
+pub(super) fn waiter_ty() -> Type {
     Type::Func(Rc::new(FuncType { params: Vec::new(), required: 0, ret: Type::Void }))
 }
 
 /// The `#value` type of `Promise<t>`.
-fn value_ty(t: &Type) -> Type {
+pub(super) fn value_ty(t: &Type) -> Type {
     if *t == Type::Void { Type::Bool } else { t.clone() }
 }
 
-fn void_stmt(kind: TExprKind, span: Span) -> TStmt {
+pub(super) fn void_stmt(kind: TExprKind, span: Span) -> TStmt {
     TStmt::Expr(TExpr::new(kind, Type::Void, span))
 }
 
 /// `v = e;`
-fn set_var(v: VarId, e: TExpr, span: Span) -> TStmt {
+pub(super) fn set_var(v: VarId, e: TExpr, span: Span) -> TStmt {
     let ty = e.ty.clone();
     TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(v), bx(e)), ty, span))
 }
 
 /// `e === n` on `int` values.
-fn is(e: TExpr, n: i32, span: Span) -> TExpr {
+pub(super) fn is(e: TExpr, n: i32, span: Span) -> TExpr {
     TExpr::new(TExprKind::Cmp(CmpOp::Eq, EqKind::I32, bx(e), bx(int(n, span))), Type::Bool, span)
 }
 
@@ -479,8 +479,14 @@ impl Checker<'_> {
         self.async_rt = Some(AsyncRt { unhandled, init, enqueue, base, settle, reject, then });
     }
 
+    /// The shared `then(p, k)` and `reject(p, e)`.
+    pub(super) fn promise_then_reject(&self) -> (FuncId, FuncId) {
+        let rt = self.async_rt.as_ref().expect("made with the first promise");
+        (rt.then, rt.reject)
+    }
+
     /// `e` as the common view `Promise<void>`.
-    fn as_base(&self, e: TExpr) -> TExpr {
+    pub(super) fn as_base(&self, e: TExpr) -> TExpr {
         let base = self.async_rt.as_ref().expect("made with the first promise").base;
         if e.ty == Type::Struct(base) {
             return e;
@@ -496,7 +502,7 @@ impl Checker<'_> {
     }
 
     /// A top-level helper function with these parameters.
-    fn helper_fn(&mut self, name: &str, params: &[(&str, Type)], ret: Type) -> (FuncId, Vec<VarId>) {
+    pub(super) fn helper_fn(&mut self, name: &str, params: &[(&str, Type)], ret: Type) -> (FuncId, Vec<VarId>) {
         let fid = self.prog.new_func(FuncDef {
             name: name.to_owned(),
             kind: FuncKind::TopLevel,
@@ -510,15 +516,15 @@ impl Checker<'_> {
         (fid, vars)
     }
 
-    fn var_in(&mut self, owner: FuncId, name: &str, ty: Type, in_loop: Option<LoopId>) -> VarId {
+    pub(super) fn var_in(&mut self, owner: FuncId, name: &str, ty: Type, in_loop: Option<LoopId>) -> VarId {
         self.prog.new_var(VarInfo { name: name.to_owned(), ty, owner, mutable: true, module: None, in_loop, captured: false })
     }
 
-    fn pfield(&self, p: &TExpr, sid: StructId, idx: u32, ty: Type) -> TExpr {
+    pub(super) fn pfield(&self, p: &TExpr, sid: StructId, idx: u32, ty: Type) -> TExpr {
         TExpr::new(TExprKind::Field(bx(p.clone()), sid, idx), ty, p.span)
     }
 
-    fn set_pfield(&self, p: TExpr, sid: StructId, idx: u32, v: TExpr) -> TStmt {
+    pub(super) fn set_pfield(&self, p: TExpr, sid: StructId, idx: u32, v: TExpr) -> TStmt {
         let span = p.span;
         let ty = v.ty.clone();
         TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Field(bx(p), sid, idx), bx(v)), ty, span))
@@ -561,7 +567,7 @@ impl Checker<'_> {
     }
 
     /// A new pending `Promise<info.ty>`.
-    fn new_promise(&self, info: &PromiseInfo, span: Span) -> TExpr {
+    pub(super) fn new_promise(&self, info: &PromiseInfo, span: Span) -> TExpr {
         let fields = vec![
             int(0, span),
             TExpr::new(TExprKind::Null, self.error_type().nullable(), span),

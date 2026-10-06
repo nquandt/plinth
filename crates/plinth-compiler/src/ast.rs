@@ -308,6 +308,8 @@ pub enum ExprKind {
     New(String, Vec<TypeAnn>),
     /// `new C(args)`: construction of a user class (SPEC.md §4.2).
     NewInstance(String, Vec<Expr>),
+    /// `new Promise<T>(executor)` (SPEC.md §4.5).
+    NewPromise(Vec<TypeAnn>, Vec<Expr>),
     /// `x instanceof C` (SPEC.md §4.2 v1): `(value, class name, name span)`.
     InstanceOf(Box<Expr>, String, Span),
     /// `expr as T` (dogfooding gap #6): only a safe, checked narrowing is

@@ -1188,7 +1188,25 @@ impl Cx<'_> {
                         return None;
                     }
                 };
-                if name == "Map" || name == "Set" {
+                if name == "Promise" {
+                    let mut type_args = Vec::new();
+                    if let Some(a) = &n.type_arguments {
+                        for t in &a.params {
+                            type_args.push(self.ty(t)?);
+                        }
+                    }
+                    let mut args = Vec::new();
+                    for a in &n.arguments {
+                        match a {
+                            o::Argument::SpreadElement(s) => {
+                                self.err(code::UNSUPPORTED, s.span, "spread arguments are not supported");
+                                return None;
+                            }
+                            other => args.push(self.expr(other.as_expression()?)?),
+                        }
+                    }
+                    ExprKind::NewPromise(type_args, args)
+                } else if name == "Map" || name == "Set" {
                     if !n.arguments.is_empty() {
                         self.err(code::ARG_COUNT, n.span, format!("`new {name}()` takes no arguments"));
                         return None;

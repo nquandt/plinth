@@ -83,6 +83,14 @@ fn answer(guest: &mut Guest, tree: &mut Tree, kind: DialogKind, message: &str, r
     apply(guest, tree, commits);
 }
 
+/// Answers the open dialog with this message (with no value).
+fn answer_by_message(guest: &mut Guest, tree: &mut Tree, message: &str) {
+    let pending = guest.pending_dialogs().to_vec();
+    let d = pending.iter().find(|d| d.message == message).unwrap_or_else(|| panic!("no dialog {message:?} in {pending:?}"));
+    let commits = guest.answer_dialog(d.id, Value::Null).unwrap();
+    apply(guest, tree, commits);
+}
+
 /// A program with a `Text` that shows `status` and one `go` button whose
 /// handler is `handler`; `top` holds top-level declarations.
 fn app(top: &str, handler: &str) -> String {
@@ -640,4 +648,177 @@ fn a_switch_with_await_at_the_end_of_a_loop_body() {
     press(&mut guest, &mut tree, "go");
     answer(&mut guest, &mut tree, DialogKind::Confirm, "two", Value::Bool(true));
     assert_eq!(text(&tree), "a1T3");
+}
+
+// -- The `Promise` API -------------------------------------------------------------
+
+#[test]
+fn promise_all_of_an_array_keeps_the_order() {
+    let top = r#"async function ask(q: string): Promise<string> { const v = await prompt(q); return v ?? "-"; }"#;
+    let handler = r#"async () => {
+  const ps: Promise<string>[] = [];
+  for (const q of ["a", "b", "c"]) { ps.push(ask(q)); }
+  const all = await Promise.all(ps);
+  const empty: Promise<number>[] = [];
+  const none = await Promise.all(empty);
+  status.set(all.join(",") + "/" + none.length);
+}"#;
+    let main = app(top, handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    let pending = guest.pending_dialogs().to_vec();
+    assert_eq!(pending.len(), 3, "all three run at once");
+    // Answer in reverse order: the result keeps the order of the array.
+    for (d, v) in pending.iter().rev().zip(["z", "y", "x"]) {
+        let commits = guest.answer_dialog(d.id, Value::Str(v.into())).unwrap();
+        apply(&mut guest, &mut tree, commits);
+        if v != "x" {
+            assert_eq!(text(&tree), "idle");
+        }
+    }
+    assert_eq!(text(&tree), "x,y,z/0");
+}
+
+#[test]
+fn promise_all_of_a_tuple_and_rejection() {
+    let top = r#"async function num(): Promise<number> { await alert("n"); return 4; }
+async function str(): Promise<string> { return "s"; }
+async function bad(): Promise<number> { await alert("bad"); throw new Error("nope"); }"#;
+    let handler = r#"async () => {
+  const [n, s] = await Promise.all([num(), str()]);
+  try {
+    const xs = await Promise.all([num(), bad()]);
+    status.set("no " + xs.length);
+  } catch (e) {
+    status.set(s + n + " " + e.message);
+  }
+}"#;
+    let main = app(top, handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Alert, "n", Value::Null);
+    let pending = guest.pending_dialogs().to_vec();
+    assert_eq!(pending.len(), 2);
+    let bad = pending.iter().find(|d| d.message == "bad").unwrap().id;
+    let commits = guest.answer_dialog(bad, Value::Null).unwrap();
+    apply(&mut guest, &mut tree, commits);
+    assert_eq!(text(&tree), "s4 nope");
+    let n = guest.pending_dialogs()[0].id;
+    let commits = guest.answer_dialog(n, Value::Null).unwrap();
+    apply(&mut guest, &mut tree, commits);
+    assert!(guest.take_errors().is_empty());
+}
+
+#[test]
+fn promise_resolve_and_reject() {
+    let handler = r#"async () => {
+  const a = await Promise.resolve(5);
+  const b: Promise<string | null> = Promise.resolve(null);
+  await Promise.resolve();
+  let msg = "";
+  try { await Promise.reject<number>(new Error("r1")); } catch (e) { msg = e.message; }
+  try { await Promise.reject("r2"); } catch (e) { msg = msg + e.message; }
+  status.set(a + ":" + ((await b) ?? "null") + ":" + msg);
+}"#;
+    let main = app("", handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    assert_eq!(text(&tree), "5:null:r1r2");
+}
+
+#[test]
+fn then_catch_and_finally_chain() {
+    let top = r#"let log = "";
+async function num(n: number): Promise<number> { await alert("n" + n); if (n < 0) { throw new Error("neg"); } return n; }"#;
+    let handler = r#"() => {
+  num(2)
+    .then((v) => v * 10)
+    .then((v) => num(v + 1))
+    .then((v) => { log = log + "v=" + v + ";"; })
+    .finally(() => { log = log + "fin;"; })
+    .then(() => { status.set(log); });
+  num(-1)
+    .then((v) => "ok" + v, (e) => "handled " + e.message)
+    .then((s) => { log = log + s + ";"; });
+  num(-2)
+    .catch((e) => 99)
+    .then((v) => { log = log + "c" + v + ";"; });
+}"#;
+    let main = app(top, handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer_by_message(&mut guest, &mut tree, "n-1");
+    answer_by_message(&mut guest, &mut tree, "n-2");
+    answer_by_message(&mut guest, &mut tree, "n2");
+    answer_by_message(&mut guest, &mut tree, "n21");
+    assert_eq!(text(&tree), "handled neg;c99;v=21;fin;");
+    assert!(guest.take_errors().is_empty());
+}
+
+#[test]
+fn an_unhandled_rejection_through_then_is_reported() {
+    let top = r#"async function bad(): Promise<number> { await alert("x"); throw new Error("lost"); }"#;
+    let main = app(top, r#"() => { bad().then((v) => v + 1); status.set("started"); }"#);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Alert, "x", Value::Null);
+    assert_eq!(guest.take_errors(), vec!["Uncaught (in promise) Error: lost".to_string()]);
+}
+
+#[test]
+fn new_promise_with_resolve_reject_and_a_timer() {
+    let top = r#"import { setTimeout } from "plinth:time";
+function delay(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+}
+function check(n: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    if (n > 0) { resolve(n * 2); } else { reject(new Error("bad " + n)); }
+    resolve(1000);
+  });
+}
+function throws(): Promise<string> {
+  return new Promise<string>(() => { throw new Error("in executor"); });
+}"#;
+    let handler = r#"async () => {
+  await delay(0);
+  const a = await check(3);
+  let m = "";
+  try { await check(-1); } catch (e) { m = e.message; }
+  try { await throws(); } catch (e) { m = m + "/" + e.message; }
+  status.set(a + " " + m);
+}"#;
+    let main = app(top, handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    assert_eq!(text(&tree), "idle");
+    let deadline = guest.next_timer_deadline().expect("a timer is set");
+    let commits = guest.fire_due_timers(deadline + std::time::Duration::from_millis(1)).unwrap();
+    apply(&mut guest, &mut tree, commits);
+    assert_eq!(text(&tree), "6 bad -1/in executor");
+}
+
+#[test]
+fn promise_api_diagnostics() {
+    assert_eq!(codes(&app("", r#"() => { const p = new Promise((resolve: (v: number) => void) => resolve(1)); }"#)), vec!["PL3007"]);
+    assert_eq!(codes(&app("", r#"() => { Promise.race([]); }"#)), vec!["PL3004"]);
+    assert_eq!(codes(&app("", r#"() => { Promise.all([1, 2]); }"#)), vec!["PL3001"]);
+}
+
+#[test]
+fn promise_all_and_then_survive_gc_stress() {
+    let handler = r#"async () => {
+  const ps = ["a", "b"].map((q) => prompt(q).then((v) => (v ?? "?") + q));
+  const both = await Promise.all(ps);
+  status.set(both.join("+"));
+}"#;
+    let main = app("", handler);
+    let (mut guest, mut tree) = start_with(&main, true);
+    press(&mut guest, &mut tree, "go");
+    let pending = guest.pending_dialogs().to_vec();
+    for (d, v) in pending.iter().zip(["x".repeat(30), "y".to_string()]) {
+        let commits = guest.answer_dialog(d.id, Value::Str(v)).unwrap();
+        apply(&mut guest, &mut tree, commits);
+    }
+    assert_eq!(text(&tree), format!("{}a+yb", "x".repeat(30)));
 }

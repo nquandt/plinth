@@ -1,0 +1,3 @@
+app/main.tsx(3,34): error PL3001: the `onRejected` function must return `number`, not `string`
+  const p = f().then((n) => n + 1, (e) => "failed");
+                                   ^^^^^^^^^^^^^^^
