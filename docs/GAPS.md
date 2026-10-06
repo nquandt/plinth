@@ -501,3 +501,43 @@ small local change), per the dogfooding task's scope.
   `npx -y -p typescript@7 tsc -p .` in `examples/big-list` (clean) and
   `plinth.exe build examples/big-list`.
 
+
+## Found by 7GUIs tasks 1-5 (2026-10-06)
+
+Found while building `examples/7guis/` (docs/VALIDATION.md V1). Tests:
+`crates/plinth-compiler/tests/sevenguis.rs` (wasmtime) and
+`web/test/run-7guis.mjs` (web host code in Node).
+
+Fixed:
+
+- **A one-way `value` came back in its own `change` event.** With
+  `value={t()} onChange={(v) => t.set(v)}` (the only way to have a field
+  plus a handler, because a signal `value` with `onChange` is `PL4005`),
+  the prop effect sent the typed text back to the host on every key. The
+  hosts dropped it (the desktop compares with `last_synced`, the web with
+  the input's value), so there was no loop, but a host that handles
+  events late could move the caret or lose a key. Now the runtime keeps
+  the node and value of the running `change` event and `set_prop` does
+  not send the same `value` back (`plinth-rt/src/ui.rs`, `host_value`).
+  Test: `temperature_converts_both_ways_and_keeps_invalid_input`.
+- **`Picker options={[A, B]}` with `const` names was rejected**
+  (`PL3001: each item must be a string literal`): the literal fast path
+  took every array literal. Now only an array of string literals takes it;
+  other arrays are joined at run time (`check/jsx.rs`). Test:
+  `picker_options_from_an_array_of_const_names` in `tests/lang.rs`.
+- **`TextField.error` did not show on the web**, and on the desktop an
+  empty `error` gave a red border with no message. The web renderer now
+  shows the message under the input, with `aria-invalid` and
+  `aria-describedby`; both hosts treat `""` as no error. The desktop also
+  treats an empty `Row.trailing` as none (its accessible name was
+  `"title, "`).
+
+Open (workarounds in the apps):
+
+| # | Area | What failed | Workaround | Suggested fix |
+|---|---|---|---|---|
+| 7G-1 | UI API | `TextField` has no `disabled` prop. 7GUIs flight booker wants the return date field disabled for a one-way flight. | The return date field is not shown for a one-way flight (`{isReturn() && <TextField .../>}`). | Add an optional `disabled` to `TextField`, `TextArea` and `DatePicker` (UI API 1.6; the `disabled` prop id 10 exists). Not done: it changes the UI API. |
+| 7G-2 | UI API | No selection state for a list. 7GUIs CRUD selects a row. | The app keeps `selectedId` and shows `trailing="Selected"` on the selected row. Screen readers hear "Mustermann, Max, Selected", not a selected state. | A `selected?: boolean` on `Row` (AccessKit `selected`, `aria-selected` with `role="option"` in a listbox), or a `selection` prop on `List`. Not done: new prop. |
+| 7G-3 | Checker | An optional prop cannot be left out by a condition: `icon={c ? "check" : undefined}` is valid for `tsc` but is `PL3001: type "check" \| null is not assignable to ...`. | Use a prop that accepts `""` (see 7G-2). | Accept `T \| null` for an optional prop, and send a "remove prop" (or the default) for `null`. Needs a host op or a default value for each prop. |
+| 7G-4 | Std (`plinth:time`) | `parseDate` reads only ISO text; `makeDate(2027, 4, 31)` rolls over to 1 May, as JS does. | `examples/7guis/flight-booker/app/dates.ts` splits `DD.MM.YYYY` and checks the day with a `dateParts(makeDate(...))` round trip. | Low. A `parseDate(text, pattern)` would remove 30 lines. |
+| 7G-5 | Tests | The Node tests cannot hold a mouse button or type keys; VALIDATION asks for held clicks on the timer. | Not covered for 7GUIs. `run-a11y.mjs` covers held clicks and typing on other apps. | Add the 7GUIs apps to `run-a11y.mjs`. |

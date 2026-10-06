@@ -29,9 +29,13 @@ struct Harness {
 impl Harness {
     fn start(bytes: &[u8]) -> Self {
         let runner = Runner::new().unwrap();
+        // The start time for docs/VALIDATION.md §6: load (compile and link)
+        // and init to the first commit. Run with `--nocapture` to see it.
+        let t0 = Instant::now();
         let mut guest = runner.load(bytes, Limits::default()).unwrap();
         let mut tree = Tree::new();
         let commits = guest.init(&[]);
+        eprintln!("start: load + init {:.1} ms", t0.elapsed().as_secs_f64() * 1000.0);
         for log in guest.take_logs() {
             eprintln!("guest: {log}");
         }

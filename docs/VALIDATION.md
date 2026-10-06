@@ -83,4 +83,34 @@ Fill in this section as the apps are done.
 
 | App | Lines of app code | `.plnt` size | First frame (desktop) | First frame (web) | Memory | Notes |
 |---|---|---|---|---|---|---|
-| | | | | | | |
+| 7GUIs 1 Counter | 22 (18) | 1174 B (app wasm 1257 B) | 37 ms | 3.6 ms | 1152 KiB | |
+| 7GUIs 2 Temperature converter | 75 (56) | 1564 B (2136 B) | 29 ms | 2.0 ms | 1152 KiB | No loop, no echo; invalid text stays and shows `error`. |
+| 7GUIs 3 Flight booker | 125 (107) | 2388 B (4170 B) | 30 ms | 2.2 ms | 1152 KiB | Return date hidden, not disabled (GAPS 7G-1). 30 lines are a `DD.MM.YYYY` parser (7G-4). |
+| 7GUIs 4 Timer | 46 (33) | 1490 B (2006 B) | 22 ms | 2.4 ms | 1152 KiB | |
+| 7GUIs 5 CRUD | 120 (98) | 2489 B (4409 B) | 28 ms | 2.8 ms | 1152 KiB | Selection shown with `trailing` (7G-2). |
+
+How these numbers were measured (2026-10-06, Windows, one machine):
+
+- **Lines of app code:** all lines of the files in `app/`; in brackets,
+  without blank lines and comment lines.
+- **`.plnt` size:** the file from `plinth build` (a zip, so smaller than
+  the app wasm in brackets). The runtime core is not in the package.
+- **First frame (desktop):** NOT the first painted frame. It is the time
+  from `Runner::load` (compile and link the core and the app in wasmtime)
+  to the first commit of `init`, in a release build
+  (`cargo test --release -p plinth-compiler --test sevenguis -- --nocapture`).
+  A debug build takes 300-500 ms (Cranelift is slow without
+  optimization). The gpui paint after that was not measured; it needs a
+  window.
+- **First frame (web):** the same span in Node 22 with the web host code
+  (`readPlnt`, `PlinthApp.load`, `init` to the first commit), median of 5
+  runs. No DOM and no paint, so this is a lower bound for a browser.
+- **Memory:** the guest's linear memory after `init`, from
+  `exports.memory.buffer.byteLength` (the same wasm on both hosts). It is
+  the core's initial size (18 pages); these apps do not grow it. Host
+  memory (wasmtime, gpui, the browser) is not included.
+
+Not done yet for V1 tasks 1-5: screenshots (`plinth-shoot`), axe on the
+web and the AccessKit names check (VALIDATION §1), held clicks on the
+timer (GAPS 7G-5), and the comparison with published React and Svelte
+implementations.
