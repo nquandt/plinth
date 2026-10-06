@@ -24,13 +24,10 @@ pub const TIME_NAMES: &[&str] = &["now", "monotonicNow", "setTimeout", "setInter
 pub const STORE_NAMES: &[&str] = &["kv"];
 pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
 
-/// The `store.kv` capability (SPEC.md §11), needed by every `plinth:store`
-/// call.
-pub const CAP_STORE_KV: &str = "store.kv";
-/// The `clipboard.write`/`clipboard.read` capabilities, needed by
-/// `plinth:clipboard`'s `writeText`/`readText` respectively.
-pub const CAP_CLIPBOARD_WRITE: &str = "clipboard.write";
-pub const CAP_CLIPBOARD_READ: &str = "clipboard.read";
+/// The capability names, from the shared map (`plinth-link`'s
+/// `capabilities` module, `docs/HUB.md` §12.3) rather than a duplicated
+/// list here.
+pub use plinth_link::capabilities::{CLIPBOARD_READ as CAP_CLIPBOARD_READ, CLIPBOARD_WRITE as CAP_CLIPBOARD_WRITE, STORE_KV as CAP_STORE_KV};
 
 pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
     match m {

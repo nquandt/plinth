@@ -44,7 +44,8 @@ pub fn componentize(core: &[u8]) -> Result<Vec<u8>> {
         .context("encode the component")
 }
 
-/// Validates a `.plnt` package, a bare app module or a bare component.
+/// Validates a `.plnt` package, a bare app module or a bare component, and
+/// prints its capability report (`docs/HUB.md` §7.1).
 pub fn validate_file(path: &Path) -> Result<()> {
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     if plinth_package::is_package(&bytes) {
@@ -52,22 +53,52 @@ pub fn validate_file(path: &Path) -> Result<()> {
         if pkg.manifest.ui_api.split('.').next() != plinth_protocol::UI_API_VERSION.split('.').next() {
             bail!("the package needs UI API {}, but this host has {}", pkg.manifest.ui_api, plinth_protocol::UI_API_VERSION);
         }
-        validate_entry(&pkg.component)
+        validate_entry(&pkg.component, &pkg.manifest.capabilities)
     } else {
-        validate_entry(&bytes)
+        validate_entry(&bytes, &[])
     }
 }
 
-/// An app module must link into this runtime (SPEC.md §10.1); a component
+/// An app module must link into this runtime (SPEC.md §10.1), reaching
+/// only declared capabilities (`docs/HUB.md` §7.1 rule 1); a component
 /// must import only the plinth:app world.
-fn validate_entry(bytes: &[u8]) -> Result<()> {
+fn validate_entry(bytes: &[u8], declared: &[plinth_package::Capability]) -> Result<()> {
     use plinth_compiler::{cores, split};
     if split::is_app_module(bytes) {
+        print_capability_report(bytes, declared)?;
+        let names: Vec<String> = declared.iter().map(|c| c.name.clone()).collect();
+        split::check_capabilities(bytes, &names)?;
         let component = cores::link_app(bytes)?;
         validate_component(&component)
     } else {
         validate_component(bytes)
     }
+}
+
+/// Prints the declared, reachable and "declared but not used" capability
+/// lists for an app module (`docs/HUB.md` §7.1).
+fn print_capability_report(bytes: &[u8], declared: &[plinth_package::Capability]) -> Result<()> {
+    use plinth_compiler::split;
+    let reachable = split::reachable_capabilities(bytes)?;
+    println!("capabilities:");
+    if declared.is_empty() {
+        println!("  declared: none");
+    } else {
+        println!("  declared:");
+        for c in declared {
+            println!("    {} - {}", c.name, c.rationale);
+        }
+    }
+    if reachable.is_empty() {
+        println!("  reachable: none");
+    } else {
+        println!("  reachable: {}", reachable.iter().cloned().collect::<Vec<_>>().join(", "));
+    }
+    let unused: Vec<&str> = declared.iter().map(|c| c.name.as_str()).filter(|n| !reachable.contains(*n)).collect();
+    if !unused.is_empty() {
+        println!("  declared but not used: {}", unused.join(", "));
+    }
+    Ok(())
 }
 
 /// Rejects every top-level component import that is not in the plinth:app

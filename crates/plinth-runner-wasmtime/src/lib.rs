@@ -29,11 +29,10 @@ mod bindings {
 use bindings::App;
 use bindings::plinth::app::error::{DeniedReason as WitDeniedReason, HostError};
 
-/// Capability names (SPEC.md §11).
+/// Capability names (SPEC.md §11), from the shared map in `plinth-link`
+/// (`docs/HUB.md` §12.3) rather than a duplicated list here.
 pub mod capability {
-    pub const STORE_KV: &str = "store.kv";
-    pub const CLIPBOARD_READ: &str = "clipboard.read";
-    pub const CLIPBOARD_WRITE: &str = "clipboard.write";
+    pub use plinth_link::capabilities::{CLIPBOARD_READ, CLIPBOARD_WRITE, STORE_KV};
 }
 
 impl From<DeniedReason> for WitDeniedReason {

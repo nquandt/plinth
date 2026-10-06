@@ -45,17 +45,18 @@ impl HostApp {
         if plinth_package::is_package(&bytes) {
             let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("open {}", path.display()))?;
             let assets = pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
+            let capabilities: Vec<String> = pkg.manifest.capabilities.into_iter().map(|c| c.name).collect();
             Ok(HostApp {
-                component: with_runtime(pkg.component).with_context(|| format!("load {}", path.display()))?,
+                component: with_runtime(pkg.component, &capabilities).with_context(|| format!("load {}", path.display()))?,
                 title: pkg.manifest.name,
                 accent: pkg.manifest.accent.unwrap_or_else(|| "teal".into()),
                 app_id: pkg.manifest.id,
-                capabilities: pkg.manifest.capabilities.into_iter().map(|c| c.name).collect(),
+                capabilities,
                 assets,
             })
         } else {
             let title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-            let component = with_runtime(bytes).with_context(|| format!("load {}", path.display()))?;
+            let component = with_runtime(bytes, &[]).with_context(|| format!("load {}", path.display()))?;
             Ok(HostApp {
                 component,
                 title: title.clone(),
@@ -69,10 +70,18 @@ impl HostApp {
 }
 
 /// Links an app module into the installed core that it needs (SPEC.md
-/// §10.5). A component passes through unchanged.
-fn with_runtime(entry: Vec<u8>) -> Result<Vec<u8>> {
+/// §10.5). A component passes through unchanged. Refuses an app module
+/// that can reach a capability its manifest does not declare (`SPEC.md`
+/// §11, `docs/HUB.md` §7.1 rule 1); `declared` is empty for a bare
+/// `app.wasm`, so it may reach none.
+fn with_runtime(entry: Vec<u8>, declared: &[String]) -> Result<Vec<u8>> {
     use plinth_link::{cores, split};
-    if split::is_app_module(&entry) { cores::link_app(&entry) } else { Ok(entry) }
+    if split::is_app_module(&entry) {
+        split::check_capabilities(&entry, declared)?;
+        cores::link_app(&entry)
+    } else {
+        Ok(entry)
+    }
 }
 
 /// A `Clipboard` backed by the real system clipboard (`arboard`), used

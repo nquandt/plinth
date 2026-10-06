@@ -281,6 +281,52 @@ pub fn is_app_module(bytes: &[u8]) -> bool {
     bytes.len() >= 8 && bytes[..8] == [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
 }
 
+/// The names of the runtime functions that an app module's imports can
+/// reach, straight from its import section (no linking, no runtime
+/// needed). Used by `reachable_capabilities` and by tools that just want
+/// the raw import names.
+pub fn imported_functions(app: &[u8]) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    for payload in Parser::new(0).parse_all(app) {
+        if let Payload::ImportSection(r) = payload? {
+            for imp in r.into_imports() {
+                let imp = imp?;
+                if imp.module == RT_MODULE && matches!(imp.ty, TypeRef::Func(_)) {
+                    names.push(imp.name.to_string());
+                }
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// The capabilities (`crate::capabilities`) that an app module's imports
+/// can reach: each imported runtime function mapped to the capability it
+/// needs (`docs/HUB.md` §7.1, §12.3). A function outside the map needs no
+/// capability.
+pub fn reachable_capabilities(app: &[u8]) -> Result<std::collections::BTreeSet<String>> {
+    Ok(imported_functions(app)?
+        .iter()
+        .filter_map(|name| crate::capabilities::for_function(name))
+        .map(str::to_string)
+        .collect())
+}
+
+/// Refuses an app that can reach a capability it does not declare
+/// (`docs/HUB.md` §7.1 rule 1, `SPEC.md` §11). `declared` are the
+/// manifest's capability names; a bare `app.wasm` with no manifest passes
+/// an empty list, so it may reach none.
+pub fn check_capabilities(app: &[u8], declared: &[String]) -> Result<()> {
+    let reachable = reachable_capabilities(app)?;
+    for cap in &reachable {
+        ensure!(
+            declared.iter().any(|d| d == cap),
+            "the app can reach the `{cap}` capability, which its manifest does not declare"
+        );
+    }
+    Ok(())
+}
+
 /// Checks an app module against the runtime `rt` and remaps it into the
 /// runtime's index spaces, for `link::link`.
 ///
