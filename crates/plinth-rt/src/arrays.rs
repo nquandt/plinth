@@ -102,10 +102,18 @@ pub fn push_i32(p: u32, v: i32) -> u32 {
     n + 1
 }
 
-/// A shallow copy of `[start, end)`.
-pub fn slice(p: u32, start: u32, end: u32) -> u32 {
-    let end = end.min(len(p));
-    let start = start.min(end);
+/// Resolves a (possibly negative) `slice`-style index against `len`, the
+/// way JS does: negative counts back from the end, clamped to `[0, len]`.
+fn rel_index(i: i32, len: u32) -> u32 {
+    if i < 0 { (len as i64 + i as i64).max(0) as u32 } else { (i as u32).min(len) }
+}
+
+/// A shallow copy of `[start, end)`, with JS's negative-index semantics
+/// (SPEC.md §6.3 keyed lists rely on `slice(0, -1)` etc. behaving this way).
+pub fn slice(p: u32, start: i32, end: i32) -> u32 {
+    let len = len(p);
+    let end = rel_index(end, len);
+    let start = rel_index(start, len).min(end);
     let n = end - start;
     let q = new(gc::type_of(p), n);
     let size = elem_size(p);
