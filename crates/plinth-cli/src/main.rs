@@ -42,8 +42,8 @@ usage:
   plinth hub open <plinth://app/<id>>  open an app link (installs from sources if needed)
   plinth hub register-scheme [--exe <path>] | unregister-scheme
                                    register plinth:// links for this user (Windows)
-  plinth hub shortcut <app id> [--dir <folder>]
-                                   write a desktop shortcut that opens the app
+  plinth hub shortcut <app id> [--start-menu] [--dir <folder>] [--url]
+                                   write a shortcut (.lnk, app icon) that opens the app
   plinth hub remove <app id>       remove an app from the library
   plinth hub grants <app id> [allow|refuse <capability>]
                                    show or set a grant
@@ -680,9 +680,10 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
         Some("register-scheme") => {
             // `docs/HUB.md` §10: Windows runs `plinth hub open <link>` for a
             // plinth:// link. Per user (HKEY_CURRENT_USER), no administrator.
+            // `plinthw` (next to this program) runs it with no console window.
             let exe = match raw.iter().position(|a| *a == "--exe").and_then(|i| raw.get(i + 1)) {
                 Some(exe) => PathBuf::from(exe),
-                None => std::env::current_exe()?,
+                None => plinth_hub::os::gui_launcher(&std::env::current_exe()?),
             };
             register_scheme(&exe)?;
             println!("registered plinth:// links to run {} hub open", exe.display());
@@ -716,14 +717,33 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some("shortcut") => {
-            let id = args.get(1).context("usage: plinth hub shortcut <app id> [--dir <folder>]")?;
+            // `docs/HUB.md` §10: a `.lnk` with the app icon on the desktop or
+            // in the Start menu; `--url` writes the older Internet Shortcut.
+            let id = args.get(1).context("usage: plinth hub shortcut <app id> [--start-menu] [--dir <folder>] [--url]")?;
             let entry = hub.get(id)?.with_context(|| format!("{id} is not in the library"))?;
             let dir = match raw.iter().position(|a| *a == "--dir").and_then(|i| raw.get(i + 1)) {
                 Some(dir) => PathBuf::from(dir),
+                None if raw.contains(&"--start-menu") => {
+                    plinth_hub::os::start_menu_dir().context("no Start menu folder on this platform; use --dir <folder>")?
+                }
                 None => plinth_hub::os::desktop_dir().context("no desktop folder on this platform; use --dir <folder>")?,
             };
-            let path = plinth_hub::os::write_shortcut(&dir, id, &entry.name, &std::env::current_exe()?)?;
-            println!("wrote {} (it opens plinth://app/{id}; run `plinth hub register-scheme` one time)", path.display());
+            let exe = std::env::current_exe()?;
+            if raw.contains(&"--url") {
+                let path = plinth_hub::os::write_shortcut(&dir, id, &entry.name, &exe)?;
+                println!("wrote {} (it opens plinth://app/{id}; run `plinth hub register-scheme` one time)", path.display());
+                return Ok(ExitCode::SUCCESS);
+            }
+            let icon = match hub.write_app_icon(id) {
+                Ok(icon) => icon,
+                Err(e) => {
+                    eprintln!("[plinth] the shortcut gets the Plinth icon: {e:#}");
+                    None
+                }
+            };
+            let launcher = plinth_hub::os::gui_launcher(&exe);
+            let path = plinth_hub::os::write_link_shortcut(&dir, id, &entry.name, &launcher, icon.as_deref())?;
+            println!("wrote {} (it runs {} {})", path.display(), launcher.display(), plinth_hub::os::shortcut_arguments(id));
             return Ok(ExitCode::SUCCESS);
         }
         Some("search") => {

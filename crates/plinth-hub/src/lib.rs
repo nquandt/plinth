@@ -439,6 +439,25 @@ impl Hub {
         if changed { write_json(&self.updates_path(), &store) } else { Ok(()) }
     }
 
+    /// Writes the icon of `id` (the manifest's `icon`, a PNG in the
+    /// package) as `icons/<id>.ico` in the Hub directory, for a shortcut
+    /// (`docs/HUB.md` §10). `Ok(None)` when the app has no icon, or when its
+    /// icon is not a PNG image.
+    pub fn write_app_icon(&self, id: &str) -> Result<Option<PathBuf>> {
+        let bytes = self.package(id)?;
+        let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("read the package for {id}"))?;
+        let Some(icon) = &pkg.manifest.icon else { return Ok(None) };
+        let icon = icon.trim_start_matches("./");
+        let Some((_, png)) = pkg.assets.iter().find(|(path, _)| path == icon) else { return Ok(None) };
+        let Some(ico) = os::png_to_ico(png) else { return Ok(None) };
+        if !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+')) {
+            bail!("`{id}` is not a valid app id");
+        }
+        let path = self.dir.join("icons").join(format!("{id}.ico"));
+        write_atomic(&path, &ico)?;
+        Ok(Some(path))
+    }
+
     /// Pins `id` to `version`, or unpins it (`version: None` runs latest).
     pub fn pin(&self, id: &str, version: Option<String>) -> Result<()> {
         let mut lib = self.library()?;
@@ -1715,6 +1734,29 @@ mod tests {
         assert!(hub.add_package(&fake_signed_package("com.example.notes", "0.2.0", &acme)).is_err());
         svc.unblock_publisher(&acme.key_id()).unwrap();
         assert!(!hub.is_blocked(&id).unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `docs/HUB.md` §10: the app icon becomes `icons/<id>.ico` in the Hub
+    /// directory, for a `.lnk` shortcut.
+    #[test]
+    fn writes_the_app_icon_as_an_ico_file() {
+        let (hub, dir) = temp_hub();
+        let mut pkg = plinth_package::Package::read(&fake_package("com.example.notes", "0.1.0")).unwrap();
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend_from_slice(&64u32.to_be_bytes());
+        png.extend_from_slice(&64u32.to_be_bytes());
+        png.extend_from_slice(&[8, 6, 0, 0, 0]);
+        pkg.manifest.icon = Some("assets/icon.png".into());
+        pkg.assets.push(("assets/icon.png".into(), png.clone()));
+        let id = hub.add_package(&pkg.write().unwrap()).unwrap();
+        let path = hub.write_app_icon(&id).unwrap().unwrap();
+        assert_eq!(path, dir.join("icons").join("com.example.notes.ico"));
+        let ico = std::fs::read(&path).unwrap();
+        assert_eq!(&ico[22..], &png[..]);
+        // No icon: no file.
+        let other = hub.add_package(&fake_package("com.example.plain", "0.1.0")).unwrap();
+        assert_eq!(hub.write_app_icon(&other).unwrap(), None);
         std::fs::remove_dir_all(&dir).ok();
     }
 

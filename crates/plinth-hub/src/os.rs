@@ -181,6 +181,214 @@ pub fn desktop_dir() -> Option<PathBuf> {
     }
 }
 
+/// The Start menu folder for Plinth apps of the current user
+/// (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Plinth`), if this
+/// platform has one. No administrator rights are necessary.
+pub fn start_menu_dir() -> Option<PathBuf> {
+    if cfg!(windows) {
+        std::env::var_os("APPDATA").map(|appdata| PathBuf::from(appdata).join(r"Microsoft\Windows\Start Menu\Programs\Plinth"))
+    } else {
+        None
+    }
+}
+
+/// The program that a shortcut or a `plinth://` link runs: `plinthw.exe`
+/// next to `cli` if it is there, else `cli`. `plinthw` is a small program
+/// for the Windows subsystem that runs `plinth.exe` with no console
+/// window, so a click on a shortcut or a link does not show a console for
+/// a moment (`docs/HUB.md` §10).
+pub fn gui_launcher(cli: &Path) -> PathBuf {
+    let launcher = cli.with_file_name(format!("plinthw{}", std::env::consts::EXE_SUFFIX));
+    if launcher.is_file() { launcher } else { cli.to_path_buf() }
+}
+
+/// The arguments that a shortcut gives the launcher to open `id`.
+pub fn shortcut_arguments(id: &str) -> String {
+    format!("hub open {}", app_link(id))
+}
+
+// -- Icons --------------------------------------------------------------------
+
+/// The width and the height of a PNG image, from its `IHDR` chunk, or
+/// `None` if `png` is not a PNG.
+pub fn png_size(png: &[u8]) -> Option<(u32, u32)> {
+    const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    if png.len() < 24 || &png[..8] != SIGNATURE || &png[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(png[16..20].try_into().ok()?);
+    let height = u32::from_be_bytes(png[20..24].try_into().ok()?);
+    (width > 0 && height > 0).then_some((width, height))
+}
+
+/// A Windows icon (`.ico`) that holds `png` as its one image. Windows
+/// Vista and later read PNG images in an icon file. `None` if `png` is not
+/// a PNG image.
+pub fn png_to_ico(png: &[u8]) -> Option<Vec<u8>> {
+    let (width, height) = png_size(png)?;
+    // In an icon directory entry, 0 means 256 (or more) pixels.
+    let dim = |d: u32| if d >= 256 { 0u8 } else { d as u8 };
+    let mut ico = Vec::with_capacity(22 + png.len());
+    ico.extend_from_slice(&[0, 0, 1, 0, 1, 0]); // reserved, type 1 (icon), one image
+    ico.push(dim(width));
+    ico.push(dim(height));
+    ico.push(0); // no palette
+    ico.push(0); // reserved
+    ico.extend_from_slice(&1u16.to_le_bytes()); // color planes
+    ico.extend_from_slice(&32u16.to_le_bytes()); // bits per pixel
+    ico.extend_from_slice(&(png.len() as u32).to_le_bytes());
+    ico.extend_from_slice(&22u32.to_le_bytes()); // the image starts after this header
+    ico.extend_from_slice(png);
+    Some(ico)
+}
+
+// -- Windows shell links (`.lnk`) -------------------------------------------
+
+/// What a `.lnk` file starts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShellLink {
+    /// The program, as an absolute path.
+    pub target: PathBuf,
+    pub arguments: String,
+    pub working_dir: Option<PathBuf>,
+    /// The tooltip text.
+    pub description: String,
+    /// An `.ico` file or a program with an icon resource.
+    pub icon: PathBuf,
+    pub icon_index: i32,
+}
+
+#[cfg(windows)]
+fn wide(text: &std::ffi::OsStr) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt as _;
+    text.encode_wide().chain([0]).collect()
+}
+
+/// Calls `body` with COM ready on this thread (`CoInitializeEx`), and
+/// balances the call. A thread that already uses another COM mode (for
+/// example a UI thread) can still make a shell link.
+#[cfg(windows)]
+fn with_com<T>(body: impl FnOnce() -> Result<T>) -> Result<T> {
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+    // SAFETY: no reserved pointer; every successful call is balanced below.
+    let init = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    let result = body();
+    if init.is_ok() {
+        // SAFETY: balances the successful `CoInitializeEx` above.
+        unsafe { CoUninitialize() };
+    }
+    result
+}
+
+/// Saves `link` as the `.lnk` file `path` through the Windows shell
+/// (`IShellLinkW`), so that the link has the item ID list and the link
+/// information that Explorer expects.
+#[cfg(windows)]
+pub fn save_shell_link(path: &Path, link: &ShellLink) -> Result<()> {
+    use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistFile};
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink as ShellLinkClass};
+    use windows::core::{Interface as _, PCWSTR};
+    with_com(|| {
+        let target = wide(link.target.as_os_str());
+        let arguments = wide(std::ffi::OsStr::new(&link.arguments));
+        let description = wide(std::ffi::OsStr::new(&link.description));
+        let icon = wide(link.icon.as_os_str());
+        let file = wide(path.as_os_str());
+        // SAFETY: each string is a NUL-terminated UTF-16 buffer that lives
+        // until the end of this closure; the interfaces come from COM.
+        unsafe {
+            let shell_link: IShellLinkW = CoCreateInstance(&ShellLinkClass, None, CLSCTX_INPROC_SERVER)?;
+            shell_link.SetPath(PCWSTR(target.as_ptr()))?;
+            shell_link.SetArguments(PCWSTR(arguments.as_ptr()))?;
+            shell_link.SetDescription(PCWSTR(description.as_ptr()))?;
+            shell_link.SetIconLocation(PCWSTR(icon.as_ptr()), link.icon_index)?;
+            if let Some(dir) = &link.working_dir {
+                let dir = wide(dir.as_os_str());
+                shell_link.SetWorkingDirectory(PCWSTR(dir.as_ptr()))?;
+            }
+            let persist: IPersistFile = shell_link.cast()?;
+            persist.Save(PCWSTR(file.as_ptr()), true)?;
+        }
+        Ok(())
+    })
+}
+
+/// Reads the `.lnk` file `path` back through the Windows shell: the
+/// target, the arguments and the icon location. For tests and checks.
+#[cfg(windows)]
+pub fn read_shell_link(path: &Path) -> Result<ShellLink> {
+    use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistFile, STGM_READ};
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink as ShellLinkClass};
+    use windows::core::{Interface as _, PCWSTR};
+    fn text(buffer: &[u16]) -> String {
+        let end = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+        String::from_utf16_lossy(&buffer[..end])
+    }
+    with_com(|| {
+        let file = wide(path.as_os_str());
+        // SAFETY: the buffers are large enough for each call (MAX_PATH and
+        // the 1024 characters that `IShellLinkW` allows for arguments).
+        unsafe {
+            let shell_link: IShellLinkW = CoCreateInstance(&ShellLinkClass, None, CLSCTX_INPROC_SERVER)?;
+            let persist: IPersistFile = shell_link.cast()?;
+            persist.Load(PCWSTR(file.as_ptr()), STGM_READ)?;
+            let mut target = [0u16; 1024];
+            shell_link.GetPath(&mut target, std::ptr::null_mut(), 0)?;
+            let mut arguments = [0u16; 1024];
+            shell_link.GetArguments(&mut arguments)?;
+            let mut description = [0u16; 1024];
+            shell_link.GetDescription(&mut description)?;
+            let mut dir = [0u16; 1024];
+            shell_link.GetWorkingDirectory(&mut dir)?;
+            let mut icon = [0u16; 1024];
+            let mut icon_index = 0;
+            shell_link.GetIconLocation(&mut icon, &mut icon_index)?;
+            let dir = text(&dir);
+            Ok(ShellLink {
+                target: PathBuf::from(text(&target)),
+                arguments: text(&arguments),
+                working_dir: (!dir.is_empty()).then(|| PathBuf::from(dir)),
+                description: text(&description),
+                icon: PathBuf::from(text(&icon)),
+                icon_index,
+            })
+        }
+    })
+}
+
+#[cfg(not(windows))]
+pub fn save_shell_link(_path: &Path, _link: &ShellLink) -> Result<()> {
+    bail!("`.lnk` shortcuts are for Windows only (docs/HUB.md §10); use --url")
+}
+
+/// A file name for a `.lnk` shortcut to the app `name`.
+pub fn link_file_name(name: &str) -> String {
+    let url = shortcut_file_name(name);
+    format!("{}.lnk", url.trim_end_matches(".url"))
+}
+
+/// Writes a `.lnk` shortcut (`docs/HUB.md` §10) into `dir` that runs
+/// `launcher hub open plinth://app/<id>`, with `icon` (the app's `.ico`)
+/// or else the icon of `launcher`. Unlike `write_shortcut`, it does not
+/// need the `plinth://` scheme. Returns the file path.
+pub fn write_link_shortcut(dir: &Path, id: &str, name: &str, launcher: &Path, icon: Option<&Path>) -> Result<PathBuf> {
+    if !is_safe(id) {
+        bail!("`{id}` is not a valid app id");
+    }
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(link_file_name(name));
+    let link = ShellLink {
+        target: launcher.to_path_buf(),
+        arguments: shortcut_arguments(id),
+        working_dir: launcher.parent().map(Path::to_path_buf),
+        description: format!("Open {} (Plinth app {id})", name.trim()),
+        icon: icon.unwrap_or(launcher).to_path_buf(),
+        icon_index: 0,
+    };
+    save_shell_link(&path, &link)?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +440,72 @@ mod tests {
         assert!(text.contains("URL=plinth://app/com.example.notes\r\n"), "{text}");
         assert!(text.contains(r"IconFile=C:\plinth.exe"), "{text}");
         assert!(write_shortcut(&dir, "bad id", "x", Path::new("x")).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A tiny 2x3 PNG header (the image data does not matter here).
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend_from_slice(&width.to_be_bytes());
+        png.extend_from_slice(&height.to_be_bytes());
+        png.extend_from_slice(&[8, 6, 0, 0, 0, 1, 2, 3, 4]);
+        png
+    }
+
+    #[test]
+    fn makes_an_icon_from_a_png() {
+        let image = png(48, 32);
+        assert_eq!(png_size(&image), Some((48, 32)));
+        let ico = png_to_ico(&image).unwrap();
+        assert_eq!(&ico[..6], &[0, 0, 1, 0, 1, 0]);
+        assert_eq!((ico[6], ico[7]), (48, 32));
+        assert_eq!(u32::from_le_bytes(ico[14..18].try_into().unwrap()) as usize, image.len());
+        assert_eq!(u32::from_le_bytes(ico[18..22].try_into().unwrap()), 22);
+        assert_eq!(&ico[22..], &image[..]);
+        // 256 pixels or more is 0 in the directory entry.
+        let big = png_to_ico(&png(512, 256)).unwrap();
+        assert_eq!((big[6], big[7]), (0, 0));
+        assert!(png_to_ico(b"GIF89a....................").is_none());
+    }
+
+    /// The shortcut goes only into the folder that the caller gives
+    /// (`--dir`, or the Start menu folder that the CLI looks up), never a
+    /// real user folder in a test. The Windows shell reads it back.
+    #[cfg(windows)]
+    #[test]
+    fn writes_a_link_shortcut_with_the_app_icon_or_the_launcher_icon() {
+        let dir = std::env::temp_dir().join(format!("plinth-lnk-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A real file as the target, so that the shell can resolve it.
+        let launcher = dir.join("plinthw.exe");
+        std::fs::write(&launcher, b"MZ").unwrap();
+        let icon = dir.join("com.example.notes.ico");
+        std::fs::write(&icon, png_to_ico(&png(32, 32)).unwrap()).unwrap();
+
+        let path = write_link_shortcut(&dir, "com.example.notes", "Notes: daily", &launcher, Some(&icon)).unwrap();
+        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "Notes_ daily.lnk");
+        let link = read_shell_link(&path).unwrap();
+        assert_eq!(link.target, launcher);
+        assert_eq!(link.arguments, "hub open plinth://app/com.example.notes");
+        assert_eq!(link.working_dir.as_deref(), Some(dir.as_path()));
+        assert_eq!(link.icon, icon);
+        assert_eq!(link.description, "Open Notes: daily (Plinth app com.example.notes)");
+
+        let path = write_link_shortcut(&dir, "com.example.other", "Other", &launcher, None).unwrap();
+        assert_eq!(read_shell_link(&path).unwrap().icon, launcher);
+        assert!(write_link_shortcut(&dir, "bad id", "x", &launcher, None).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_launcher_is_plinthw_when_it_is_next_to_the_cli() {
+        let dir = std::env::temp_dir().join(format!("plinth-launcher-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cli = dir.join(format!("plinth{}", std::env::consts::EXE_SUFFIX));
+        assert_eq!(gui_launcher(&cli), cli);
+        let launcher = dir.join(format!("plinthw{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&launcher, b"").unwrap();
+        assert_eq!(gui_launcher(&cli), launcher);
         std::fs::remove_dir_all(&dir).ok();
     }
 }
