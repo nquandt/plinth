@@ -18,7 +18,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { PlinthApp, readPlnt } from "../plinth-web.js";
+import { PlinthApp, readPlnt, netDenied } from "../plinth-web.js";
 import {
   HubStore,
   memoryStorage,
@@ -93,6 +93,21 @@ function protocolChecks() {
     assert.equal(checkFrameMessage(bad), null, `refused: ${JSON.stringify(bad)?.slice(0, 80)}`);
   }
   assert.equal(applyKvMessage(store, "com.example.b", { type: "clipboard-write", text: "x" }), false);
+
+  // net-fetch and size (the parent makes the request after its own check).
+  const fetchMsg = { channel: CHANNEL, type: "net-fetch", id: 3, url: "https://api.example.com/x", method: "GET", headers: [["accept", "text/plain"]], body: null };
+  assert.ok(checkFrameMessage(fetchMsg));
+  assert.equal(checkFrameMessage({ ...fetchMsg, headers: [["a"]] }), null);
+  assert.equal(checkFrameMessage({ ...fetchMsg, body: 5 }), null);
+  assert.ok(checkFrameMessage({ channel: CHANNEL, type: "size", height: 480 }));
+  assert.equal(checkFrameMessage({ channel: CHANNEL, type: "size", height: -1 }), null);
+  const declared = new Set(["net:api.example.com", "net.local"]);
+  assert.equal(netDenied("https://api.example.com/x", declared), null);
+  assert.equal(netDenied("https://other.example.com/x", declared), "denied:undeclared");
+  assert.equal(netDenied("https://api.example.com/x", declared, new Set(["net:api.example.com"])), "denied:refused");
+  assert.equal(netDenied("http://192.168.1.4/", declared), null);
+  assert.equal(netDenied("http://127.0.0.1/", new Set(["net:*"])), "denied:undeclared", "net:* does not cover private hosts");
+  assert.equal(netDenied("not a url", declared), "denied:unsupported");
 
   // The start message has the data of one app only.
   const start = startMessage(store, "com.example.a", { pkg: new ArrayBuffer(1), core: new ArrayBuffer(1), refused: new Set(["clipboard.read"]) });

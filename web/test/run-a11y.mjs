@@ -316,7 +316,7 @@ function frameSurface(page) {
   return {
     eval: (e) => page.frameEval(e),
     waitFor: (e, t) => page.frameWaitFor(e, t),
-    offset: () => page.eval(`(() => { const r = document.querySelector(".hub-frame").getBoundingClientRect(); return { x: r.x, y: r.y }; })()`),
+    offset: () => page.eval(`(() => { const r = document.querySelector(".host-frame").getBoundingClientRect(); return { x: r.x, y: r.y }; })()`),
   };
 }
 
@@ -343,11 +343,17 @@ async function stopwatchClicks(page, surface) {
   const button = (label) => `[...document.querySelectorAll("#app button")].find((b) => b.textContent.trim() === ${JSON.stringify(label)})`;
   const shown = `document.querySelector("#app main").textContent`;
   await surface.waitFor(`${button("Start")} ? true : null`, 20000);
-  await mouseClick(page, surface, button("Start"), 150);
-  await new Promise((res) => setTimeout(res, 400));
-  const before = await surface.eval(shown);
-  await new Promise((res) => setTimeout(res, 200));
-  if ((await surface.eval(shown)) === before) throw new Error("the stopwatch did not start");
+  // Start: a new out-of-process app frame can miss the first synthetic
+  // click in headless Edge, so click Start again until the stopwatch runs.
+  // The check is about Stop, which must work with one click.
+  for (let attempt = 1; ; attempt++) {
+    await mouseClick(page, surface, button("Start"), 150);
+    await new Promise((res) => setTimeout(res, 400));
+    const before = await surface.eval(shown);
+    await new Promise((res) => setTimeout(res, 200));
+    if ((await surface.eval(shown)) !== before) break;
+    if (attempt === 3) throw new Error(`the stopwatch did not start: ${JSON.stringify(await surface.eval(`({ text: document.getElementById("app").innerText.slice(0, 120), start: !!(${button("Start")}) })`))}`);
+  }
   await mouseClick(page, surface, button("Stop"), 150);
   await new Promise((res) => setTimeout(res, 100));
   const stopped = await surface.eval(shown);
@@ -441,189 +447,225 @@ function startHubServer(exe, dir) {
   });
 }
 
-const HUB_APPS = ["counter", "notes", "budget", "quotes", "utility", "todo", "timer", "hub"];
+const HUB_APPS = ["counter", "notes", "budget", "utility", "todo", "timer", "calculator", "hub"];
 const ID = (app) => (app === "hub" ? "dev.plinth.hub" : `dev.plinth.examples.${app}`);
 
 /**
- * The web App Hub in headless Edge: the list renders (light and dark, and
- * at phone width with no horizontal scroll), app pages show the capability
- * label and the browser support, and apps run in the sandboxed app frame:
- * counter with no question; notes and budget after the consent view, each
- * with its own kv data that the other cannot see; the Manage page changes a
- * grant and removes data; a package that does not match the registry digest
- * does not run; typing in todo and the stopwatch of timer work in the frame.
- * Returns the axe result of each view.
+ * The web App Hub in headless Edge (docs/web-hub.md): `hub.html` runs the
+ * Hub app (`examples/hub`, signed with a throwaway key that the registry's
+ * hub.json trusts) from the registry. Its library is the registry listing.
+ * Open in the Hub app launches each app in the host's app window, a
+ * sandboxed iframe (opaque origin): counter at once; utility after the
+ * host's consent window; notes and budget each with their own kv data,
+ * which the other cannot see; a grant that the Hub app turns off is denied
+ * in the app; a package that does not match the registry digest does not
+ * open; typing in todo and the stopwatch work in the frame. Light, dark and
+ * phone width. Returns the axe result of each view.
  */
 async function checkHub(cdpPort) {
   const exe = path.join(root, "target/debug", process.platform === "win32" ? "plinth.exe" : "plinth");
   const dir = await mkdtemp(path.join(tmpdir(), "plinth-a11y-hub-"));
+  const reg = path.join(dir, "registry");
+  await mkdir(reg);
   for (const app of HUB_APPS) {
-    await copyFile(path.join(root, "examples", app, "dist", `${app}.plnt`), path.join(dir, `${app}.plnt`));
+    await copyFile(path.join(root, "examples", app, "dist", `${app}.plnt`), path.join(reg, `${app}.plnt`));
   }
-  execFileSync(exe, ["registry", "build", dir, "--with-core"], { stdio: "ignore" });
-  // Change one byte of the utility package after the build: the registry
-  // digest no longer agrees, so the hub must refuse to run it.
-  const utilityDoc = JSON.parse(await readFile(path.join(dir, "apps", ID("utility"), "index.json"), "utf8"));
-  const utilityPkg = path.join(dir, "packages", `${utilityDoc.versions[0].sha256}.plnt`);
-  const bytes = await readFile(utilityPkg);
+  const env = { ...process.env, PLINTH_PUBLISHER_DIR: path.join(dir, "publisher") };
+  execFileSync(exe, ["publisher", "init", "--name", "you"], { env, stdio: "ignore" });
+  const key = execFileSync(exe, ["publisher", "show"], { env, encoding: "utf8" }).trim().split(/\s+/).pop();
+  execFileSync(exe, ["sign", path.join(reg, "hub.plnt")], { env, stdio: "ignore" });
+  execFileSync(exe, ["registry", "build", reg, "--with-core", "--hub-trusted-key", key], { stdio: "ignore" });
+  // Change one byte of the calculator package after the build: the registry
+  // digest no longer agrees, so the host must refuse to run it.
+  const calcDoc = JSON.parse(await readFile(path.join(reg, "apps", ID("calculator"), "index.json"), "utf8"));
+  const calcPkg = path.join(reg, "packages", `${calcDoc.versions[0].sha256}.plnt`);
+  const bytes = await readFile(calcPkg);
   bytes[bytes.length - 30] ^= 1;
-  await writeFile(utilityPkg, bytes);
+  await writeFile(calcPkg, bytes);
 
-  const { child, base } = await startHubServer(exe, dir);
+  const { child, base } = await startHubServer(exe, reg);
   const results = [];
   const page = await openPage(cdpPort);
   const frame = frameSurface(page);
   try {
-    const ready = `document.body.dataset.ready === "true" ? true : null`;
     // A11Y_SHOTS=<folder>: also save a PNG of each view, to look at by eye.
     const shot = async (name) => {
       if (!process.env.A11Y_SHOTS) return;
       await mkdir(process.env.A11Y_SHOTS, { recursive: true });
-      const r = await page.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true });
+      const r = await page.send("Page.captureScreenshot", { format: "png" });
       await writeFile(path.join(process.env.A11Y_SHOTS, `hub-${name}.png`), Buffer.from(r.data, "base64"));
     };
     const hubAxe = async (view) => results.push({ view, violations: await axeRun(page, undefined, { iframes: false }) });
-    const go = async (hash, until) => {
-      await page.eval(`location.hash = ${JSON.stringify(hash)}`);
-      await page.waitFor(`document.body.dataset.route === ${JSON.stringify(hash)} ${until ? `&& (${until})` : ""} ? true : null`, 20000);
-    };
-    const running = (id) => `document.body.dataset.running === ${JSON.stringify(id)}`;
-    const mainText = () => page.eval(`document.getElementById("hub-main").innerText`);
+    const appText = () => page.eval(`document.getElementById("app").innerText`);
     const button = (label) => `[...document.querySelectorAll("#app button")].find((b) => b.textContent.trim() === ${JSON.stringify(label)})`;
+    const click = async (expr, what) => {
+      await page.waitFor(`${expr} ? true : null`, 10000).catch(() => {
+        throw new Error(`no ${what}`);
+      });
+      await page.eval(`${expr}.click()`);
+    };
+    const running = (id) =>
+      `document.body.dataset.running === ${JSON.stringify(id)} ? true : (document.body.dataset.notice || document.body.dataset.failed ? (() => { throw new Error("the app did not open: " + (document.body.dataset.notice || document.body.dataset.failed)); })() : null)`;
+    const waitRunning = async (id) => {
+      await page.waitFor(running(id), 20000).catch(async (err) => {
+        const state = await page.eval(`JSON.stringify({ data: { ...document.body.dataset }, windows: document.querySelectorAll("#host-app").length, frames: document.querySelectorAll("iframe").length, last: document.querySelector("iframe")?.dataset.last, consent: !!document.getElementById("host-consent") })`);
+        const inFrame = await page.frameEval(`JSON.stringify({ text: document.body.innerText.slice(0, 200), data: { ...document.body.dataset } })`).catch((e) => String(e));
+        throw new Error(`${id} did not start: ${state} frame: ${inFrame} (${err.message.slice(0, 60)})`);
+      });
+    };
+    const library = async () => {
+      if (await page.eval(`!!document.querySelector("#app .pl-back")`)) await page.eval(`document.querySelector("#app .pl-back").click()`);
+      await click(`[...document.querySelectorAll("#app .pl-nav-item")].find((b) => b.textContent === "Library")`, "Library tab");
+      await page.waitFor(`document.querySelector("#app .pl-row") ? true : null`, 10000);
+    };
+    /** Selects the app in the Hub app's library and presses Open. */
+    const openApp = async (name) => {
+      await library();
+      await click(`[...document.querySelectorAll("#app .pl-row")].find((r) => r.querySelector(".pl-row-title")?.textContent === ${JSON.stringify(name)})`, `row ${name}`);
+      await page.waitFor(`document.querySelector("#app h1")?.textContent.includes(${JSON.stringify(name)}) ? true : null`, 10000);
+      await click(button("Open"), "Open button");
+    };
+    const closeApp = async () => {
+      await page.eval(`document.getElementById("host-app-close")?.click()`);
+      await page.waitFor(`document.getElementById("host-app") ? null : true`, 5000);
+    };
 
     for (const scheme of ["light", "dark"]) {
       await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: scheme }] });
       await page.navigate(`${base}/`);
-      await page.waitFor(ready, 20000);
-      const cards = await page.eval(`document.querySelectorAll(".hub-card").length`);
-      if (cards !== HUB_APPS.length) throw new Error(`the list shows ${cards} apps, not ${HUB_APPS.length}`);
-      await hubAxe(`list (${scheme})`);
-      await shot(`list-${scheme}`);
+      await page.waitFor(`document.body.dataset.ready === "true" || document.body.dataset.startError ? true : null`, 20000);
+      const startError = await page.eval(`document.body.dataset.startError ?? ""`);
+      if (startError) throw new Error(`the Hub did not start: ${startError}`);
+      await page.waitFor(`document.querySelectorAll("#app .pl-row").length > 0 ? true : null`, 10000);
+      const rows = await page.eval(`[...document.querySelectorAll("#app .pl-row-title")].map((t) => t.textContent).join(",")`);
+      if (rows !== "Calculator,Counter,Notes,Stopwatch,Todo,Utility,Budget".split(",").sort().join(",")) {
+        throw new Error(`the Hub library shows ${rows}`);
+      }
+      await hubAxe(`hub library (${scheme})`);
+      await shot(`library-${scheme}`);
     }
     await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
 
-    // Search.
-    await page.eval(`(() => { const q = document.getElementById("hub-q"); q.value = "clip"; q.dispatchEvent(new Event("input")); })()`);
-    const found = await page.eval(`[...document.querySelectorAll(".hub-card h2")].map((h) => h.textContent).join(",")`);
-    if (found !== "Utility") throw new Error(`search "clip" shows ${found}`);
+    // Discover: search the registry.
+    await click(`[...document.querySelectorAll("#app .pl-nav-item")].find((b) => b.textContent === "Discover")`, "Discover tab");
+    await page.waitFor(`document.querySelector("#app input[type=text]") ? true : null`, 10000);
+    await page.eval(`(() => { const i = document.querySelector("#app input[type=text]"); i.value = "util"; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    await click(button("Search"), "Search button");
+    await page.waitFor(`document.getElementById("app").innerText.includes("1 app found.") ? true : null`, 10000);
+    if (!(await appText()).includes("Utility")) throw new Error(`search "util" does not find Utility:\n${await appText()}`);
+    await hubAxe("hub discover");
 
-    // App pages: the label, the risk levels and the browser support.
-    const appPage = async (id) => {
-      await go(`#/app/${id}`);
-      return mainText();
-    };
-    const utility = await appPage(ID("utility"));
-    for (const want of ["Read the clipboard.", "Medium risk", "Write to the clipboard.", "Low risk", "Limited in the browser"]) {
-      if (!utility.includes(want)) throw new Error(`the Utility page has no "${want}":\n${utility}`);
-    }
-    await hubAxe("app page (utility)");
-    await shot("app-utility");
-    const hubApp = await appPage(ID("hub"));
-    for (const want of ["High risk", "Not supported in the browser", "does not support hub.manage"]) {
-      if (!hubApp.includes(want)) throw new Error(`the Hub page has no "${want}":\n${hubApp}`);
-    }
-    await shot("app-hub");
-
-    // Open counter (no capabilities): no question, it runs in the sandboxed frame.
-    await appPage(ID("counter"));
-    await page.eval(`document.querySelector(".hub-open").click()`);
-    await page.waitFor(`${running(ID("counter"))} ? true : null`, 20000);
-    const sandbox = await page.eval(`document.querySelector(".hub-frame").getAttribute("sandbox")`);
+    // Counter (no capabilities): it opens at once, in the sandboxed frame.
+    await openApp("Counter");
+    await waitRunning(ID("counter"));
+    const sandbox = await page.eval(`document.querySelector(".host-frame").getAttribute("sandbox")`);
     if (sandbox !== "allow-scripts") throw new Error(`the app frame has sandbox="${sandbox}"`);
     await frame.waitFor(`document.querySelector("#app button") ? true : null`, 20000);
     // The frame has an opaque origin: no storage, no cookies, no hub DOM.
     const walls = await frame.eval(`(() => {
       const tryIt = (f) => { try { f(); return "open"; } catch { return "blocked"; } };
       return { origin: self.origin, storage: tryIt(() => localStorage.length), cookie: tryIt(() => document.cookie),
-               parent: tryIt(() => parent.document.body), idb: typeof indexedDB === "undefined" ? "blocked" : tryIt(() => indexedDB.open("x")) };
+               parent: tryIt(() => parent.document.body), idb: tryIt(() => indexedDB.open("x")) };
     })()`);
     if (walls.origin !== "null" || walls.storage !== "blocked" || walls.cookie !== "blocked" || walls.parent !== "blocked") {
       throw new Error(`the app frame is not isolated: ${JSON.stringify(walls)}`);
     }
     await frame.eval(`${button("Increment")}.click()`);
     await frame.waitFor(`[...document.querySelectorAll("#app h1, #app h2")].some((h) => h.textContent.trim() === "1") ? true : null`, 5000);
-    await hubAxe("counter running (hub page)");
+    await hubAxe("app window (counter)");
     results.push({ view: "counter in the app frame", violations: await axeRun(page, frame.eval) });
     await shot("counter");
+    await closeApp();
 
-    // Notes: the consent view comes first (store.kv is low risk: Allow is selected).
-    await go(`#/run/${ID("notes")}`, `document.body.dataset.consent`);
-    const consent = await mainText();
-    for (const want of ["Allow Notes to use these capabilities?", "Save data on this device.", "Low risk", "Save your notes on this device.", "Not signed"]) {
-      if (!consent.includes(want)) throw new Error(`the consent view has no "${want}":\n${consent}`);
+    // Utility: clipboard.read (medium) is not decided: the host's consent window first.
+    await openApp("Utility");
+    await page.waitFor(`document.body.dataset.consent === ${JSON.stringify(ID("utility"))} ? true : null`, 10000);
+    const consent = await page.eval(`document.getElementById("host-consent").innerText`);
+    for (const want of ["Allow Utility to use these capabilities?", "Read the clipboard.", "Medium risk", "Paste text into the input box."]) {
+      if (!consent.includes(want)) throw new Error(`the consent window has no "${want}":\n${consent}`);
     }
-    const checked = await page.eval(`document.querySelector("input[data-cap='store.kv']:checked")?.value`);
-    if (checked !== "allow") throw new Error(`store.kv (low risk) is not "allow" by default: ${checked}`);
-    await hubAxe("consent (notes)");
-    await shot("consent-notes");
-    await page.eval(`document.getElementById("hub-consent-ok").click()`);
-    await page.waitFor(`${running(ID("notes"))} ? true : null`, 20000);
+    if (consent.includes("Write to the clipboard")) throw new Error("the consent window asks for a low-risk capability");
+    const checked = await page.eval(`document.querySelector("#host-consent input[data-cap='clipboard.read']:checked")?.value`);
+    if (checked !== "deny") throw new Error(`clipboard.read (medium risk) is not "deny" first: ${checked}`);
+    await hubAxe("consent window (utility)");
+    await shot("consent-utility");
+    await page.eval(`document.getElementById("host-consent-open").click()`);
+    await page.waitFor(`document.getElementById("host-consent") ? null : true`, 5000).catch(async () => {
+      const st = await page.eval(`(() => { const d = document.getElementById("host-consent"); const b = document.getElementById("host-consent-open"); return JSON.stringify({ open: d.open, rv: d.returnValue, n: document.querySelectorAll("dialog").length, btn: b.outerHTML, form: !!b.form, active: document.activeElement?.outerHTML?.slice(0, 80) }); })()`);
+      throw new Error(`the consent window did not close: ${st}`);
+    });
+    await waitRunning(ID("utility"));
+    await closeApp();
+    // No question the second time.
+    await openApp("Utility");
+    await waitRunning(ID("utility"));
+    if (await page.eval(`!!document.getElementById("host-consent")`)) throw new Error("the consent window came again");
+    await closeApp();
+    // After Refresh, the Hub app shows the decision in the label.
+    await library();
+    await click(`[...document.querySelectorAll("#app .pl-action")].find((b) => b.textContent === "Refresh")`, "Refresh action");
+    await click(`[...document.querySelectorAll("#app .pl-row")].find((r) => r.querySelector(".pl-row-title")?.textContent === "Utility")`, "row Utility");
+    await page.waitFor(`document.getElementById("app").innerText.includes("Not allowed") ? true : null`, 5000).catch(async () => {
+      throw new Error(`the Hub app does not show the refused grant:\n${await appText()}`);
+    });
+
+    // Notes: its kv data stays in the hub page, under its own namespace.
+    await openApp("Notes");
+    await waitRunning(ID("notes"));
     await frame.waitFor(`document.body.dataset.kvEntries === "0" ? true : null`, 5000);
-    const addNote = async (title) => {
-      await frame.eval(`(() => {
-        const set = (label, v) => { const i = [...document.querySelectorAll("#app input, #app textarea")].find((e) => e.labels?.[0]?.textContent.trim() === label || e.getAttribute("aria-label") === label);
-          i.value = v; i.dispatchEvent(new Event("input", { bubbles: true })); };
-        set("Title", ${JSON.stringify(title)}); set("Body", "From the a11y test");
-      })()`);
-      await frame.eval(`${button("Add note")}.click()`);
-      await frame.waitFor(`document.getElementById("app").innerText.includes(${JSON.stringify(title)}) ? true : null`, 5000);
-    };
-    await addNote("Isolated note");
+    await frame.eval(`(() => {
+      const set = (label, v) => { const i = [...document.querySelectorAll("#app input, #app textarea")].find((e) => e.labels?.[0]?.textContent.trim() === label || e.getAttribute("aria-label") === label);
+        i.value = v; i.dispatchEvent(new Event("input", { bubbles: true })); };
+      set("Title", "Isolated note"); set("Body", "From the a11y test");
+    })()`);
+    await frame.eval(`${button("Add note")}.click()`);
+    await frame.waitFor(`document.getElementById("app").innerText.includes("Isolated note") ? true : null`, 5000);
     const keysOf = (id) => `Object.keys(localStorage).filter((k) => k.startsWith("plinth-hub:kv:${id}:"))`;
     await page.waitFor(`${keysOf(ID("notes"))}.length > 0 ? true : null`, 5000);
+    await closeApp();
 
-    // Budget: its own consent, and its frame gets none of the notes data.
+    // Budget: its frame gets none of the notes data.
     const budgetBefore = await page.eval(`${keysOf(ID("budget"))}.length`);
-    await go(`#/run/${ID("budget")}`, `document.body.dataset.consent`);
-    await page.eval(`document.getElementById("hub-consent-ok").click()`);
-    await page.waitFor(`${running(ID("budget"))} ? true : null`, 20000);
+    await openApp("Budget");
+    await waitRunning(ID("budget"));
     const budgetGot = await frame.waitFor(`document.body.dataset.kvEntries ?? null`, 5000);
     if (Number(budgetGot) !== budgetBefore) throw new Error(`budget got ${budgetGot} kv entries, not ${budgetBefore} (the notes data must not be there)`);
-    const budgetKeys = await page.eval(`${keysOf(ID("budget"))}.length`);
     if ((await frame.eval(`document.getElementById("app").innerText`)).includes("Isolated note")) throw new Error("budget shows the note of notes");
+    await closeApp();
 
-    // Notes again: no question, the note is still there (from the parent's snapshot).
-    await go(`#/run/${ID("notes")}`, running(ID("notes")));
+    // Notes again: the note is there (the page sends the snapshot).
+    await openApp("Notes");
     await frame.waitFor(`document.getElementById("app").innerText.includes("Isolated note") ? true : null`, 10000);
+    await closeApp();
 
-    // Manage: deny store.kv for notes; notes runs and reads nothing.
-    await go("#/manage");
-    const manage = await mainText();
-    for (const want of ["Manage apps", "Notes", "Budget", "Allowed (default)", "Stored data"]) {
-      if (!manage.includes(want)) throw new Error(`the Manage page has no "${want}":\n${manage}`);
-    }
-    await hubAxe("manage");
-    await shot("manage");
-    const notesSection = `document.querySelector('section[data-app="${ID("notes")}"]')`;
-    await page.eval(`(() => { const s = ${notesSection}.querySelector("select[data-cap='store.kv']"); s.value = "deny"; s.dispatchEvent(new Event("change")); })()`);
-    await page.waitFor(`${notesSection}.innerText.includes("Denied") ? true : null`, 5000);
-    await go(`#/run/${ID("notes")}`, running(ID("notes")));
+    // The Hub app turns store.kv off for notes: notes runs and reads nothing.
+    await page.eval(`[...document.querySelectorAll("#app label.pl-toggle")].find((l) => l.textContent.includes("Allow store.kv")).querySelector("input").click()`);
+    await page.waitFor(`document.getElementById("app").innerText.includes("Not allowed") ? true : null`, 5000);
+    await click(button("Open"), "Open button");
+    await waitRunning(ID("notes"));
     await frame.waitFor(`document.querySelector("#app button") ? true : null`, 10000);
     if ((await frame.eval(`document.getElementById("app").innerText`)).includes("Isolated note")) throw new Error("notes reads its data with store.kv denied");
+    await closeApp();
 
-    // Manage: remove the data of notes, forget the decisions: the next run asks again.
-    await go("#/manage");
-    await page.eval(`[...${notesSection}.querySelectorAll("button")].find((b) => b.textContent === "Remove stored data").click()`);
-    await page.waitFor(`${keysOf(ID("notes"))}.length === 0 ? true : null`, 5000);
-    if ((await page.eval(`${keysOf(ID("budget"))}.length`)) !== budgetKeys) throw new Error("removing the notes data changed budget");
-    await page.eval(`[...${notesSection}.querySelectorAll("button")].find((b) => b.textContent === "Forget decisions").click()`);
-    await go(`#/run/${ID("notes")}`, `document.body.dataset.consent`);
-
-    // A package that does not match the registry digest does not run.
-    await go(`#/run/${ID("utility")}`, `document.body.dataset.refused`);
-    const refused = await mainText();
-    if (!refused.includes("does not match the registry digest")) throw new Error(`no digest message:\n${refused}`);
-    if (await page.eval(`document.querySelector(".hub-frame") !== null`)) throw new Error("a refused package has an app frame");
-    await hubAxe("refused package");
+    // A package that does not match the registry digest does not open.
+    await openApp("Calculator");
+    await page.waitFor(`document.body.dataset.notice ? true : null`, 10000);
+    const notice = await page.eval(`document.body.dataset.notice`);
+    if (!notice.includes("does not match the registry digest")) throw new Error(`no digest message: ${notice}`);
+    if (await page.eval(`document.querySelector(".host-frame") !== null`)) throw new Error("a refused package has an app frame");
+    await hubAxe("notice (digest)");
+    await page.eval(`document.querySelector(".host-dialog button").click()`);
+    await page.eval(`delete document.body.dataset.notice`);
 
     // Typing and the stopwatch inside the app frame.
-    await go(`#/run/${ID("todo")}`, running(ID("todo")));
+    await openApp("Todo");
+    await waitRunning(ID("todo"));
     await typeKeys(page, frame, async () => {
       // A real click first. Headless Edge does not always move the focus
-      // into a new out-of-process frame on a synthetic click (about 1 run
-      // in 6: the iframe element gets the focus, the frame document does
-      // not); then focus the field from inside the frame, as the
-      // standalone check does. The keys then go to the field.
+      // into a new out-of-process frame on a synthetic click (the iframe
+      // element gets the focus, the frame document does not); then focus
+      // the field from inside the frame, as the standalone check does. The
+      // keys then go to the field.
       const input = `document.querySelector("#app input[type=text]")`;
       await mouseClick(page, frame, input);
       const focused = `document.activeElement?.tagName === "INPUT" && document.hasFocus() ? true : null`;
@@ -632,24 +674,23 @@ async function checkHub(cdpPort) {
         await frame.waitFor(focused, 2000);
       }
     });
-    await go(`#/run/${ID("timer")}`, running(ID("timer")));
+    await closeApp();
+    await openApp("Stopwatch");
+    await waitRunning(ID("timer"));
     await stopwatchClicks(page, frame);
+    await closeApp();
+
     // Phone width: no horizontal scroll. Last, because the device metrics
     // override does not reach the out-of-process app frames in the same way
     // (their clicks then miss).
     await page.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 800, deviceScaleFactor: 2, mobile: true });
-    await appPage(ID("quotes"));
+    await library();
     const overflow = await page.eval(`document.documentElement.scrollWidth - window.innerWidth`);
-    if (overflow > 0) throw new Error(`the app page scrolls sideways by ${overflow}px at 390px`);
-    await hubAxe("app page (quotes, phone)");
-    await shot("app-quotes-phone");
-    await go("#/");
-    const listOverflow = await page.eval(`document.documentElement.scrollWidth - window.innerWidth`);
-    if (listOverflow > 0) throw new Error(`the list scrolls sideways by ${listOverflow}px at 390px`);
-    await shot("list-phone");
+    if (overflow > 0) throw new Error(`the Hub scrolls sideways by ${overflow}px at 390px`);
+    await hubAxe("hub library (phone)");
+    await shot("library-phone");
     await page.send("Emulation.clearDeviceMetricsOverride");
-
-    console.log("  list, search, app pages, phone width, sandboxed frame, consent, kv isolation, Manage, digest check, typing and stopwatch in the frame: ok");
+    console.log("  Hub app from the registry, Discover, sandboxed frame, consent window, kv isolation, grant from the Hub app, digest check, typing and stopwatch in the frame, phone width: ok");
   } finally {
     await page.close();
     child.kill();

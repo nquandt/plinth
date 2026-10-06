@@ -13,17 +13,17 @@
 //    user's grants, blocks, pins and groups are in IndexedDB).
 // 3. On a launch: the consent window (a host dialog, not app UI) for the
 //    capabilities that are not decided, then the app window: a dialog with
-//    the app in `<iframe sandbox="allow-scripts">` (`app-frame.html`, an
-//    opaque origin). The page keeps the kv data of each app
-//    (`hub-storage.js`) and answers the frame's clipboard and dialog
-//    requests.
+//    the app in its sandboxed frame. The frame pair (`app-frame.js` in the
+//    frame, `frame-host.js` here) is the same for every page that shows a
+//    Plinth app; this page adds only the Hub parts.
 
 import { PlinthApp, readPlnt } from "./plinth-web.js";
 import { Tree, DomRenderer } from "./dom-renderer.js";
 import { loadRegistry, loadAppDocument, latestVersion, pickCore, packageUrl, coreUrl, fetchBytes } from "./registry-client.js";
 import { checkPackage, checkCore } from "./hub-integrity.js";
 import { HubHost, indexedDbPersist, memoryPersist } from "./hub-host.js";
-import { HubStore, memoryStorage, checkFrameMessage, applyKvMessage, startMessage, CHANNEL, KV_QUOTA } from "./hub-storage.js";
+import { HubStore, memoryStorage } from "./hub-storage.js";
+import { AppFrame } from "./frame-host.js";
 
 const container = document.getElementById("app");
 const status = document.getElementById("host-status");
@@ -162,14 +162,26 @@ function askConsent(entry, version, rows) {
       el("p", {}, "A denied capability does not stop the app: the app gets the answer “denied”. You can change this later on the app page of the Hub."),
       form,
     );
-    dialog.addEventListener("close", () => {
-      const ok = dialog.returnValue === "open";
+    // The answer comes from the button (the submit event), not only from
+    // the close event: a close event can come late or not at all in some
+    // browsers. Escape (cancel) or a close without a button is Cancel.
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
       const decisions = {};
       for (const input of form.querySelectorAll("input[type=radio]:checked")) decisions[input.dataset.cap] = input.value === "allow";
+      if (dialog.open) dialog.close();
       dialog.remove();
       delete document.body.dataset.consent;
       resolve(ok ? decisions : null);
+    };
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      finish(event.submitter?.value === "open");
     });
+    dialog.addEventListener("cancel", () => finish(false));
+    dialog.addEventListener("close", () => finish(dialog.returnValue === "open"));
     document.body.append(dialog);
     document.body.dataset.consent = entry.id;
     dialog.showModal();
@@ -178,32 +190,46 @@ function askConsent(entry, version, rows) {
 
 // -- The app window -------------------------------------------------------------
 
-/** The app that runs now: `{ id, name, frame, dialog, declared, refused, pkg, core, sent }`. */
+/** The app that runs now: `{ id, name, frame (AppFrame), dialog }`. */
 let session = null;
 
 function closeApp() {
   if (!session) return;
   const s = session;
   session = null;
-  s.frame.remove();
-  if (s.dialog.open) s.dialog.close();
+  s.frame.destroy();
   s.dialog.remove();
+  container.inert = false;
   delete document.body.dataset.running;
+  if (s.returnFocus?.isConnected) s.returnFocus.focus();
 }
 
-function allowed(s, name) {
-  return s.declared.includes(name) && !s.refused.includes(name);
-}
-
+/** The host's app window: a modal dialog with the app in its sandboxed frame (`frame-host.js`). */
 function openAppWindow(entry, version, pkg, core) {
   closeApp();
-  // `allow-scripts` only: an opaque origin, no forms, no popups, no modal
-  // dialogs, no top navigation, no same-origin access (docs/web-hub.md §4).
-  const frame = el("iframe", { class: "host-frame", sandbox: "allow-scripts", title: entry.name, src: "app-frame.html" });
+  const frame = new AppFrame({
+    appId: entry.id,
+    title: entry.name,
+    pkg,
+    core,
+    declared: version.capabilities,
+    refused: host.refusedFor(entry.id, version.capabilities),
+    store: appData,
+    onStarted: () => {
+      document.body.dataset.running = entry.id;
+      announce(`${entry.name} is open.`);
+    },
+    onFailed: (message) => {
+      document.body.dataset.failed = message;
+    },
+  });
   const close = el("button", { class: "host-button", type: "button", id: "host-app-close" }, "Close");
+  // A fixed overlay with role="dialog", not a modal <dialog>: headless
+  // Chromium does not route mouse input to an out-of-process iframe in the
+  // top layer. The Hub app behind it is inert while it is open.
   const dialog = el(
-    "dialog",
-    { class: "host-window", id: "host-app", "aria-labelledby": "host-app-title" },
+    "div",
+    { class: "host-window", id: "host-app", role: "dialog", "aria-modal": "true", "aria-labelledby": "host-app-title" },
     el(
       "div",
       { class: "host-window-bar" },
@@ -211,81 +237,19 @@ function openAppWindow(entry, version, pkg, core) {
       el("span", { class: "host-meta" }, `Version ${version.version}`),
       close,
     ),
-    frame,
+    frame.element,
   );
   close.addEventListener("click", () => closeApp());
-  dialog.addEventListener("close", () => closeApp());
+  // Escape in the window bar closes it (a key in the app goes to the frame).
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && session?.dialog === dialog) closeApp();
+  });
+  const returnFocus = document.activeElement;
   document.body.append(dialog);
-  session = {
-    id: entry.id,
-    name: entry.name,
-    frame,
-    dialog,
-    declared: version.capabilities,
-    refused: host.refusedFor(entry.id, version.capabilities),
-    pkg,
-    core,
-    sent: false,
-  };
-  dialog.showModal();
+  container.inert = true;
+  session = { id: entry.id, frame, dialog, returnFocus };
+  frame.element.focus();
 }
-
-function answerFrame(s, id, value) {
-  // The frame has an opaque origin: "*" is the only target origin that
-  // reaches it. The message goes to the window of this frame only.
-  s.frame.contentWindow?.postMessage({ channel: CHANNEL, type: "answer", id, value }, "*");
-}
-
-window.addEventListener("message", (event) => {
-  const s = session;
-  if (!s || event.source !== s.frame.contentWindow) return;
-  const msg = checkFrameMessage(event.data);
-  if (!msg) return;
-  if (msg.type === "kv-set" || msg.type === "kv-delete") {
-    if (allowed(s, "store.kv")) applyKvMessage(appData, s.id, msg, KV_QUOTA);
-    return;
-  }
-  switch (msg.type) {
-    case "ready": {
-      if (s.sent) return;
-      s.sent = true;
-      const pkg = s.pkg.slice().buffer;
-      const core = s.core.slice().buffer;
-      const start = startMessage(appData, s.id, { pkg, core, refused: s.refused });
-      if (!allowed(s, "store.kv")) start.kv = {};
-      s.frame.contentWindow.postMessage(start, "*", [pkg, core]);
-      break;
-    }
-    case "started":
-      document.body.dataset.running = s.id;
-      announce(`${s.name} is open.`);
-      break;
-    case "failed":
-      document.body.dataset.failed = msg.message;
-      break;
-    case "clipboard-write":
-      if (allowed(s, "clipboard.write")) navigator.clipboard?.writeText(msg.text).catch(() => {});
-      break;
-    case "clipboard-read":
-      if (!allowed(s, "clipboard.read") || !navigator.clipboard?.readText) answerFrame(s, msg.id, null);
-      else
-        navigator.clipboard.readText().then(
-          (text) => answerFrame(s, msg.id, text),
-          () => answerFrame(s, msg.id, null),
-        );
-      break;
-    case "dialog": {
-      // The dialogs of this page: a sandboxed frame without `allow-modals`
-      // cannot show them.
-      let value = null;
-      if (msg.kind === "alert") window.alert(msg.message);
-      else if (msg.kind === "confirm") value = window.confirm(msg.message);
-      else value = window.prompt(msg.message);
-      answerFrame(s, msg.id, value);
-      break;
-    }
-  }
-});
 
 /**
  * A launch from the Hub app (`plinth:hub` `launch`): the same plan as the
@@ -293,7 +257,14 @@ window.addEventListener("message", (event) => {
  * pinned one) asks for its undecided capabilities; if the user cancels,
  * the newest version whose capabilities are all decided runs.
  */
+let launching = false;
+
 async function launchApp(id) {
+  // One launch at a time: a second Open while the consent window or a
+  // download is open does nothing.
+  document.body.dataset.launchCalls = String(Number(document.body.dataset.launchCalls ?? 0) + 1); // for tests
+  if (launching) return;
+  launching = true;
   try {
     const entry = host.get(id);
     if (!entry) return notice("Cannot open the app", `${id} is not in the library.`);
@@ -314,6 +285,8 @@ async function launchApp(id) {
   } catch (err) {
     console.error(err);
     notice("Cannot open the app", String(err?.message ?? err));
+  } finally {
+    launching = false;
   }
 }
 

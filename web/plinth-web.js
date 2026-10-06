@@ -98,6 +98,69 @@ function manifestEntry(manifestText) {
 
 const DeniedReason = { undeclared: 0, refused: 1, unsupported: 2 };
 
+/** True for a host in a private or loopback range (`net.local`, SPEC.md §11). */
+export function isPrivateNetHost(host) {
+  const h = host.split(":")[0]; // strip a port
+  if (h.toLowerCase() === "localhost" || h.endsWith(".local") || h === "::1" || h === "0.0.0.0" || h === "[::1]") return true;
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
+/**
+ * The `plinth:net` check (SPEC.md §11): `net:<host>` and `net.local` are
+ * dynamic names, so the check runs against the URL. `capReason(name)` gives
+ * null (usable) or a `DeniedReason`. Returns null or a `DeniedReason`.
+ */
+function netDeniedReason(url, capReason) {
+  let host;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return DeniedReason.unsupported;
+  }
+  const names = isPrivateNetHost(host) ? ["net.local"] : [`net:${host}`, "net:*"];
+  const reasons = names.map(capReason);
+  if (reasons.includes(null)) return null;
+  return reasons.includes(DeniedReason.refused) ? DeniedReason.refused : DeniedReason.undeclared;
+}
+
+/**
+ * The `plinth:net` check for a host page (the app-frame host checks the
+ * request again in the parent): null if `url` may be fetched, else the
+ * `"denied:<reason>"` text. `declared` and `refused` are capability sets.
+ */
+export function netDenied(url, declared, refused = new Set()) {
+  const capReason = (name) => (!declared.has(name) ? DeniedReason.undeclared : refused.has(name) ? DeniedReason.refused : null);
+  const reason = netDeniedReason(url, capReason);
+  if (reason === null) return null;
+  return reason === DeniedReason.undeclared ? "denied:undeclared" : reason === DeniedReason.refused ? "denied:refused" : "denied:unsupported";
+}
+
+/** One HTTP request for `plinth:net`: `[ok, status, text, error]`, never a throw. */
+export async function httpFetch(url, method, headers, body, impl = typeof fetch === "function" ? fetch : null) {
+  if (!impl) return [false, 0, "", "network: no fetch implementation available"];
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), 20000) : null;
+  try {
+    const res = await impl(url, {
+      method,
+      headers,
+      body: body ?? undefined,
+      redirect: "manual", // redirects are allowed only to allowed hosts (SPEC.md §11); not re-checked per hop yet.
+      credentials: "omit", // an app request never carries the page's cookies
+      signal: controller?.signal,
+    });
+    const text = await res.text();
+    return [res.ok, res.status, text, null];
+  } catch (e) {
+    return [false, 0, "", `network: ${e?.message ?? e}`];
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 /**
  * A `Map`-backed implementation of the kv storage interface `hostImports`
  * expects ({get,set,delete,keys}, all synchronous). Used as the Node
@@ -205,6 +268,7 @@ function hostImports(
     completeRequest,
     clipboard = null,
     hub = null,
+    netFetch = null,
   } = {},
 ) {
   // A capability is usable when the manifest declares it and the user did
@@ -226,64 +290,25 @@ function hostImports(
     return id;
   }
   // plinth:net (core 1.4, SPEC.md §8.5, §11): same request-id-now,
-  // completion-later shape as dialogs. `net:<host>` and `net.local` are
-  // dynamic capability names (one per declared host; §11), so the check
-  // happens here against the actual URL, not by exact string lookup.
-  function isPrivateNetHost(host) {
-    const h = host.split(":")[0]; // strip a port
-    if (h.toLowerCase() === "localhost" || h.endsWith(".local") || h === "::1" || h === "0.0.0.0" || h === "[::1]") return true;
-    const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-    if (!m) return false;
-    const [a, b] = [Number(m[1]), Number(m[2])];
-    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
-  }
-  function hostOf(url) {
-    try {
-      return new URL(url).hostname;
-    } catch {
-      return null;
-    }
-  }
-  function netDeniedReason(host) {
-    if (host === null) return DeniedReason.unsupported;
-    const names = isPrivateNetHost(host) ? ["net.local"] : [`net:${host}`, "net:*"];
-    const reasons = names.map(capReason);
-    if (reasons.includes(null)) return null;
-    return reasons.includes(DeniedReason.refused) ? DeniedReason.refused : DeniedReason.undeclared;
-  }
-  function netResult(ok, status, text, error) {
-    return [ok, status, text, error];
-  }
-  async function runFetch(url, method, headers, body) {
-    const impl = typeof fetch === "function" ? fetch : null;
-    if (!impl) return netResult(false, 0, "", "network: no fetch implementation available");
-    const controller = typeof AbortController === "function" ? new AbortController() : null;
-    const timeout = controller ? setTimeout(() => controller.abort(), 20000) : null;
-    try {
-      const res = await impl(url, {
-        method,
-        headers,
-        body: body ?? undefined,
-        redirect: "manual", // redirects are allowed only to allowed hosts (SPEC.md §11); not re-checked per hop yet.
-        signal: controller?.signal,
-      });
-      const text = await res.text();
-      return netResult(res.ok, res.status, text, null);
-    } catch (e) {
-      return netResult(false, 0, "", `network: ${e?.message ?? e}`);
-    } finally {
-      if (timeout) clearTimeout(timeout);
-    }
-  }
+  // completion-later shape as dialogs. The check is `netDeniedReason`
+  // (module level, shared with the app-frame host).
   function openNetFetch(url, method, headers, body) {
     const id = nextRequest++;
-    const reason = netDeniedReason(hostOf(url));
+    const reason = netDeniedReason(url, capReason);
     if (reason !== null) {
       const text = reason === DeniedReason.undeclared ? "denied:undeclared" : reason === DeniedReason.refused ? "denied:refused" : "denied:unsupported";
-      Promise.resolve().then(() => completeRequest?.(id, netResult(false, 0, "", text)));
+      Promise.resolve().then(() => completeRequest?.(id, [false, 0, "", text]));
       return id;
     }
-    runFetch(url, method, headers, body).then((result) => completeRequest?.(id, result));
+    // `netFetch` (the app frame): the parent page makes the request, so it
+    // carries the page's real origin (docs/web-hub.md §4). It answers the
+    // same `[ok, status, text, error]` result.
+    const run = netFetch
+      ? Promise.resolve()
+          .then(() => netFetch(url, method, headers, body))
+          .catch((e) => [false, 0, "", `network: ${e?.message ?? e}`])
+      : httpFetch(url, method, headers, body);
+    run.then((result) => completeRequest?.(id, result));
     return id;
   }
   function mem() {

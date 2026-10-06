@@ -121,6 +121,16 @@
         color: var(--pl-text);
         border: 1px solid var(--pl-border);
       }
+      .host-input {
+        width: 100%;
+        box-sizing: border-box;
+        font: inherit;
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--pl-border);
+        background: var(--pl-surface);
+        color: var(--pl-text);
+      }
       .host-primary {
         background: var(--pl-accent);
         color: var(--pl-accent-text);
@@ -128,16 +138,13 @@
         font-weight: 600;
       }
       .host-window {
-        width: calc(100vw - 16px);
-        height: calc(100vh - 16px);
-        max-width: none;
-        max-height: none;
-        padding: 0;
-        box-sizing: border-box;
-        flex-direction: column;
-      }
-      .host-window[open] {
+        position: fixed;
+        inset: 8px;
+        z-index: 10;
         display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        box-shadow: 0 0 0 100vmax rgb(0 0 0 / 0.55);
       }
       .host-window-bar {
         display: flex;

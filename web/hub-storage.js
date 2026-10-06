@@ -233,6 +233,8 @@ const FRAME_TYPES = {
   "clipboard-write": { text: "string" },
   "clipboard-read": { id: "number" },
   dialog: { id: "number", kind: "string", message: "string" },
+  "net-fetch": { id: "number", url: "string", method: "string" },
+  size: { height: "number" },
 };
 
 /**
@@ -249,6 +251,11 @@ export function checkFrameMessage(data) {
   }
   if (data.type === "dialog" && !["alert", "confirm", "prompt"].includes(data.kind)) return null;
   if ((data.type === "kv-set" || data.type === "kv-delete") && data.key.length > MAX_KEY) return null;
+  if (data.type === "net-fetch") {
+    const headersOk = Array.isArray(data.headers) && data.headers.every((h) => Array.isArray(h) && h.length === 2 && h.every((x) => typeof x === "string"));
+    if (!headersOk || (data.body !== null && typeof data.body !== "string")) return null;
+  }
+  if (data.type === "size" && !(Number.isFinite(data.height) && data.height >= 0)) return null;
   return data;
 }
 

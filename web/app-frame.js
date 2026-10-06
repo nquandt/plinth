@@ -53,11 +53,25 @@ async function start(msg) {
       writeText: (text) => send({ type: "clipboard-write", text }),
       readText: () => ask("clipboard-read", {}),
     },
+    // The parent page makes each request (it checks the capability again),
+    // so a request carries the page's origin, not "null".
+    netFetch: (url, method, headers, body) => ask("net-fetch", { url, method, headers, body }),
   });
   new DomRenderer(tree, container, app, assets);
   app.init([]);
   // For tests (web/test/run-a11y.mjs): how many kv entries the start message had.
   document.body.dataset.kvEntries = String(Object.keys(msg.kv ?? {}).length);
+  // The content height, so that a parent page can size the iframe to it.
+  let last = -1;
+  const report = () => {
+    const height = Math.ceil(container.getBoundingClientRect().height);
+    if (height !== last) {
+      last = height;
+      send({ type: "size", height });
+    }
+  };
+  new ResizeObserver(report).observe(container);
+  report();
 }
 
 window.addEventListener("message", (event) => {
