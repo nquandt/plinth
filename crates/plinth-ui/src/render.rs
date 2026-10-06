@@ -1305,12 +1305,17 @@ impl PlinthRoot {
         let title = node.str_prop(prop::TITLE).unwrap_or("").to_owned();
         let subtitle = node.str_prop(prop::SUBTITLE).map(str::to_owned);
         let glyph = node.str_prop(prop::ICON).map(icon_glyph);
+        let trailing = node.str_prop(prop::TRAILING).map(str::to_owned);
         let handler = node.handler(event::PRESS).filter(|_| self.stopped.is_none());
         let hover = t.hover;
+        let aria_label = match &trailing {
+            Some(tr) => format!("{title}, {tr}"),
+            None => title.clone(),
+        };
                 let row_el = div()
             .id(eid("row", node.id))
             .role(accesskit::Role::ListItem)
-            .aria_label(title.clone())
+            .aria_label(aria_label)
             .flex()
             .items_center()
             .gap_3()
@@ -1328,6 +1333,7 @@ impl PlinthRoot {
                     .child(div().text_sm().child(title))
                     .when_some(subtitle, |d, s| d.child(div().text_xs().text_color(t.text_muted).child(s))),
             )
+            .when_some(trailing, |d, tr| d.child(div().flex_none().text_sm().text_color(t.text_muted).child(tr)))
             .child(div().flex().flex_none().items_center().gap_2().children(self.render_children(node, t, cx)));
         let row_el = match handler {
             Some(h) => keyboard_activatable(
@@ -1770,10 +1776,21 @@ impl PlinthRoot {
     fn render_image(&self, node: &Node, t: &Tokens) -> AnyElement {
         let src = node.str_prop(prop::SRC).unwrap_or("");
         let alt = node.str_prop(prop::ALT).unwrap_or("").to_owned();
-        let ratio = match node.enum_prop(prop::ASPECT) {
+        let aspect_kind = node.enum_prop(prop::ASPECT);
+        let ratio = match aspect_kind {
             aspect::WIDE => 16.0 / 9.0,
             aspect::TALL => 3.0 / 4.0,
             _ => 1.0,
+        };
+        // Regular/wide windows cap the image height and center it
+        // horizontally, instead of filling the full content width
+        // (SPEC.md §6.3). Compact keeps the full-width default.
+        let max_h = match self.class {
+            WidthClass::Compact => None,
+            WidthClass::Regular | WidthClass::Wide => Some(match aspect_kind {
+                aspect::WIDE => 280.,
+                _ => 360.,
+            }),
         };
         let id = eid("image", node.id);
         match self.assets.get(src).and_then(|bytes| image_format(src).map(|f| (f, bytes))) {
@@ -1781,7 +1798,8 @@ impl PlinthRoot {
                 .id(id)
                 .role(accesskit::Role::Image)
                 .aria_label(alt)
-                .w_full()
+                .when(max_h.is_none(), |d| d.w_full())
+                .when_some(max_h, |d, h| d.h(px(h)).max_w_full().mx_auto())
                 .aspect_ratio(ratio as f32)
                 .overflow_hidden()
                 .rounded_md()
@@ -1796,7 +1814,8 @@ impl PlinthRoot {
                 .id(id)
                 .role(accesskit::Role::Image)
                 .aria_label(alt.clone())
-                .w_full()
+                .when(max_h.is_none(), |d| d.w_full())
+                .when_some(max_h, |d, h| d.h(px(h)).max_w_full().mx_auto())
                 .aspect_ratio(ratio as f32)
                 .rounded_md()
                 .bg(t.surface_alt)

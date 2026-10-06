@@ -445,6 +445,8 @@ export class DomRenderer {
     if (title) header.appendChild(el("span", "pl-row-title")).appendChild(text(title));
     if (subtitle) header.appendChild(el("span", "pl-row-subtitle")).appendChild(text(subtitle));
     row.appendChild(header);
+    const trailing = n.props.get(Prop.trailing);
+    if (trailing) row.appendChild(el("span", "pl-row-trailing")).appendChild(text(trailing));
     const actions = el("div", "pl-row-actions");
     this.renderChildren(n, actions);
     row.appendChild(actions);
@@ -620,9 +622,11 @@ export class DomRenderer {
     const src = n.props.get(Prop.src) ?? "";
     const alt = n.props.get(Prop.alt) ?? "";
     const aspectProp = n.props.get(Prop.aspect);
-    const ratio = ASPECT_RATIO[aspectProp?.enum ?? EnumAspect.square] ?? ASPECT_RATIO[EnumAspect.square];
+    const aspectValue = aspectProp?.enum ?? EnumAspect.square;
+    const ratio = ASPECT_RATIO[aspectValue] ?? ASPECT_RATIO[EnumAspect.square];
+    const aspectClass = aspectValue === EnumAspect.wide ? "pl-image-wide" : aspectValue === EnumAspect.tall ? "pl-image-tall" : "pl-image-square";
     const url = this.assetUrl(src);
-    const wrap = el("div", "pl-image", { style: `aspect-ratio: ${ratio}` });
+    const wrap = el("div", `pl-image ${aspectClass}`, { style: `aspect-ratio: ${ratio}` });
     if (url) {
       const img = el("img", "pl-image-img", { alt, src: url });
       wrap.appendChild(img);

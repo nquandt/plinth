@@ -28,15 +28,12 @@ import {
   deleteTransaction,
   selectTransaction,
 } from "./model";
-function amountLabel(amount: number): string {
+function amountTrailing(amount: number): string {
   return amount >= 0 ? `+${amount.toFixed(2)}` : amount.toFixed(2);
 }
 
-function rowSubtitle(date: string, category: string, note: string): string {
-  if (note.trim() === "") {
-    return `${date} · ${category}`;
-  }
-  return `${date} · ${category} · ${note}`;
+function rowSubtitle(date: string, note: string): string {
+  return note.trim() === "" ? date : `${date} · ${note}`;
 }
 
 export default function Transactions() {
@@ -117,8 +114,9 @@ export default function Transactions() {
           key={(t) => t.id}
           row={(t) => (
             <Row
-              title={amountLabel(t.amount)}
-              subtitle={rowSubtitle(t.date, t.category, t.note)}
+              title={t.category}
+              subtitle={rowSubtitle(t.date, t.note)}
+              trailing={amountTrailing(t.amount)}
               onPress={() => openEdit(t.id)}
             />
           )}

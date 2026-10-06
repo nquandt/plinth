@@ -61,6 +61,7 @@ confirm = 31     # bool, default true for a destructive action (UI API 1.2)
 src = 32         # string, an asset path under assets/ (image, UI API 1.3)
 alt = 33         # string, non-empty accessible description (image, UI API 1.3)
 aspect = 34      # enum aspect (image, UI API 1.3)
+trailing = 35    # string, a muted value shown on the right of a row (row, UI API 1.4)
 
 [events]
 press = 1        # value: null

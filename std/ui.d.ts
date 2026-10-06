@@ -125,6 +125,8 @@ export declare function Row(props: {
   subtitle?: string;
   icon?: IconName;
   onPress?: () => void;
+  /** A muted value shown on the right of the row, e.g. "12 items" or "$4.50". */
+  trailing?: string;
   children?: Children;
 }): Element;
 

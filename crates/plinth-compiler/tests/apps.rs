@@ -134,6 +134,19 @@ impl Harness {
             .map(|n| n.str_prop(prop::TITLE).unwrap_or_default().to_owned())
             .collect()
     }
+
+    fn row_trailings(&self) -> Vec<String> {
+        let list = self.one(ControlKind::List, |n| n.children.iter().any(|c| self.tree.get(*c).and_then(|c| c.kind) == Some(ControlKind::Row)));
+        self.tree
+            .get(list)
+            .unwrap()
+            .children
+            .iter()
+            .filter_map(|r| self.tree.get(*r))
+            .filter(|n| n.kind == Some(ControlKind::Row))
+            .map(|n| n.str_prop(prop::TRAILING).unwrap_or_default().to_owned())
+            .collect()
+    }
 }
 
 #[test]
@@ -157,27 +170,27 @@ fn budget_add_filter_edit_delete_and_stats() {
     h.fire(add_children[1], event::CHANGE, Value::Number(-15.0)); // Amount
     h.fire(add_children[4], event::PRESS, Value::Null); // "Add" button
     assert_eq!(h.row_titles().len(), 6);
-    assert!(h.row_titles().contains(&"-15.00".to_string()));
+    assert!(h.row_trailings().contains(&"-15.00".to_string()));
 
     // Filter by category: only "Salary" matches the one seed income row.
     let filter = h.one(ControlKind::Picker, |n| {
         n.str_prop(prop::LABEL) == Some("Category") && n.str_prop(prop::VALUE) == Some("All")
     });
     h.fire(filter, event::CHANGE, "Salary".into());
-    assert_eq!(h.row_titles(), ["+2500.00"]);
+    assert_eq!(h.row_trailings(), ["+2500.00"]);
     h.fire(filter, event::CHANGE, "All".into());
     assert_eq!(h.row_titles().len(), 6);
 
     // Search by note text.
     let search = h.one(ControlKind::TextField, |n| n.str_prop(prop::LABEL) == Some("Search"));
     h.fire(search, event::CHANGE, "rent".into());
-    assert_eq!(h.row_titles(), ["-900.00"]);
+    assert_eq!(h.row_trailings(), ["-900.00"]);
     h.fire(search, event::CHANGE, "".into());
     assert_eq!(h.row_titles().len(), 6);
 
     // Edit the new row, then delete it with the destructive button in the
     // edit sheet.
-    let row = h.find(ControlKind::Row, |n| n.str_prop(prop::TITLE) == Some("-15.00"))[0];
+    let row = h.find(ControlKind::Row, |n| n.str_prop(prop::TRAILING) == Some("-15.00"))[0];
     h.fire(row, event::PRESS, Value::Null);
     let edit_sheet = h.one(ControlKind::Sheet, |n| n.str_prop(prop::TITLE) == Some("Edit transaction"));
     let edit_children = h.tree.get(edit_sheet).unwrap().children.clone();
