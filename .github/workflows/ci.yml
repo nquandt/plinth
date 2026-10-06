@@ -83,7 +83,8 @@ jobs:
           ./target/debug/plinth core export target/core.wasm
           for app in counter todo timer notes gallery budget; do ./target/debug/plinth build examples/$app; done
           ./target/debug/plinth build web/test/fixtures/net-fixture
-          for t in web/test/run-*.mjs; do node "$t"; done
+          # run-a11y.mjs needs a local Edge and the axe-core CDN; run it by hand.
+          for t in web/test/run-*.mjs; do [ "$t" = web/test/run-a11y.mjs ] || node "$t"; done
 
       - name: tsc check of every example
         working-directory: plinth
