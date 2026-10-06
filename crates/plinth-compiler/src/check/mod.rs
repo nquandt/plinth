@@ -784,6 +784,10 @@ impl Checker<'_> {
                 let fields = self.fields(fields);
                 self.anon_struct(fields)
             }
+            TypeAnn::Tuple(parts, _) => {
+                let elems: Vec<Type> = parts.iter().map(|p| self.resolve_type(p)).collect();
+                Type::Struct(self.tuple_struct(&elems))
+            }
             TypeAnn::Named { name, args, span } => self.named_type(name, args, *span),
         }
     }
@@ -1013,6 +1017,28 @@ impl Checker<'_> {
             Type::Struct(s) => s,
             _ => unreachable!(),
         }
+    }
+
+    /// The struct that backs a tuple `[A, B, …]`: one field per element,
+    /// named `0`, `1`, …, and the struct name is the tuple type as written
+    /// (for diagnostics). `Map.entries()` returns an array of these.
+    pub(crate) fn tuple_struct(&mut self, elems: &[Type]) -> types::StructId {
+        let shown: Vec<String> = elems.iter().map(|t| self.show(t)).collect();
+        let name = format!("[{}]", shown.join(", "));
+        if let Some(id) = self.anon_structs.get(&name) {
+            return *id;
+        }
+        let fields = elems.iter().enumerate().map(|(i, t)| Field { name: i.to_string(), ty: t.clone(), optional: false }).collect();
+        let id = self.prog.structs.len() as types::StructId;
+        self.prog.structs.push(StructDef { name: name.clone(), fields });
+        self.anon_structs.insert(name, id);
+        id
+    }
+
+    /// The element types of a tuple struct, or `None` for any other struct.
+    pub(crate) fn tuple_elems(&self, sid: types::StructId) -> Option<Vec<Type>> {
+        let def = &self.prog.structs[sid as usize];
+        def.name.starts_with('[').then(|| def.fields.iter().map(|f| f.ty.clone()).collect())
     }
 
     fn anon_struct(&mut self, fields: Vec<Field>) -> Type {

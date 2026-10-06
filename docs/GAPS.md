@@ -30,8 +30,7 @@ small local change), per the dogfooding task's scope.
   an empty, unusable interface).
 - `Map`/`Set` iteration as plain methods (`keys()`/`values()`/`forEach`,
   fixed in gap batch 3 item 2; see "Fixed in this pass"). `entries()` as a
-  plain array is still not possible: no tuple/array-of-pairs type exists to
-  return it as (the `for…of ([k, v] of m)` form still works).
+  plain array: done (tuples, see "Fixed in this pass").
 - `Array` methods beyond the common set: done. `concat`/`reduce` (gap
   batch 3 item 3), `sort`, and `splice`/`fill`/`flat` are in "Fixed in this
   pass".
@@ -248,6 +247,20 @@ small local change), per the dogfooding task's scope.
   than a literal `1` is `PL2000`. `std/lib.d.ts` has the three signatures
   (`flat` has a `this: U[][]` overload, so `tsc` gives the correct type).
   Tests: `crates/plinth-compiler/tests/collections.rs`.
+
+- **`Map.entries()` as a value, and tuples (HANDOFF.md §9 item 4).**
+  `m.entries()` returns a new `[K, V][]`. A tuple type `[A, B, …]` is a
+  struct with one field for each element (`Checker::tuple_struct` in
+  `check/mod.rs`; the struct name is the tuple type, for diagnostics). The
+  checker reads a tuple element with a number literal index (`t[0]`, also
+  as an assignment target) or an array pattern (`const [k, v] = t`, also in
+  callback parameters such as `es.map(([k, v]) => ...)`). An array literal
+  becomes a tuple when a tuple type is expected. `for (const e of m)` now
+  binds `e` to a `[K, V]` pair (before, this was an error).
+  `JSON.stringify` writes a tuple as a JSON array; `JSON.parse<T>` does not
+  accept a tuple type (`PL3001`). A computed index into a tuple is
+  `PL2011`. No new runtime function. `std/lib.d.ts` has `entries():
+  [K, V][]`. Tests: `crates/plinth-compiler/tests/collections.rs`.
 
 - #5 (fixed): `plinth:time` gained date/time support: `timezoneOffset`
   (a new host function, `plinth:app@1.0.0`'s `time` interface, core

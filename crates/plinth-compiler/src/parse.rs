@@ -538,6 +538,31 @@ impl Cx<'_> {
                 TypeAnn::Func { params, ret: Box::new(ret), span }
             }
             T::TSTypeLiteral(l) => TypeAnn::Object(self.members(&l.members)?, span),
+            T::TSTupleType(tt) => {
+                let mut parts = Vec::new();
+                for e in &tt.element_types {
+                    let inner = match e.as_ts_type() {
+                        Some(T::TSNamedTupleMember(m)) if !m.optional => m.element_type.as_ts_type(),
+                        Some(T::TSNamedTupleMember(_)) => None,
+                        other => other,
+                    };
+                    let Some(inner) = inner else {
+                        self.err_help(
+                            code::ADVANCED_TYPE,
+                            t_span(t),
+                            "optional and rest tuple elements are not supported",
+                            "write a fixed-length tuple such as `[string, number]`",
+                        );
+                        return None;
+                    };
+                    parts.push(self.ty(inner)?);
+                }
+                if parts.is_empty() {
+                    self.err_help(code::ADVANCED_TYPE, t_span(t), "an empty tuple type is not supported", "use an array type");
+                    return None;
+                }
+                TypeAnn::Tuple(parts, span)
+            }
             T::TSConditionalType(_)
             | T::TSMappedType(_)
             | T::TSIndexedAccessType(_)
@@ -546,7 +571,6 @@ impl Cx<'_> {
             | T::TSTypeQuery(_)
             | T::TSTypeOperatorType(_)
             | T::TSIntersectionType(_)
-            | T::TSTupleType(_)
             | T::TSImportType(_)
             | T::TSTypePredicate(_) => {
                 self.err_help(

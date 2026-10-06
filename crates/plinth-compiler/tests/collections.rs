@@ -171,3 +171,67 @@ fn flat_on_a_flat_array_is_a_copy() {
 fn flat_with_a_depth_other_than_one_is_rejected() {
     assert_eq!(codes(&show("const a = [[[1]]]; const b = a.flat(2);", "\"\"")), ["PL2000"]);
 }
+
+// -- `Map.entries()` as a value, and tuples -----------------------------------
+
+const MAP: &str = "const m = new Map<string, number>(); m.set(\"a\", 1); m.set(\"b\", 2);";
+
+#[test]
+fn map_entries_as_an_array_of_pairs() {
+    let body = format!("{MAP} const es = m.entries(); const out = es.map(([k, v]) => k + \"=\" + v).join(\",\");");
+    assert_eq!(shown(&body, "out + \"|\" + es.length"), "a=1,b=2|2");
+}
+
+#[test]
+fn map_entries_index_and_destructure() {
+    let body = format!("{MAP} const es = m.entries(); const first = es[0]; const [k, v] = es[1];");
+    assert_eq!(shown(&body, "first[0] + first[1] + \"|\" + k + v"), "a1|b2");
+}
+
+#[test]
+fn map_entries_are_copies() {
+    let body = format!("{MAP} const es = m.entries(); es[0][1] = 9; es.pop();");
+    assert_eq!(shown(&body, "\"\" + (m.get(\"a\") ?? 0) + m.size + es.length"), "121");
+}
+
+#[test]
+fn map_entries_spread_sort_and_for_of() {
+    let body = format!(
+        "{MAP} m.set(\"c\", 0); const es = [...m.entries()].sort((x, y) => x[1] - y[1]); let out = \"\"; for (const [k, v] of es) {{ out = out + k + v; }}"
+    );
+    assert_eq!(shown(&body, "out"), "c0a1b2");
+}
+
+#[test]
+fn for_of_over_a_map_with_one_name_binds_a_pair() {
+    let body = format!("{MAP} let out = \"\"; for (const e of m) {{ out = out + e[0] + e[1]; }}");
+    assert_eq!(shown(&body, "out"), "a1b2");
+}
+
+#[test]
+fn tuple_annotations_literals_and_json() {
+    let body = "const p: [string, number] = [\"x\", 3]; const ps: [string, number][] = [p, [\"y\", 4]]; const j = JSON.stringify(ps);";
+    let main = show(body, "j + \"|\" + ps[1][0]").replace("from \"plinth:ui\";", "from \"plinth:ui\";
+import { JSON } from \"plinth:core\";");
+    assert_eq!(text_of(&run(&main), ControlKind::Text), "[[\"x\",3],[\"y\",4]]|y");
+}
+
+#[test]
+fn map_entries_survive_gc_stress() {
+    let main = show(
+        &format!("{MAP} const es = m.entries(); m.clear();"),
+        "es.map((e) => e[0] + e[1]).join(\",\")",
+    );
+    assert_eq!(text_of(&run_with(&main, true), ControlKind::Text), "a1,b2");
+}
+
+#[test]
+fn tuple_index_must_be_a_literal_in_range() {
+    let body = format!("{MAP} const e = m.entries()[0]; const i = 1; const a = e[2]; const b = e[i];");
+    assert_eq!(codes(&show(&body, "\"\"")), ["PL2011", "PL2011"]);
+}
+
+#[test]
+fn tuple_literal_with_the_wrong_length_is_rejected() {
+    assert_eq!(codes(&show("const p: [string, number] = [\"x\"];", "\"\"")), ["PL3001"]);
+}

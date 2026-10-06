@@ -587,7 +587,9 @@ fn set_for_of_rejects_a_key_value_pattern() {
 
 #[test]
 fn map_for_of_needs_a_key_value_pattern() {
-    let main = with_app("const m = new Map<string, number>(); for (const x of m) {}");
+    // `for (const e of m)` is valid (`e` is a `[K, V]` pair); an object
+    // pattern is not.
+    let main = with_app("const m = new Map<string, number>(); for (const { x } of m) {}");
     assert_eq!(codes(&main), ["PL3001"]);
 }
 

@@ -83,6 +83,10 @@ impl Checker<'_> {
                         let i = self.coerce(i, &Type::Number);
                         TExpr::new(TExprKind::Index(bx(o), bx(i)), *elem, span)
                     }
+                    Type::Struct(sid) if self.tuple_elems(sid).is_some() => match self.tuple_index(sid, index) {
+                        Some((i, ty)) => TExpr::new(TExprKind::Field(bx(o), sid, i), ty, span),
+                        None => TExpr::new(TExprKind::Null, Type::Error, span),
+                    },
                     Type::Error => TExpr::new(TExprKind::Null, Type::Error, span),
                     other => {
                         let msg = format!("cannot index a value of type `{}`", self.show(&other));
@@ -1293,6 +1297,20 @@ impl Checker<'_> {
         }
     }
 
+    /// `t[i]` on a tuple: `i` must be a number literal in range, so the
+    /// read is a plain field read with a known type.
+    fn tuple_index(&mut self, sid: crate::types::StructId, index: &Expr) -> Option<(u32, Type)> {
+        let tys = self.tuple_elems(sid).unwrap_or_default();
+        match index.kind {
+            ExprKind::Num(n) if n >= 0.0 && n.fract() == 0.0 && (n as usize) < tys.len() => Some((n as u32, tys[n as usize].clone())),
+            _ => {
+                let msg = format!("an index into `{}` must be a number literal from 0 to {}", self.prog.structs[sid as usize].name, tys.len().saturating_sub(1));
+                self.err_help(code::COMPUTED_ACCESS, index.span, msg, "write `t[0]`, or destructure: `const [a, b] = t`");
+                None
+            }
+        }
+    }
+
     fn num_lit(&self, v: f64, span: Span) -> TExpr {
         TExpr::new(TExprKind::Num(v), Type::Number, span)
     }
@@ -1885,6 +1903,20 @@ impl Checker<'_> {
                     self.err(code::TYPE_MISMATCH, *pspan, "`for…of` over a `Map` needs `[key, value]` with simple names");
                 }
             },
+            (Mode::Entries, ast::Pattern::Ident(name, pspan)) => {
+                // `for (const e of m)`: `e` is a `[K, V]` pair.
+                let vt = v_ty.clone().unwrap_or(Type::Error);
+                let pair = self.tuple_struct(&[k_ty.clone(), vt.clone()]);
+                let values = self.kv_field(&obj_r, sid, 1, span);
+                let lit = TExpr::new(
+                    TExprKind::StructLit(pair, vec![self.arr_get_at(keys.clone(), i_r.clone(), k_ty.clone(), span), self.arr_get_at(values, i_r.clone(), vt, span)]),
+                    Type::Struct(pair),
+                    span,
+                );
+                let v = self.new_var(name, Type::Struct(pair), mutable);
+                self.define(name, *pspan, Binding::Var(v));
+                prologue.push(TStmt::Let(v, Some(lit)));
+            }
             (Mode::Entries, other) => {
                 self.err(code::TYPE_MISMATCH, other.span(), "`for…of` over a `Map` needs `[key, value]`, for example `for (const [k, v] of m)`");
             }
@@ -2058,12 +2090,49 @@ impl Checker<'_> {
                 self.no_args(args, span);
                 self.arr_copy_of(self.kv_field(&o, sid, 1, span), span)
             }
+            // `.entries()` as a plain `[K, V][]` (a tuple is a 2-field
+            // struct, see `tuple_struct`): an index loop that pushes one new
+            // pair per entry. The pairs are copies, so a change to the
+            // result does not change the map.
+            "entries" => {
+                self.no_args(args, span);
+                let pair = self.tuple_struct(&[k.clone(), v.clone()]);
+                let pair_ty = Type::Struct(pair);
+                let res_ty = Type::Array(Box::new(pair_ty.clone()));
+                let var = |id: VarId, ty: &Type| TExpr::new(TExprKind::Var(id), ty.clone(), span);
+                let obj_v = self.temp(o.ty.clone());
+                let obj_r = var(obj_v, &o.ty);
+                let keys = self.kv_field(&obj_r, sid, 0, span);
+                let values = self.kv_field(&obj_r, sid, 1, span);
+                let res_v = self.temp(res_ty.clone());
+                let len_v = self.temp(Type::Number);
+                let i_v = self.temp(Type::Number);
+                let i_r = var(i_v, &Type::Number);
+                let lit = TExpr::new(
+                    TExprKind::StructLit(pair, vec![self.arr_get_at(keys.clone(), i_r.clone(), k.clone(), span), self.arr_get_at(values, i_r.clone(), v.clone(), span)]),
+                    pair_ty,
+                    span,
+                );
+                let push = self.arr_push_discard(var(res_v, &res_ty), lit, span);
+                let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(var(len_v, &Type::Number))), Type::Bool, span);
+                let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r), bx(self.num_lit(1.0, span))), Type::Number, span);
+                let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
+                let id = self.prog.new_loop();
+                let stmts = vec![
+                    TStmt::Let(obj_v, Some(o)),
+                    TStmt::Let(res_v, Some(TExpr::new(TExprKind::ArrayLit(Vec::new()), res_ty.clone(), span))),
+                    TStmt::Let(len_v, Some(self.arr_len_of(keys, span))),
+                    TStmt::Let(i_v, Some(self.num_lit(0.0, span))),
+                    TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![push] },
+                ];
+                TExpr::new(TExprKind::Block(stmts, bx(var(res_v, &res_ty))), res_ty, span)
+            }
             _ => {
                 self.err_help(
                     code::NO_PROPERTY,
                     prop_span,
                     format!("`Map` has no method `{prop}`"),
-                    "use `get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys` or `values`",
+                    "use `get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys`, `values` or `entries`",
                 );
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
@@ -2178,6 +2247,30 @@ impl Checker<'_> {
     // -- Literals ---------------------------------------------------------
 
     fn array_lit(&mut self, elems: &[(bool, Expr)], expected: Option<&Type>, span: Span) -> TExpr {
+        // `["a", 1]` where a tuple `[string, number]` is expected.
+        let tuple = match expected {
+            Some(Type::Struct(sid)) => Some(*sid),
+            Some(Type::Nullable(inner)) => match &**inner {
+                Type::Struct(sid) => Some(*sid),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(sid) = tuple
+            && let Some(tys) = self.tuple_elems(sid)
+        {
+            if elems.len() != tys.len() || elems.iter().any(|(spread, _)| *spread) {
+                let msg = format!("`{}` needs exactly {} element(s) and no spread", self.prog.structs[sid as usize].name, tys.len());
+                self.err(code::TYPE_MISMATCH, span, msg);
+                return TExpr::new(TExprKind::Null, Type::Error, span);
+            }
+            let mut values = Vec::new();
+            for ((_, e), t) in elems.iter().zip(&tys) {
+                let te = self.expr_with(e, t);
+                values.push(self.coerce(te, t));
+            }
+            return TExpr::new(TExprKind::StructLit(sid, values), Type::Struct(sid), span);
+        }
         let mut elem_ty = match expected {
             Some(Type::Array(t)) => Some((**t).clone()),
             Some(Type::Nullable(inner)) => match &**inner {
@@ -2655,6 +2748,10 @@ impl Checker<'_> {
                         let i = self.coerce(i, &Type::Number);
                         Some((Place::Index(bx(o), bx(i)), *elem))
                     }
+                    Type::Struct(sid) if self.tuple_elems(sid).is_some() => {
+                        let (i, ty) = self.tuple_index(sid, index)?;
+                        Some((Place::Field(bx(o), sid, i), ty))
+                    }
                     Type::Error => None,
                     other => {
                         let msg = format!("cannot index a value of type `{}`", self.show(&other));
@@ -2843,18 +2940,26 @@ impl Checker<'_> {
     /// a chain of concatenations in declaration order.
     fn json_stringify_struct(&mut self, value: TExpr, sid: crate::types::StructId, span: Span) -> TExpr {
         let fields = self.prog.structs[sid as usize].fields.clone();
+        // A tuple is a JSON array, as in JS.
+        let tuple = self.tuple_elems(sid).is_some();
+        let (open, close) = if tuple { ("[", "]") } else { ("{", "}") };
         let v = self.temp(value.ty.clone());
         let v_r = TExpr::new(TExprKind::Var(v), value.ty.clone(), span);
-        let mut acc = TExpr::new(TExprKind::Str("{".into()), Type::String, span);
+        let mut acc = TExpr::new(TExprKind::Str(open.into()), Type::String, span);
         for (i, f) in fields.iter().enumerate() {
-            let prefix = if i == 0 { format!("\"{}\":", f.name) } else { format!(",\"{}\":", f.name) };
+            let prefix = match (tuple, i) {
+                (true, 0) => String::new(),
+                (true, _) => ",".into(),
+                (false, 0) => format!("\"{}\":", f.name),
+                (false, _) => format!(",\"{}\":", f.name),
+            };
             let field_val = TExpr::new(TExprKind::Field(bx(v_r.clone()), sid, i as u32), f.ty.clone(), span);
             let field_str = self.json_stringify_value(field_val, span);
             let prefix_e = TExpr::new(TExprKind::Str(prefix), Type::String, span);
             let piece = TExpr::new(TExprKind::Concat(bx(prefix_e), bx(field_str)), Type::String, span);
             acc = TExpr::new(TExprKind::Concat(bx(acc), bx(piece)), Type::String, span);
         }
-        let close = TExpr::new(TExprKind::Str("}".into()), Type::String, span);
+        let close = TExpr::new(TExprKind::Str(close.into()), Type::String, span);
         let result = TExpr::new(TExprKind::Concat(bx(acc), bx(close)), Type::String, span);
         TExpr::new(TExprKind::Block(vec![TStmt::Let(v, Some(value))], bx(result)), Type::String, span)
     }
@@ -3011,6 +3116,11 @@ impl Checker<'_> {
             }
             Type::Nullable(inner) => self.json_decode_nullable(inner, span),
             Type::Array(elem) => self.json_decode_array(elem, span),
+            Type::Struct(sid) if self.tuple_elems(*sid).is_some() => {
+                let msg = format!("`JSON.parse` does not support the tuple type `{}`", self.show(ty));
+                self.err_help(code::TYPE_MISMATCH, span, msg, "parse an interface with named fields");
+                TExpr::new(TExprKind::Null, Type::Error, span)
+            }
             Type::Struct(sid) => self.json_decode_struct(*sid, span),
             Type::Map(k, v) if **k == Type::String => self.json_decode_map(v, span),
             Type::Error => TExpr::new(TExprKind::Null, Type::Error, span),

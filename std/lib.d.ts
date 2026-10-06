@@ -74,6 +74,8 @@ declare class Map<K, V> {
   forEach(f: (value: V, key: K) => void): void;
   keys(): K[];
   values(): V[];
+  /** A new array of `[key, value]` pairs, in insertion order. */
+  entries(): [K, V][];
   readonly size: number;
 }
 

@@ -119,6 +119,8 @@ pub enum TypeAnn {
     Union(Vec<TypeAnn>, Span),
     Func { params: Vec<(String, TypeAnn, bool)>, ret: Box<TypeAnn>, span: Span },
     Object(Vec<FieldAnn>, Span),
+    /// `[A, B]`: a fixed-length tuple (no optional or rest elements).
+    Tuple(Vec<TypeAnn>, Span),
 }
 
 impl TypeAnn {
@@ -134,7 +136,8 @@ impl TypeAnn {
             | TypeAnn::BoolLit(_, s)
             | TypeAnn::Array(_, s)
             | TypeAnn::Union(_, s)
-            | TypeAnn::Object(_, s) => *s,
+            | TypeAnn::Object(_, s)
+            | TypeAnn::Tuple(_, s) => *s,
             TypeAnn::Named { span, .. } | TypeAnn::Func { span, .. } => *span,
         }
     }
