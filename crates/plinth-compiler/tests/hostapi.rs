@@ -141,3 +141,68 @@ fn undeclared_capability_is_a_compile_error() {
     let front = plinth_compiler::driver::frontend_with_capabilities(&fs, &[]);
     assert!(front.diags.iter().any(|d| d.code == "PL1007"), "expected PL1007, got: {:?}", front.diags.iter().map(|d| d.code).collect::<Vec<_>>());
 }
+
+/// `plinth:time`'s date/time additions (docs/GAPS.md gap #5), end to end:
+/// `dateParts`, `makeDate`, `formatDate`, `toISOString` and `parseDate`,
+/// against a fixed, fake local offset (the runner's `timezone-offset` is
+/// injectable, SPEC.md §8.5, for exactly this).
+#[test]
+fn date_time_round_trip_with_a_fake_offset() {
+    let fs = MemFs::default().with(
+        "app/main.tsx",
+        "\
+import { app, Screen, Text } from \"plinth:ui\";
+import { dateParts, makeDate, formatDate, toISOString, parseDate } from \"plinth:time\";
+
+function Home() {
+  // 2024-03-05T09:07:03.045Z, read back with a fake -300 (US Eastern) local offset.
+  const ms = 1709629623045;
+  const p = dateParts(ms, true);
+  const local = dateParts(ms, false);
+  const made = makeDate(2024, 3, 5, 4, 7, 3);
+  const parsed = parseDate(\"2024-03-05T09:07:03.045Z\");
+  const nums = [
+    p.year, p.month, p.day, p.hour, p.minute, p.second, p.millisecond, p.weekday,
+    local.hour, local.day,
+    made === ms - 45 ? 1 : 0,
+    parsed === ms ? 1 : 0,
+  ];
+  let parts = \"\";
+  for (const n of nums) {
+    parts = parts === \"\" ? \"\" + n : parts + \",\" + n;
+  }
+  return (
+    <Screen title=\"Home\">
+      <Text>{parts + \"|\" + formatDate(ms, \"YYYY-MM-DD HH:mm:ss\", true) + \"|\" + toISOString(ms)}</Text>
+    </Screen>
+  );
+}
+export default app({ screens: { home: { title: \"Home\", component: Home } } });
+",
+    );
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &[]).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| panic!("{}", front.diags.iter().map(|d| front.sources.render(d)).collect::<Vec<_>>().join("\n")));
+
+    let runner = Runner::new().unwrap();
+    let policy = Policy::new(Vec::<String>::new());
+    let kv = plinth_runner_wasmtime::kv::Kv::in_memory();
+    let clipboard: Box<dyn Clipboard> = Box::new(MemoryClipboard::default());
+    let mut guest = runner.load_with_policy(&artifact.component, Limits::default(), policy, kv, clipboard).unwrap();
+    guest.set_fake_timezone_offset(-300);
+
+    let mut tree = Tree::new();
+    let commits = guest.init(&[]).unwrap();
+    for log in guest.take_logs() {
+        eprintln!("guest: {log}");
+    }
+    for commit in commits {
+        let errors = tree.apply(&commit).unwrap();
+        assert!(errors.is_empty(), "op errors: {errors:?}");
+    }
+    let text = text_of(&tree);
+    let (parts, rest) = text.split_once('|').unwrap();
+    let (formatted, iso) = rest.split_once('|').unwrap();
+    assert_eq!(parts, "2024,3,5,9,7,3,45,2,4,5,1,1", "UTC/local dateParts, makeDate and parseDate round trip");
+    assert_eq!(formatted, "2024-03-05 09:07:03");
+    assert_eq!(iso, "2024-03-05T09:07:03.045Z");
+}
