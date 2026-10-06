@@ -22,6 +22,34 @@ pub enum Item {
     ExportDefault(Expr),
     /// `export { a, b as c }`.
     ExportNames(Vec<(String, String, Span)>),
+    /// A basic class (SPEC.md §4.2, v0: no `extends`).
+    Class(ClassDecl),
+}
+
+#[derive(Debug, Clone)]
+pub struct ClassDecl {
+    pub name: String,
+    pub fields: Vec<ClassField>,
+    /// `None` is an error (a class needs exactly one constructor).
+    pub ctor: Option<CtorDecl>,
+    pub methods: Vec<FuncDecl>,
+    pub exported: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClassField {
+    pub name: String,
+    pub ty: TypeAnn,
+    pub init: Option<Expr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct CtorDecl {
+    pub params: Vec<Param>,
+    pub body: Vec<Stmt>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -258,8 +286,10 @@ pub enum ExprKind {
     Func(Box<FuncDecl>),
     Jsx(Box<JsxElement>),
     /// `new Map<K, V>()` or `new Set<T>()` (HANDOFF.md item 5). No other
-    /// `new` expression is supported.
+    /// built-in `new` expression is supported.
     New(String, Vec<TypeAnn>),
+    /// `new C(args)`: construction of a user class (SPEC.md §4.2).
+    NewInstance(String, Vec<Expr>),
 }
 
 #[derive(Debug, Clone)]

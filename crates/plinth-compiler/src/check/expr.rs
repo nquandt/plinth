@@ -164,6 +164,7 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Jsx(Box::new(j)), Type::Element, span)
             }
             ExprKind::New(name, type_args) => self.new_map_or_set(name, type_args, expected, span),
+            ExprKind::NewInstance(name, args) => self.new_instance(name, args, span),
         }
     }
 
@@ -270,6 +271,15 @@ impl Checker<'_> {
                 self.err(code::UNKNOWN_NAME, span, format!("`{name}` is a type, not a value"));
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
+            None if name == "this" => {
+                self.err_help(
+                    code::THIS,
+                    span,
+                    "`this` is not allowed outside a method or constructor",
+                    "move this code into a method, or pass the value in as a parameter",
+                );
+                TExpr::new(TExprKind::Null, Type::Error, span)
+            }
             None => {
                 let help = match name {
                     "document" | "window" | "fetch" | "process" | "globalThis" | "setTimeout" | "localStorage" => {
@@ -351,6 +361,11 @@ impl Checker<'_> {
             Type::Struct(sid) => match self.prog.structs[sid as usize].field(prop).map(|(i, f)| (i, f.ty.clone())) {
                 Some((idx, ty)) => TExpr::new(TExprKind::Field(bx(o), sid, idx as u32), ty, span),
                 None => {
+                    if self.classes.get(&sid).is_some_and(|c| c.methods.contains_key(prop)) {
+                        let msg = format!("`{prop}` is a method; it cannot be used without calling it");
+                        self.err_help(code::UNBOUND_METHOD, prop_span, msg, format!("write `() => c.{prop}()`"));
+                        return TExpr::new(TExprKind::Null, Type::Error, span);
+                    }
                     let s = &self.prog.structs[sid as usize];
                     let names: Vec<&str> = s.fields.iter().map(|f| f.name.as_str()).collect();
                     let msg = format!("`{}` has no field `{prop}`", s.name);
@@ -491,6 +506,45 @@ impl Checker<'_> {
         if !args.is_empty() {
             self.err(code::ARG_COUNT, span, "this call takes no arguments");
         }
+    }
+
+    /// Checks the arguments of a method call (`c.m(a)`), with `this` as the
+    /// lowered function's first argument (SPEC.md §4.2: static dispatch).
+    fn method_args(&mut self, ft: &Rc<FuncType>, this: TExpr, args: &[Expr], span: Span) -> Vec<TExpr> {
+        let this = self.coerce(this, &ft.params[0]);
+        let rest = FuncType { params: ft.params[1..].to_vec(), required: ft.required.saturating_sub(1), ret: ft.ret.clone() };
+        let mut out = vec![this];
+        out.extend(self.call_args(&rest, args, span));
+        out
+    }
+
+    /// `new C(args)`: calls the class's lowered constructor function.
+    fn new_instance(&mut self, name: &str, args: &[Expr], span: Span) -> TExpr {
+        let sid = match self.lookup(name) {
+            Some(Binding::Type(Type::Struct(sid))) if self.classes.contains_key(&sid) => sid,
+            Some(Binding::Type(_)) => {
+                self.err_help(code::CLASS, span, format!("`{name}` is not a class"), "`new` only works on a class");
+                return TExpr::new(TExprKind::Null, Type::Error, span);
+            }
+            Some(_) => {
+                self.err(code::NOT_CALLABLE, span, format!("`{name}` cannot be constructed with `new`"));
+                return TExpr::new(TExprKind::Null, Type::Error, span);
+            }
+            None => {
+                self.err(code::UNKNOWN_NAME, span, format!("cannot find name `{name}`"));
+                return TExpr::new(TExprKind::Null, Type::Error, span);
+            }
+        };
+        let Some(ctor) = self.classes[&sid].ctor else {
+            // Already reported ("a class needs a constructor") when declared.
+            for a in args {
+                self.expr(a, None);
+            }
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        };
+        let ft = self.func_type(ctor, span);
+        let targs = self.call_args(&ft, args, span);
+        TExpr::new(TExprKind::Call(ctor, targs), Type::Struct(sid), span)
     }
 
     /// Checks arguments against a signature. Missing optional arguments
@@ -644,7 +698,12 @@ impl Checker<'_> {
             Type::Array(elem) => self.array_method(o, (*elem).clone(), prop, prop_span, args, span),
             Type::Map(k, v) => self.map_method(o, &k, &v, prop, prop_span, args, span),
             Type::Set(t) => self.set_method(o, &t, prop, prop_span, args, span),
-            Type::Struct(_) => {
+            Type::Struct(sid) => {
+                if let Some(&fid) = self.classes.get(&sid).and_then(|c| c.methods.get(prop)) {
+                    let ft = self.func_type(fid, prop_span);
+                    let targs = self.method_args(&ft, o, args, span);
+                    return TExpr::new(TExprKind::Call(fid, targs), ft.ret.clone(), span);
+                }
                 // A function-typed field: `obj.f(x)`.
                 let field = self.property(o, prop, prop_span, span);
                 match field.ty.clone() {

@@ -188,6 +188,16 @@ pub struct Checker<'d> {
     /// Instantiations of generic interfaces so far:
     /// `(module, interface index, type arguments) -> monomorphized struct`.
     interface_instantiations: Vec<(usize, usize, Vec<Type>, types::StructId)>,
+    /// Basic classes (SPEC.md §4.2): the nominal struct's fields are the
+    /// class fields; each method lowers to a top-level function with a
+    /// synthetic `this` first parameter (static dispatch, v0: no `extends`).
+    classes: HashMap<types::StructId, ClassInfo>,
+}
+
+struct ClassInfo {
+    /// `None` only right after a "a class needs a constructor" error.
+    ctor: Option<FuncId>,
+    methods: HashMap<String, FuncId>,
 }
 
 struct GenericTemplate {
@@ -223,6 +233,7 @@ pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>, ca
         instantiations: Vec::new(),
         alias_instantiations: Vec::new(),
         interface_instantiations: Vec::new(),
+        classes: HashMap::new(),
     };
     c.prog.module_count = modules.len() as u32;
     for (i, m) in modules.iter().enumerate() {
@@ -307,11 +318,22 @@ impl Checker<'_> {
             }
         }
 
-        // 2. Types: enums and interfaces first (by name), then fields.
+        // 2. Types: enums, interfaces and classes first (by name), then
+        // fields/methods.
         let mut interfaces = Vec::new();
+        let mut classes = Vec::new();
         for item in &src.ast.items {
             match item {
                 Item::Enum(e) => self.declare_enum(e),
+                Item::Class(c) => {
+                    let id = self.prog.structs.len() as types::StructId;
+                    self.prog.structs.push(StructDef { name: c.name.clone(), fields: Vec::new() });
+                    self.define(&c.name, c.span, Binding::Type(Type::Struct(id)));
+                    if c.exported {
+                        self.exports[m].insert(c.name.clone(), Binding::Type(Type::Struct(id)));
+                    }
+                    classes.push((id, c));
+                }
                 Item::Interface(i) if i.type_params.is_empty() => {
                     let id = self.prog.structs.len() as types::StructId;
                     self.prog.structs.push(StructDef { name: i.name.clone(), fields: Vec::new() });
@@ -343,6 +365,9 @@ impl Checker<'_> {
         for (id, i) in interfaces {
             let fields = self.fields(&i.fields);
             self.prog.structs[id as usize].fields = fields;
+        }
+        for (id, c) in classes {
+            self.declare_class(id, c, m);
         }
 
         // 3. Top-level functions are hoisted.
@@ -1133,6 +1158,163 @@ impl Checker<'_> {
         self.pending.insert(fid, PendingFunc { decl: f.clone(), module: m });
     }
 
+    // -- Classes (SPEC.md §4.2) --------------------------------------------
+
+    /// Fills in a class's fields, lowers its methods to top-level functions
+    /// (a synthetic `this: ClassName` first parameter, checked lazily like
+    /// any other top-level function), and checks its constructor eagerly
+    /// (so it can bind `this` and build the instance; as a result a
+    /// constructor cannot call a free function declared later in the same
+    /// file — forward-declare it, or move the class after it).
+    fn declare_class(&mut self, sid: types::StructId, c: &ast::ClassDecl, m: usize) {
+        let mut fields: Vec<Field> = Vec::new();
+        let mut inits: Vec<Option<ast::Expr>> = Vec::new();
+        for f in &c.fields {
+            if fields.iter().any(|x| x.name == f.name) {
+                self.err(code::DUPLICATE, f.span, format!("duplicate field `{}`", f.name));
+                continue;
+            }
+            let ty = self.resolve_type(&f.ty);
+            fields.push(Field { name: f.name.clone(), ty, optional: false });
+            inits.push(f.init.clone());
+        }
+        self.prog.structs[sid as usize].fields = fields.clone();
+
+        let mut methods = HashMap::new();
+        for meth in &c.methods {
+            let Some((name, name_span)) = meth.name.clone() else { continue };
+            if methods.contains_key(&name) {
+                self.err(code::DUPLICATE, name_span, format!("duplicate method `{name}`"));
+                continue;
+            }
+            let mangled = format!("{}#{name}", c.name);
+            let mut synth = meth.clone();
+            synth.name = Some((mangled.clone(), name_span));
+            synth.exported = false;
+            synth.is_default = false;
+            synth.params.insert(0, this_param(&c.name, meth.span));
+            self.declare_top_func(&synth, m);
+            let Some(Binding::Func(fid)) = self.module_scopes[m].get(&mangled).cloned() else { unreachable!() };
+            methods.insert(name, fid);
+        }
+        self.classes.insert(sid, ClassInfo { ctor: None, methods });
+
+        // A class with no explicit constructor gets a trivial one that
+        // builds the instance from the field initializers alone (every
+        // field needs one, or a zero value, in that case).
+        let default_ctor = ast::CtorDecl { params: Vec::new(), body: Vec::new(), span: c.span };
+        let ctor_ast = c.ctor.as_ref().unwrap_or(&default_ctor);
+        if ctor_ast.body.iter().any(stmt_has_return) {
+            self.err_help(
+                code::CLASS,
+                ctor_ast.span,
+                "a constructor cannot `return` a value",
+                "remove the `return`; the instance returns automatically",
+            );
+        }
+
+        let fid = self.prog.new_func(FuncDef {
+            name: format!("{}.constructor", c.name),
+            kind: FuncKind::TopLevel,
+            params: Vec::new(),
+            ret: Type::Struct(sid),
+            body: Vec::new(),
+            span: ctor_ast.span,
+        });
+        let saved_func = std::mem::replace(&mut self.fx.func, fid);
+        let mut param_vars = Vec::new();
+        for p in &ctor_ast.params {
+            let ty = match &p.ty {
+                Some(t) => {
+                    let ty = self.resolve_type(t);
+                    if p.optional { self.nullable(ty, p.span) } else { ty }
+                }
+                None => {
+                    self.err_help(code::CANNOT_INFER, p.span, "a constructor parameter needs a type", "add `: type`");
+                    Type::Error
+                }
+            };
+            let pname = match &p.pattern {
+                ast::Pattern::Ident(n, _) => n.clone(),
+                _ => format!("$p{}", param_vars.len()),
+            };
+            param_vars.push(self.prog.new_var(VarInfo {
+                name: pname,
+                ty,
+                owner: fid,
+                mutable: true,
+                module: None,
+                in_loop: None,
+                captured: false,
+            }));
+        }
+        self.fx.func = saved_func;
+        self.prog.funcs[fid as usize].params = param_vars.clone();
+
+        let saved_fx = std::mem::replace(
+            &mut self.fx,
+            FnCx { func: fid, scopes: vec![Scope::default()], loops: Vec::new(), ret: Some(Type::Struct(sid)), inferred: None, reactive: ReactiveCtx::Callback },
+        );
+        let mut prologue = Vec::new();
+        for (p, v) in ctor_ast.params.iter().zip(&param_vars) {
+            self.bind_param(p, *v, &mut prologue);
+        }
+        // Each field's value: its class-level initializer (evaluated before
+        // `this` exists, so it cannot read `this`), or a type-appropriate
+        // zero value for a field the constructor body assigns right away
+        // (the `constructor(x: number) { this.x = x; }` pattern).
+        let mut field_vals = Vec::new();
+        for (f, init) in fields.iter().zip(&inits) {
+            let v = match init {
+                Some(e) => {
+                    let te = self.expr(e, Some(&f.ty));
+                    self.coerce(te, &f.ty)
+                }
+                None => match self.zero_value(&f.ty, ctor_ast.span) {
+                    Some(v) => v,
+                    None => {
+                        let msg = format!("field `{}` needs an initializer", f.name);
+                        self.err_help(code::MISSING_FIELD, ctor_ast.span, msg, "give it a default value, or assign it in the constructor right away");
+                        TExpr::new(TExprKind::Null, Type::Error, ctor_ast.span)
+                    }
+                },
+            };
+            field_vals.push(v);
+        }
+        let this_val = TExpr::new(TExprKind::StructLit(sid, field_vals), Type::Struct(sid), ctor_ast.span);
+        let this_var = self.new_var("this", Type::Struct(sid), true);
+        self.define("this", ctor_ast.span, Binding::Var(this_var));
+        prologue.push(TStmt::Let(this_var, Some(this_val)));
+
+        let mut body = prologue;
+        body.extend(self.block_stmts(&ctor_ast.body));
+        body.push(TStmt::Return(Some(TExpr::new(TExprKind::Var(this_var), Type::Struct(sid), ctor_ast.span))));
+
+        self.fx.scopes.pop();
+        self.fx = saved_fx;
+        self.prog.funcs[fid as usize].body = body;
+        self.classes.get_mut(&sid).unwrap().ctor = Some(fid);
+    }
+
+    /// A type-appropriate default value for a class field without an
+    /// initializer. `None` for a type with no safe zero value (structs,
+    /// functions, maps, sets, unions): those need an explicit initializer.
+    fn zero_value(&mut self, ty: &Type, span: Span) -> Option<TExpr> {
+        match ty {
+            Type::Number | Type::Int => Some(TExpr::new(TExprKind::Num(0.0), ty.clone(), span)),
+            Type::Bool => Some(TExpr::new(TExprKind::Bool(false), ty.clone(), span)),
+            Type::String => Some(TExpr::new(TExprKind::Str(String::new()), ty.clone(), span)),
+            Type::Enum(_) => Some(TExpr::new(TExprKind::Num(0.0), ty.clone(), span)),
+            Type::Array(_) => Some(TExpr::new(TExprKind::ArrayLit(Vec::new()), ty.clone(), span)),
+            Type::Nullable(_) | Type::Element => {
+                let n = TExpr::new(TExprKind::Null, Type::Null, span);
+                Some(self.coerce(n, ty))
+            }
+            Type::Error => Some(TExpr::new(TExprKind::Null, Type::Error, span)),
+            _ => None,
+        }
+    }
+
     /// Registers a generic top-level function as a template: it is checked
     /// (once per distinct type arguments) only when a call site
     /// instantiates it (HANDOFF.md item 3).
@@ -1442,6 +1624,32 @@ fn contains_break(stmts: &[TStmt]) -> bool {
         TStmt::Block(b) => contains_break(b),
         _ => false,
     })
+}
+
+/// The synthetic `this: ClassName` first parameter of a lowered method.
+fn this_param(class_name: &str, span: Span) -> ast::Param {
+    ast::Param {
+        pattern: ast::Pattern::Ident("this".to_string(), span),
+        ty: Some(TypeAnn::Named { name: class_name.to_string(), args: Vec::new(), span }),
+        default: None,
+        optional: false,
+        span,
+    }
+}
+
+/// True if `s` (or something nested in it, not counting a nested function
+/// or arrow body) is a `return` statement.
+fn stmt_has_return(s: &ast::Stmt) -> bool {
+    use ast::StmtKind as K;
+    match &s.kind {
+        K::Return(_) => true,
+        K::Block(b) => b.iter().any(stmt_has_return),
+        K::If(_, a, b) => stmt_has_return(a) || b.as_deref().is_some_and(stmt_has_return),
+        K::While(_, b) | K::DoWhile(b, _) => stmt_has_return(b),
+        K::For { body, .. } | K::ForOf { body, .. } => stmt_has_return(body),
+        K::Switch(_, cases) => cases.iter().any(|(_, b)| b.iter().any(stmt_has_return)),
+        _ => false,
+    }
 }
 
 fn display_name(decl: &ast::FuncDecl) -> &str {
