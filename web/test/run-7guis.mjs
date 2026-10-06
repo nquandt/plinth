@@ -187,10 +187,31 @@ async function flightBooker() {
   assert.equal(dialog.props.get(Prop.message), "You booked a return flight on 10.03.2027, back on 11.03.2027.");
 }
 
+async function timer() {
+  const h = await Harness.start("timer");
+  const progress = h.one(ControlKind.progress);
+  const slider = h.labeled(ControlKind.slider, "Duration");
+  assert.ok(h.texts().includes("0.0 s"));
+  h.send(slider, Event.change, 1);
+  for (let i = 0; i < 4; i++) h.tick();
+  assert.ok(h.texts().includes("0.4 s"), h.texts().join(" | "));
+  // The elapsed time stops at the duration.
+  for (let i = 0; i < 10; i++) h.tick();
+  assert.ok(h.texts().includes("1.0 s"), h.texts().join(" | "));
+  assert.equal(progress.props.get(Prop.value), 1);
+  // A longer duration lets it go on.
+  h.send(slider, Event.change, 2);
+  assert.equal(progress.props.get(Prop.value), 0.5);
+  h.tick();
+  assert.ok(h.texts().includes("1.1 s"), h.texts().join(" | "));
+  h.press("Reset");
+  assert.ok(h.texts().includes("0.0 s"));
+  assert.equal(progress.props.get(Prop.value), 0);
+}
 
 
 async function main() {
-  for (const [name, test] of Object.entries({ counter, temperature, flightBooker })) {
+  for (const [name, test] of Object.entries({ counter, temperature, flightBooker, timer })) {
     await test();
     console.log(`run-7guis.mjs: ${name} ok`);
   }

@@ -278,3 +278,57 @@ fn flight_booker_constraints() {
     h.press("Book");
     assert_eq!(h.node(dialog).str_prop(prop::MESSAGE), Some("You booked a one-way flight on 29.02.2028."));
 }
+
+#[test]
+fn timer_elapses_to_the_duration_and_resets() {
+    let art = build("timer");
+    let mut h = Harness::start(&art.component);
+    let progress = h.one(ControlKind::Progress, |_| true);
+    let slider = h.labeled(ControlKind::Slider, "Duration");
+    let fraction = |h: &Harness| h.node(progress).num_prop(prop::VALUE).unwrap_or(-1.0);
+    assert_eq!(fraction(&h), 0.0);
+    assert!(h.texts().contains(&"0.0 s".to_string()));
+    assert!(h.texts().contains(&"Duration: 15 s".to_string()));
+
+    // A short duration, so the test needs few ticks.
+    h.fire(slider, event::CHANGE, Value::Number(1.0));
+    assert!(h.texts().contains(&"Duration: 1 s".to_string()));
+    let mut t = Instant::now();
+    for _ in 0..5 {
+        t += Duration::from_millis(100);
+        h.fire_timers(t);
+    }
+    assert!(h.texts().contains(&"0.5 s".to_string()), "{:?}", h.texts());
+    assert!((fraction(&h) - 0.5).abs() < 1e-9);
+
+    // The UI stays responsive while the timer runs: an event between ticks
+    // is handled at once.
+    h.fire(slider, event::CHANGE, Value::Number(2.0));
+    assert!((fraction(&h) - 0.25).abs() < 1e-9);
+    h.fire(slider, event::CHANGE, Value::Number(1.0));
+
+    // The elapsed time stops at the duration.
+    for _ in 0..10 {
+        t += Duration::from_millis(100);
+        h.fire_timers(t);
+    }
+    assert!(h.texts().contains(&"1.0 s".to_string()), "{:?}", h.texts());
+    assert_eq!(fraction(&h), 1.0);
+
+    // A longer duration lets the timer go on.
+    h.fire(slider, event::CHANGE, Value::Number(2.0));
+    assert_eq!(fraction(&h), 0.5);
+    for _ in 0..3 {
+        t += Duration::from_millis(100);
+        h.fire_timers(t);
+    }
+    assert!(h.texts().contains(&"1.3 s".to_string()), "{:?}", h.texts());
+
+    // Reset starts again from zero.
+    h.press("Reset");
+    assert!(h.texts().contains(&"0.0 s".to_string()));
+    assert_eq!(fraction(&h), 0.0);
+    t += Duration::from_millis(100);
+    h.fire_timers(t);
+    assert!(h.texts().contains(&"0.1 s".to_string()), "{:?}", h.texts());
+}
