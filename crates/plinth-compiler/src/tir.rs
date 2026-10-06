@@ -137,6 +137,17 @@ pub enum NumOp {
     Pow,
 }
 
+/// Arithmetic on two `int` values (SPEC.md §4.2): stays `i32`, unlike
+/// `NumOp` which always works on `f64`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CmpOp {
     Eq,
@@ -218,6 +229,7 @@ pub enum TExprKind {
     /// A closure value for a function.
     Closure(FuncId),
     Num2(NumOp, Box<TExpr>, Box<TExpr>),
+    Int2(IntOp, Box<TExpr>, Box<TExpr>),
     Neg(Box<TExpr>),
     Not(Box<TExpr>),
     Cmp(CmpOp, EqKind, Box<TExpr>, Box<TExpr>),
@@ -228,6 +240,12 @@ pub enum TExprKind {
     Or(Box<TExpr>, Box<TExpr>),
     Cond(Box<TExpr>, Box<TExpr>, Box<TExpr>),
     IsNull(Box<TExpr>),
+    /// Reads a discriminated union's shared literal field (the first field
+    /// of every member struct, so every member has it at the same offset).
+    UnionTag(Box<TExpr>),
+    /// True if the union value's runtime member is one of these indices
+    /// into the `Type::Union` member list of the operand's static type.
+    UnionIs(Box<TExpr>, Vec<usize>),
     Coerce(Coercion, Box<TExpr>),
     /// Statements, then a value.
     Block(Vec<TStmt>, Box<TExpr>),

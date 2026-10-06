@@ -1,0 +1,476 @@
+//! Compiler language-gap tests (HANDOFF.md §9 item 3). Separate from
+//! `e2e.rs` so this agent does not collide with others editing that file.
+//!
+//! Diagnostic tests use an in-memory file system; behavior tests compile a
+//! small Plinth TS program and run it in wasmtime, like `e2e.rs` does for
+//! the example apps.
+
+use plinth_compiler::driver::{Frontend, MemFs, frontend};
+use plinth_protocol::ControlKind;
+use plinth_runner_wasmtime::{Limits, Runner};
+use plinth_ui::tree::Tree;
+
+const APP: &str = "\nexport default app({ screens: { home: { title: \"Home\", component: Home } } });\n";
+
+fn with_app(body: &str) -> String {
+    format!("import {{ app, Screen, Text, signal, computed, effect }} from \"plinth:ui\";\n{body}\nfunction Home() {{ return <Screen title=\"Home\" />; }}{APP}")
+}
+
+fn render(f: &Frontend) -> String {
+    f.diags.iter().map(|d| f.sources.render(d)).collect::<Vec<_>>().join("\n")
+}
+
+fn codes(main: &str) -> Vec<&'static str> {
+    let fs = MemFs::default().with("app/main.tsx", main);
+    let f = frontend(&fs);
+    eprintln!("{}", render(&f));
+    f.diags.iter().map(|d| d.code).collect()
+}
+
+/// Compiles a program and runs it in wasmtime; panics with the diagnostics
+/// on a compile error. Returns the initial semantic tree.
+fn run(main: &str) -> Tree {
+    let fs = MemFs::default().with("app/main.tsx", main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    let commits = guest.init(&[]).unwrap();
+    for log in guest.take_logs() {
+        eprintln!("guest: {log}");
+    }
+    for commit in commits {
+        let errors = tree.apply(&commit).unwrap();
+        assert!(errors.is_empty(), "op errors: {errors:?}");
+    }
+    tree
+}
+
+fn text_of(tree: &Tree, kind: ControlKind) -> String {
+    let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+    while let Some(id) = stack.pop() {
+        let node = tree.get(id).unwrap();
+        if node.kind == Some(kind) {
+            if let Some(t) = &node.text {
+                return t.clone();
+            }
+        }
+        stack.extend(node.children.iter());
+    }
+    panic!("no {kind:?} found");
+}
+
+// -- 1. Reactivity lint: a signal/computed read outside JSX, `computed` or
+// `effect`, but inside a component body, is not reactive (HANDOFF.md §6). --
+
+#[test]
+fn signal_read_in_component_body_warns() {
+    let main = with_app("const s = signal(1); const x = s();");
+    assert_eq!(codes(&main), ["PL2020"]);
+}
+
+#[test]
+fn computed_read_in_component_body_warns() {
+    let main = with_app("const s = signal(1); const c = computed(() => s()); const x = c();");
+    assert_eq!(codes(&main), ["PL2020"]);
+}
+
+#[test]
+fn signal_read_in_jsx_child_is_fine() {
+    let main = with_app("const s = signal(1);").replace(
+        "function Home() { return <Screen title=\"Home\" />; }",
+        "function Home() { return <Screen title=\"Home\"><Text>{s()}</Text></Screen>; }",
+    );
+    assert_eq!(codes(&main), Vec::<&str>::new());
+}
+
+#[test]
+fn signal_read_in_jsx_prop_is_fine() {
+    let main = r#"import { app, Screen, Text, signal } from "plinth:ui";
+const s = signal("hi");
+function Home() { return <Screen title={s()} />; }
+"#
+    .to_string()
+        + APP;
+    assert_eq!(codes(&main), Vec::<&str>::new());
+}
+
+#[test]
+fn signal_read_in_computed_is_fine() {
+    let main = with_app("const s = signal(1); const c = computed(() => s() + 1);");
+    assert_eq!(codes(&main), Vec::<&str>::new());
+}
+
+#[test]
+fn signal_read_in_effect_is_fine() {
+    let main = with_app("const s = signal(1); effect(() => { const x = s(); });");
+    assert_eq!(codes(&main), Vec::<&str>::new());
+}
+
+#[test]
+fn signal_read_in_event_handler_is_fine() {
+    let main = r#"import { app, Screen, Button, signal } from "plinth:ui";
+const s = signal(1);
+function Home() { return <Screen title="Home"><Button label="go" onPress={() => { const x = s(); }} /></Screen>; }
+"#
+    .to_string()
+        + APP;
+    assert_eq!(codes(&main), Vec::<&str>::new());
+}
+
+// -- 2. Discriminated unions + narrowing -------------------------------------
+
+const SHAPE: &str = r#"
+interface Circle { kind: "circle"; radius: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+function area(s: Shape): number {
+  if (s.kind === "circle") {
+    return s.radius * s.radius * 3;
+  } else {
+    return s.side * s.side;
+  }
+}
+"#;
+
+#[test]
+fn discriminant_narrowing_compiles_and_runs() {
+    let main = format!(
+        "import {{ app, Screen, Text }} from \"plinth:ui\";\n{SHAPE}\nfunction Home() {{ return <Screen title=\"Home\"><Text>{{area({{ kind: \"circle\", radius: 2 }})}}</Text></Screen>; }}{APP}"
+    );
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "12");
+}
+
+#[test]
+fn discriminant_narrowing_other_member() {
+    let main = format!(
+        "import {{ app, Screen, Text }} from \"plinth:ui\";\n{SHAPE}\nfunction Home() {{ return <Screen title=\"Home\"><Text>{{area({{ kind: \"square\", side: 3 }})}}</Text></Screen>; }}{APP}"
+    );
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "9");
+}
+
+#[test]
+fn union_field_without_narrowing_is_rejected() {
+    let main = format!(
+        "import {{ app, Screen }} from \"plinth:ui\";\n{SHAPE}\nfunction bad(s: Shape): number {{ return s.radius; }}\nfunction Home() {{ return <Screen title=\"Home\" />; }}{APP}"
+    );
+    assert_eq!(codes(&main), ["PL3004"]);
+}
+
+#[test]
+fn union_member_mismatch_is_rejected() {
+    // `number` is not a supported union member type yet.
+    let main = with_app("function f(x: number | { a: number }): number { return 1; }");
+    assert_eq!(codes(&main), ["PL2012"]);
+}
+
+#[test]
+fn typeof_narrows_string_or_object_union() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Circle { kind: "circle"; radius: number; }
+function describe(x: string | Circle): string {
+  if (typeof x === "string") {
+    return x;
+  } else {
+    return "circle " + x.radius;
+  }
+}
+function Home() {
+  return <Screen title="Home"><Text>{describe("hi")}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi");
+}
+
+#[test]
+fn typeof_narrows_to_object_branch() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Circle { kind: "circle"; radius: number; }
+function describe(x: string | Circle): string {
+  if (typeof x === "string") {
+    return x;
+  } else {
+    return "circle " + x.radius;
+  }
+}
+function Home() {
+  return <Screen title="Home"><Text>{describe({ kind: "circle", radius: 5 })}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "circle 5");
+}
+
+#[test]
+fn bare_typeof_outside_comparison_is_rejected() {
+    let main = with_app("function f(x: number): string { return typeof x; }");
+    assert_eq!(codes(&main), ["PL2012"]);
+}
+
+// -- 3. Generic functions (monomorphized) ------------------------------------
+
+#[test]
+fn generic_identity_monomorphizes_per_type() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function identity<T>(x: T): T { return x; }
+function Home() {
+  const n = identity(1);
+  const s = identity("hi");
+  return <Screen title="Home"><Text>{s + "-" + (n + 1)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi-2");
+}
+
+#[test]
+fn generic_array_helper_infers_from_argument() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function first<T>(xs: T[]): T { return xs[0]; }
+function Home() {
+  const xs: number[] = [5, 6, 7];
+  return <Screen title="Home"><Text>{first(xs)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "5");
+}
+
+#[test]
+fn generic_call_with_explicit_type_argument() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function identity<T>(x: T): T { return x; }
+function Home() {
+  return <Screen title="Home"><Text>{identity<string>("hey")}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hey");
+}
+
+#[test]
+fn generic_type_param_cannot_be_inferred() {
+    // `T` only appears in the return type: nothing to infer it from.
+    let main = with_app("function make<T>(): T[] { return []; }\nconst xs = make();");
+    assert_eq!(codes(&main), ["PL3007"]);
+}
+
+#[test]
+fn generic_function_used_as_a_value_is_rejected() {
+    let main = with_app("function identity<T>(x: T): T { return x; }\nconst f = identity;");
+    assert_eq!(codes(&main), ["PL2015"]);
+}
+
+#[test]
+fn generic_call_reuses_the_same_instantiation() {
+    // Calling with the same concrete type twice must still just work (no
+    // duplicate-definition or redeclaration errors from monomorphizing).
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function identity<T>(x: T): T { return x; }
+function Home() {
+  const a = identity(1);
+  const b = identity(2);
+  return <Screen title="Home"><Text>{a + b}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "3");
+}
+
+// -- 4. `int` from plinth:core ------------------------------------------------
+
+#[test]
+fn int_arithmetic_stays_int_and_displays() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { int } from "plinth:core";
+function Home() {
+  const a: int = 7;
+  const b = int(3);
+  const c = a + b * int(2) - b;
+  return <Screen title="Home"><Text>{c}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    // 7 + 3*2 - 3 = 10
+    assert_eq!(text_of(&tree, ControlKind::Text), "10");
+}
+
+#[test]
+fn int_widens_to_number_implicitly() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { int } from "plinth:core";
+function Home() {
+  const a: int = 7;
+  const n: number = a;
+  return <Screen title="Home"><Text>{n / 2}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "3.5");
+}
+
+#[test]
+fn number_needs_explicit_int_conversion() {
+    let main = with_app("const n: number = 5; const x: int = n;");
+    assert_eq!(codes(&main), ["PL3001"]);
+}
+
+#[test]
+fn int_div_by_int_stays_int_truncated() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { int } from "plinth:core";
+function Home() {
+  const a = int(7);
+  const b = int(2);
+  return <Screen title="Home"><Text>{a / b}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    // Integer division truncates: 7 / 2 = 3, unlike `number` division (3.5).
+    assert_eq!(text_of(&tree, ControlKind::Text), "3");
+}
+
+// -- 5. Map / Set -------------------------------------------------------------
+
+#[test]
+fn map_set_get_has_delete_and_size() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.set("a", 10);
+  const hasA = m.has("a");
+  const hasC = m.has("c");
+  const a = m.get("a");
+  const missing = m.get("z");
+  const deletedB = m.delete("b");
+  const deletedAgain = m.delete("b");
+  const size = m.size;
+  const av = a === null ? -1 : a;
+  const mv = missing === null ? -1 : missing;
+  const out = "" + hasA + "," + hasC + "," + av + "," + mv + "," + deletedB + "," + deletedAgain + "," + size;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    // a was overwritten to 10; b deleted once; c and z never existed.
+    assert_eq!(text_of(&tree, ControlKind::Text), "true,false,10,-1,true,false,1");
+}
+
+#[test]
+fn map_clear_empties_it() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.clear();
+  return <Screen title="Home"><Text>{m.size}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "0");
+}
+
+#[test]
+fn set_add_has_delete_and_size() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const s = new Set<number>();
+  s.add(1);
+  s.add(2);
+  s.add(1);
+  const has1 = s.has(1);
+  const has9 = s.has(9);
+  const deleted = s.delete(1);
+  const deletedAgain = s.delete(1);
+  const out = "" + has1 + "," + has9 + "," + deleted + "," + deletedAgain + "," + s.size;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    // Adding 1 twice is a no-op; after deleting 1 once, only 2 remains.
+    assert_eq!(text_of(&tree, ControlKind::Text), "true,false,true,false,1");
+}
+
+#[test]
+fn map_key_must_be_a_supported_kind() {
+    let main = with_app("const m = new Map<boolean[], number>();");
+    assert_eq!(codes(&main), ["PL2012"]);
+}
+
+#[test]
+fn map_new_without_type_args_or_context_cannot_infer() {
+    let main = with_app("const m = new Map();");
+    assert_eq!(codes(&main), ["PL3007"]);
+}
+
+#[test]
+fn map_infers_type_args_from_declared_variable_type() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { int } from "plinth:core";
+function Home() {
+  const m: Map<string, int> = new Map();
+  return <Screen title="Home"><Text>{m.size}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    // int is not a supported Map value type, but this still exercises
+    // inference-from-context before that check; use number instead.
+    let main = main.replace("Map<string, int>", "Map<string, number>");
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "0");
+}
+
+// -- Behavior smoke test: confirms the `run` harness works and the lint
+// does not fire on a normal counter-style program. -------------------------
+
+#[test]
+fn normal_counter_program_compiles_and_runs() {
+    let main = r#"import { app, Screen, Text, Button, signal } from "plinth:ui";
+const count = signal(0);
+function Home() {
+  return <Screen title="Home">
+    <Text>{count()}</Text>
+    <Button label="inc" onPress={() => count.set(count() + 1)} />
+  </Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "0");
+}

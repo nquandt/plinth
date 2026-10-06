@@ -107,6 +107,9 @@ pub const PREFIX: &str = "__plinth_rt_";
 pub const ARR_F64: i32 = 1;
 pub const ARR_I32: i32 = 2;
 pub const ARR_REF: i32 = 3;
+/// The runtime's built-in type id for a string object (mirrors
+/// `plinth-rt/src/gc.rs`'s `T_STRING`), used to narrow a union member.
+pub const T_STRING: u32 = 0;
 
 /// The first type id for compiler-defined types.
 pub const FIRST_USER_TYPE: u32 = 16;

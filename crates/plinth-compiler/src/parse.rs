@@ -622,9 +622,20 @@ impl Cx<'_> {
             self.err(code::ASYNC, f.span, "async functions and generators come in v1");
             return None;
         }
-        if f.type_parameters.is_some() {
-            self.err(code::GENERIC_USER, f.span, "generic functions come in v1");
-            return None;
+        let mut type_params = Vec::new();
+        if let Some(tp) = &f.type_parameters {
+            for p in &tp.params {
+                if p.constraint.is_some() || p.default.is_some() {
+                    self.err_help(
+                        code::GENERIC_USER,
+                        p.span,
+                        "a constrained or defaulted type parameter is not supported yet",
+                        "use a plain type parameter: `<T>`",
+                    );
+                    return None;
+                }
+                type_params.push(p.name.name.to_string());
+            }
         }
         if f.this_param.is_some() {
             self.err(code::THIS, f.span, "`this` parameters are not allowed");
@@ -645,6 +656,7 @@ impl Cx<'_> {
             exported: false,
             is_default: false,
             span: self.span(f.span),
+            type_params,
         })
     }
 
@@ -766,10 +778,7 @@ impl Cx<'_> {
                         self.err_help(code::DELETE, u.span, "`delete` is not allowed", "use a Map and `map.delete(key)`");
                         return None;
                     }
-                    U::Typeof => {
-                        self.err(code::UNSUPPORTED, u.span, "`typeof` comes in v1 with union narrowing");
-                        return None;
-                    }
+                    U::Typeof => UnOp::Typeof,
                     _ => {
                         self.err(code::UNSUPPORTED, u.span, "this operator is not supported");
                         return None;
@@ -874,6 +883,7 @@ impl Cx<'_> {
                     exported: false,
                     is_default: false,
                     span,
+                    type_params: Vec::new(),
                 }))
             }
             E::FunctionExpression(f) => ExprKind::Func(Box::new(self.function(f)?)),
@@ -904,8 +914,22 @@ impl Cx<'_> {
                 return None;
             }
             E::NewExpression(n) => {
-                self.err_help(code::CLASS, n.span, "`new` is not supported yet", "use object literals and functions");
-                return None;
+                let name = match &n.callee {
+                    o::Expression::Identifier(id) => id.name.to_string(),
+                    _ => String::new(),
+                };
+                if (name == "Map" || name == "Set") && n.arguments.is_empty() {
+                    let mut type_args = Vec::new();
+                    if let Some(a) = &n.type_arguments {
+                        for t in &a.params {
+                            type_args.push(self.ty(t)?);
+                        }
+                    }
+                    ExprKind::New(name, type_args)
+                } else {
+                    self.err_help(code::CLASS, n.span, "`new` is only supported for `new Map()` and `new Set()`", "use object literals and functions");
+                    return None;
+                }
             }
             E::AwaitExpression(a) => {
                 self.err(code::ASYNC, a.span, "`await` comes in v1");

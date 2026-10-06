@@ -70,6 +70,7 @@ pub enum StdFn {
     ClearTimer,
     ClipboardWriteText,
     ClipboardReadText,
+    Int,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +95,8 @@ pub enum Binding {
     Control(ControlKind),
     Std(StdFn),
     StdObj(StdObj),
+    /// A generic function template, by index into `Checker::generics`.
+    Generic(usize),
 }
 
 #[derive(Default)]
@@ -101,6 +104,21 @@ struct Scope {
     names: HashMap<String, Binding>,
     /// Narrowed types of variables (`if (x !== null)`).
     narrow: HashMap<VarId, Type>,
+}
+
+/// Where a signal/computed read happens, for the "not reactive" lint
+/// (HANDOFF.md §6: a read outside JSX, `computed` or `effect` does not
+/// re-run when the signal changes).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ReactiveCtx {
+    /// Plain statements in a function body: a signal read here runs once
+    /// and never again, which is usually a bug.
+    Plain,
+    /// Inside JSX (a prop or child expression), or inside `computed`/`effect`.
+    Reactive,
+    /// Inside an event handler or other callback: reads are intentional
+    /// (they see the current value when the callback runs), so no warning.
+    Callback,
 }
 
 /// The state of the function that the checker is in.
@@ -112,6 +130,7 @@ struct FnCx {
     ret: Option<Type>,
     /// The inferred return type so far.
     inferred: Option<Type>,
+    reactive: ReactiveCtx,
 }
 
 struct PendingFunc {
@@ -142,6 +161,23 @@ pub struct Checker<'d> {
     /// host API call that needs a capability not in this set is a compile
     /// error (`code::CAPABILITY_UNDECLARED`).
     capabilities: HashSet<String>,
+    /// Set just before checking a `computed`/`effect` callback body, so the
+    /// new closure's `FnCx` starts in `Reactive` instead of `Callback`.
+    pending_reactive: bool,
+    /// Generic top-level function templates, not checked until a call site
+    /// instantiates them (HANDOFF.md item 3).
+    generics: Vec<GenericTemplate>,
+    /// Concrete types for the generic function template being checked
+    /// right now, by type-parameter name.
+    generic_bindings: HashMap<String, Type>,
+    /// Instantiations so far: `(template index, type arguments) -> FuncId`.
+    /// Linear (there are only ever a handful) so `Type` need not be `Hash`.
+    instantiations: Vec<(usize, Vec<Type>, FuncId)>,
+}
+
+struct GenericTemplate {
+    decl: ast::FuncDecl,
+    module: usize,
 }
 
 /// Checks all modules. `modules` must be in dependency order (dependencies
@@ -155,7 +191,7 @@ pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>, ca
         defaults: vec![None; modules.len()],
         module_scopes: vec![HashMap::new(); modules.len()],
         module: 0,
-        fx: FnCx { func: 0, scopes: Vec::new(), loops: Vec::new(), ret: None, inferred: None },
+        fx: FnCx { func: 0, scopes: Vec::new(), loops: Vec::new(), ret: None, inferred: None, reactive: ReactiveCtx::Plain },
         pending: HashMap::new(),
         in_progress: HashSet::new(),
         aliases: vec![Vec::new(); modules.len()],
@@ -164,6 +200,10 @@ pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>, ca
         navigations: Vec::new(),
         app_seen: false,
         capabilities: capabilities.iter().cloned().collect(),
+        pending_reactive: false,
+        generics: Vec::new(),
+        generic_bindings: HashMap::new(),
+        instantiations: Vec::new(),
     };
     c.prog.module_count = modules.len() as u32;
     for (i, m) in modules.iter().enumerate() {
@@ -233,7 +273,8 @@ impl Checker<'_> {
             span: Span::new(src.file, 0, 0),
         });
         self.prog.module_inits.push(init);
-        self.fx = FnCx { func: init, scopes: Vec::new(), loops: Vec::new(), ret: Some(Type::Void), inferred: None };
+        self.fx =
+            FnCx { func: init, scopes: Vec::new(), loops: Vec::new(), ret: Some(Type::Void), inferred: None, reactive: ReactiveCtx::Plain };
 
         // 1. Imports.
         let mut import_index = 0;
@@ -280,7 +321,11 @@ impl Checker<'_> {
         // 3. Top-level functions are hoisted.
         for item in &src.ast.items {
             if let Item::Stmt(ast::Stmt { kind: ast::StmtKind::Func(f), .. }) = item {
-                self.declare_top_func(f, m);
+                if f.type_params.is_empty() {
+                    self.declare_top_func(f, m);
+                } else {
+                    self.declare_generic(f, m);
+                }
             }
         }
 
@@ -488,7 +533,7 @@ impl Checker<'_> {
     /// `T | null`, with a check that the representation supports null.
     fn nullable(&mut self, ty: Type, span: Span) -> Type {
         match ty {
-            Type::Bool | Type::Enum(_) | Type::Signal(_) | Type::Computed(_) => {
+            Type::Bool | Type::Int | Type::Enum(_) | Type::Signal(_) | Type::Computed(_) => {
                 self.err_help(
                     code::NULLABLE,
                     span,
@@ -531,11 +576,13 @@ impl Checker<'_> {
                     _ => {
                         if others.iter().all(|t| *t == Type::Number) && lits.is_empty() {
                             Type::Number
+                        } else if lits.is_empty() {
+                            self.union_of(others, *span)
                         } else {
                             self.err_help(
                                 code::ADVANCED_TYPE,
                                 *span,
-                                "general union types come in v1",
+                                "a union cannot mix string literals with other types",
                                 "use `T | null`, or a union of string literals",
                             );
                             return Type::Error;
@@ -567,6 +614,11 @@ impl Checker<'_> {
     }
 
     fn named_type(&mut self, name: &str, args: &[TypeAnn], span: Span) -> Type {
+        if args.is_empty() {
+            if let Some(t) = self.generic_bindings.get(name) {
+                return t.clone();
+            }
+        }
         let arity = |c: &mut Self, n: usize| {
             if args.len() != n {
                 c.err(code::UNKNOWN_TYPE, span, format!("`{name}` takes {n} type argument(s)"));
@@ -583,15 +635,42 @@ impl Checker<'_> {
                 return Type::Array(Box::new(self.resolve_type(&args[0])));
             }
             "JSX.Element" => return Type::Element,
-            "int" => {
-                self.err_help(code::UNSUPPORTED, span, "`int` is not supported yet", "use `number`");
-                return Type::Error;
-            }
+            "int" => return Type::Int,
             "any" | "unknown" | "object" | "Object" => {
                 self.err(code::ANY, span, format!("`{name}` is not allowed"));
                 return Type::Error;
             }
-            "Map" | "Set" | "Promise" | "Record" | "Partial" | "Readonly" => {
+            "Map" => {
+                if !arity(self, 2) {
+                    return Type::Error;
+                }
+                let k = self.resolve_type(&args[0]);
+                let v = self.resolve_type(&args[1]);
+                if !self.valid_key_type(&k) {
+                    let msg = format!("a `Map` key must be `string`, `int`, `number`, `boolean` or an enum, not `{}`", self.show(&k));
+                    self.err(code::ADVANCED_TYPE, span, msg);
+                    return Type::Error;
+                }
+                if !self.valid_map_value_type(&v) {
+                    let msg = format!("a `Map`/`Set` value of type `{}` is not supported yet", self.show(&v));
+                    self.err_help(code::ADVANCED_TYPE, span, msg, "use `string`, `number` or an object type");
+                    return Type::Error;
+                }
+                return Type::Map(Box::new(k), Box::new(v));
+            }
+            "Set" => {
+                if !arity(self, 1) {
+                    return Type::Error;
+                }
+                let t = self.resolve_type(&args[0]);
+                if !self.valid_key_type(&t) {
+                    let msg = format!("a `Set` element must be `string`, `int`, `number`, `boolean` or an enum, not `{}`", self.show(&t));
+                    self.err(code::ADVANCED_TYPE, span, msg);
+                    return Type::Error;
+                }
+                return Type::Set(Box::new(t));
+            }
+            "Promise" | "Record" | "Partial" | "Readonly" => {
                 self.err(code::ADVANCED_TYPE, span, format!("`{name}` is not supported yet"));
                 return Type::Error;
             }
@@ -639,6 +718,50 @@ impl Checker<'_> {
         t
     }
 
+    /// A `Map` key or `Set` element type (SPEC.md §4.2).
+    fn valid_key_type(&self, t: &Type) -> bool {
+        matches!(t, Type::String | Type::StrLits(_) | Type::Number | Type::Int | Type::Bool | Type::Enum(_))
+    }
+
+    /// A `Map` value type. Narrower than general types for v0: no
+    /// `boolean`/`int`/enum (`get` needs a nullable result, and those
+    /// types cannot be `| null` yet; HANDOFF.md item 5).
+    fn valid_map_value_type(&self, t: &Type) -> bool {
+        matches!(t, Type::String | Type::StrLits(_) | Type::Number | Type::Struct(_) | Type::Array(_) | Type::Union(_))
+    }
+
+    /// The comparison for a `Map` key or `Set` element.
+    pub(crate) fn key_eq(&self, k: &Type) -> EqKind {
+        match self.widen(k.clone()) {
+            Type::String => EqKind::Str,
+            Type::Number => EqKind::F64,
+            _ => EqKind::I32,
+        }
+    }
+
+    /// The internal 2-field struct `{ keys: K[], values: V[] }` that backs
+    /// a `Map<K, V>` at run time (HANDOFF.md item 5). A `Map`'s own fields
+    /// are never exposed to user code; only `Checker` methods read them.
+    pub(crate) fn map_struct(&mut self, k: &Type, v: &Type) -> types::StructId {
+        let fields = vec![
+            Field { name: "keys".into(), ty: Type::Array(Box::new(k.clone())), optional: false },
+            Field { name: "values".into(), ty: Type::Array(Box::new(v.clone())), optional: false },
+        ];
+        match self.anon_struct(fields) {
+            Type::Struct(s) => s,
+            _ => unreachable!(),
+        }
+    }
+
+    /// The internal 1-field struct `{ keys: T[] }` that backs a `Set<T>`.
+    pub(crate) fn set_struct(&mut self, t: &Type) -> types::StructId {
+        let fields = vec![Field { name: "keys".into(), ty: Type::Array(Box::new(t.clone())), optional: false }];
+        match self.anon_struct(fields) {
+            Type::Struct(s) => s,
+            _ => unreachable!(),
+        }
+    }
+
     fn anon_struct(&mut self, fields: Vec<Field>) -> Type {
         let key: Vec<String> = fields.iter().map(|f| format!("{}:{}", f.name, self.show(&f.ty))).collect();
         let key = key.join(",");
@@ -652,6 +775,69 @@ impl Checker<'_> {
         Type::Struct(id)
     }
 
+    /// Builds a `Type::Union` from distinct object and string member
+    /// types (SPEC.md §4.2). Members with another representation (number,
+    /// boolean, enum, array, function, …) are not supported yet.
+    fn union_of(&mut self, mut members: Vec<Type>, span: Span) -> Type {
+        members.dedup();
+        let mut strings = 0;
+        for m in &members {
+            match m {
+                Type::Struct(_) => {}
+                Type::String | Type::StrLits(_) => strings += 1,
+                other => {
+                    let msg = format!("a union member of type `{}` is not supported yet", self.show(other));
+                    self.err_help(code::ADVANCED_TYPE, span, msg, "union members can be object types or `string`");
+                    return Type::Error;
+                }
+            }
+        }
+        if strings > 1 {
+            self.err(code::ADVANCED_TYPE, span, "a union can have at most one string-like member");
+            return Type::Error;
+        }
+        if members.len() < 2 {
+            return members.pop().unwrap_or(Type::Error);
+        }
+        Type::Union(members.into())
+    }
+
+    /// If the object (struct) members of a union all share a literal-string
+    /// field, declared first, with a distinct literal per member: the
+    /// field's name and `(literal, member index)` pairs (indices into the
+    /// full `members`, including any non-struct member). A union needs at
+    /// least one struct member for this. This field is readable without
+    /// narrowing, and narrows the union when compared to one of its
+    /// literals (HANDOFF.md item 2).
+    pub(crate) fn union_discriminant(&self, members: &[Type]) -> Option<(String, Vec<(String, usize)>)> {
+        let mut name: Option<String> = None;
+        let mut out = Vec::new();
+        let mut any_struct = false;
+        for (i, m) in members.iter().enumerate() {
+            let Type::Struct(sid) = m else { continue };
+            any_struct = true;
+            let f = self.prog.structs[*sid as usize].fields.first()?;
+            let Type::StrLits(lits) = &f.ty else { return None };
+            if lits.len() != 1 {
+                return None;
+            }
+            match &name {
+                None => name = Some(f.name.clone()),
+                Some(n) if *n != f.name => return None,
+                _ => {}
+            }
+            out.push((lits[0].clone(), i));
+        }
+        if !any_struct {
+            return None;
+        }
+        let mut seen = std::collections::HashSet::new();
+        if !out.iter().all(|(l, _)| seen.insert(l.clone())) {
+            return None;
+        }
+        Some((name?, out))
+    }
+
     // -- Assignability ----------------------------------------------------
 
     /// How a value of `from` converts to `to`: `None` if it cannot,
@@ -663,6 +849,7 @@ impl Checker<'_> {
         }
         match (from, to) {
             (T::Error, _) | (_, T::Error) => Some(None),
+            (T::Int, T::Number) => Some(Some(Coercion::I32ToNum)),
             (T::StrLits(_), T::String) => Some(Some(Coercion::Retag)),
             (T::StrLits(a), T::StrLits(b)) if a.iter().all(|x| b.contains(x)) => Some(Some(Coercion::Retag)),
             (T::Null, T::Nullable(_)) | (T::Null, T::Element) => Some(Some(Coercion::Retag)),
@@ -679,6 +866,8 @@ impl Checker<'_> {
                     .then_some(Some(Coercion::Retag))
             }
             (T::Func(f), T::Func(g)) => self.func_compatible(f, g).then_some(Some(Coercion::Retag)),
+            (t, T::Union(members)) if members.iter().any(|m| m == t) => Some(Some(Coercion::Retag)),
+            (T::StrLits(_), T::Union(members)) if members.contains(&T::String) => Some(Some(Coercion::Retag)),
             _ => None,
         }
     }
@@ -730,7 +919,7 @@ impl Checker<'_> {
             Type::StrLits(_) => Coercion::Retag,
             Type::Number => Coercion::NumToStr,
             Type::Bool => Coercion::BoolToStr,
-            Type::Enum(_) => {
+            Type::Enum(_) | Type::Int => {
                 let n = TExpr::new(TExprKind::Coerce(Coercion::I32ToNum, Box::new(e)), Type::Number, span);
                 return TExpr::new(TExprKind::Coerce(Coercion::NumToStr, Box::new(n)), Type::String, span);
             }
@@ -836,6 +1025,93 @@ impl Checker<'_> {
         self.pending.insert(fid, PendingFunc { decl: f.clone(), module: m });
     }
 
+    /// Registers a generic top-level function as a template: it is checked
+    /// (once per distinct type arguments) only when a call site
+    /// instantiates it (HANDOFF.md item 3).
+    fn declare_generic(&mut self, f: &ast::FuncDecl, m: usize) {
+        if f.is_default {
+            self.err(code::GENERIC_USER, f.span, "a generic function cannot be the default export");
+        }
+        let idx = self.generics.len();
+        self.generics.push(GenericTemplate { decl: f.clone(), module: m });
+        if let Some((n, span)) = &f.name {
+            self.define(n, *span, Binding::Generic(idx));
+            if f.exported {
+                self.exports[m].insert(n.clone(), Binding::Generic(idx));
+            }
+        }
+    }
+
+    /// Checks (or reuses an earlier, identical) instantiation of a generic
+    /// function template for one call site. Returns its concrete `FuncId`
+    /// and `FuncType`, or `None` on an error already reported.
+    pub(crate) fn instantiate_generic(
+        &mut self,
+        gid: usize,
+        type_args: &[ast::TypeAnn],
+        args: &[ast::Expr],
+        span: Span,
+    ) -> Option<(FuncId, Rc<FuncType>)> {
+        let decl = self.generics[gid].decl.clone();
+        let module = self.generics[gid].module;
+        let names = decl.type_params.clone();
+        // 1. The concrete type for each type parameter: explicit `f<T>(...)`
+        // arguments, or inferred from the call's argument types.
+        let mut bound: Vec<Type> = Vec::new();
+        if !type_args.is_empty() {
+            if type_args.len() != names.len() {
+                self.err(code::ARG_COUNT, span, format!("`{}` takes {} type argument(s)", display_name(&decl), names.len()));
+                return None;
+            }
+            for t in type_args {
+                bound.push(self.resolve_type(t));
+            }
+        } else {
+            let mut by_name: HashMap<&str, Type> = HashMap::new();
+            for (p, a) in decl.params.iter().zip(args) {
+                let Some(ann) = &p.ty else { continue };
+                let te = self.expr(a, None);
+                infer_type_param(ann, &te.ty, &names, &mut by_name);
+            }
+            for n in &names {
+                match by_name.get(n.as_str()) {
+                    Some(t) => bound.push(t.clone()),
+                    None => {
+                        let msg = format!("cannot infer type parameter `{n}` of `{}`; give it explicitly", display_name(&decl));
+                        self.err(code::CANNOT_INFER, span, msg);
+                        return None;
+                    }
+                }
+            }
+        }
+        if bound.iter().any(Type::is_error) {
+            return None;
+        }
+        // 2. Reuse an earlier instantiation with the same type arguments.
+        if let Some((_, _, fid)) = self.instantiations.iter().find(|(g, b, _)| *g == gid && *b == bound) {
+            let fid = *fid;
+            return Some((fid, self.func_type(fid, span)));
+        }
+        // 3. Check a fresh copy of the template with `names[i] := bound[i]`.
+        let saved_bindings = std::mem::take(&mut self.generic_bindings);
+        for (n, t) in names.iter().zip(&bound) {
+            self.generic_bindings.insert(n.clone(), t.clone());
+        }
+        let saved_module = std::mem::replace(&mut self.module, module);
+        let base = decl.name.as_ref().map(|(n, _)| n.as_str()).unwrap_or("f");
+        let mangled = format!("{base}${}", self.instantiations.iter().filter(|(g, ..)| *g == gid).count());
+        let mut mono = decl.clone();
+        mono.name = Some((mangled.clone(), decl.span));
+        mono.type_params.clear();
+        self.declare_top_func(&mono, module);
+        let Some(Binding::Func(fid)) = self.lookup(&mangled) else { unreachable!() };
+        self.check_pending(fid);
+        self.module = saved_module;
+        self.generic_bindings = saved_bindings;
+        self.instantiations.push((gid, bound, fid));
+        Some((fid, self.func_type(fid, span)))
+    }
+
     /// Checks a top-level function body now (for its inferred return type).
     fn check_pending(&mut self, fid: FuncId) {
         let Some(p) = self.pending.remove(&fid) else { return };
@@ -844,7 +1120,14 @@ impl Checker<'_> {
         let declared = (p.decl.ret.is_some()).then(|| self.prog.funcs[fid as usize].ret.clone());
         let saved_fx = std::mem::replace(
             &mut self.fx,
-            FnCx { func: fid, scopes: vec![Scope::default()], loops: Vec::new(), ret: declared.clone(), inferred: None },
+            FnCx {
+                func: fid,
+                scopes: vec![Scope::default()],
+                loops: Vec::new(),
+                ret: declared.clone(),
+                inferred: None,
+                reactive: ReactiveCtx::Plain,
+            },
         );
         let params = self.prog.funcs[fid as usize].params.clone();
         let mut prologue = Vec::new();
@@ -978,10 +1261,9 @@ impl Checker<'_> {
             Some(r) => Some(self.resolve_type(r)),
             None => expected.map(|e| e.ret.clone()).filter(|t| *t == Type::Void || !t.is_error()),
         };
-        let mut saved = std::mem::replace(
-            &mut self.fx,
-            FnCx { func: fid, scopes: Vec::new(), loops: Vec::new(), ret: declared.clone(), inferred: None },
-        );
+        let reactive = if std::mem::take(&mut self.pending_reactive) { ReactiveCtx::Reactive } else { ReactiveCtx::Callback };
+        let mut saved =
+            std::mem::replace(&mut self.fx, FnCx { func: fid, scopes: Vec::new(), loops: Vec::new(), ret: declared.clone(), inferred: None, reactive });
         // A closure sees the scopes of the enclosing function: move them in
         // for the body, then give them back.
         self.fx.scopes = std::mem::take(&mut saved.scopes);
@@ -1047,4 +1329,38 @@ fn contains_break(stmts: &[TStmt]) -> bool {
         TStmt::Block(b) => contains_break(b),
         _ => false,
     })
+}
+
+fn display_name(decl: &ast::FuncDecl) -> &str {
+    decl.name.as_ref().map(|(n, _)| n.as_str()).unwrap_or("<anonymous>")
+}
+
+/// Unifies a parameter's type annotation (as written, with type-parameter
+/// names still bare identifiers) against the checked type of the argument,
+/// to infer `name → Type` for any type parameter it mentions. Only the
+/// shapes generic helpers actually need: `T`, `T[]`, `T | null`.
+fn infer_type_param<'a>(ann: &'a TypeAnn, arg: &Type, names: &[String], out: &mut HashMap<&'a str, Type>) {
+    match ann {
+        TypeAnn::Named { name, args, .. } if args.is_empty() && names.iter().any(|n| n == name) => {
+            out.entry(name.as_str()).or_insert_with(|| arg.clone());
+        }
+        TypeAnn::Array(inner, _) => {
+            if let Type::Array(elem) = arg {
+                infer_type_param(inner, elem, names, out);
+            }
+        }
+        TypeAnn::Union(parts, _) => {
+            // `T | null`: unify `T` against the non-null part of the arg.
+            let inner_arg = match arg {
+                Type::Nullable(t) => (**t).clone(),
+                t => t.clone(),
+            };
+            for p in parts {
+                if !matches!(p, TypeAnn::Null(_)) {
+                    infer_type_param(p, &inner_arg, names, out);
+                }
+            }
+        }
+        _ => {}
+    }
 }

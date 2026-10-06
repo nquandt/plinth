@@ -6,6 +6,16 @@ use crate::diag::{Span, code};
 use crate::tir::*;
 use crate::types::Type;
 
+/// The type of "one of these members": the lone member, or a union of
+/// the rest, for the two branches of a `UnionIs` narrowing.
+fn one_of(mut members: Vec<Type>) -> Type {
+    match members.len() {
+        0 => Type::Error,
+        1 => members.pop().unwrap(),
+        _ => Type::Union(members.into()),
+    }
+}
+
 impl Checker<'_> {
     pub(super) fn block_stmts(&mut self, stmts: &[ast::Stmt]) -> Vec<TStmt> {
         let mut out = Vec::new();
@@ -449,8 +459,32 @@ impl Checker<'_> {
                 fa.extend(fb);
                 (Vec::new(), fa)
             }
+            // `typeof x === "..."` or a discriminant comparison, both
+            // compiled to `UnionIs` (HANDOFF.md item 2).
+            TExprKind::UnionIs(obj, idxs) => match (self.narrowable_var(obj), &obj.ty) {
+                (Some(v), Type::Union(members)) => {
+                    let picked: Vec<Type> = idxs.iter().map(|i| members[*i].clone()).collect();
+                    let rest: Vec<Type> = members.iter().enumerate().filter(|(i, _)| !idxs.contains(i)).map(|(_, m)| m.clone()).collect();
+                    (vec![(v, one_of(picked))], vec![(v, one_of(rest))])
+                }
+                _ => (Vec::new(), Vec::new()),
+            },
             _ => (Vec::new(), Vec::new()),
         }
+    }
+
+    /// The variable a (possibly narrowed/retagged) expression reads, for
+    /// narrowing. Unlike `narrowable`, any type is allowed; like it, only a
+    /// `const` or a parameter (never reassigned inside the branch).
+    fn narrowable_var(&self, e: &TExpr) -> Option<VarId> {
+        let v = match &e.kind {
+            TExprKind::Var(v) => *v,
+            TExprKind::Coerce(Coercion::Retag, inner) => return self.narrowable_var(inner),
+            _ => return None,
+        };
+        let info = &self.prog.vars[v as usize];
+        let is_param = self.prog.funcs[info.owner as usize].params.contains(&v);
+        if info.mutable && !is_param { None } else { Some(v) }
     }
 
     /// A read of a `const` or a parameter of a nullable type.

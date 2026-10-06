@@ -17,7 +17,7 @@ pub const UI_NAMES: &[&str] = &[
     // UI API 1.2
     "Tabs", "Sheet", "Dialog", "Menu", "Grid", "Action",
 ];
-pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console"];
+pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int"];
 pub const TIME_NAMES: &[&str] = &["now", "monotonicNow", "setTimeout", "setInterval", "clearTimeout", "clearInterval"];
 pub const STORE_NAMES: &[&str] = &["kv"];
 pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText"];
@@ -71,6 +71,7 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "console" => Binding::StdObj(StdObj::Console),
             "parseNumber" => Binding::Std(StdFn::ParseNumber),
             "toString" => Binding::Std(StdFn::ToString),
+            "int" => Binding::Std(StdFn::Int),
             _ => return None,
         }),
     }
@@ -129,6 +130,7 @@ impl Checker<'_> {
                     return TExpr::new(TExprKind::Null, Type::Error, span);
                 }
                 let ret = type_args.first().map(|t| self.resolve_type(t));
+                self.pending_reactive = true;
                 let (f, _) = self.callback(&args[0], &[], ret.clone());
                 let inner = match (&ret, &f.ty) {
                     (Some(r), _) => r.clone(),
@@ -144,6 +146,7 @@ impl Checker<'_> {
                 if !one_arg(self, "effect") {
                     return TExpr::new(TExprKind::Null, Type::Error, span);
                 }
+                self.pending_reactive = true;
                 let (f, _) = self.callback(&args[0], &[], Some(Type::Void));
                 TExpr::new(TExprKind::EffectNew(Box::new(f)), Type::Void, span)
             }
@@ -227,6 +230,14 @@ impl Checker<'_> {
                     self.err(code::ARG_COUNT, span, "`readText` takes no arguments");
                 }
                 TExpr::new(TExprKind::Rt("clipboard_read_text", Vec::new()), Type::String.nullable(), span)
+            }
+            StdFn::Int => {
+                if !one_arg(self, "int") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let te = self.expr(&args[0], Some(&Type::Number));
+                let te = self.coerce(te, &Type::Number);
+                TExpr::new(TExprKind::Coerce(Coercion::NumToI32, Box::new(te)), Type::Int, span)
             }
         }
     }

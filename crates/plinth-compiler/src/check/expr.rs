@@ -1,6 +1,6 @@
 //! Expressions.
 
-use super::{Binding, Checker, StdFn, StdObj};
+use super::{Binding, Checker, ReactiveCtx, StdFn, StdObj};
 use crate::ast::{self, BinOp, Expr, ExprKind, LogicOp, ObjProp, UnOp};
 use crate::diag::{Span, code};
 use crate::tir::*;
@@ -12,10 +12,36 @@ fn bx(e: TExpr) -> Box<TExpr> {
 }
 
 impl Checker<'_> {
+    /// The "not reactive" lint (HANDOFF.md §6): a signal/computed read
+    /// outside JSX, `computed` or `effect`, but inside a component body,
+    /// runs once and never again. Reads inside event handlers are fine.
+    fn check_reactive_read(&mut self, span: Span) {
+        if self.fx.reactive == ReactiveCtx::Plain {
+            self.diags.push(
+                crate::diag::Diagnostic::warning(
+                    code::SIGNAL_NOT_REACTIVE,
+                    span,
+                    "this signal read is not reactive: it runs once and will not update",
+                )
+                .help("move the read into the JSX or a `computed`"),
+            );
+        }
+    }
+
     pub(crate) fn expr(&mut self, e: &Expr, expected: Option<&Type>) -> TExpr {
         let span = e.span;
         match &e.kind {
-            ExprKind::Num(n) => TExpr::new(TExprKind::Num(*n), Type::Number, span),
+            ExprKind::Num(n) => {
+                // A literal is exactly representable, so it may satisfy an
+                // `int` context directly (SPEC.md §4.2); any other number
+                // needs an explicit `int(x)`.
+                let ty = match expected {
+                    Some(Type::Int) => Type::Int,
+                    Some(Type::Nullable(inner)) if **inner == Type::Int => Type::Int,
+                    _ => Type::Number,
+                };
+                TExpr::new(TExprKind::Num(*n), ty, span)
+            }
             ExprKind::Bool(b) => TExpr::new(TExprKind::Bool(*b), Type::Bool, span),
             ExprKind::Null => TExpr::new(TExprKind::Null, Type::Null, span),
             ExprKind::Str(s) => {
@@ -84,6 +110,16 @@ impl Checker<'_> {
                     let te = self.coerce(te, &Type::Number);
                     if *op == UnOp::Plus { te } else { TExpr::new(TExprKind::Neg(bx(te)), Type::Number, span) }
                 }
+                UnOp::Typeof => {
+                    self.err_help(
+                        code::ADVANCED_TYPE,
+                        span,
+                        "`typeof` is only allowed directly in `typeof x === \"...\"`",
+                        "narrow a union: `if (typeof x === \"string\") { ... }`",
+                    );
+                    self.expr(x, None);
+                    TExpr::new(TExprKind::Str("undefined".into()), Type::Error, span)
+                }
             },
             ExprKind::Binary(op, l, r) => self.binary(*op, l, r, span),
             ExprKind::Logical(op, l, r) => self.logical(*op, l, r, span, expected),
@@ -127,7 +163,53 @@ impl Checker<'_> {
                 let j = self.jsx(el);
                 TExpr::new(TExprKind::Jsx(Box::new(j)), Type::Element, span)
             }
+            ExprKind::New(name, type_args) => self.new_map_or_set(name, type_args, expected, span),
         }
+    }
+
+    /// `new Map<K, V>()` / `new Set<T>()` (HANDOFF.md item 5): an empty
+    /// 2-field (or 1-field) struct of arrays. The type arguments may come
+    /// from `expected` instead, like array literals do.
+    fn new_map_or_set(&mut self, name: &str, type_args: &[ast::TypeAnn], expected: Option<&Type>, span: Span) -> TExpr {
+        let empty_arr = |elem: &Type| TExpr::new(TExprKind::ArrayLit(Vec::new()), Type::Array(Box::new(elem.clone())), span);
+        if name == "Map" {
+            let (k, v) = match (type_args, expected) {
+                ([k, v], _) => (self.resolve_type(k), self.resolve_type(v)),
+                ([], Some(Type::Map(k, v))) => ((**k).clone(), (**v).clone()),
+                _ => {
+                    self.err_help(code::CANNOT_INFER, span, "cannot infer the key and value types of `new Map()`", "write `new Map<K, V>()`");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+            };
+            if !type_args.is_empty() && !self.valid_key_type(&k) {
+                let msg = format!("a `Map` key must be `string`, `int`, `number`, `boolean` or an enum, not `{}`", self.show(&k));
+                self.err(code::ADVANCED_TYPE, span, msg);
+                return TExpr::new(TExprKind::Null, Type::Error, span);
+            }
+            if !type_args.is_empty() && !self.valid_map_value_type(&v) {
+                let msg = format!("a `Map`/`Set` value of type `{}` is not supported yet", self.show(&v));
+                self.err(code::ADVANCED_TYPE, span, msg);
+                return TExpr::new(TExprKind::Null, Type::Error, span);
+            }
+            let sid = self.map_struct(&k, &v);
+            let lit = TExpr::new(TExprKind::StructLit(sid, vec![empty_arr(&k), empty_arr(&v)]), Type::Map(Box::new(k), Box::new(v)), span);
+            return lit;
+        }
+        let t = match (type_args, expected) {
+            ([t], _) => self.resolve_type(t),
+            ([], Some(Type::Set(t))) => (**t).clone(),
+            _ => {
+                self.err_help(code::CANNOT_INFER, span, "cannot infer the element type of `new Set()`", "write `new Set<T>()`");
+                return TExpr::new(TExprKind::Null, Type::Error, span);
+            }
+        };
+        if !type_args.is_empty() && !self.valid_key_type(&t) {
+            let msg = format!("a `Set` element must be `string`, `int`, `number`, `boolean` or an enum, not `{}`", self.show(&t));
+            self.err(code::ADVANCED_TYPE, span, msg);
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        let sid = self.set_struct(&t);
+        TExpr::new(TExprKind::StructLit(sid, vec![empty_arr(&t)]), Type::Set(Box::new(t)), span)
     }
 
     fn concat(&mut self, acc: Option<TExpr>, part: TExpr) -> TExpr {
@@ -169,6 +251,15 @@ impl Checker<'_> {
             }
             Some(Binding::Std(_)) | Some(Binding::StdObj(_)) => {
                 self.err(code::UNSUPPORTED, span, format!("`{name}` can only be called, not used as a value"));
+                TExpr::new(TExprKind::Null, Type::Error, span)
+            }
+            Some(Binding::Generic(_)) => {
+                self.err_help(
+                    code::GENERIC_USER,
+                    span,
+                    format!("`{name}` is generic; it can only be called directly"),
+                    format!("write `{name}(...)` or `{name}<T>(...)`"),
+                );
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
             Some(Binding::Control(_)) => {
@@ -273,11 +364,44 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Coerce(Coercion::I32ToNum, bx(len)), Type::Number, span)
             }
             Type::String | Type::StrLits(_) if prop == "length" => TExpr::new(TExprKind::Rt("str_len", vec![o]), Type::Number, span),
+            Type::Map(k, v) if prop == "size" => {
+                let sid = self.map_struct(&k, &v);
+                self.arr_len_of(self.kv_field(&o, sid, 0, span), span)
+            }
+            Type::Set(t) if prop == "size" => {
+                let sid = self.set_struct(&t);
+                self.arr_len_of(self.kv_field(&o, sid, 0, span), span)
+            }
+            Type::Map(..) | Type::Set(_) => {
+                self.err_help(
+                    code::NO_PROPERTY,
+                    prop_span,
+                    format!("`{}` has no property `{prop}`", self.show(&o.ty)),
+                    "use `.size`, or a method like `.get`/`.has`",
+                );
+                TExpr::new(TExprKind::Null, Type::Error, span)
+            }
             Type::Nullable(_) => {
                 let msg = format!("the value may be null (type `{}`)", self.show(&o.ty));
                 self.err_help(code::NULLABLE, o.span, msg, "check for null first, or use `?.`");
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
+            Type::Union(members) => match self.union_discriminant(&members) {
+                Some((name, lits)) if name == prop => {
+                    let ty = Type::str_lits(lits.into_iter().map(|(l, _)| l).collect());
+                    TExpr::new(TExprKind::UnionTag(bx(o)), ty, span)
+                }
+                Some((name, _)) => {
+                    let msg = format!("`{}` has no property `{prop}`", self.show(&o.ty));
+                    self.err_help(code::NO_PROPERTY, prop_span, msg, format!("narrow it first, or read `.{name}`"));
+                    TExpr::new(TExprKind::Null, Type::Error, span)
+                }
+                None => {
+                    let msg = format!("`{}` has no property `{prop}`", self.show(&o.ty));
+                    self.err_help(code::NO_PROPERTY, prop_span, msg, "narrow the union first (with `typeof` or a shared literal field)");
+                    TExpr::new(TExprKind::Null, Type::Error, span)
+                }
+            },
             Type::Signal(_) | Type::Computed(_) => {
                 self.err_help(
                     code::NO_PROPERTY,
@@ -308,6 +432,15 @@ impl Checker<'_> {
                     let targs = self.call_args(&ft, args, span);
                     return TExpr::new(TExprKind::Call(fid, targs), ft.ret.clone(), span);
                 }
+                Some(Binding::Generic(gid)) => {
+                    return match self.instantiate_generic(gid, type_args, args, span) {
+                        Some((fid, ft)) => {
+                            let targs = self.call_args(&ft, args, span);
+                            TExpr::new(TExprKind::Call(fid, targs), ft.ret.clone(), span)
+                        }
+                        None => TExpr::new(TExprKind::Null, Type::Error, span),
+                    };
+                }
                 _ => {}
             },
             ExprKind::Member { obj, prop, prop_span, optional: false } => {
@@ -328,10 +461,12 @@ impl Checker<'_> {
         match c.ty.clone() {
             Type::Signal(t) => {
                 self.no_args(args, span);
+                self.check_reactive_read(span);
                 TExpr::new(TExprKind::SignalGet(bx(c)), *t, span)
             }
             Type::Computed(t) => {
                 self.no_args(args, span);
+                self.check_reactive_read(span);
                 TExpr::new(TExprKind::ComputedGet(bx(c)), *t, span)
             }
             Type::Func(ft) => {
@@ -451,7 +586,16 @@ impl Checker<'_> {
                         self.err(code::ARG_COUNT, span, "`set` takes one argument");
                         return TExpr::new(TExprKind::Null, Type::Void, span);
                     }
+                    // The argument runs once, synchronously, right here (like
+                    // `update`'s callback): a signal read in it is the normal
+                    // "read current value(s), compute the next one" pattern,
+                    // not the "not reactive" bug, so do not lint it.
+                    let saved = self.fx.reactive;
+                    if saved == ReactiveCtx::Plain {
+                        self.fx.reactive = ReactiveCtx::Callback;
+                    }
                     let v = self.expr_with(&args[0], &t);
+                    self.fx.reactive = saved;
                     let v = self.coerce(v, &t);
                     TExpr::new(TExprKind::SignalSet(bx(o), bx(v)), Type::Void, span)
                 }
@@ -498,6 +642,8 @@ impl Checker<'_> {
                 }
             },
             Type::Array(elem) => self.array_method(o, (*elem).clone(), prop, prop_span, args, span),
+            Type::Map(k, v) => self.map_method(o, &k, &v, prop, prop_span, args, span),
+            Type::Set(t) => self.set_method(o, &t, prop, prop_span, args, span),
             Type::Struct(_) => {
                 // A function-typed field: `obj.f(x)`.
                 let field = self.property(o, prop, prop_span, span);
@@ -701,6 +847,275 @@ impl Checker<'_> {
         }
     }
 
+    // -- `Map` / `Set` (HANDOFF.md item 5) ---------------------------------
+    //
+    // Both are the internal struct `{ keys: K[] }` (`Set`) or
+    // `{ keys: K[], values: V[] }` (`Map`), built in `Checker::map_struct`/
+    // `set_struct`. Every method desugars to array operations the checker
+    // already has (`ArraySearch`, `Index`, `Assign(Place::Index, ..)`,
+    // `arr_push_*`/`arr_pop_*`), so none of this needs new codegen or a new
+    // `plinth-rt` module. Lookup, insert and delete are linear scans: fine
+    // for the small, form-sized state Plinth apps keep (SPEC.md §4.2).
+
+    /// A value that produces nothing on the stack, for the tail of a
+    /// `Type::Void` block (unlike `TExprKind::Null`, which always pushes a
+    /// zero and is only safe where the surrounding statement drops it).
+    fn void_tail(&self, span: Span) -> TExpr {
+        let dummy = TExpr::new(TExprKind::Bool(true), Type::Bool, span);
+        TExpr::new(TExprKind::Coerce(Coercion::Discard, bx(dummy)), Type::Void, span)
+    }
+
+    /// Field `idx` of a `Map`/`Set` object (its `keys` or `values` array).
+    fn kv_field(&self, obj: &TExpr, sid: crate::types::StructId, idx: u32, span: Span) -> TExpr {
+        let ty = self.prog.structs[sid as usize].fields[idx as usize].ty.clone();
+        TExpr::new(TExprKind::Field(bx(obj.clone()), sid, idx), ty, span)
+    }
+
+    fn arr_len_of(&self, arr: TExpr, span: Span) -> TExpr {
+        let len = TExpr::new(TExprKind::Rt("arr_len", vec![arr]), Type::Bool, span);
+        TExpr::new(TExprKind::Coerce(Coercion::I32ToNum, bx(len)), Type::Number, span)
+    }
+
+    fn arr_get_at(&self, arr: TExpr, idx: TExpr, elem_ty: Type, span: Span) -> TExpr {
+        TExpr::new(TExprKind::Index(bx(arr), bx(idx)), elem_ty, span)
+    }
+
+    fn arr_set_at(&self, arr: TExpr, idx: TExpr, value: TExpr, span: Span) -> TStmt {
+        let elem_ty = value.ty.clone();
+        TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Index(bx(arr), bx(idx)), bx(value)), elem_ty, span))
+    }
+
+    fn arr_push_discard(&self, arr: TExpr, value: TExpr, span: Span) -> TStmt {
+        let f = if value.ty.repr() == crate::types::Repr::F64 { "arr_push_f64" } else { "arr_push_i32" };
+        let push = TExpr::new(TExprKind::Rt(f, vec![arr, value]), Type::Bool, span);
+        TStmt::Expr(TExpr::new(TExprKind::Coerce(Coercion::Discard, bx(push)), Type::Void, span))
+    }
+
+    fn arr_pop_discard(&self, arr: TExpr, span: Span) -> TStmt {
+        let elem_ty = match &arr.ty {
+            Type::Array(e) => (**e).clone(),
+            _ => unreachable!(),
+        };
+        let f = if elem_ty.repr() == crate::types::Repr::F64 { "arr_pop_f64" } else { "arr_pop_i32" };
+        let pop = TExpr::new(TExprKind::Rt(f, vec![arr]), elem_ty, span);
+        TStmt::Expr(TExpr::new(TExprKind::Coerce(Coercion::Discard, bx(pop)), Type::Void, span))
+    }
+
+    /// `while (arr.length > 0) arr.pop();`
+    fn arr_clear(&mut self, arr: TExpr, span: Span) -> Vec<TStmt> {
+        let arr_v = self.temp(arr.ty.clone());
+        let arr_r = TExpr::new(TExprKind::Var(arr_v), arr.ty.clone(), span);
+        let cond = TExpr::new(
+            TExprKind::Cmp(CmpOp::Gt, EqKind::F64, bx(self.arr_len_of(arr_r.clone(), span)), bx(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
+            Type::Bool,
+            span,
+        );
+        let id = self.prog.new_loop();
+        let pop = self.arr_pop_discard(arr_r, span);
+        vec![TStmt::Let(arr_v, Some(arr)), TStmt::Loop { id, cond: Some(cond), test_after: false, update: None, body: vec![pop] }]
+    }
+
+    /// `m.delete(k)` / `s.delete(v)`: finds the key, then swaps it with the
+    /// last entry and pops (so deletion does not keep insertion order).
+    fn kv_delete(&mut self, sid: crate::types::StructId, has_values: bool, eq: EqKind, o: TExpr, key: TExpr, span: Span) -> TExpr {
+        let obj_v = self.temp(o.ty.clone());
+        let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
+        let keys = self.kv_field(&obj_r, sid, 0, span);
+        let idx_v = self.temp(Type::Number);
+        let idx_r = TExpr::new(TExprKind::Var(idx_v), Type::Number, span);
+        let search = TExpr::new(TExprKind::ArraySearch { index: true, eq, arr: bx(keys.clone()), value: bx(key) }, Type::Number, span);
+        let not_found = TExpr::new(
+            TExprKind::Cmp(CmpOp::Eq, EqKind::F64, bx(idx_r.clone()), bx(TExpr::new(TExprKind::Num(-1.0), Type::Number, span))),
+            Type::Bool,
+            span,
+        );
+        let last_v = self.temp(Type::Number);
+        let last_r = TExpr::new(TExprKind::Var(last_v), Type::Number, span);
+        let last_init = TExpr::new(
+            TExprKind::Num2(NumOp::Sub, bx(self.arr_len_of(keys.clone(), span)), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))),
+            Type::Number,
+            span,
+        );
+        let idx_ne_last = TExpr::new(TExprKind::Cmp(CmpOp::Ne, EqKind::F64, bx(idx_r.clone()), bx(last_r.clone())), Type::Bool, span);
+        let keys_elem = match &keys.ty {
+            Type::Array(e) => (**e).clone(),
+            _ => unreachable!(),
+        };
+        let mut swap_body = vec![self.arr_set_at(keys.clone(), idx_r.clone(), self.arr_get_at(keys.clone(), last_r.clone(), keys_elem, span), span)];
+        if has_values {
+            let values = self.kv_field(&obj_r, sid, 1, span);
+            let values_elem = match &values.ty {
+                Type::Array(e) => (**e).clone(),
+                _ => unreachable!(),
+            };
+            swap_body.push(self.arr_set_at(values.clone(), idx_r.clone(), self.arr_get_at(values, last_r.clone(), values_elem, span), span));
+        }
+        let mut pop_stmts = vec![TStmt::If(idx_ne_last, swap_body, Vec::new()), self.arr_pop_discard(keys, span)];
+        if has_values {
+            pop_stmts.push(self.arr_pop_discard(self.kv_field(&obj_r, sid, 1, span), span));
+        }
+        let found_block =
+            TExpr::new(TExprKind::Block(pop_stmts, bx(TExpr::new(TExprKind::Bool(true), Type::Bool, span))), Type::Bool, span);
+        let cond =
+            TExpr::new(TExprKind::Cond(bx(not_found), bx(TExpr::new(TExprKind::Bool(false), Type::Bool, span)), bx(found_block)), Type::Bool, span);
+        let prelude = vec![TStmt::Let(obj_v, Some(o)), TStmt::Let(idx_v, Some(search)), TStmt::Let(last_v, Some(last_init))];
+        TExpr::new(TExprKind::Block(prelude, bx(cond)), Type::Bool, span)
+    }
+
+    fn map_method(&mut self, o: TExpr, k: &Type, v: &Type, prop: &str, prop_span: Span, args: &[Expr], span: Span) -> TExpr {
+        let sid = self.map_struct(k, v);
+        let eq = self.key_eq(k);
+        let wrong_arity = |c: &mut Self, what: &str, n: usize| {
+            c.err(code::ARG_COUNT, span, format!("`{what}` takes {n} argument(s)"));
+        };
+        match prop {
+            "get" => {
+                if args.len() != 1 {
+                    wrong_arity(self, "get", 1);
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let key = self.expr_with(&args[0], k);
+                let key = self.coerce(key, k);
+                let obj_v = self.temp(o.ty.clone());
+                let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
+                let keys = self.kv_field(&obj_r, sid, 0, span);
+                let values = self.kv_field(&obj_r, sid, 1, span);
+                let idx_v = self.temp(Type::Number);
+                let idx_r = TExpr::new(TExprKind::Var(idx_v), Type::Number, span);
+                let search = TExpr::new(TExprKind::ArraySearch { index: true, eq, arr: bx(keys), value: bx(key) }, Type::Number, span);
+                let not_found = TExpr::new(
+                    TExprKind::Cmp(CmpOp::Eq, EqKind::F64, bx(idx_r.clone()), bx(TExpr::new(TExprKind::Num(-1.0), Type::Number, span))),
+                    Type::Bool,
+                    span,
+                );
+                let result_ty = self.nullable(v.clone(), span);
+                let null_v = self.coerce(TExpr::new(TExprKind::Null, Type::Null, span), &result_ty);
+                let found = self.coerce(self.arr_get_at(values, idx_r, v.clone(), span), &result_ty);
+                let cond = TExpr::new(TExprKind::Cond(bx(not_found), bx(null_v), bx(found)), result_ty.clone(), span);
+                TExpr::new(TExprKind::Block(vec![TStmt::Let(obj_v, Some(o)), TStmt::Let(idx_v, Some(search))], bx(cond)), result_ty, span)
+            }
+            "set" => {
+                if args.len() != 2 {
+                    wrong_arity(self, "set", 2);
+                    return self.void_tail(span);
+                }
+                let key = self.expr_with(&args[0], k);
+                let key = self.coerce(key, k);
+                let val = self.expr_with(&args[1], v);
+                let val = self.coerce(val, v);
+                let obj_v = self.temp(o.ty.clone());
+                let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
+                let keys = self.kv_field(&obj_r, sid, 0, span);
+                let values = self.kv_field(&obj_r, sid, 1, span);
+                let key_v = self.temp(k.clone());
+                let key_r = TExpr::new(TExprKind::Var(key_v), k.clone(), span);
+                let idx_v = self.temp(Type::Number);
+                let idx_r = TExpr::new(TExprKind::Var(idx_v), Type::Number, span);
+                let search = TExpr::new(TExprKind::ArraySearch { index: true, eq, arr: bx(keys.clone()), value: bx(key_r.clone()) }, Type::Number, span);
+                let found = TExpr::new(
+                    TExprKind::Cmp(CmpOp::Ne, EqKind::F64, bx(idx_r.clone()), bx(TExpr::new(TExprKind::Num(-1.0), Type::Number, span))),
+                    Type::Bool,
+                    span,
+                );
+                let set_existing = self.arr_set_at(values.clone(), idx_r, val.clone(), span);
+                let push_key = self.arr_push_discard(keys, key_r, span);
+                let push_val = self.arr_push_discard(values, val, span);
+                let if_stmt = TStmt::If(found, vec![set_existing], vec![push_key, push_val]);
+                let body = vec![TStmt::Let(obj_v, Some(o)), TStmt::Let(key_v, Some(key)), TStmt::Let(idx_v, Some(search)), if_stmt];
+                TExpr::new(TExprKind::Block(body, bx(self.void_tail(span))), Type::Void, span)
+            }
+            "has" => {
+                if args.len() != 1 {
+                    wrong_arity(self, "has", 1);
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let key = self.expr_with(&args[0], k);
+                let key = self.coerce(key, k);
+                let keys = self.kv_field(&o, sid, 0, span);
+                TExpr::new(TExprKind::ArraySearch { index: false, eq, arr: bx(keys), value: bx(key) }, Type::Bool, span)
+            }
+            "delete" => {
+                if args.len() != 1 {
+                    wrong_arity(self, "delete", 1);
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let key = self.expr_with(&args[0], k);
+                let key = self.coerce(key, k);
+                self.kv_delete(sid, true, eq, o, key, span)
+            }
+            "clear" => {
+                self.no_args(args, span);
+                let obj_v = self.temp(o.ty.clone());
+                let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
+                let mut body = vec![TStmt::Let(obj_v, Some(o))];
+                body.extend(self.arr_clear(self.kv_field(&obj_r, sid, 0, span), span));
+                body.extend(self.arr_clear(self.kv_field(&obj_r, sid, 1, span), span));
+                TExpr::new(TExprKind::Block(body, bx(self.void_tail(span))), Type::Void, span)
+            }
+            _ => {
+                self.err_help(code::NO_PROPERTY, prop_span, format!("`Map` has no method `{prop}`"), "use `get`, `set`, `has`, `delete` or `clear`");
+                TExpr::new(TExprKind::Null, Type::Error, span)
+            }
+        }
+    }
+
+    fn set_method(&mut self, o: TExpr, t: &Type, prop: &str, prop_span: Span, args: &[Expr], span: Span) -> TExpr {
+        let sid = self.set_struct(t);
+        let eq = self.key_eq(t);
+        match prop {
+            "add" => {
+                if args.len() != 1 {
+                    self.err(code::ARG_COUNT, span, "`add` takes one value");
+                    return self.void_tail(span);
+                }
+                let val = self.expr_with(&args[0], t);
+                let val = self.coerce(val, t);
+                let obj_v = self.temp(o.ty.clone());
+                let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
+                let keys = self.kv_field(&obj_r, sid, 0, span);
+                let val_v = self.temp(t.clone());
+                let val_r = TExpr::new(TExprKind::Var(val_v), t.clone(), span);
+                let has = TExpr::new(TExprKind::ArraySearch { index: false, eq, arr: bx(keys.clone()), value: bx(val_r.clone()) }, Type::Bool, span);
+                let not_has = TExpr::new(TExprKind::Not(bx(has)), Type::Bool, span);
+                let push = self.arr_push_discard(keys, val_r, span);
+                let if_stmt = TStmt::If(not_has, vec![push], Vec::new());
+                let body = vec![TStmt::Let(obj_v, Some(o)), TStmt::Let(val_v, Some(val)), if_stmt];
+                TExpr::new(TExprKind::Block(body, bx(self.void_tail(span))), Type::Void, span)
+            }
+            "has" => {
+                if args.len() != 1 {
+                    self.err(code::ARG_COUNT, span, "`has` takes one value");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let val = self.expr_with(&args[0], t);
+                let val = self.coerce(val, t);
+                let keys = self.kv_field(&o, sid, 0, span);
+                TExpr::new(TExprKind::ArraySearch { index: false, eq, arr: bx(keys), value: bx(val) }, Type::Bool, span)
+            }
+            "delete" => {
+                if args.len() != 1 {
+                    self.err(code::ARG_COUNT, span, "`delete` takes one value");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let val = self.expr_with(&args[0], t);
+                let val = self.coerce(val, t);
+                self.kv_delete(sid, false, eq, o, val, span)
+            }
+            "clear" => {
+                self.no_args(args, span);
+                let obj_v = self.temp(o.ty.clone());
+                let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
+                let mut body = vec![TStmt::Let(obj_v, Some(o))];
+                body.extend(self.arr_clear(self.kv_field(&obj_r, sid, 0, span), span));
+                TExpr::new(TExprKind::Block(body, bx(self.void_tail(span))), Type::Void, span)
+            }
+            _ => {
+                self.err_help(code::NO_PROPERTY, prop_span, format!("`Set` has no method `{prop}`"), "use `add`, `has`, `delete` or `clear`");
+                TExpr::new(TExprKind::Null, Type::Error, span)
+            }
+        }
+    }
+
     // -- Literals ---------------------------------------------------------
 
     fn array_lit(&mut self, elems: &[(bool, Expr)], expected: Option<&Type>, span: Span) -> TExpr {
@@ -745,12 +1160,32 @@ impl Checker<'_> {
     }
 
     fn object_lit(&mut self, props: &[ObjProp], expected: Option<&Type>, span: Span) -> TExpr {
+        // A union target: pick the member whose discriminant literal
+        // matches this literal's discriminant field (an object union,
+        // HANDOFF.md item 2).
+        let union_target = |c: &Self, members: &[Type]| -> Option<crate::types::StructId> {
+            let (name, lits) = c.union_discriminant(members)?;
+            let found = props.iter().find_map(|p| match p {
+                ObjProp::Field(n, e, _) if *n == name => match &e.kind {
+                    ExprKind::Str(s) => Some(s.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })?;
+            let (_, idx) = lits.into_iter().find(|(l, _)| *l == found)?;
+            match &members[idx] {
+                Type::Struct(s) => Some(*s),
+                _ => None,
+            }
+        };
         let target = match expected {
             Some(Type::Struct(s)) => Some(*s),
             Some(Type::Nullable(inner)) => match &**inner {
                 Type::Struct(s) => Some(*s),
+                Type::Union(members) => union_target(self, members),
                 _ => None,
             },
+            Some(Type::Union(members)) => union_target(self, members),
             _ => None,
         };
         // Evaluate the parts in source order into temporaries. `source`
@@ -870,14 +1305,26 @@ impl Checker<'_> {
                     let b = self.to_str(rt);
                     return TExpr::new(TExprKind::Concat(bx(a), bx(b)), Type::String, span);
                 }
+                if lt.ty == Type::Int && rt.ty == Type::Int {
+                    return TExpr::new(TExprKind::Int2(IntOp::Add, bx(lt), bx(rt)), Type::Int, span);
+                }
                 let a = self.coerce(lt, &Type::Number);
                 let b = self.coerce(rt, &Type::Number);
                 TExpr::new(TExprKind::Num2(NumOp::Add, bx(a), bx(b)), Type::Number, span)
             }
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow => {
-                let lt = self.expr(l, Some(&Type::Number));
+                let lt = self.expr(l, None);
+                let rt = self.expr(r, None);
+                if op != BinOp::Pow && lt.ty == Type::Int && rt.ty == Type::Int {
+                    let iop = match op {
+                        BinOp::Sub => IntOp::Sub,
+                        BinOp::Mul => IntOp::Mul,
+                        BinOp::Div => IntOp::Div,
+                        _ => IntOp::Rem,
+                    };
+                    return TExpr::new(TExprKind::Int2(iop, bx(lt), bx(rt)), Type::Int, span);
+                }
                 let a = self.coerce(lt, &Type::Number);
-                let rt = self.expr(r, Some(&Type::Number));
                 let b = self.coerce(rt, &Type::Number);
                 let nop = match op {
                     BinOp::Sub => NumOp::Sub,
@@ -889,6 +1336,9 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Num2(nop, bx(a), bx(b)), Type::Number, span)
             }
             BinOp::Eq | BinOp::Ne => {
+                if let Some(test) = self.typeof_narrow(l, r, span) {
+                    return if op == BinOp::Ne { TExpr::new(TExprKind::Not(bx(test)), Type::Bool, span) } else { test };
+                }
                 let lt = self.expr(l, None);
                 let rt = self.expr(r, Some(&lt.ty.clone()));
                 let test = self.equality(lt, rt, span);
@@ -914,7 +1364,59 @@ impl Checker<'_> {
     }
 
     /// `a === b`.
+    /// `typeof x === "string"` or `"string" === typeof x`: narrows a union
+    /// to its `string` member (or, for `"object"`, to its non-string
+    /// members). `None` if this is not that pattern.
+    fn typeof_narrow(&mut self, l: &Expr, r: &Expr, span: Span) -> Option<TExpr> {
+        let (inner, cat, cat_span) = match (&l.kind, &r.kind) {
+            (ExprKind::Unary(UnOp::Typeof, inner), ExprKind::Str(cat)) => (inner, cat, r.span),
+            (ExprKind::Str(cat), ExprKind::Unary(UnOp::Typeof, inner)) => (inner, cat, l.span),
+            _ => return None,
+        };
+        let te = self.expr(inner, None);
+        let Type::Union(members) = &te.ty else {
+            self.err_help(
+                code::ADVANCED_TYPE,
+                inner.span,
+                format!("`typeof` narrowing needs a union type, not `{}`", self.show(&te.ty)),
+                "give the value a union type, e.g. `let x: Shape | string`",
+            );
+            return Some(TExpr::new(TExprKind::Bool(false), Type::Error, span));
+        };
+        let idxs: Vec<usize> = match cat.as_str() {
+            "string" => members.iter().enumerate().filter(|(_, m)| m.is_stringish()).map(|(i, _)| i).collect(),
+            "object" => members.iter().enumerate().filter(|(_, m)| matches!(m, Type::Struct(_))).map(|(i, _)| i).collect(),
+            _ => {
+                self.err_help(code::ADVANCED_TYPE, cat_span, format!("`typeof` narrowing to {cat:?} is not supported yet"), "use \"string\" or \"object\"");
+                Vec::new()
+            }
+        };
+        if idxs.is_empty() {
+            let msg = format!("`{}` has no `{cat}` member", self.show(&te.ty));
+            self.err(code::TYPE_MISMATCH, cat_span, msg);
+            return Some(TExpr::new(TExprKind::Bool(false), Type::Error, span));
+        }
+        Some(TExpr::new(TExprKind::UnionIs(Box::new(te), idxs), Type::Bool, span))
+    }
+
+    /// `union.tag === "lit"` or `"lit" === union.tag`: narrows the union
+    /// to the member whose discriminant literal is `lit`.
+    fn discriminant_narrow(&mut self, a: &TExpr, b: &TExpr, span: Span) -> Option<TExpr> {
+        let (tag, lit) = match (&a.kind, &b.kind) {
+            (TExprKind::UnionTag(o), TExprKind::Str(s)) => (o, s),
+            (TExprKind::Str(s), TExprKind::UnionTag(o)) => (o, s),
+            _ => return None,
+        };
+        let Type::Union(members) = &tag.ty else { return None };
+        let (_, lits) = self.union_discriminant(members)?;
+        let idx = lits.into_iter().find(|(l, _)| l == lit)?.1;
+        Some(TExpr::new(TExprKind::UnionIs(Box::new((**tag).clone()), vec![idx]), Type::Bool, span))
+    }
+
     fn equality(&mut self, a: TExpr, b: TExpr, span: Span) -> TExpr {
+        if let Some(t) = self.discriminant_narrow(&a, &b, span) {
+            return t;
+        }
         let is_null = |t: &TExpr| matches!(t.kind, TExprKind::Null);
         if is_null(&a) || is_null(&b) {
             let other = if is_null(&a) { b } else { a };
@@ -950,6 +1452,7 @@ impl Checker<'_> {
             (Type::Number, Type::Number) => EqKind::F64,
             (Type::Bool, Type::Bool) | (Type::Element, Type::Element) => EqKind::I32,
             (Type::Enum(x), Type::Enum(y)) if x == y => EqKind::I32,
+            (Type::Int, Type::Int) => EqKind::I32,
             (Type::String, Type::String) => EqKind::Str,
             (Type::Error, _) | (_, Type::Error) => EqKind::I32,
             (x, y) if x == y && x.repr() == crate::types::Repr::Ref => EqKind::Ref,

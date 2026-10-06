@@ -1,6 +1,6 @@
 //! JSX: controls of UI API 1.0 and user components (SPEC.md §6.3, §7.2).
 
-use super::{Binding, Checker};
+use super::{Binding, Checker, ReactiveCtx};
 use crate::ast::{Expr, ExprKind, JsxChild, JsxElement};
 use crate::controls::{self, ChildKind, PropTy, Target};
 use crate::diag::code;
@@ -10,6 +10,18 @@ use std::rc::Rc;
 
 impl Checker<'_> {
     pub(super) fn jsx(&mut self, el: &JsxElement) -> TJsx {
+        // Inside JSX, a signal/computed read is reactive (it re-runs when the
+        // value changes), unlike a plain read in the component body.
+        let saved = self.fx.reactive;
+        if saved != ReactiveCtx::Callback {
+            self.fx.reactive = ReactiveCtx::Reactive;
+        }
+        let result = self.jsx_inner(el);
+        self.fx.reactive = saved;
+        result
+    }
+
+    fn jsx_inner(&mut self, el: &JsxElement) -> TJsx {
         match self.lookup(&el.name) {
             Some(Binding::Control(kind)) => self.control(el, controls::by_kind(kind)),
             Some(Binding::Func(fid)) => self.component(el, fid),

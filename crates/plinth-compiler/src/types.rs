@@ -9,6 +9,10 @@ pub type EnumId = u32;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
     Number,
+    /// `int` from `plinth:core` (SPEC.md §4.2): a branded `i32`. Literals
+    /// and arithmetic stay `i32`; it converts to `number` implicitly, and
+    /// from `number` only with `int(x)`.
+    Int,
     Bool,
     String,
     /// A union of string literals. At run time it is a string.
@@ -26,6 +30,17 @@ pub enum Type {
     Element,
     Enum(EnumId),
     App,
+    /// A discriminated union (SPEC.md §4.2): the runtime value is a plain
+    /// heap reference and the GC type-id in its header tells which member
+    /// it is. Members are `Struct` (object shapes) and at most one
+    /// `String`. Narrowed with `typeof` or a shared literal field.
+    Union(Rc<[Type]>),
+    /// `Map<K, V>` (SPEC.md §4.2). `K` is `string`, `int`, `number`,
+    /// `boolean` or an enum. At run time it is a 2-field struct of a keys
+    /// array and a values array (linear scan; HANDOFF.md item 5).
+    Map(Box<Type>, Box<Type>),
+    /// `Set<T>`: a 1-field struct holding a keys array, the same way.
+    Set(Box<Type>),
     /// The type of an expression with an error. It is compatible with all
     /// types, so one error does not cause more.
     Error,
@@ -64,14 +79,17 @@ impl Type {
     pub fn repr(&self) -> Repr {
         match self {
             Type::Number => Repr::F64,
-            Type::Bool | Type::Element | Type::Enum(_) | Type::Signal(_) | Type::Computed(_) | Type::App => Repr::I32,
+            Type::Int | Type::Bool | Type::Element | Type::Enum(_) | Type::Signal(_) | Type::Computed(_) | Type::App => Repr::I32,
             Type::String
             | Type::StrLits(_)
             | Type::Null
             | Type::Nullable(_)
             | Type::Array(_)
             | Type::Struct(_)
-            | Type::Func(_) => Repr::Ref,
+            | Type::Func(_)
+            | Type::Union(_)
+            | Type::Map(..)
+            | Type::Set(_) => Repr::Ref,
             Type::Void => Repr::Void,
             Type::Error => Repr::I32,
         }
@@ -137,6 +155,7 @@ impl fmt::Display for Display<'_> {
         let sub = |ty| Display { ty, structs: self.structs, enums: self.enums };
         match self.ty {
             Type::Number => write!(f, "number"),
+            Type::Int => write!(f, "int"),
             Type::Bool => write!(f, "boolean"),
             Type::String => write!(f, "string"),
             Type::StrLits(l) => {
@@ -167,6 +186,12 @@ impl fmt::Display for Display<'_> {
             Type::Element => write!(f, "JSX.Element"),
             Type::Enum(id) => write!(f, "{}", self.enums[*id as usize].name),
             Type::App => write!(f, "App"),
+            Type::Union(members) => {
+                let parts: Vec<String> = members.iter().map(|m| sub(m).to_string()).collect();
+                write!(f, "{}", parts.join(" | "))
+            }
+            Type::Map(k, v) => write!(f, "Map<{}, {}>", sub(k), sub(v)),
+            Type::Set(t) => write!(f, "Set<{}>", sub(t)),
             Type::Error => write!(f, "<error>"),
         }
     }

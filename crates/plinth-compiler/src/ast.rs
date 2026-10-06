@@ -159,6 +159,9 @@ pub struct FuncDecl {
     pub exported: bool,
     pub is_default: bool,
     pub span: Span,
+    /// Names of `<T, U, …>` type parameters (generic functions, monomorphized
+    /// per call site; HANDOFF.md item 3). Empty for an ordinary function.
+    pub type_params: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -214,6 +217,8 @@ pub enum UnOp {
     Neg,
     Plus,
     Not,
+    /// Only valid directly in `typeof x === "..."` (union narrowing).
+    Typeof,
 }
 
 #[derive(Debug, Clone)]
@@ -245,6 +250,9 @@ pub enum ExprKind {
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
     Func(Box<FuncDecl>),
     Jsx(Box<JsxElement>),
+    /// `new Map<K, V>()` or `new Set<T>()` (HANDOFF.md item 5). No other
+    /// `new` expression is supported.
+    New(String, Vec<TypeAnn>),
 }
 
 #[derive(Debug, Clone)]
