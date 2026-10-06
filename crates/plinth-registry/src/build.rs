@@ -63,6 +63,10 @@ fn incoming_packages(folder: &Path) -> Result<Vec<PathBuf>> {
 fn add_package(folder: &Path, bytes: &[u8], report: &mut Report) -> Result<()> {
     let pkg = plinth_package::Package::read(bytes).context("not a valid .plnt package")?;
     plinth_link::cores::link_app(&pkg.component).context("the package does not link against an installed core")?;
+    // A signature that does not check out is refused; an unsigned package
+    // is still allowed (`docs/HUB.md` §6.1, draft-1 registries keep
+    // working with no signatures).
+    let signer = plinth_package::signature::verify(&pkg).context("the package signature does not check out")?;
     let declared: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
     plinth_link::split::check_capabilities(&pkg.component, &declared)?;
     let reachable = plinth_link::split::reachable_capabilities(&pkg.component)?;
@@ -107,6 +111,21 @@ fn add_package(folder: &Path, bytes: &[u8], report: &mut Report) -> Result<()> {
         return Ok(());
     }
 
+    // A new version must be signed by the same key as the previous one
+    // (`docs/HUB.md` §6.1); an unsigned app, or a first version, imposes no
+    // such rule. Key rotation statements are future work.
+    if let Some(previous) = doc.versions.first()
+        && let (Some(old_key), Some(new)) = (&previous.signer, &signer)
+        && old_key != &new.key
+    {
+        bail!(
+            "{} is signed by a different key ({}) than the previous version ({}); key rotation is not supported yet",
+            pkg.manifest.id,
+            new.key,
+            old_key
+        );
+    }
+
     let core = plinth_link::split::app_core_version(&pkg.component).map(|(maj, min)| format!("{maj}.{min}")).unwrap_or_default();
     let entry = VersionEntry {
         version: pkg.manifest.version.clone(),
@@ -118,6 +137,7 @@ fn add_package(folder: &Path, bytes: &[u8], report: &mut Report) -> Result<()> {
         reachable: reachable.into_iter().collect(),
         published: now_rfc3339(),
         yanked: None,
+        signer: signer.map(|s| s.key),
     };
     report.added.push((pkg.manifest.id.clone(), entry.version.clone()));
     doc.versions.push(entry);

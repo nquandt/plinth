@@ -117,6 +117,51 @@ fn adding_a_second_version_appends() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Compiles counter, signs it with `identity`, and sets its manifest
+/// publisher to `identity.name` (`docs/HUB.md` §6.1).
+fn compile_counter_signed(id: &str, version: &str, identity: &plinth_package::publisher::PublisherIdentity) -> Vec<u8> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/counter");
+    let fs = plinth_compiler::driver::DiskFs { root };
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &[]).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("counter has errors:\n{}", diags.join("\n"))
+    });
+    let component = artifact.app;
+    let cfg = plinth_package::ProjectConfig::parse(&format!(
+        "id = \"{id}\"\nname = \"Counter\"\nversion = \"{version}\"\npublisher = \"{}\"\n",
+        identity.name
+    ))
+    .unwrap();
+    let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
+    let mut pkg = plinth_package::Package { manifest, component, assets: Vec::new(), signature: None };
+    pkg.signature = Some(plinth_package::signature::sign(&pkg, identity).unwrap());
+    pkg.write().unwrap()
+}
+
+fn fake_identity(name: &str) -> plinth_package::publisher::PublisherIdentity {
+    plinth_package::publisher::PublisherIdentity { name: name.to_owned(), signing_key: ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng) }
+}
+
+/// §6.1: the generator copies the signer key into the version entry, and
+/// refuses a new version signed by a different key.
+#[test]
+fn signer_is_recorded_and_enforced() {
+    let dir = temp_dir("signer");
+    let acme = fake_identity("Acme");
+    std::fs::write(dir.join("a.plnt"), compile_counter_signed("com.example.counter", "0.1.0", &acme)).unwrap();
+    build(&dir, &Options::default()).unwrap();
+
+    let doc_text = std::fs::read_to_string(dir.join("apps/com.example.counter/index.json")).unwrap();
+    let doc: plinth_registry::AppDocument = serde_json::from_str(&doc_text).unwrap();
+    assert_eq!(doc.versions[0].signer.as_deref(), Some(acme.key_id().as_str()));
+
+    let other = fake_identity("Acme");
+    std::fs::write(dir.join("b.plnt"), compile_counter_signed("com.example.counter", "0.2.0", &other)).unwrap();
+    assert!(build(&dir, &Options::default()).is_err());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 fn snapshot(dir: &Path) -> Vec<(String, String)> {
     let mut out = Vec::new();
     fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {

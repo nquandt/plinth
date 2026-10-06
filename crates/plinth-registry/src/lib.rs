@@ -103,6 +103,11 @@ pub struct VersionEntry {
     pub published: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yanked: Option<String>,
+    /// The signer's key id (`docs/HUB.md` §6.1, phase H1), copied from the
+    /// package's `signature.json`. `None` for an unsigned package (draft-1
+    /// registries without signatures still work).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,6 +202,7 @@ mod tests {
                 reachable: vec![],
                 published: "t".into(),
                 yanked: None,
+                signer: None,
             },
             VersionEntry {
                 version: "1.2.0".into(),
@@ -208,6 +214,7 @@ mod tests {
                 reachable: vec![],
                 published: "t".into(),
                 yanked: None,
+                signer: None,
             },
             VersionEntry {
                 version: "1.1.5".into(),
@@ -219,6 +226,7 @@ mod tests {
                 reachable: vec![],
                 published: "t".into(),
                 yanked: None,
+                signer: None,
             },
         ];
         sort_versions(&mut v);

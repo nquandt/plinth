@@ -5012,10 +5012,12 @@ name = "plinth-registry"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ed25519-dalek",
  "plinth-compiler",
  "plinth-hub",
  "plinth-link",
  "plinth-package",
+ "rand_core 0.6.4",
  "serde",
  "serde_json",
  "sha2",
