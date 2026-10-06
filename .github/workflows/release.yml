@@ -1,0 +1,148 @@
+# Builds release binaries and npm packages on a `v*` tag, and (gated)
+# publishes them. See docs/RELEASING.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to npm after building (needs NPM_TOKEN)"
+        type: boolean
+        default: false
+
+env:
+  GPUI_CE_COMMIT: 30572650c80c1975c33bfd66c90ae66ea00ee1cc
+  CARGO_BUILD_JOBS: 3
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: win32-x64
+            os: windows-latest
+            exe: plinth.exe
+          - platform: linux-x64
+            os: ubuntu-latest
+            exe: plinth
+          - platform: darwin-arm64
+            os: macos-14
+            exe: plinth
+          - platform: darwin-x64
+            os: macos-13
+            exe: plinth
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout plinth
+        uses: actions/checkout@v4
+        with:
+          path: plinth
+
+      - name: Checkout gpui-ce (sibling, pinned commit)
+        uses: actions/checkout@v4
+        with:
+          repository: nquandt/gpui-ce
+          ref: ${{ env.GPUI_CE_COMMIT }}
+          path: gpui-ce
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: plinth -> target
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install system packages for gpui-ce (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev libfontconfig-dev
+
+      - name: cargo build --release -p plinth-cli
+        working-directory: plinth
+        run: cargo build --release -p plinth-cli
+
+      - name: Set npm versions from Cargo.toml
+        working-directory: plinth
+        run: node scripts/set-version.mjs
+
+      - name: Pack platform package
+        working-directory: plinth
+        run: node scripts/npm-pack.mjs --platform ${{ matrix.platform }} --binary target/release/${{ matrix.exe }}
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.platform }}
+          path: plinth/target/npm/*.tgz
+          if-no-files-found: error
+
+  meta:
+    name: Pack meta packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node scripts/set-version.mjs
+      - run: node scripts/npm-pack.mjs --meta
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-meta
+          path: target/npm/*.tgz
+          if-no-files-found: error
+
+  publish:
+    name: Publish to npm
+    needs: [build, meta]
+    runs-on: ubuntu-latest
+    # Gated: only on a real v* tag, or an explicit opt-in workflow_dispatch,
+    # and only when the NPM_TOKEN secret is configured.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish == 'true'
+    environment: npm-publish
+    permissions:
+      id-token: write # npm provenance
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download all tarballs
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: npm-*
+          merge-multiple: true
+
+      - name: Check NPM_TOKEN is configured
+        run: |
+          if [ -z "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "NPM_TOKEN secret is not set; skipping publish." >&2
+            exit 1
+          fi
+
+      - name: Publish each tarball
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -e
+          for tgz in dist/*.tgz; do
+            echo "publishing $tgz"
+            npm publish "$tgz" --access public --provenance
+          done

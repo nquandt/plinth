@@ -1,0 +1,184 @@
+# CI for Plinth. Windows is the tested platform (SPEC.md §1). Linux and
+# macOS jobs are best-effort: they run `cargo check` and the non-GUI test
+# crates, but gpui-ce rendering is not verified there yet, so those steps
+# use `continue-on-error: true`. See HANDOFF.md.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# gpui-ce is a path dependency checked out as a sibling directory, pinned to
+# a known-good commit (see docs/RELEASING.md for how to update the pin).
+env:
+  GPUI_CE_REPO: https://github.com/nquandt/gpui-ce
+  GPUI_CE_COMMIT: 30572650c80c1975c33bfd66c90ae66ea00ee1cc
+  CARGO_BUILD_JOBS: 3
+
+jobs:
+  windows:
+    name: Windows (tested)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout plinth
+        uses: actions/checkout@v4
+        with:
+          path: plinth
+
+      - name: Checkout gpui-ce (sibling, pinned commit)
+        uses: actions/checkout@v4
+        with:
+          repository: nquandt/gpui-ce
+          ref: ${{ env.GPUI_CE_COMMIT }}
+          path: gpui-ce
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: plinth -> target
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Test crates one at a time: linking several large gpui test binaries
+      # at once fails on Windows (LNK1318/LNK1201). See HANDOFF.md §7.
+      - name: cargo test -p plinth-protocol
+        working-directory: plinth
+        run: cargo test -p plinth-protocol
+      - name: cargo test -p plinth-rt
+        working-directory: plinth
+        run: cargo test -p plinth-rt
+      - name: cargo test -p plinth-ui
+        working-directory: plinth
+        run: cargo test -p plinth-ui
+      - name: cargo test -p plinth-package
+        working-directory: plinth
+        run: cargo test -p plinth-package
+      - name: cargo test -p plinth-compiler
+        working-directory: plinth
+        run: cargo test -p plinth-compiler
+      - name: cargo test -p plinth-runner-wasmtime
+        working-directory: plinth
+        run: cargo test -p plinth-runner-wasmtime
+      - name: cargo test -p plinth-host-desktop
+        working-directory: plinth
+        run: cargo test -p plinth-host-desktop
+
+      - name: tsc check of every example
+        working-directory: plinth
+        shell: bash
+        run: |
+          set -e
+          for dir in examples/*/; do
+            name=$(basename "$dir")
+            [ -f "$dir/tsconfig.json" ] || continue
+            echo "::group::tsc $name"
+            (cd "$dir" && npx -y -p typescript@7 tsc -p .)
+            echo "::endgroup::"
+          done
+
+  linux:
+    name: Linux (best effort, not yet verified)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout plinth
+        uses: actions/checkout@v4
+        with:
+          path: plinth
+
+      - name: Checkout gpui-ce (sibling, pinned commit)
+        uses: actions/checkout@v4
+        with:
+          repository: nquandt/gpui-ce
+          ref: ${{ env.GPUI_CE_COMMIT }}
+          path: gpui-ce
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: plinth -> target
+
+      # Packages gpui-ce needs to build on Linux (from gpui-ce's own CI).
+      - name: Install system packages for gpui-ce
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev libfontconfig-dev
+
+      # Only Windows is tested so far (HANDOFF.md). Keep this job green-ish
+      # but non-blocking until Linux rendering is actually verified.
+      - name: cargo check (workspace)
+        working-directory: plinth
+        continue-on-error: true
+        run: cargo check --workspace
+
+      - name: cargo test -p plinth-protocol
+        working-directory: plinth
+        continue-on-error: true
+        run: cargo test -p plinth-protocol
+      - name: cargo test -p plinth-package
+        working-directory: plinth
+        continue-on-error: true
+        run: cargo test -p plinth-package
+      - name: cargo test -p plinth-compiler
+        working-directory: plinth
+        continue-on-error: true
+        run: cargo test -p plinth-compiler
+
+  macos:
+    name: macOS (best effort, not yet verified)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout plinth
+        uses: actions/checkout@v4
+        with:
+          path: plinth
+
+      - name: Checkout gpui-ce (sibling, pinned commit)
+        uses: actions/checkout@v4
+        with:
+          repository: nquandt/gpui-ce
+          ref: ${{ env.GPUI_CE_COMMIT }}
+          path: gpui-ce
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: plinth -> target
+
+      # Only Windows is tested so far (HANDOFF.md). Keep this job green-ish
+      # but non-blocking until macOS rendering is actually verified.
+      - name: cargo check (workspace)
+        working-directory: plinth
+        continue-on-error: true
+        run: cargo check --workspace
+
+      - name: cargo test -p plinth-protocol
+        working-directory: plinth
+        continue-on-error: true
+        run: cargo test -p plinth-protocol
+      - name: cargo test -p plinth-package
+        working-directory: plinth
+        continue-on-error: true
+        run: cargo test -p plinth-package
+      - name: cargo test -p plinth-compiler
+        working-directory: plinth
+        continue-on-error: true
+        run: cargo test -p plinth-compiler

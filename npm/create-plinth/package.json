@@ -3,8 +3,17 @@
   "version": "0.1.0",
   "description": "Start a new Plinth app: npm create plinth@latest my-app",
   "license": "Apache-2.0",
-  "repository": { "type": "git", "url": "https://github.com/nquandt/plinth" },
-  "bin": { "create-plinth": "index.js" },
-  "files": ["index.js"],
-  "engines": { "node": ">=18" }
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nquandt/plinth"
+  },
+  "bin": {
+    "create-plinth": "index.js"
+  },
+  "files": [
+    "index.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
 }
