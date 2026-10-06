@@ -12,6 +12,7 @@ The **Plinth Hub** is the app that a non-technical person installs to get and us
 2. **Keep apps.** The user adds apps to a library, puts them in groups, and gets updates.
 3. **Run apps safely.** The Hub shows what each app can do (its capabilities) before it runs. The user approves, limits, or blocks it.
 4. **Supply the runtime.** The Hub contains a Plinth host and installs the runtime cores (`SPEC.md` §10.5) that apps need.
+5. **Keep the user's profile (draft).** The library, the grants and the data of every app belong to the user. They are on the user's devices or in storage that the user chooses, encrypted end to end, and never on the vendor's servers. A new device joins the profile and gets the apps and their data back. See `docs/STORAGE.md` §2.1.
 
 The Hub is the same product on desktop (Windows, macOS, Linux), mobile (Android, iOS), and the web. An app that works in the Hub on one device works the same on every other device, because each device runs the same `.plnt` file on the same core version.
 

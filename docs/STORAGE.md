@@ -34,6 +34,37 @@ The model has six concepts. The host owns all of them. An app never sees a crede
 5. **Sync engine.** A host service that copies a space between a local copy and a remote provider. The app works offline against the local copy. The host finds conflicts with ETags or version ids, keeps both versions, and tells the app through an event. The app does not need network access or credentials for sync.
 6. **Secrets.** A small `plinth:secrets` API that keeps an app's own tokens (S3), encrypted and separate for each app, in the OS keychain where possible. It is not for spaces; spaces need no app secrets.
 
+### 2.1 The profile: your device or your storage, never the vendor's
+
+The host's storage is also the user's **profile**. A profile holds everything that belongs to the user, not to an app:
+
+- the identity: a profile key pair, made on the first device;
+- the provider settings (where the user's storage is);
+- the Hub library: installed apps, versions, pins, groups;
+- every grant, block and policy decision;
+- every space, including each app's private space.
+
+**Principle: the data of a Plinth app is on the user's device or in the user's storage, never on the vendor's servers, unless the user gives the app a `net` grant to send it there (S3).**
+
+**A new device.** The user installs a Plinth host (the Hub app, or any Plinth app with the host inside) and connects it to the profile. The host gets the provider settings, restores the library and the grants, and syncs the spaces. Each app then opens with its data, as on the first device, with no account at the vendor.
+
+Design rules for the profile:
+
+1. **End-to-end encryption by default.** The storage provider is not trusted, even when it is the user's own bucket at a cloud company. The host encrypts every object before upload. Keys come from the profile key and never leave the user's devices in plain form. (S11 becomes the default, not an option.)
+2. **Device pairing.** A new device joins through an existing device (a QR code or a short code that carries the provider settings and a wrapped key), or through the provider settings plus a recovery phrase. The profile lists its devices, and the user can remove a device; the host then rotates the keys.
+3. **Recovery.** A recovery phrase, made at profile creation, restores the profile key if every device is lost. Without it, the data cannot be read. The Hub says this clearly.
+4. **More than one profile.** A user can have a personal and a work profile on one device. A profile is a hard boundary: apps, grants and spaces do not cross profiles. An organization can manage a work profile (S10).
+5. **Grants travel with the profile.** A grant made on one device is valid on every device of the profile. The consent screen says so.
+6. **Offline first.** The device keeps a full local copy of what it uses. Sync runs when the provider can be reached.
+
+This turns the Hub library (docs/HUB.md) and the storage design into one feature. It also gives an answer to "how do I move my apps to a new computer" with no Plinth server in the path.
+
+Open questions for the profile:
+
+- ST-Q7: Which encryption design (for example age or libsodium secretbox for objects, with a key hierarchy: profile key → space keys → object keys)? Encrypted file names, or plain names for easier debugging?
+- ST-Q8: Pairing on the web host: a browser profile has no keychain. Keep the key in IndexedDB as a non-extractable WebCrypto key, and require the recovery phrase on each new browser?
+- ST-Q9: Can an app ask for the user's identity (for example a public key to sign shared documents) without a vendor account? A `profile.identity` capability, with a separate key for each app so apps cannot track the user across apps.
+
 **Manifest.** An app declares the spaces that it wants and why, for example: `spaces = [{ name = "vault", mode = "read-write", reason = "Your notes" }]`. At install or first use, the user picks an existing space or makes a new one for each request. The app cannot name a provider or a location.
 
 ## 3. Isolation rules
@@ -118,5 +149,7 @@ The Obsidian-like notes app is the first user of this design. The slice builds o
 4. The Hub: configure a provider, make a space, grant it, remove a grant. The consent screen shows the space requests.
 5. Isolation tests: a second app cannot reach the vault without a grant; path tricks fail; scoped credentials where rustfs and Azurite support them.
 6. Not in this slice: the cross-app data capability (§3.1, deferred). A second app tests the walls instead: without a grant it cannot read the notes app's private space or the vault; a package with the same id from another publisher gets nothing; removing a space grant closes the handle.
+
+The slice does not build the full profile (§2.1). It keeps the profile in mind: object layout, keys and the library format must not block it later. Encryption of synced objects is in the slice if ST-Q7 has an answer by then.
 
 Editor: Markdown source in a `TextArea`, with a new `Markdown` display control for the reading view (headings, lists, links, `[[wiki links]]`, code). A rich-text control is a later decision.
