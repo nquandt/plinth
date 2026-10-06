@@ -1,0 +1,4 @@
+app/main.tsx(3,93): error PL3001: `series` must be an array of `{ name, points }` objects
+  function Home() { return <Screen title="Home"><Chart label="c" kind="bar" data={[]} series={s} /></Screen>; }
+                                                                                              ^
+  help: write `series={[{ name: "2026", points: [...] }]}`, or pass a `ChartSeriesDef[]`

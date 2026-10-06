@@ -287,8 +287,8 @@ small local change), per the dogfooding task's scope.
   index reads, `str_concat`, `json_num_str`); no new runtime function. The
   array literal path does not change. `ChartPoint` and `ChartSeriesDef` are
   now real types when imported from `plinth:ui` (before, the import was
-  `PL1004`). `series` itself must still be an array literal (only its
-  `points` can be dynamic). `examples/budget`'s statistics screen now
+  `PL1004`). `series` can also be any expression now (see "`Chart`
+  `series` as an expression" below). `examples/budget`'s statistics screen now
   builds both charts with `categories.map(...)`. Tests: the "Dynamic
   `Chart` data" section of `crates/plinth-compiler/tests/collections.rs`,
   and a chart check in `budget_add_filter_edit_delete_and_stats`

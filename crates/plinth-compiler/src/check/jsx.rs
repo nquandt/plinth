@@ -139,12 +139,15 @@ impl Checker<'_> {
             if ps.ty == PropTy::ChartSeries {
                 let Target::Prop(id) = ps.target else { unreachable!("ChartSeries always targets a prop") };
                 let ExprKind::Array(items) = &value.kind else {
-                    self.err_help(
-                        code::TYPE_MISMATCH,
-                        value.span,
-                        "`series` must be an array literal of `{ name, points }` objects",
-                        "write `series={[{ name: \"2026\", points: [...] }]}`",
-                    );
+                    match self.encode_chart_series_dyn(&value) {
+                        Some(te) => props.push(TProp { target: PropTarget::Str(id), value: te }),
+                        None => self.err_help(
+                            code::TYPE_MISMATCH,
+                            value.span,
+                            "`series` must be an array of `{ name, points }` objects",
+                            "write `series={[{ name: \"2026\", points: [...] }]}`, or pass a `ChartSeriesDef[]`",
+                        ),
+                    }
                     continue;
                 };
                 let mut parts = Vec::new();
@@ -465,10 +468,14 @@ impl Checker<'_> {
     /// read in `value` keeps the prop reactive. `None` means another type;
     /// the caller reports the diagnostic.
     fn encode_chart_points_dyn(&mut self, value: &Expr) -> Option<TExpr> {
-        let span = value.span;
         let arr = self.expr(value, None);
-        let arr_ty = arr.ty.clone();
-        let Type::Array(elem) = &arr_ty else { return None };
+        self.encode_points_texpr(arr)
+    }
+
+    /// The point encoding for a checked array of `{ label, value }` structs.
+    fn encode_points_texpr(&mut self, arr: TExpr) -> Option<TExpr> {
+        let span = arr.span;
+        let Type::Array(elem) = &arr.ty else { return None };
         let Type::Struct(sid) = **elem else { return None };
         let def = &self.prog.structs[sid as usize];
         let (label_i, label_ty) = def.field("label").map(|(i, f)| (i as u32, f.ty.clone()))?;
@@ -476,6 +483,48 @@ impl Checker<'_> {
         if !label_ty.is_stringish() || !matches!(value_ty, Type::Number | Type::Int) {
             return None;
         }
+        self.encode_each(arr, "\u{1f}", |c, pt| {
+            let label = TExpr::new(TExprKind::Field(bx(pt.clone()), sid, label_i), label_ty.clone(), span);
+            let label = c.coerce(label, &Type::String);
+            let v = TExpr::new(TExprKind::Field(bx(pt), sid, value_i), value_ty.clone(), span);
+            let v = c.coerce(v, &Type::Number);
+            let v_str = TExpr::new(TExprKind::Rt("json_num_str", vec![v]), Type::String, span);
+            let sep = TExpr::new(TExprKind::Str("\u{1}".into()), Type::String, span);
+            Some(c.concat3(label, sep, v_str, span))
+        })
+    }
+
+    /// `Chart.series` as any other expression (a variable, a `computed`, a
+    /// `.map()` result): an array of structs with a `name: string` and a
+    /// `points` array of `{ label, value }` structs (`ChartSeriesDef`). The
+    /// encoding is the same as for a literal, built at run time.
+    fn encode_chart_series_dyn(&mut self, value: &Expr) -> Option<TExpr> {
+        let arr = self.expr(value, None);
+        let span = arr.span;
+        let Type::Array(elem) = &arr.ty else { return None };
+        let Type::Struct(sid) = **elem else { return None };
+        let def = &self.prog.structs[sid as usize];
+        let (name_i, name_ty) = def.field("name").map(|(i, f)| (i as u32, f.ty.clone()))?;
+        let (points_i, points_ty) = def.field("points").map(|(i, f)| (i as u32, f.ty.clone()))?;
+        if !name_ty.is_stringish() {
+            return None;
+        }
+        self.encode_each(arr, "\u{1e}", |c, s| {
+            let name = TExpr::new(TExprKind::Field(bx(s.clone()), sid, name_i), name_ty.clone(), span);
+            let name = c.coerce(name, &Type::String);
+            let points = TExpr::new(TExprKind::Field(bx(s), sid, points_i), points_ty.clone(), span);
+            let points = c.encode_points_texpr(points)?;
+            let sep = TExpr::new(TExprKind::Str("\u{1}".into()), Type::String, span);
+            Some(c.concat3(name, sep, points, span))
+        })
+    }
+
+    /// A loop over the array `arr` that joins `piece(element)` with `sep`.
+    /// `None` when `piece` gives `None` (a wrong element type).
+    fn encode_each(&mut self, arr: TExpr, sep: &str, piece: impl FnOnce(&mut Self, TExpr) -> Option<TExpr>) -> Option<TExpr> {
+        let span = arr.span;
+        let arr_ty = arr.ty.clone();
+        let Type::Array(elem) = &arr_ty else { return None };
         let var = |v: VarId, ty: &Type| TExpr::new(TExprKind::Var(v), ty.clone(), span);
         let str_lit = |t: &str| TExpr::new(TExprKind::Str(t.into()), Type::String, span);
         let num = |n: f64| TExpr::new(TExprKind::Num(n), Type::Number, span);
@@ -485,15 +534,13 @@ impl Checker<'_> {
         let pt_v = self.temp((**elem).clone());
         let acc_v = self.temp(Type::String);
         let i_r = var(i_v, &Type::Number);
-        let pt_r = var(pt_v, elem);
-        let len = TExpr::new(TExprKind::Coerce(Coercion::I32ToNum, bx(TExpr::new(TExprKind::Rt("arr_len", vec![var(arr_v, &arr_ty)]), Type::Bool, span))), Type::Number, span);
+        let len = TExpr::new(
+            TExprKind::Coerce(Coercion::I32ToNum, bx(TExpr::new(TExprKind::Rt("arr_len", vec![var(arr_v, &arr_ty)]), Type::Bool, span))),
+            Type::Number,
+            span,
+        );
         let get = TExpr::new(TExprKind::Index(bx(var(arr_v, &arr_ty)), bx(i_r.clone())), (**elem).clone(), span);
-        let label = TExpr::new(TExprKind::Field(bx(pt_r.clone()), sid, label_i), label_ty.clone(), span);
-        let label = self.coerce(label, &Type::String);
-        let v = TExpr::new(TExprKind::Field(bx(pt_r), sid, value_i), value_ty.clone(), span);
-        let v = self.coerce(v, &Type::Number);
-        let v_str = TExpr::new(TExprKind::Rt("json_num_str", vec![v]), Type::String, span);
-        let piece = self.concat3(label, str_lit("\u{1}"), v_str, span);
+        let piece = piece(self, var(pt_v, elem))?;
         let append = |acc_v: VarId, e: TExpr| {
             let sum = TExpr::new(TExprKind::Rt("str_concat", vec![TExpr::new(TExprKind::Var(acc_v), Type::String, span), e]), Type::String, span);
             TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(acc_v), bx(sum)), Type::String, span))
@@ -501,7 +548,7 @@ impl Checker<'_> {
         let gt0 = TExpr::new(TExprKind::Cmp(CmpOp::Gt, EqKind::F64, bx(i_r.clone()), bx(num(0.0))), Type::Bool, span);
         let body = vec![
             TStmt::Let(pt_v, Some(get)),
-            TStmt::If(gt0, vec![append(acc_v, str_lit("\u{1f}"))], Vec::new()),
+            TStmt::If(gt0, vec![append(acc_v, str_lit(sep))], Vec::new()),
             append(acc_v, piece),
         ];
         let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(var(len_v, &Type::Number))), Type::Bool, span);

@@ -342,3 +342,22 @@ fn chart_data_of_the_wrong_type_is_rejected() {
     let main = chart_app("const xs = [{ label: 1, value: 2 }];\n  const add = () => {};", "data={xs}");
     assert_eq!(codes(&main), ["PL3001"]);
 }
+
+#[test]
+fn chart_series_from_a_computed_map_updates() {
+    let body = "const years = signal<number[]>([2025]);\n  const add = () => years.set([...years(), 2026]);\n  const series = computed(() => years().map((y): ChartSeriesDef => ({ name: \"\" + y, points: [{ label: \"q1\", value: y - 2000 }, { label: \"q2\", value: 1 }] })));";
+    let main = chart_app(body, "data={[]} series={series()}").replace("ChartPoint, signal", "ChartPoint, ChartSeriesDef, signal");
+    let (before, after) = chart_prop(&main, plinth_protocol::prop::SERIES, Some("Add"));
+    assert_eq!(before, "2025\u{1}q1\u{1}25\u{1f}q2\u{1}1");
+    assert_eq!(after, "2025\u{1}q1\u{1}25\u{1f}q2\u{1}1\u{1e}2026\u{1}q1\u{1}26\u{1f}q2\u{1}1");
+}
+
+#[test]
+fn chart_series_from_a_variable_and_wrong_types() {
+    let body = "const s: ChartSeriesDef[] = [];\n  const add = () => {};";
+    let main = chart_app(body, "data={[]} series={s}").replace("ChartPoint, signal", "ChartPoint, ChartSeriesDef, signal");
+    let (before, _) = chart_prop(&main, plinth_protocol::prop::SERIES, None);
+    assert_eq!(before, "");
+    let main = chart_app("const s = [{ name: \"a\", points: [1] }];\n  const add = () => {};", "data={[]} series={s}");
+    assert_eq!(codes(&main), ["PL3001"]);
+}
