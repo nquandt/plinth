@@ -1,4 +1,0 @@
-app/main.tsx(3,19): error PL3004: `Promise.race` is not supported
-  const p = Promise.race([f()]);
-                    ^^^^
-  help: use `Promise.all`, `Promise.resolve` or `Promise.reject`

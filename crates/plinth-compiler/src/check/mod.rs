@@ -252,7 +252,7 @@ pub struct Checker<'d> {
     async_rt: Option<asyncfn::AsyncRt>,
     /// `Promise.all` helper functions, one per element type
     /// (`check/promises.rs`).
-    promise_alls: Vec<(Type, FuncId)>,
+    promise_alls: Vec<(promises::Combinator, Type, FuncId)>,
 }
 
 /// The built-in `Error` class (SPEC.md §5.6). `throw` takes an instance of
@@ -949,6 +949,24 @@ impl Checker<'_> {
                     return Type::Error;
                 }
                 return self.promise_type(&t);
+            }
+            "PromiseSettledResult" | "PromiseFulfilledResult" if self.lookup(name).is_none() => {
+                if !arity(self, 1) {
+                    return Type::Error;
+                }
+                let t = self.resolve_type(&args[0]);
+                if t.is_error() {
+                    return Type::Error;
+                }
+                let (ok, _, u) = self.settled_result(&t);
+                return if name == "PromiseFulfilledResult" { Type::Struct(ok) } else { u };
+            }
+            "PromiseRejectedResult" if self.lookup(name).is_none() => {
+                if !arity(self, 0) {
+                    return Type::Error;
+                }
+                let (_, bad, _) = self.settled_result(&Type::Void);
+                return Type::Struct(bad);
             }
             "Record" | "Partial" | "Readonly" => {
                 self.err(code::ADVANCED_TYPE, span, format!("`{name}` is not supported yet"));

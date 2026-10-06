@@ -133,12 +133,31 @@ interface PromiseConstructor {
   all<A, B>(values: [Promise<A>, Promise<B>]): Promise<[A, B]>;
   all<A, B, C>(values: [Promise<A>, Promise<B>, Promise<C>]): Promise<[A, B, C]>;
   all<A, B, C, D>(values: [Promise<A>, Promise<B>, Promise<C>, Promise<D>]): Promise<[A, B, C, D]>;
+  /** Settles as the first promise that settles. */
+  race<T>(values: Promise<T>[]): Promise<T>;
+  /**
+   * Resolves with the first value. When all promises reject, rejects with
+   * an `Error` whose `name` is "AggregateError".
+   */
+  any<T>(values: Promise<T>[]): Promise<T>;
+  /** Waits until all promises settle; one result per promise, in order. */
+  allSettled<T>(values: Promise<T>[]): Promise<PromiseSettledResult<T>[]>;
   resolve(): Promise<void>;
   resolve<T>(value: T | Promise<T>): Promise<T>;
   /** `reason` is an `Error`, or a string that becomes `new Error(reason)`. */
   reject<T = void>(reason: Error | string): Promise<T>;
 }
 declare var Promise: PromiseConstructor;
+interface PromiseFulfilledResult<T> {
+  status: "fulfilled";
+  value: T;
+}
+interface PromiseRejectedResult {
+  status: "rejected";
+  reason: Error;
+}
+/** An element of the result of `Promise.allSettled`. Narrow it with `status`. */
+type PromiseSettledResult<T> = PromiseFulfilledResult<T> | PromiseRejectedResult;
 
 interface Boolean {}
 interface Function {}

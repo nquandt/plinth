@@ -801,8 +801,133 @@ function throws(): Promise<string> {
 #[test]
 fn promise_api_diagnostics() {
     assert_eq!(codes(&app("", r#"() => { const p = new Promise((resolve: (v: number) => void) => resolve(1)); }"#)), vec!["PL3007"]);
-    assert_eq!(codes(&app("", r#"() => { Promise.race([]); }"#)), vec!["PL3004"]);
+    assert_eq!(codes(&app("", r#"() => { Promise.withResolvers(); }"#)), vec!["PL3004"]);
+    assert_eq!(codes(&app("", r#"() => { Promise.race([Promise.resolve(1), Promise.resolve("a")]); }"#)), vec!["PL2012"]);
+    assert_eq!(codes(&app("", r#"() => { Promise.any(5); }"#)), vec!["PL3001"]);
+    assert_eq!(codes(&app("", r#"() => { Promise.allSettled([1]); }"#)), vec!["PL3001"]);
     assert_eq!(codes(&app("", r#"() => { Promise.all([1, 2]); }"#)), vec!["PL3001"]);
+}
+
+#[test]
+fn promise_race_settles_as_the_first_promise() {
+    let handler = r#"async () => {
+  const a = prompt("a");
+  const b = prompt("b");
+  const first = await Promise.race([a, b]);
+  let m = "";
+  try {
+    await Promise.race([Promise.reject<number>("fast"), Promise.resolve(1)]);
+  } catch (e) {
+    m = e.message;
+  }
+  await Promise.race([Promise.resolve(), Promise.resolve()]);
+  status.set((first ?? "null") + " " + m);
+}"#;
+    let main = app("", handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    let pending = guest.pending_dialogs().to_vec();
+    assert_eq!(pending.len(), 2);
+    let b = pending.iter().find(|d| d.message == "b").unwrap().id;
+    let commits = guest.answer_dialog(b, Value::Str("B".into())).unwrap();
+    apply(&mut guest, &mut tree, commits);
+    assert_eq!(text(&tree), "B fast");
+    // The loser settles later; nothing happens and nothing is reported.
+    let a = guest.pending_dialogs()[0].id;
+    let commits = guest.answer_dialog(a, Value::Str("A".into())).unwrap();
+    apply(&mut guest, &mut tree, commits);
+    assert_eq!(text(&tree), "B fast");
+    assert!(guest.take_errors().is_empty());
+}
+
+#[test]
+fn promise_any_takes_the_first_value_and_aggregates_rejections() {
+    let top = r#"async function bad(m: string): Promise<number> { await alert(m); throw new Error(m); }
+async function good(): Promise<number> { await alert("good"); return 7; }"#;
+    let handler = r#"async () => {
+  const v = await Promise.any([bad("x"), good()]);
+  let m = "";
+  try {
+    await Promise.any([bad("y"), bad("z")]);
+  } catch (e) {
+    m = e.name + ": " + e.message;
+  }
+  const none: Promise<string>[] = [];
+  try { await Promise.any(none); } catch (e) { m = m + "/" + e.name; }
+  status.set(v + " " + m);
+}"#;
+    let main = app(top, handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer_by_message(&mut guest, &mut tree, "x");
+    assert_eq!(text(&tree), "idle", "one rejection does not settle `any`");
+    answer_by_message(&mut guest, &mut tree, "good");
+    answer_by_message(&mut guest, &mut tree, "z");
+    assert_eq!(text(&tree), "idle");
+    answer_by_message(&mut guest, &mut tree, "y");
+    assert_eq!(text(&tree), "7 AggregateError: All promises were rejected/AggregateError");
+    assert!(guest.take_errors().is_empty());
+}
+
+#[test]
+fn promise_all_settled_gives_a_result_per_promise() {
+    let top = r#"async function bad(): Promise<number> { await alert("bad"); throw new Error("no"); }
+async function good(): Promise<number> { await alert("good"); return 3; }
+function show(rs: PromiseSettledResult<number>[]): string {
+  let s = "";
+  for (const r of rs) {
+    if (r.status === "fulfilled") { s = s + "ok " + r.value + ";"; } else { s = s + "err " + r.reason.message + ";"; }
+  }
+  return s;
+}"#;
+    let handler = r#"async () => {
+  const rs = await Promise.allSettled([good(), bad(), Promise.resolve(5)]);
+  const vs = await Promise.allSettled([Promise.resolve(), Promise.reject("v")]);
+  const empty: Promise<string>[] = [];
+  const es = await Promise.allSettled(empty);
+  const one: PromiseFulfilledResult<number> = { status: "fulfilled", value: 1 };
+  const two: PromiseRejectedResult = { status: "rejected", reason: new Error("r") };
+  status.set(show(rs) + vs[0].status + vs[1].status + es.length + one.value + two.reason.message);
+}"#;
+    let main = app(top, handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer_by_message(&mut guest, &mut tree, "bad");
+    assert_eq!(text(&tree), "idle");
+    answer_by_message(&mut guest, &mut tree, "good");
+    assert_eq!(text(&tree), "ok 3;err no;ok 5;fulfilledrejected01r");
+    assert!(guest.take_errors().is_empty());
+}
+
+#[test]
+fn promise_combinators_survive_gc_stress() {
+    let handler = r#"async () => {
+  const ps = ["a", "b"].map((q) => prompt(q).then((v) => (v ?? "?") + q));
+  const rs = await Promise.allSettled(ps);
+  const first = await Promise.race(["c", "d"].map((q) => prompt(q).then((v) => (v ?? "?") + q)));
+  const any = await Promise.any(["e"].map((q) => prompt(q).then((v) => (v ?? "?") + q)));
+  let s = "";
+  for (const r of rs) { if (r.status === "fulfilled") { s = s + r.value; } }
+  status.set(s + "|" + first + "|" + any);
+}"#;
+    let main = app("", handler);
+    let (mut guest, mut tree) = start_with(&main, true);
+    press(&mut guest, &mut tree, "go");
+    for round in 0..3 {
+        let pending = guest.pending_dialogs().to_vec();
+        assert!(!pending.is_empty(), "round {round}");
+        for d in pending {
+            if guest.pending_dialogs().iter().any(|p| p.id == d.id) {
+                let commits = guest.answer_dialog(d.id, Value::Str("x".repeat(20))).unwrap();
+                apply(&mut guest, &mut tree, commits);
+            }
+        }
+        if !text(&tree).starts_with("idle") {
+            break;
+        }
+    }
+    let x = "x".repeat(20);
+    assert_eq!(text(&tree), format!("{x}a{x}b|{x}c|{x}e"));
 }
 
 #[test]

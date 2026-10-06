@@ -23,8 +23,9 @@ small local change), per the dogfooding task's scope.
 
 - `async`/`await` and `try`/`catch`: done (see "Fixed in this pass").
   The `Promise` API, async methods and `await` in all statements: done
-  (see "Fixed in this pass"). Still open: `Promise.race`, `Promise.any`
-  and `Promise.allSettled`.
+  (see "Fixed in this pass"). `Promise.race`, `Promise.any` and
+  `Promise.allSettled`: done (see "`Promise.race`, `any` and
+  `allSettled`" in "Fixed in this pass").
 - Regular expressions: not needed by either app; the text-tools screen used
   manual character scans instead of `RegExp` (which `lib.d.ts` declares as
   an empty, unusable interface).
@@ -421,12 +422,46 @@ small local change), per the dogfooding task's scope.
     a tuple is `PL2012`.
   - `Promise.resolve(v)`, `Promise.resolve()`, `Promise.reject(e)`
     (`e` is an `Error` or a string).
-  - `Promise.race`/`any`/`allSettled` are `PL3004`.
+  - `Promise.race`/`any`/`allSettled` were `PL3004` here; they are done
+    now (see the entry "`Promise.race`, `any` and `allSettled`").
   - `std/lib.d.ts` declares all of these for `tsc`.
   - Tests: "The `Promise` API" section of `tests/async_await.rs` (also
     under GC stress); goldens `PL3001_promise_all`,
     `PL3001_promise_then`, `PL3001_promise_reject`,
-    `PL3004_promise_race`, `PL2012_promise_all_void`.
+    `PL3004_promise_static` (was `PL3004_promise_race`),
+    `PL2012_promise_all_void`.
+
+- **`Promise.race`, `any` and `allSettled` (branch `wt-compiler2`).**
+  Generated code only, like `Promise.all`: one helper function per
+  combinator and promise type (`make_promise_race_any`,
+  `make_promise_all_settled` in `check/promises.rs`), no new runtime
+  function, no new core version.
+  - `race` registers a waiter on each promise that copies the result to
+    the new promise. `resolve` and `reject` do nothing on a settled
+    promise, so the later results are dropped. A losing rejection has a
+    waiter, so it is not reported as unhandled.
+  - `any` counts the rejections. When all promises reject (or the array
+    is empty), it rejects with an `Error` with the name
+    `AggregateError`. There is no `AggregateError` class and no `errors`
+    array: TypeScript types them as `any[]`, and Plinth has only one
+    error type.
+  - `allSettled` gives `PromiseSettledResult<T>[]`, the TypeScript shape
+    `{ status: "fulfilled"; value: T } | { status: "rejected"; reason:
+    Error }`. It is an ordinary discriminated union of two object types
+    (`settled_result`), so `r.status === "fulfilled"` narrows it. The
+    names `PromiseSettledResult<T>`, `PromiseFulfilledResult<T>` and
+    `PromiseRejectedResult` are built-in types. For `Promise<void>`, the
+    fulfilled object has no `value` field (a field cannot have the type
+    `void`).
+  - An array literal of promises of different types is `PL2012` for
+    these three (TypeScript gives a union of the value types, and a
+    Plinth union cannot hold numbers or booleans). Golden
+    `PL2012_promise_race_mixed`.
+  - `std/lib.d.ts` declares all of them.
+  - Tests: `promise_race_settles_as_the_first_promise`,
+    `promise_any_takes_the_first_value_and_aggregates_rejections`,
+    `promise_all_settled_gives_a_result_per_promise`,
+    `promise_combinators_survive_gc_stress` (`tests/async_await.rs`).
 
 - **`async` class methods (branch `wt/lang6`).** The parser now keeps
   `async` on a method, and the method body goes through the same

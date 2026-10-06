@@ -38,8 +38,9 @@ signals; discriminated unions with narrowing; generic functions,
 interfaces, and type aliases; `Map`/`Set`; classes with single
 inheritance and `instanceof`; `JSON.stringify`/`JSON.parse<T>`;
 `try`/`catch`/`finally`/`throw` (see "Errors and exceptions");
-`async`/`await` (see "Async functions and `await`"). **Not yet:** static
-members, getters/setters, generic classes, `Promise.race`/`any`/`allSettled`.
+`async`/`await` (see "Async functions and `await`"); the `Promise` API
+with `all`, `race`, `any` and `allSettled`. **Not yet:** static
+members, getters/setters, generic classes.
 
 ## Supported syntax
 
@@ -250,9 +251,33 @@ load()
   **`Promise.reject(e)`** gives a rejected promise; `e` is an `Error` or
   a string (`new Error(e)`). Write `Promise.reject<T>(e)` for a type
   other than `Promise<void>`.
-- Not supported: `Promise.race`, `Promise.any`, `Promise.allSettled`
-  (`PL3004`), and a `then` callback that takes a rejection reason of a
-  type other than `Error`.
+- **`Promise.race(ps)`** settles as the first promise in `ps` that
+  settles: the same value or the same error. An empty array gives a
+  promise that never settles.
+- **`Promise.any(ps)`** resolves with the first value. When all
+  promises reject, it rejects with an `Error` whose `name` is
+  `"AggregateError"` and whose `message` is "All promises were
+  rejected" (Plinth has no `AggregateError` class, so the single errors
+  are not kept). An empty array rejects at once.
+- **`Promise.allSettled(ps)`** waits until all promises settle and
+  never rejects. It gives an array of `PromiseSettledResult<T>`, in the
+  order of `ps`. This is a discriminated union, as in TypeScript:
+  `{ status: "fulfilled"; value: T }` (`PromiseFulfilledResult<T>`) or
+  `{ status: "rejected"; reason: Error }` (`PromiseRejectedResult`).
+  Narrow it with `r.status === "fulfilled"`. For `Promise<void>`, the
+  fulfilled result has no `value` field.
+  ```ts
+  const rs = await Promise.allSettled(urls.map((u) => fetch(u, null)));
+  for (const r of rs) {
+    if (r.status === "fulfilled") { show(r.value.body); } else { log(r.reason.message); }
+  }
+  ```
+- `race`, `any` and `allSettled` take an array of promises of one type.
+  An array literal of promises of different types is the error `PL2012`
+  (only `Promise.all` makes a tuple).
+- Not supported: other `Promise` functions such as
+  `Promise.withResolvers` (`PL3004`), and a `then` callback that takes a
+  rejection reason of a type other than `Error`.
 
 ## Errors and exceptions
 

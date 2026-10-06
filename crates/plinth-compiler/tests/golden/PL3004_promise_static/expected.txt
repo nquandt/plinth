@@ -1,0 +1,4 @@
+app/main.tsx(3,19): error PL3004: `Promise.withResolvers` is not supported
+  const p = Promise.withResolvers();
+                    ^^^^^^^^^^^^^
+  help: use `Promise.all`, `race`, `any`, `allSettled`, `resolve` or `reject`

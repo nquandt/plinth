@@ -1,5 +1,6 @@
 //! The `Promise` API (SPEC.md §4.5): `then`, `catch`, `finally`,
-//! `new Promise`, `Promise.all`, `Promise.resolve` and `Promise.reject`.
+//! `new Promise`, `Promise.all`, `race`, `any`, `allSettled`,
+//! `Promise.resolve` and `Promise.reject`.
 //!
 //! All of it is generated code on top of the promise helpers in
 //! `asyncfn.rs`: a callback of `then` becomes a waiter closure that the
@@ -13,8 +14,28 @@ use super::asyncfn::{ERROR, PromiseInfo, STATE, VALUE, bx, int, is, set_var, val
 use crate::ast::{self, Expr, ExprKind};
 use crate::diag::{Span, code};
 use crate::tir::*;
-use crate::types::{FuncType, Type};
+use crate::types::{Field, FuncType, StructId, Type};
 use std::rc::Rc;
+
+/// `Promise.all`, `race`, `any` or `allSettled`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Combinator {
+    All,
+    Race,
+    Any,
+    AllSettled,
+}
+
+impl Combinator {
+    fn name(self) -> &'static str {
+        match self {
+            Combinator::All => "all",
+            Combinator::Race => "race",
+            Combinator::Any => "any",
+            Combinator::AllSettled => "allSettled",
+        }
+    }
+}
 
 fn var(v: VarId, ty: &Type, span: Span) -> TExpr {
     TExpr::new(TExprKind::Var(v), ty.clone(), span)
@@ -279,7 +300,7 @@ impl Checker<'_> {
         TExpr::new(TExprKind::Block(pre, bx(r)), rpty, span)
     }
 
-    /// `Promise.all`, `Promise.resolve` and `Promise.reject`.
+    /// `Promise.all`, `race`, `any`, `allSettled`, `resolve` and `reject`.
     pub(super) fn promise_static(&mut self, prop: &str, prop_span: Span, type_args: &[ast::TypeAnn], args: &[Expr], span: Span, expected: Option<&Type>) -> TExpr {
         let expected_inner = expected.and_then(|e| self.promise_of(e)).map(|i| i.ty.clone());
         match prop {
@@ -327,16 +348,27 @@ impl Checker<'_> {
                 let stmts = vec![TStmt::Let(pv, Some(self.new_promise(&info, span))), self.reject_stmt(p.clone(), e, span)];
                 TExpr::new(TExprKind::Block(stmts, bx(p)), pty, span)
             }
-            "all" => {
+            "all" | "race" | "any" | "allSettled" => {
+                let kind = match prop {
+                    "all" => Combinator::All,
+                    "race" => Combinator::Race,
+                    "any" => Combinator::Any,
+                    _ => Combinator::AllSettled,
+                };
                 if args.len() != 1 {
-                    self.err(code::ARG_COUNT, span, "`Promise.all` takes one array of promises");
+                    self.err(code::ARG_COUNT, span, format!("`Promise.{prop}` takes one array of promises"));
                     return self.err_expr(span);
                 }
-                self.promise_all(&args[0], span)
+                self.promise_combinator(kind, &args[0], span)
             }
             _ => {
                 let msg = format!("`Promise.{prop}` is not supported");
-                self.err_help(code::NO_PROPERTY, prop_span, msg, "use `Promise.all`, `Promise.resolve` or `Promise.reject`");
+                self.err_help(
+                    code::NO_PROPERTY,
+                    prop_span,
+                    msg,
+                    "use `Promise.all`, `race`, `any`, `allSettled`, `resolve` or `reject`",
+                );
                 self.err_expr(span)
             }
         }
@@ -368,10 +400,11 @@ impl Checker<'_> {
         }
     }
 
-    /// `Promise.all(a)`: an array of `Promise<T>` gives a `Promise<T[]>`
-    /// (a `Promise<void>` for `Promise<void>[]`); an array literal of
-    /// promises of different types gives a promise of a tuple.
-    fn promise_all(&mut self, a: &Expr, span: Span) -> TExpr {
+    /// `Promise.all`/`race`/`any`/`allSettled(a)` for an array of
+    /// `Promise<T>`. For `all`, an array literal of promises of different
+    /// types gives a promise of a tuple.
+    fn promise_combinator(&mut self, kind: Combinator, a: &Expr, span: Span) -> TExpr {
+        let name = kind.name();
         if let ExprKind::Array(elems) = &a.kind
             && !elems.is_empty()
             && elems.iter().all(|(spread, _)| !*spread)
@@ -382,7 +415,7 @@ impl Checker<'_> {
             }
             for (i, (_, e)) in items.iter().zip(elems) {
                 if self.promise_of(&i.ty).is_none() {
-                    let msg = format!("`Promise.all` needs promises, not `{}`", self.show(&i.ty));
+                    let msg = format!("`Promise.{name}` needs promises, not `{}`", self.show(&i.ty));
                     self.err(code::TYPE_MISMATCH, e.span, msg);
                     return self.err_expr(span);
                 }
@@ -390,35 +423,191 @@ impl Checker<'_> {
             if items.iter().all(|i| i.ty == items[0].ty) {
                 let aty = Type::Array(Box::new(items[0].ty.clone()));
                 let lit = TExpr::new(TExprKind::ArrayLit(items.into_iter().map(|i| (false, i)).collect()), aty, a.span);
-                return self.promise_all_array(lit, span);
+                return self.promise_combinator_array(kind, lit, span);
             }
-            return self.promise_all_tuple(items, span);
+            if kind == Combinator::All {
+                return self.promise_all_tuple(items, span);
+            }
+            let msg = format!("`Promise.{name}` of promises of different types is not supported");
+            self.err_help(code::ADVANCED_TYPE, span, msg, "give all the promises the same type");
+            return self.err_expr(span);
         }
         let arr = self.expr(a, None);
         match &arr.ty {
-            Type::Array(e) if self.promise_of(e).is_some() => self.promise_all_array(arr, span),
+            Type::Array(e) if self.promise_of(e).is_some() => self.promise_combinator_array(kind, arr, span),
             Type::Error => self.err_expr(span),
             other => {
-                let msg = format!("`Promise.all` needs an array of promises, not `{}`", self.show(other));
+                let msg = format!("`Promise.{name}` needs an array of promises, not `{}`", self.show(other));
                 self.err(code::TYPE_MISMATCH, a.span, msg);
                 self.err_expr(span)
             }
         }
     }
 
-    fn promise_all_array(&mut self, arr: TExpr, span: Span) -> TExpr {
+    /// A call of the generated helper of `kind` for the element type of
+    /// `arr` (one helper per combinator and promise type).
+    fn promise_combinator_array(&mut self, kind: Combinator, arr: TExpr, span: Span) -> TExpr {
         let Type::Array(e) = &arr.ty else { unreachable!() };
         let qinfo = self.promise_of(e).cloned().expect("checked by the caller");
-        let fid = match self.promise_alls.iter().find(|(t, _)| *t == qinfo.ty) {
-            Some((_, f)) => *f,
+        let fid = match self.promise_alls.iter().find(|(k, t, _)| *k == kind && *t == qinfo.ty) {
+            Some((_, _, f)) => *f,
             None => {
-                let f = self.make_promise_all(&qinfo);
-                self.promise_alls.push((qinfo.ty.clone(), f));
+                let f = match kind {
+                    Combinator::All => self.make_promise_all(&qinfo),
+                    Combinator::Race | Combinator::Any => self.make_promise_race_any(kind, &qinfo),
+                    Combinator::AllSettled => self.make_promise_all_settled(&qinfo),
+                };
+                self.promise_alls.push((kind, qinfo.ty.clone(), f));
                 f
             }
         };
         let ret = self.prog.funcs[fid as usize].ret.clone();
         TExpr::new(TExprKind::Call(fid, vec![arr]), ret, span)
+    }
+
+    /// The structs of `PromiseFulfilledResult<T>`
+    /// (`{ status: "fulfilled"; value: T }`, no `value` for `T = void`)
+    /// and `PromiseRejectedResult` (`{ status: "rejected"; reason: Error }`),
+    /// and their union `PromiseSettledResult<T>`. `status` is the
+    /// discriminant, so `r.status === "fulfilled"` narrows `r`.
+    pub(crate) fn settled_result(&mut self, t: &Type) -> (StructId, StructId, Type) {
+        let lit = |s: &str| Type::StrLits(Rc::from(vec![s.to_string()]));
+        let mut ok = vec![Field { name: "status".into(), ty: lit("fulfilled"), optional: false }];
+        if *t != Type::Void {
+            ok.push(Field { name: "value".into(), ty: t.clone(), optional: false });
+        }
+        let bad = vec![
+            Field { name: "status".into(), ty: lit("rejected"), optional: false },
+            Field { name: "reason".into(), ty: self.error_type(), optional: false },
+        ];
+        let (Type::Struct(ok), Type::Struct(bad)) = (self.anon_struct(ok), self.anon_struct(bad)) else { unreachable!() };
+        (ok, bad, Type::Union(vec![Type::Struct(ok), Type::Struct(bad)].into()))
+    }
+
+    /// `race(ps)` settles as the first promise that settles. `any(ps)`
+    /// resolves with the first value, and rejects with an `Error` named
+    /// `AggregateError` when all promises reject (at once for an empty
+    /// array). Neither copies `ps`: the loop registers all waiters before
+    /// any of them runs. `resolve` and `reject` do nothing on a promise
+    /// that is already settled, so the later results are dropped.
+    fn make_promise_race_any(&mut self, kind: Combinator, qinfo: &PromiseInfo) -> FuncId {
+        let span = Span::default();
+        let qty = Type::Struct(qinfo.sid);
+        let aty = Type::Array(Box::new(qty.clone()));
+        let (fid, ps) = self.helper_fn(&format!("Promise.{}<{}>", kind.name(), self.show(&qinfo.ty)), &[("ps", aty.clone())], qty.clone());
+        let a = var(ps[0], &aty, span);
+        let rv = self.var_in(fid, "$r", qty.clone(), None);
+        let r = var(rv, &qty, span);
+        let lv = self.var_in(fid, "$left", Type::Int, None);
+        let left = var(lv, &Type::Int, span);
+        let id = self.prog.new_loop();
+        let qv = self.var_in(fid, "$q", qty.clone(), Some(id));
+        let q = var(qv, &qty, span);
+        let (q2, r2, qinfo2, left2) = (q.clone(), r.clone(), qinfo.clone(), left.clone());
+        let k = if kind == Combinator::Race {
+            self.gen_closure("<race>", Vec::new(), span, |c, _, _| c.copy_settled(&q2, &qinfo2, &r2, &qinfo2, span))
+        } else {
+            self.gen_closure("<any>", Vec::new(), span, |c, kf, _| {
+                let v = if qinfo2.ty == Type::Void { TExpr::new(TExprKind::Bool(false), Type::Bool, span) } else { c.value_of(&q2, &qinfo2) };
+                let ok = c.resolve_stmts(r2.clone(), &qinfo2, v, span);
+                let dec = TExpr::new(TExprKind::Int2(IntOp::Sub, bx(left2.clone()), bx(int(1, span))), Type::Int, span);
+                let agg = c.aggregate_error(kf, span);
+                let all_bad = vec![c.reject_stmt(r2.clone(), agg, span)];
+                let bad = vec![set_var(lv, dec, span), TStmt::If(is(left2.clone(), 0, span), all_bad, Vec::new())];
+                vec![TStmt::If(c.state_is(&q2, 1), ok, bad)]
+            })
+        };
+        let mut body = vec![TStmt::Let(rv, Some(self.new_promise(qinfo, span)))];
+        if kind == Combinator::Any {
+            let len = TExpr::new(TExprKind::Rt("arr_len", vec![a.clone()]), Type::Int, span);
+            let agg = self.aggregate_error(fid, span);
+            body.push(TStmt::Let(lv, Some(len)));
+            body.push(TStmt::If(is(left.clone(), 0, span), vec![self.reject_stmt(r.clone(), agg, span)], Vec::new()));
+        }
+        body.push(TStmt::ForOf { id, var: qv, arr: a, body: vec![self.then_stmt(q, k, span)] });
+        body.push(TStmt::Return(Some(r)));
+        self.prog.funcs[fid as usize].body = body;
+        fid
+    }
+
+    /// The rejection of `Promise.any` when all promises reject: an `Error`
+    /// with the name `AggregateError` and the message "All promises were
+    /// rejected". Plinth has no `AggregateError` class, so the single
+    /// errors are not kept.
+    fn aggregate_error(&mut self, owner: FuncId, span: Span) -> TExpr {
+        let err_ty = self.error_type();
+        let msg = TExpr::new(TExprKind::Str("All promises were rejected".into()), Type::String, span);
+        let e = self.new_error(msg);
+        let ev = self.var_in(owner, "$agg", err_ty.clone(), None);
+        let ef = var(ev, &err_ty, span);
+        let fields = &self.prog.structs[self.error_class as usize].fields;
+        let name_idx = fields.iter().position(|f| f.name == "name").expect("Error has a name") as u32;
+        let name = TExpr::new(TExprKind::Str("AggregateError".into()), Type::String, span);
+        let set = self.set_pfield(ef.clone(), self.error_class, name_idx, name);
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(ev, Some(e)), set], bx(ef)), err_ty, span)
+    }
+
+    /// `allSettled(ps: Promise<T>[]): Promise<PromiseSettledResult<T>[]>`:
+    /// copies `ps`, waits until every promise settles, and resolves with
+    /// one result object per promise, in order. It never rejects.
+    fn make_promise_all_settled(&mut self, qinfo: &PromiseInfo) -> FuncId {
+        let span = Span::default();
+        let qty = Type::Struct(qinfo.sid);
+        let aty = Type::Array(Box::new(qty.clone()));
+        let (ok_sid, bad_sid, uty) = self.settled_result(&qinfo.ty);
+        let out_ty = Type::Array(Box::new(uty.clone()));
+        let rinfo = self.promise_info(&out_ty);
+        let rty = Type::Struct(rinfo.sid);
+        let (fid, ps) = self.helper_fn(&format!("Promise.allSettled<{}>", self.show(&qinfo.ty)), &[("ps", aty.clone())], rty.clone());
+        let av = self.var_in(fid, "$a", aty.clone(), None);
+        let a = var(av, &aty, span);
+        let rv = self.var_in(fid, "$r", rty.clone(), None);
+        let r = var(rv, &rty, span);
+        let lv = self.var_in(fid, "$left", Type::Int, None);
+        let left = var(lv, &Type::Int, span);
+        let id = self.prog.new_loop();
+        let qv = self.var_in(fid, "$q", qty.clone(), Some(id));
+        let q = var(qv, &qty, span);
+
+        let (r2, rinfo2, a2, left2, qinfo2, out_ty2) = (r.clone(), rinfo.clone(), a.clone(), left.clone(), qinfo.clone(), out_ty.clone());
+        let k = self.gen_closure("<allSettled>", Vec::new(), span, |c, kf, _| {
+            let dec = TExpr::new(TExprKind::Int2(IntOp::Sub, bx(left2.clone()), bx(int(1, span))), Type::Int, span);
+            let ov = c.var_in(kf, "$out", out_ty2.clone(), None);
+            let o = var(ov, &out_ty2, span);
+            let id2 = c.prog.new_loop();
+            let xv = c.var_in(kf, "$p", qty.clone(), Some(id2));
+            let x = var(xv, &qty, span);
+            let lit = |s: &str| TExpr::new(TExprKind::Str(s.into()), Type::StrLits(Rc::from(vec![s.to_string()])), span);
+            let mut ok_fields = vec![lit("fulfilled")];
+            if qinfo2.ty != Type::Void {
+                ok_fields.push(c.value_of(&x, &qinfo2));
+            }
+            let ok_val = TExpr::new(TExprKind::StructLit(ok_sid, ok_fields), Type::Struct(ok_sid), span);
+            let bad_fields = vec![lit("rejected"), c.error_of(&x, qinfo2.sid)];
+            let bad_val = TExpr::new(TExprKind::StructLit(bad_sid, bad_fields), Type::Struct(bad_sid), span);
+            let ok_val = c.coerce(ok_val, &uty);
+            let bad_val = c.coerce(bad_val, &uty);
+            let push_ok = c.arr_push_discard(o.clone(), ok_val, span);
+            let push_bad = c.arr_push_discard(o.clone(), bad_val, span);
+            let each = TStmt::If(c.state_is(&x, 1), vec![push_ok], vec![push_bad]);
+            let mut done = vec![TStmt::Let(ov, Some(TExpr::new(TExprKind::ArrayLit(Vec::new()), out_ty2.clone(), span)))];
+            done.push(TStmt::ForOf { id: id2, var: xv, arr: a2.clone(), body: vec![each] });
+            done.extend(c.resolve_stmts(r2.clone(), &rinfo2, o, span));
+            vec![set_var(lv, dec, span), TStmt::If(is(left2.clone(), 0, span), done, Vec::new())]
+        });
+        let empty = TExpr::new(TExprKind::ArrayLit(Vec::new()), out_ty.clone(), span);
+        let resolve_empty = self.resolve_stmts(r.clone(), &rinfo, empty, span);
+        let len = TExpr::new(TExprKind::Rt("arr_len", vec![a.clone()]), Type::Int, span);
+        let copy = self.arr_copy_of(var(ps[0], &aty, span), span);
+        self.prog.funcs[fid as usize].body = vec![
+            TStmt::Let(av, Some(copy)),
+            TStmt::Let(rv, Some(self.new_promise(&rinfo, span))),
+            TStmt::Let(lv, Some(len)),
+            TStmt::If(is(left.clone(), 0, span), resolve_empty, Vec::new()),
+            TStmt::ForOf { id, var: qv, arr: a, body: vec![self.then_stmt(q, k, span)] },
+            TStmt::Return(Some(r)),
+        ];
+        fid
     }
 
     /// `all(ps: Promise<T>[]): Promise<T[]>`: copies `ps`, waits for each
