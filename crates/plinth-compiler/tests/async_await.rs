@@ -822,3 +822,38 @@ fn promise_all_and_then_survive_gc_stress() {
     }
     assert_eq!(text(&tree), format!("{}a+yb", "x".repeat(30)));
 }
+
+// -- `async` methods -----------------------------------------------------------------
+
+#[test]
+fn async_class_methods_capture_this_and_await_each_other() {
+    let top = r#"class Counter {
+  count: number;
+  log: string;
+  constructor() { this.count = 0; this.log = ""; }
+  async step(q: string): Promise<number> {
+    if (await confirm(q)) { this.count = this.count + 1; }
+    this.log = this.log + q;
+    return this.count;
+  }
+  async run(): Promise<string> {
+    const a = await this.step("a");
+    const b = await this.step("b");
+    return this.log + ":" + a + b;
+  }
+}
+class Loud extends Counter {
+  constructor() { super(); }
+  async step(q: string): Promise<number> { const n = await super.step(q.toUpperCase()); return n * 10; }
+}
+const c = new Counter();
+const l: Counter = new Loud();"#;
+    let main = app(top, r#"async () => { status.set(await c.run() + "|" + await l.run()); }"#);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "a", Value::Bool(true));
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "b", Value::Bool(true));
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "A", Value::Bool(true));
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "B", Value::Bool(false));
+    assert_eq!(text(&tree), "ab:12|AB:1010");
+}

@@ -324,13 +324,8 @@ impl Cx<'_> {
                         continue;
                     }
                     let f = &m.value;
-                    if f.r#async || f.generator {
-                        self.err_help(
-                            code::ASYNC,
-                            m.span,
-                            "async methods and generators are not supported yet",
-                            "use a top-level `async function` that takes the object as a parameter",
-                        );
+                    if f.generator {
+                        self.err(code::ASYNC, m.span, "generator methods are not supported");
                         continue;
                     }
                     let Some(body) = &f.body else {
@@ -367,7 +362,7 @@ impl Cx<'_> {
                         is_default: false,
                         span: self.span(m.span),
                         type_params: Vec::new(),
-                        is_async: false,
+                        is_async: f.r#async,
                     });
                 }
                 o::ClassElement::AccessorProperty(a) => {

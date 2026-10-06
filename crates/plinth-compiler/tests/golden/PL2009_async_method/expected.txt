@@ -1,4 +1,0 @@
-app/main.tsx(2,11): error PL2009: async methods and generators are not supported yet
-  class A { async run(): Promise<void> {} }
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  help: use a top-level `async function` that takes the object as a parameter
