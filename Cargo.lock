@@ -4810,6 +4810,7 @@ dependencies = [
  "plinth-compiler",
  "plinth-host-desktop",
  "plinth-hub",
+ "plinth-link",
  "plinth-package",
  "plinth-protocol",
  "plinth-registry",

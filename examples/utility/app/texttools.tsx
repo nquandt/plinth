@@ -1,5 +1,5 @@
 import { signal, Screen, Section, Group, Tabs, TextArea, NumberField, Text, Button } from "plinth:ui";
-import { writeText } from "plinth:clipboard";
+import { writeText, readText } from "plinth:clipboard";
 import { now } from "plinth:time";
 import { Math } from "plinth:core";
 
@@ -54,6 +54,13 @@ export default function TextTools() {
     copiedMessage.set("Copied to clipboard.");
   };
 
+  const pasteInput = () => {
+    const text = readText();
+    if (text !== null) {
+      input.set(text);
+    }
+  };
+
   // No Date type and no calendar formatting in `plinth:time` (SPEC.md
   // std/time.d.ts): this breaks an epoch down into elapsed days, hours,
   // minutes and seconds by hand instead of a calendar date. See
@@ -77,6 +84,7 @@ export default function TextTools() {
         <Group axis="column">
           <Section title="Input">
             <TextArea label="Text" value={input} placeholder="Type something" />
+            <Button label="Paste" onPress={pasteInput} />
             <Text tone="muted">{`${wordCount(input())} words, ${input().length} characters`}</Text>
           </Section>
           <Section title="Transform">

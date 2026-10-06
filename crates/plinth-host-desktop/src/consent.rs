@@ -18,13 +18,27 @@ use plinth_ui::Tokens;
 use std::cell::Cell;
 use std::rc::Rc;
 
-/// One capability on the consent screen: its name and the decision the
-/// user is making for it (defaults to "allow", matching §7.3's "low-risk
-/// capabilities are granted with the install").
+/// One capability on the consent screen: its name, risk label, and the
+/// decision the user is making for it. This screen only ever lists
+/// Medium/High capabilities (`docs/HUB.md` §7.2): a None/Low one is
+/// granted automatically by `Hub::add_package` and never reaches here
+/// (`Hub::needs_consent`), so "allow" is simply the default while the
+/// user decides.
 struct Item {
     capability: String,
+    risk_label: String,
     rationale: String,
     allowed: bool,
+}
+
+/// The consent screen's label for a risk level (`docs/HUB.md` §7.2).
+fn risk_label(risk: plinth_link::capabilities::Risk) -> &'static str {
+    match risk {
+        plinth_link::capabilities::Risk::None => "No risk",
+        plinth_link::capabilities::Risk::Low => "Low risk",
+        plinth_link::capabilities::Risk::Medium => "Medium risk",
+        plinth_link::capabilities::Risk::High => "High risk",
+    }
 }
 
 /// What the user decided (`None` until Continue or Cancel).
@@ -87,7 +101,8 @@ impl Render for ConsentView {
         for i in 0..self.items.len() {
             let allowed = self.items[i].allowed;
             let capability = self.items[i].capability.clone();
-            let rationale = self.items[i].rationale.clone();
+            let risk_label = self.items[i].risk_label.clone();
+            let rationale = format!("{risk_label} \u{2014} {}", self.items[i].rationale);
             let row = div()
                 .flex()
                 .items_center()
@@ -189,8 +204,13 @@ pub fn show(app_name: &str, publisher: &str, capabilities: &[(String, String)]) 
     if capabilities.is_empty() {
         return Some(Vec::new());
     }
-    let items: Vec<Item> =
-        capabilities.iter().map(|(c, why)| Item { capability: c.clone(), rationale: describe(c, why), allowed: true }).collect();
+    let items: Vec<Item> = capabilities
+        .iter()
+        .map(|(c, why)| {
+            let risk = plinth_link::capabilities::info(c).map(|i| i.risk).unwrap_or(plinth_link::capabilities::Risk::Medium);
+            Item { capability: c.clone(), risk_label: risk_label(risk).to_owned(), rationale: describe(c, why), allowed: true }
+        })
+        .collect();
     let result = Rc::new(Cell::new(None));
     let app_name = app_name.to_owned();
     let publisher = publisher.to_owned();
