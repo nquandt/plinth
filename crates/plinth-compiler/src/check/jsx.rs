@@ -8,6 +8,10 @@ use crate::tir::*;
 use crate::types::{FuncType, Type};
 use std::rc::Rc;
 
+fn bx(e: TExpr) -> Box<TExpr> {
+    Box::new(e)
+}
+
 impl Checker<'_> {
     pub(super) fn jsx(&mut self, el: &JsxElement) -> TJsx {
         // Inside JSX, a signal/computed read is reactive (it re-runs when the
@@ -126,8 +130,8 @@ impl Checker<'_> {
                     None => self.err_help(
                         code::TYPE_MISMATCH,
                         value.span,
-                        format!("`{}` must be an array literal of `{{ label, value }}` objects", ps.name),
-                        "write `data={[{ label: \"Jan\", value: total() }]}`",
+                        format!("`{}` must be an array of `{{ label, value }}` objects", ps.name),
+                        "write `data={[{ label: \"Jan\", value: total() }]}`, or pass a `ChartPoint[]`",
                     ),
                 }
                 continue;
@@ -174,7 +178,7 @@ impl Checker<'_> {
                     };
                     let name_te = self.typed(name_e, &Type::String);
                     let Some(points_te) = self.encode_chart_points(points_e) else {
-                        self.err(code::TYPE_MISMATCH, points_e.span, "`points` must be an array literal of `{ label, value }` objects");
+                        self.err(code::TYPE_MISMATCH, points_e.span, "`points` must be an array of `{ label, value }` objects");
                         ok = false;
                         continue;
                     };
@@ -418,7 +422,7 @@ impl Checker<'_> {
     /// which keeps the resulting prop reactive through the normal JSX
     /// reactive-effect machinery, same as any other string prop.
     fn encode_chart_points(&mut self, value: &Expr) -> Option<TExpr> {
-        let ExprKind::Array(items) = &value.kind else { return None };
+        let ExprKind::Array(items) = &value.kind else { return self.encode_chart_points_dyn(value) };
         let mut parts = Vec::new();
         for (spread, it) in items {
             if *spread {
@@ -451,6 +455,67 @@ impl Checker<'_> {
             parts.push(self.concat3(label_te, sep, num_str, it.span));
         }
         Some(self.join_parts(parts, "\u{1f}", value.span))
+    }
+
+    /// `Chart.data`/`points` as any other expression (a variable, a signal
+    /// read, a `.map()` result): an array of structs with a `label: string`
+    /// and a `value: number` field (`ChartPoint`, or any object type with
+    /// these fields). The encoding is the same as for a literal, built at
+    /// run time with a loop. It is an ordinary string prop, so a signal
+    /// read in `value` keeps the prop reactive. `None` means another type;
+    /// the caller reports the diagnostic.
+    fn encode_chart_points_dyn(&mut self, value: &Expr) -> Option<TExpr> {
+        let span = value.span;
+        let arr = self.expr(value, None);
+        let arr_ty = arr.ty.clone();
+        let Type::Array(elem) = &arr_ty else { return None };
+        let Type::Struct(sid) = **elem else { return None };
+        let def = &self.prog.structs[sid as usize];
+        let (label_i, label_ty) = def.field("label").map(|(i, f)| (i as u32, f.ty.clone()))?;
+        let (value_i, value_ty) = def.field("value").map(|(i, f)| (i as u32, f.ty.clone()))?;
+        if !label_ty.is_stringish() || !matches!(value_ty, Type::Number | Type::Int) {
+            return None;
+        }
+        let var = |v: VarId, ty: &Type| TExpr::new(TExprKind::Var(v), ty.clone(), span);
+        let str_lit = |t: &str| TExpr::new(TExprKind::Str(t.into()), Type::String, span);
+        let num = |n: f64| TExpr::new(TExprKind::Num(n), Type::Number, span);
+        let arr_v = self.temp(arr_ty.clone());
+        let len_v = self.temp(Type::Number);
+        let i_v = self.temp(Type::Number);
+        let pt_v = self.temp((**elem).clone());
+        let acc_v = self.temp(Type::String);
+        let i_r = var(i_v, &Type::Number);
+        let pt_r = var(pt_v, elem);
+        let len = TExpr::new(TExprKind::Coerce(Coercion::I32ToNum, bx(TExpr::new(TExprKind::Rt("arr_len", vec![var(arr_v, &arr_ty)]), Type::Bool, span))), Type::Number, span);
+        let get = TExpr::new(TExprKind::Index(bx(var(arr_v, &arr_ty)), bx(i_r.clone())), (**elem).clone(), span);
+        let label = TExpr::new(TExprKind::Field(bx(pt_r.clone()), sid, label_i), label_ty.clone(), span);
+        let label = self.coerce(label, &Type::String);
+        let v = TExpr::new(TExprKind::Field(bx(pt_r), sid, value_i), value_ty.clone(), span);
+        let v = self.coerce(v, &Type::Number);
+        let v_str = TExpr::new(TExprKind::Rt("json_num_str", vec![v]), Type::String, span);
+        let piece = self.concat3(label, str_lit("\u{1}"), v_str, span);
+        let append = |acc_v: VarId, e: TExpr| {
+            let sum = TExpr::new(TExprKind::Rt("str_concat", vec![TExpr::new(TExprKind::Var(acc_v), Type::String, span), e]), Type::String, span);
+            TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(acc_v), bx(sum)), Type::String, span))
+        };
+        let gt0 = TExpr::new(TExprKind::Cmp(CmpOp::Gt, EqKind::F64, bx(i_r.clone()), bx(num(0.0))), Type::Bool, span);
+        let body = vec![
+            TStmt::Let(pt_v, Some(get)),
+            TStmt::If(gt0, vec![append(acc_v, str_lit("\u{1f}"))], Vec::new()),
+            append(acc_v, piece),
+        ];
+        let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(var(len_v, &Type::Number))), Type::Bool, span);
+        let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r), bx(num(1.0))), Type::Number, span);
+        let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
+        let id = self.prog.new_loop();
+        let stmts = vec![
+            TStmt::Let(arr_v, Some(arr)),
+            TStmt::Let(len_v, Some(len)),
+            TStmt::Let(acc_v, Some(str_lit(""))),
+            TStmt::Let(i_v, Some(num(0.0))),
+            TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body },
+        ];
+        Some(TExpr::new(TExprKind::Block(stmts, bx(var(acc_v, &Type::String))), Type::String, span))
     }
 
     fn children(&mut self, el: &JsxElement, spec: &controls::ControlSpec) -> TChildren {

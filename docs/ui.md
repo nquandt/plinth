@@ -146,17 +146,18 @@ needed. There are no size, axis or color props.
 
 - **`label`** is required (SPEC.md §6.1 item 3: every control needs a
   label for accessibility) and is the chart's accessible name.
-- **`data`** must be an array literal of `{ label, value }` object
-  literals — `data={[{ label: "Jan", value: total() }, ...]}`. The
-  compiler encodes it at compile time into one wire string; each
-  `value` expression can read a signal or a computed, so the chart
-  updates like any other reactive prop when a `data={...}` array
-  literal's values change. A plain `Signal<ChartPoint[]>` or a
-  `.map()`-built array is not accepted yet (v1 limitation) — write the
-  points out as a literal, as `examples/budget`'s `Statistics` screen
-  does for its six fixed categories.
+- **`data`** is an array of `{ label, value }` objects. It can be an
+  array literal (`data={[{ label: "Jan", value: total() }, ...]}`), a
+  `ChartPoint[]` variable, a signal or computed read, a function call, or
+  a `.map()` result (`data={items().map((i) => ({ label: i.name, value:
+  i.total }))}`). The number of points can change at run time. Any object
+  type with a `label: string` field and a `value: number` field is
+  accepted; other fields are ignored. `ChartPoint` and `ChartSeriesDef`
+  can be imported from `plinth:ui` as types. The compiler encodes the
+  points into one wire string. A signal read in the expression makes the
+  chart update like any other reactive prop.
 - **`series`** is optional: an array literal of `{ name, points }`
-  object literals (`points` in the same shape as `data`), for
+  object literals (`points` is any expression that `data` accepts), for
   overlaying several series on a `bar` or `line` chart (for example
   "this year" vs "last year"). When present, the renderer draws every
   series instead of `data`; `data` stays the single-series fallback a

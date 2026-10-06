@@ -206,6 +206,16 @@ fn budget_add_filter_edit_delete_and_stats() {
     h.fire(h.label("View statistics"), event::PRESS, Value::Null);
     assert_eq!(h.tree.current_root().unwrap().str_prop(prop::TITLE), Some("Statistics"));
     assert_eq!(h.find(ControlKind::Progress, |_| true).len(), 6);
+    // The charts' `data` comes from `categories.map(...)`: six points each.
+    // The monthly totals come from a `Map` read with `for…of`.
+    let charts = h.find(ControlKind::Chart, |_| true);
+    assert_eq!(charts.len(), 2);
+    for chart in charts {
+        let data = h.tree.get(chart).unwrap().str_prop(prop::DATA).unwrap_or_default().to_owned();
+        assert_eq!(data.split('\u{1f}').count(), 6, "{data:?}");
+        assert!(data.starts_with("Groceries\u{1}"), "{data:?}");
+    }
+    assert!(!h.find(ControlKind::Text, |n| n.text.as_deref().is_some_and(|t| t.starts_with("2026-10: "))).is_empty());
     h.fire(h.label("Back to transactions"), event::PRESS, Value::Null);
     assert_eq!(h.tree.current_root().unwrap().str_prop(prop::TITLE), Some("Budget"));
 }

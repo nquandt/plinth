@@ -405,6 +405,22 @@ impl Checker<'_> {
                 }
             }
             Pattern::Array(elems, span) => {
+                // A tuple (`[k, v]` of `Map.entries()`): each name reads a field.
+                if let Type::Struct(sid) = src.ty
+                    && let Some(tys) = self.tuple_elems(sid)
+                {
+                    if elems.len() > tys.len() {
+                        let msg = format!("`{}` has only {} element(s)", self.prog.structs[sid as usize].name, tys.len());
+                        self.err(code::TYPE_MISMATCH, *span, msg);
+                        return out;
+                    }
+                    for (i, sub) in elems.iter().enumerate() {
+                        let Some(sub) = sub else { continue };
+                        let part = TExpr::new(TExprKind::Field(Box::new(src.clone()), sid, i as u32), tys[i].clone(), sub.span());
+                        out.extend(self.bind_part(sub, part, mutable));
+                    }
+                    return out;
+                }
                 let Type::Array(elem) = src.ty.clone() else {
                     if !src.ty.is_error() {
                         let msg = format!("cannot destructure a value of type `{}` as an array", self.show(&src.ty));

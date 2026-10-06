@@ -30,11 +30,10 @@ small local change), per the dogfooding task's scope.
   an empty, unusable interface).
 - `Map`/`Set` iteration as plain methods (`keys()`/`values()`/`forEach`,
   fixed in gap batch 3 item 2; see "Fixed in this pass"). `entries()` as a
-  plain array is still not possible: no tuple/array-of-pairs type exists to
-  return it as (the `for…of ([k, v] of m)` form still works).
-- `Array` methods beyond the common set (gap batch 3 item 3 added
-  `concat`/`reduce`; `sort` fixed in this pass, see "Fixed in this pass"):
-  `splice`, `fill` and `flat` are still not implemented.
+  plain array: done (tuples, see "Fixed in this pass").
+- `Array` methods beyond the common set: done. `concat`/`reduce` (gap
+  batch 3 item 3), `sort`, and `splice`/`fill`/`flat` are in "Fixed in this
+  pass".
 
 ## Fixed in this pass
 
@@ -234,6 +233,68 @@ small local change), per the dogfooding task's scope.
   items"; `Map.entries()` as a plain array is also still not implemented
   — see "Larger items" above.
 
+- **Array `splice`, `fill`, `flat` (HANDOFF.md §9 item 4).** The checker
+  generates each one from array operations that exist (`arr_slice`,
+  `arr_extend`, push, pop and index loops) in `check/expr.rs`
+  (`array_splice`, `array_fill`, `array_flat`). There is no new runtime
+  function and `CORE_MINOR` does not change. `splice(start, deleteCount?,
+  ...items)` follows the JS rules: a negative start counts from the end, the
+  count is clamped, and the call returns the removed elements. The call
+  evaluates all arguments before it changes the array. `fill(value, start?,
+  end?)` changes the array in place and returns it; `start` and `end` use the
+  same relative index rule as `slice`. `flat()` flattens one level: a `T[][]`
+  becomes a new `T[]`; on another array it returns a copy. A depth other
+  than a literal `1` is `PL2000`. `std/lib.d.ts` has the three signatures
+  (`flat` has a `this: U[][]` overload, so `tsc` gives the correct type).
+  Tests: `crates/plinth-compiler/tests/collections.rs`.
+
+- **`Map.entries()` as a value, and tuples (HANDOFF.md §9 item 4).**
+  `m.entries()` returns a new `[K, V][]`. A tuple type `[A, B, …]` is a
+  struct with one field for each element (`Checker::tuple_struct` in
+  `check/mod.rs`; the struct name is the tuple type, for diagnostics). The
+  checker reads a tuple element with a number literal index (`t[0]`, also
+  as an assignment target) or an array pattern (`const [k, v] = t`, also in
+  callback parameters such as `es.map(([k, v]) => ...)`). An array literal
+  becomes a tuple when a tuple type is expected. `for (const e of m)` now
+  binds `e` to a `[K, V]` pair (before, this was an error).
+  `JSON.stringify` writes a tuple as a JSON array; `JSON.parse<T>` does not
+  accept a tuple type (`PL3001`). A computed index into a tuple is
+  `PL2011`. No new runtime function. `std/lib.d.ts` has `entries():
+  [K, V][]`. Tests: `crates/plinth-compiler/tests/collections.rs`.
+
+- **`Map` and `Set` iteration types for `tsc` (HANDOFF.md §9 item 4).**
+  The Plinth compiler accepted `for (const [k, v] of m)` before, but `tsc`
+  did not (`TS2802`), so the examples could not use it. `std/lib.d.ts` now
+  declares `[Symbol.iterator]()` on `Map` (`Iterator<[K, V]>`) and `Set`
+  (`Iterator<T>`), and a global `Iterable`. `tsc` finds the global
+  `Iterator` and `Iterable` types only when they have three type
+  parameters (the ES2015 library shape), so both have `TReturn` and
+  `TNext` with defaults; Plinth uses only `T`. `examples/budget` now
+  groups the monthly totals with a `Map` and reads them back with
+  `for…of` (CI runs `tsc` on it). Writing this example found a bug:
+  `m.set(k, (m.get(k) ?? 0) + 1)` for a new key pushed the key before it
+  evaluated the value, so `get` read out of bounds. `set` now evaluates
+  the value first. Test: `map_set_with_a_value_that_reads_the_same_new_key`
+  and `lib_d_ts_declares_map_and_set_iterable` in
+  `crates/plinth-compiler/tests/collections.rs`.
+
+- **Dynamic-length `Chart` data (HANDOFF.md §9 item 4).** Before,
+  `Chart.data` (and each series' `points`) had to be an array literal, so
+  the number of points was fixed at compile time. Now any expression of
+  an array of structs with a `label: string` and a `value: number` field
+  is accepted: a variable, a signal or computed read, a function call, or
+  a `.map()` result. `check/jsx.rs::encode_chart_points_dyn` builds the
+  same wire string as the literal path, with a generated loop (`arr_len`,
+  index reads, `str_concat`, `json_num_str`); no new runtime function. The
+  array literal path does not change. `ChartPoint` and `ChartSeriesDef` are
+  now real types when imported from `plinth:ui` (before, the import was
+  `PL1004`). `series` itself must still be an array literal (only its
+  `points` can be dynamic). `examples/budget`'s statistics screen now
+  builds both charts with `categories.map(...)`. Tests: the "Dynamic
+  `Chart` data" section of `crates/plinth-compiler/tests/collections.rs`,
+  and a chart check in `budget_add_filter_edit_delete_and_stats`
+  (`tests/apps.rs`).
+
 - #5 (fixed): `plinth:time` gained date/time support: `timezoneOffset`
   (a new host function, `plinth:app@1.0.0`'s `time` interface, core
   1.6), `dateParts`/`weekday` and `makeDate` (Howard Hinnant's
@@ -252,9 +313,8 @@ small local change), per the dogfooding task's scope.
   `crates/plinth-compiler/tests/hostapi.rs`). Used in
   `examples/utility`'s new "Timestamps" tab and in `examples/budget`
   (`DatePicker` for transaction dates, `dateParts` for the "by month"
-  breakdown in `stats.tsx`; grouping uses a linear-scan array rather
-  than `Map` for…of, since `std/lib.d.ts`'s `Map` is not declared
-  `Iterable` for `tsc`, see "Larger items" above).
+  breakdown in `stats.tsx`; grouping now uses a `Map` and `for…of`, see
+  "Map and Set iteration types for `tsc`" below).
 
 ## Found later
 
