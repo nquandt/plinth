@@ -16,9 +16,10 @@ use gpui::accesskit;
 use gpui_elements::editable_text::actions::Enter;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_area, text_input};
 use crate::calendar;
+use crate::primitives;
 use plinth_protocol::{
     ControlKind, Event, NodeId, Op, Value, Writer, aspect, axis, button_role, button_size, chart_kind, date_picker_mode,
-    decode_ops, event, prop, text_align, text_style, tone,
+    decode_ops, event, pressable_role, prop, text_align, text_style, tone,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -1216,7 +1217,82 @@ impl PlinthRoot {
             ControlKind::Icon => self.render_icon(node, t),
             ControlKind::DatePicker => self.render_date_picker(node, t, cx),
             ControlKind::Chart => self.render_chart(node, t),
+            ControlKind::Box => self.render_box(node, t, cx),
+            ControlKind::Span => self.render_span(node, t),
+            ControlKind::Pressable => self.render_pressable(node, t, cx),
+            ControlKind::Scroll => self.render_scroll(node, t, cx),
         }
+    }
+
+    // -- UI API 1.6: Level 2 styled primitives (docs/UI-ADVANCED.md) --
+
+    /// The children of a Level 2 box. The items of a `List` child (also the
+    /// node that `.map()` children make) take part in the layout of the box
+    /// itself, so a row of mapped cards is a row.
+    fn render_box_children(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut out = Vec::new();
+        for &c in &node.children {
+            match self.tree.get(c) {
+                Some(child) if child.kind == Some(ControlKind::List) => out.extend(self.render_children(child, t, cx)),
+                _ => out.push(self.render_node(c, t, cx)),
+            }
+        }
+        out
+    }
+
+    /// A layout box. Without a label it is a plain container for AccessKit;
+    /// with one it is a named group.
+    fn render_box(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).map(str::to_owned);
+        let d = div().id(eid("box", node.id));
+        primitives::box_style(d, node, t)
+            .when_some(label, |d, l| d.role(accesskit::Role::Group).aria_label(l))
+            .children(self.render_box_children(node, t, cx))
+            .into_any_element()
+    }
+
+    fn render_span(&self, node: &Node, t: &Tokens) -> AnyElement {
+        let text = node.text.clone().unwrap_or_default();
+        let d = div().id(eid("span", node.id)).role(accesskit::Role::Label).aria_label(text.clone());
+        let d = primitives::grow(aligned(primitives::span_style(d, node, t), node), node);
+        d.child(text).into_any_element()
+    }
+
+    /// A box that is a button or a link: a tab stop, Enter and Space press
+    /// it, and the runtime shows hover and disabled states.
+    fn render_pressable(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
+        warn_if_unlabeled("Pressable", node.id, &label);
+        let disabled = node.bool_prop(prop::DISABLED) || self.stopped.is_some();
+        let role = if node.enum_prop(prop::ROLE) == pressable_role::LINK { accesskit::Role::Link } else { accesskit::Role::Button };
+        let own_bg = primitives::token(t, node.enum_prop(prop::BG)).is_some();
+        let hover = t.hover;
+        let d = div().id(eid("pressable", node.id)).role(role).aria_label(label).aria_disabled(disabled);
+        let mut d = primitives::box_style(d, node, t)
+            .children(self.render_box_children(node, t, cx))
+            .when(disabled, |d| d.opacity(0.5))
+            .when(!disabled, |d| {
+                d.cursor_pointer().hover(move |s| if own_bg { s.opacity(0.88) } else { s.bg(hover) })
+            });
+        if let Some(h) = node.handler(event::PRESS).filter(|_| !disabled) {
+            d = d
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.fire(h, event::PRESS, Value::Null, cx)))
+                .on_a11y_action(accesskit::Action::Click, {
+                    let entity = cx.entity();
+                    move |_, _, cx| entity.update(cx, |this, cx| this.fire(h, event::PRESS, Value::Null, cx))
+                });
+            d = keyboard_activatable(d, cx, move |this, cx| this.fire(h, event::PRESS, Value::Null, cx));
+        }
+        d.into_any_element()
+    }
+
+    /// A box that scrolls along its direction.
+    fn render_scroll(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).map(str::to_owned);
+        let d = div().id(eid("scroll", node.id)).role(accesskit::Role::ScrollView);
+        let d = primitives::box_style(d, node, t);
+        let d = if primitives::is_row(node) { d.overflow_x_scroll() } else { d.overflow_y_scroll() };
+        d.when_some(label, |d, l| d.aria_label(l)).children(self.render_box_children(node, t, cx)).into_any_element()
     }
 
     fn render_section(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {

@@ -4,7 +4,7 @@
 # enum ids. The compiler, the guest runtime and the host all generate their
 # constants from it. Never reuse or renumber an id inside one major version.
 
-version = "1.5"
+version = "1.6"
 
 [controls]
 screen = 1
@@ -35,6 +35,11 @@ image = 26         # UI API 1.3
 icon = 27          # UI API 1.4 (Icon as a control, SPEC.md §6.3)
 date-picker = 28   # UI API 1.4 (SPEC.md §6.3)
 chart = 29         # UI API 1.5 (SPEC.md §6.3)
+# UI API 1.6: Level 2 styled primitives (docs/UI-ADVANCED.md, phase U1).
+box = 30           # a layout box: flex direction, gap, padding, size, token colors
+span = 31          # styled text
+pressable = 32     # a box that is a button or a link (label and onPress required)
+scroll = 33        # a box that scrolls along its direction
 
 [props]
 title = 1        # string
@@ -68,6 +73,33 @@ mode = 36        # enum date-picker-mode (date-picker, UI API 1.4)
 chart-kind = 37  # enum chart-kind (chart, UI API 1.5)
 data = 38        # string, "label\u0001value" pairs joined with U+001F: one series (chart, UI API 1.5)
 series = 39      # string, named series joined with U+001E, each "name\u0001points" (chart, UI API 1.5)
+# UI API 1.6, Level 2 style props. Spaces and sizes are in spacing units
+# (one unit is 4 px on every host); a size can instead be a fraction.
+wrap = 40              # bool
+gap = 41               # int, spacing units
+padding = 42           # int, spacing units (all sides)
+padding-x = 43         # int, spacing units (left and right)
+padding-y = 44         # int, spacing units (top and bottom)
+cross-align = 45       # enum cross-align (the children across the direction)
+justify = 46           # enum justify (the children along the direction)
+grow = 47              # int, the flex grow factor of this element in its parent box
+width = 48             # int, spacing units
+width-fraction = 49    # enum fraction
+height = 50            # int, spacing units
+height-fraction = 51   # enum fraction
+max-width = 52         # int, spacing units
+max-width-fraction = 53 # enum fraction
+max-height = 54        # int, spacing units
+max-height-fraction = 55 # enum fraction
+bg = 56                # enum color (a theme token)
+fg = 57                # enum color (a theme token)
+border = 58            # enum color (a theme token; none = no border)
+radius = 59            # enum radius
+text-size = 60         # enum text-size
+weight = 61            # enum weight
+italic = 62            # bool
+mono = 63              # bool
+lines = 64             # int, the most lines of a span (0 = no limit)
 
 [events]
 press = 1        # value: null
@@ -119,3 +151,69 @@ datetime = 2
 bar = 0
 line = 1
 pie = 2
+
+# UI API 1.6 (Level 2). In TypeScript, the fractions are "auto", "full",
+# "1/2", "1/3", "2/3", "1/4", "3/4"; the text sizes "xs" ... "2xl"; the colors
+# "background", "surface", "surface.alt", "accent", "danger", "success",
+# "text", "text.muted", "on.accent", "border", "hover", "selected".
+[enums.cross-align]
+stretch = 0
+start = 1
+center = 2
+end = 3
+
+[enums.justify]
+start = 0
+center = 1
+end = 2
+between = 3
+
+[enums.fraction]
+none = 0
+auto = 1
+full = 2
+half = 3
+third = 4
+two-thirds = 5
+quarter = 6
+three-quarters = 7
+
+[enums.color]
+none = 0
+background = 1
+surface = 2
+surface-alt = 3
+accent = 4
+danger = 5
+success = 6
+text = 7
+text-muted = 8
+on-accent = 9
+border = 10
+hover = 11
+selected = 12
+
+[enums.radius]
+none = 0
+sm = 1
+md = 2
+lg = 3
+full = 4
+
+[enums.text-size]
+sm = 0
+xs = 1
+md = 2
+lg = 3
+xl = 4
+xxl = 5
+
+[enums.weight]
+regular = 0
+medium = 1
+semibold = 2
+bold = 3
+
+[enums.pressable-role]
+button = 0
+link = 1

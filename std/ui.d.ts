@@ -297,3 +297,74 @@ export declare function Chart(props: {
   data: ChartPoint[];
   series?: ChartSeriesDef[];
 }): Element;
+
+// -- Level 2: styled primitives (UI API 1.6, docs/UI-ADVANCED.md) ----------
+// Layout, space and look from typed props and theme tokens. Spaces and
+// sizes are spacing units (one unit is 4 px on every host); a size can also
+// be a fraction of the parent. There are no raw pixels and no raw colors.
+
+type ColorToken =
+  | "none"
+  | "background"
+  | "surface"
+  | "surface.alt"
+  | "accent"
+  | "danger"
+  | "success"
+  | "text"
+  | "text.muted"
+  | "on.accent"
+  | "border"
+  | "hover"
+  | "selected";
+type SizeValue = number | "auto" | "full" | "1/2" | "1/3" | "2/3" | "1/4" | "3/4";
+
+interface BoxStyle {
+  /** The direction of the children. Default "column". */
+  direction?: "row" | "column";
+  wrap?: boolean;
+  /** Space between the children, in spacing units. */
+  gap?: number;
+  padding?: number;
+  paddingX?: number;
+  paddingY?: number;
+  /** The children across the direction. Default "stretch". */
+  align?: "stretch" | "start" | "center" | "end";
+  /** The children along the direction. Default "start". */
+  justify?: "start" | "center" | "end" | "between";
+  /** The share of the free space that this element takes in its parent box. */
+  grow?: number;
+  width?: SizeValue;
+  height?: SizeValue;
+  maxWidth?: SizeValue;
+  maxHeight?: SizeValue;
+  bg?: ColorToken;
+  border?: ColorToken;
+  radius?: "none" | "sm" | "md" | "lg" | "full";
+  children?: Children;
+}
+
+/** A layout box. `label` names it as a group for assistive technology. */
+export declare function Box(props: BoxStyle & { label?: string }): Element;
+
+/** Styled text. The children are the text. */
+export declare function Span(props: {
+  size?: "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
+  weight?: "regular" | "medium" | "semibold" | "bold";
+  italic?: boolean;
+  mono?: boolean;
+  fg?: ColorToken;
+  align?: Align;
+  /** The most lines to show (0: no limit). */
+  lines?: number;
+  grow?: number;
+  children?: TextContent;
+}): Element;
+
+/** A box that the user can press: a button or a link. It is a tab stop; Enter and Space press it. */
+export declare function Pressable(
+  props: BoxStyle & { label: string; role: "button" | "link"; onPress: () => void; disabled?: boolean },
+): Element;
+
+/** A box that scrolls along its direction. Give it a height or a max height. */
+export declare function Scroll(props: BoxStyle & { label?: string }): Element;

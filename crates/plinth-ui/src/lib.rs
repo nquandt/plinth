@@ -3,6 +3,7 @@
 
 mod calendar;
 mod chart;
+mod primitives;
 mod render;
 mod theme;
 pub mod tree;

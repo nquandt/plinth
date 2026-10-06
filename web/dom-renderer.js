@@ -12,7 +12,25 @@
 // (from plinth-web.js) feeds `Tree.apply`; the renderer calls
 // `app.onEvent(...)` back.
 
-import { ControlKind, Prop, Event, EnumAspect, EnumTone, EnumDatePickerMode, EnumChartKind } from "./ui-api.js";
+import {
+  ControlKind,
+  Prop,
+  Event,
+  EnumAspect,
+  EnumTone,
+  EnumDatePickerMode,
+  EnumChartKind,
+  EnumAxis,
+  EnumCrossAlign,
+  EnumJustify,
+  EnumFraction,
+  EnumColor,
+  EnumRadius,
+  EnumTextSize,
+  EnumWeight,
+  EnumPressableRole,
+  EnumTextAlign,
+} from "./ui-api.js";
 
 const ASPECT_RATIO = { [EnumAspect.square]: "1 / 1", [EnumAspect.wide]: "16 / 9", [EnumAspect.tall]: "3 / 4" };
 
@@ -142,6 +160,143 @@ class Node {
  * Besides the tree, it records what each commit changed (`takeChanges`), so
  * the renderer touches only those nodes.
  */
+// -- UI API 1.6: Level 2 styled primitives (docs/UI-ADVANCED.md) ----------
+
+/** One spacing unit in CSS pixels (the same as the desktop host). */
+export const UNIT = 4;
+const MAX_UNITS = 512;
+
+const units = (v) => `${Math.min(Math.max(Math.trunc(v), 0), MAX_UNITS) * UNIT}px`;
+
+/** Color tokens as the CSS custom properties of style.css. */
+const COLOR_VARS = {
+  [EnumColor.background]: "--pl-bg",
+  [EnumColor.surface]: "--pl-surface",
+  [EnumColor.surfaceAlt]: "--pl-surface-alt",
+  [EnumColor.accent]: "--pl-accent",
+  [EnumColor.danger]: "--pl-danger",
+  [EnumColor.success]: "--pl-success",
+  [EnumColor.text]: "--pl-text",
+  [EnumColor.textMuted]: "--pl-muted",
+  [EnumColor.onAccent]: "--pl-accent-text",
+  [EnumColor.border]: "--pl-border",
+  [EnumColor.hover]: "--pl-hover",
+  [EnumColor.selected]: "--pl-selected",
+};
+/**
+ * The CSS value of a color token. `text`: the token colors text (`fg`); the
+ * accent then uses its text variant, which is lighter in dark mode (as the
+ * desktop's dark accents are), so that accent text stays legible.
+ */
+export const colorVar = (token, text = false) => {
+  if (text && token === EnumColor.accent) return "var(--pl-accent-fg)";
+  return COLOR_VARS[token] ? `var(${COLOR_VARS[token]})` : null;
+};
+
+const FRACTIONS = {
+  [EnumFraction.auto]: "auto",
+  [EnumFraction.full]: "100%",
+  [EnumFraction.half]: "50%",
+  [EnumFraction.third]: "33.3333%",
+  [EnumFraction.twoThirds]: "66.6667%",
+  [EnumFraction.quarter]: "25%",
+  [EnumFraction.threeQuarters]: "75%",
+};
+
+/** A size prop: spacing units if the int prop is set, else the fraction, else null. */
+function sizeOf(props, unitsProp, fractionProp) {
+  const n = props.get(unitsProp);
+  if (typeof n === "number") return units(n);
+  return FRACTIONS[props.get(fractionProp)?.enum] ?? null;
+}
+
+const TEXT_SIZES = {
+  [EnumTextSize.xs]: "0.75rem",
+  [EnumTextSize.sm]: "0.875rem",
+  [EnumTextSize.md]: "1rem",
+  [EnumTextSize.lg]: "1.125rem",
+  [EnumTextSize.xl]: "1.25rem",
+  [EnumTextSize.xxl]: "1.5rem",
+};
+const WEIGHTS = { [EnumWeight.regular]: "400", [EnumWeight.medium]: "500", [EnumWeight.semibold]: "600", [EnumWeight.bold]: "700" };
+
+/**
+ * The inline CSS of a Level 2 primitive (`Box`, `Pressable`, `Scroll`,
+ * `Span`) from its props: the same mapping as
+ * `crates/plinth-ui/src/primitives.rs`. Returns `{ property: value }`.
+ */
+export function primitiveStyle(n) {
+  const p = n.props;
+  const en = (prop) => p.get(prop)?.enum; // an enum prop is { enum: value }
+  const css = {};
+  const grow = p.get(Prop.grow);
+  if (typeof grow === "number" && grow > 0) {
+    css.flex = `${Math.min(Math.trunc(grow), 100)} 1 0px`;
+    css["min-width"] = "0";
+  }
+  if (n.kind === ControlKind.span) {
+    css["font-size"] = TEXT_SIZES[en(Prop.textSize) ?? EnumTextSize.sm] ?? TEXT_SIZES[EnumTextSize.sm];
+    css["font-weight"] = WEIGHTS[en(Prop.weight) ?? EnumWeight.regular] ?? "400";
+    if (p.get(Prop.italic)) css["font-style"] = "italic";
+    if (p.get(Prop.mono)) css["font-family"] = "ui-monospace, Consolas, monospace";
+    css.color = colorVar(en(Prop.fg), true) ?? "var(--pl-text)";
+    const align = en(Prop.align);
+    if (align === EnumTextAlign.center) css["text-align"] = "center";
+    else if (align === EnumTextAlign.end) css["text-align"] = "end";
+    const lines = p.get(Prop.lines);
+    if (typeof lines === "number" && lines > 0) {
+      css.display = "-webkit-box";
+      css["-webkit-box-orient"] = "vertical";
+      css["-webkit-line-clamp"] = String(Math.min(Math.trunc(lines), 1000));
+      css.overflow = "hidden";
+    }
+    return css;
+  }
+  const row = en(Prop.axis) === EnumAxis.row;
+  css.display = "flex";
+  css["flex-direction"] = row ? "row" : "column";
+  if (p.get(Prop.wrap)) css["flex-wrap"] = "wrap";
+  for (const [prop, name] of [
+    [Prop.gap, "gap"],
+    [Prop.padding, "padding"],
+  ]) {
+    const v = p.get(prop);
+    if (typeof v === "number") css[name] = units(v);
+  }
+  const px = p.get(Prop.paddingX);
+  if (typeof px === "number") css["padding-inline"] = units(px);
+  const py = p.get(Prop.paddingY);
+  if (typeof py === "number") css["padding-block"] = units(py);
+  css["align-items"] = { [EnumCrossAlign.start]: "flex-start", [EnumCrossAlign.center]: "center", [EnumCrossAlign.end]: "flex-end" }[en(Prop.crossAlign)] ?? "stretch";
+  css["justify-content"] = { [EnumJustify.center]: "center", [EnumJustify.end]: "flex-end", [EnumJustify.between]: "space-between" }[en(Prop.justify)] ?? "flex-start";
+  // A size in spacing units is fixed: the element does not shrink below it.
+  if (typeof p.get(Prop.width) === "number" || typeof p.get(Prop.height) === "number") css["flex-shrink"] = "0";
+  for (const [u, f, name] of [
+    [Prop.width, Prop.widthFraction, "width"],
+    [Prop.height, Prop.heightFraction, "height"],
+    [Prop.maxWidth, Prop.maxWidthFraction, "max-width"],
+    [Prop.maxHeight, Prop.maxHeightFraction, "max-height"],
+  ]) {
+    const v = sizeOf(p, u, f);
+    if (v) css[name] = v;
+  }
+  const bg = colorVar(en(Prop.bg));
+  if (bg) css.background = bg;
+  const border = colorVar(en(Prop.border));
+  if (border) css.border = `1px solid ${border}`;
+  const radius = { [EnumRadius.sm]: "4px", [EnumRadius.md]: "8px", [EnumRadius.lg]: "12px", [EnumRadius.full]: "9999px" }[en(Prop.radius)];
+  if (radius) css["border-radius"] = radius;
+  if (n.kind === ControlKind.scroll) css[row ? "overflow-x" : "overflow-y"] = "auto";
+  return css;
+}
+
+/** Applies `css` to `e`, changing only the properties that differ from `last` (the previous call). */
+function applyStyle(e, css, last) {
+  for (const name of Object.keys(last)) if (!(name in css)) e.style.removeProperty(name);
+  for (const [name, value] of Object.entries(css)) if (last[name] !== value) e.style.setProperty(name, value);
+  return css;
+}
+
 export class Tree {
   constructor() {
     this.nodes = new Map();
@@ -698,8 +853,74 @@ export class DomRenderer {
       case "icon": return this.iconView();
       case "datePicker": return this.datePickerView();
       case "chart": return this.chartView();
+      case "box":
+      case "scroll":
+      case "pressable": return this.primitiveBoxView(kname);
+      case "span": return this.spanView();
       default: return this.containerView(el("div", `pl-${kname}`));
     }
+  }
+
+  /**
+   * A Level 2 box (`Box`, `Scroll`, `Pressable`): a `<div>` with inline
+   * flex styles. A Pressable is a tab stop with the role button or link;
+   * Enter and Space press it (Space only for a button, as in HTML). A
+   * Scroll is a tab stop too, so the keyboard can scroll it.
+   */
+  primitiveBoxView(kname) {
+    const e = el("div", `pl-${kname}`);
+    let id = 0;
+    let last = {};
+    let disabled = false;
+    let link = false;
+    if (kname === "pressable") {
+      const press = () => {
+        if (!disabled) this.fire(id, Event.press);
+      };
+      e.addEventListener("click", press);
+      e.addEventListener("keydown", (ev) => {
+        if (ev.target !== e) return;
+        if (ev.key === "Enter" || (ev.key === " " && !link)) {
+          ev.preventDefault();
+          press();
+        }
+      });
+    }
+    return {
+      el: e,
+      slot: e,
+      update: (n) => {
+        id = n.id;
+        last = applyStyle(e, primitiveStyle(n), last);
+        const label = n.props.get(Prop.label) ?? null;
+        if (kname === "pressable") {
+          link = n.props.get(Prop.role)?.enum === EnumPressableRole.link;
+          disabled = !!n.props.get(Prop.disabled);
+          setAttr(e, "role", link ? "link" : "button");
+          setAttr(e, "aria-label", label);
+          setAttr(e, "aria-disabled", disabled ? "true" : null);
+          setAttr(e, "tabindex", disabled ? null : "0");
+          e.classList.toggle("pl-pressable-plain", !colorVar(n.props.get(Prop.bg)?.enum));
+        } else {
+          setAttr(e, "role", label ? "group" : null);
+          setAttr(e, "aria-label", label);
+          if (kname === "scroll") setAttr(e, "tabindex", "0");
+        }
+      },
+    };
+  }
+
+  /** A Level 2 Span: styled text. */
+  spanView() {
+    const e = el("span", "pl-span");
+    let last = {};
+    return {
+      el: e,
+      update: (n) => {
+        last = applyStyle(e, primitiveStyle(n), last);
+        setText(e, n.text ?? "");
+      },
+    };
   }
 
   /** A plain element whose children are the node's children. */

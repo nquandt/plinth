@@ -1,0 +1,3 @@
+app/main.tsx(2,47): error PL4003: `<Pressable>` needs the prop `role`
+  function Home() { return <Screen title="Home"><Pressable label="Go" onPress={() => {}} /></Screen>; }
+                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

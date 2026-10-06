@@ -258,6 +258,17 @@ impl Checker<'_> {
                     let te = self.typed(&value, &t);
                     (PropTarget::Str(id), self.coerce(te, &Type::String))
                 }
+                PropTy::Size(fraction_id) => match &value.kind {
+                    // A string is a fraction (`"1/2"`, `"full"`, ...): an
+                    // enum prop. Anything else is a number of spacing units.
+                    ExprKind::Str(_) => {
+                        let table = crate::controls::FRACTIONS;
+                        let t = Type::str_lits(table.iter().map(|(s, _)| s.to_string()).collect());
+                        let te = self.typed(&value, &t);
+                        (PropTarget::Enum(fraction_id, table.iter().map(|(s, v)| (s.to_string(), *v)).collect()), te)
+                    }
+                    _ => (PropTarget::Int(id), self.typed(&value, &Type::Number)),
+                },
                 PropTy::Num => (PropTarget::Num(id), self.typed(&value, &Type::Number)),
                 PropTy::Int => (PropTarget::Int(id), self.typed(&value, &Type::Number)),
                 PropTy::Bool => (PropTarget::Bool(id), self.typed(&value, &Type::Bool)),

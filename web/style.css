@@ -16,6 +16,12 @@
   --pl-accent-text: #ffffff;
   --pl-danger: #e5484d;
   --pl-border: #262a31;
+  /* Level 2 tokens (UI API 1.6). */
+  --pl-surface-alt: #1f2229;
+  --pl-accent-fg: #8fa8ff;
+  --pl-success: #4cc38a;
+  --pl-hover: #22262e;
+  --pl-selected: rgb(59 99 209 / 0.2);
   color-scheme: dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -34,6 +40,11 @@
     --pl-accent-text: #ffffff;
     --pl-danger: #c62828;
     --pl-border: #d8dbe0;
+    --pl-surface-alt: #eceef2;
+    --pl-accent-fg: #2f54c7;
+    --pl-success: #2e7d32;
+    --pl-hover: #e6e8ec;
+    --pl-selected: rgb(47 84 199 / 0.12);
     color-scheme: light;
   }
 }
@@ -601,4 +612,42 @@ body {
 }
 .pl-host-bar a {
   color: var(--pl-text);
+}
+
+/* Level 2 styled primitives (UI API 1.6, docs/UI-ADVANCED.md). The layout,
+   the space and the colors come from inline styles (dom-renderer.js
+   primitiveStyle); these rules give only what every primitive has. */
+.pl-box,
+.pl-scroll,
+.pl-pressable {
+  box-sizing: border-box;
+  min-width: 0;
+}
+.pl-span {
+  overflow-wrap: anywhere;
+}
+/* The items of a List child (also the node of .map() children) take part
+   in the layout of the box, as on the desktop. */
+.pl-box > .pl-list,
+.pl-scroll > .pl-list,
+.pl-pressable > .pl-list {
+  display: contents;
+}
+.pl-pressable {
+  cursor: pointer;
+}
+.pl-pressable[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.5;
+}
+.pl-pressable-plain:not([aria-disabled="true"]):hover {
+  background: var(--pl-hover);
+}
+.pl-pressable:not(.pl-pressable-plain):not([aria-disabled="true"]):hover {
+  opacity: 0.88;
+}
+.pl-pressable:focus-visible,
+.pl-scroll:focus-visible {
+  outline: 2px solid var(--pl-accent);
+  outline-offset: 2px;
 }

@@ -1,6 +1,6 @@
 # Advanced UI: styled primitives (draft)
 
-Status: draft for discussion (2026-10-06). Nothing in this document is built yet.
+Status: phase U1 is built (2026-10-06): `Box`, `Span`, `Pressable`, `Scroll` (UI API 1.6) on the desktop (`crates/plinth-ui/src/primitives.rs`) and the web (`primitiveStyle` in `web/dom-renderer.js`), `examples/primitives`, `docs/ui.md` "Level 2". U1 differs from this draft in three points: style props are plain props on the wire (no interned style records yet); a size is spacing units or a fraction literal (two prop ids each); `padding={[2, 3]}` is `paddingX`/`paddingY`. Tests: `crates/plinth-shoot/tests/primitives_layout.rs` (AccessKit roles and layout boxes) and `web/test/run-primitives.mjs` plus `checkPrimitives` in `run-a11y.mjs` (the same layout facts in Edge). The rest of this document is the draft.
 
 Today Plinth has one UI level: semantic controls (SPEC.md §6). Apps declare intent, and the runtime owns layout, spacing and color. This document adds a second level for apps that need more: **styled primitives** that map almost directly to what gpui already offers. It is not CSS. There are no selectors, no cascade and no general layout engine beyond the flexbox and grid model that gpui already uses.
 

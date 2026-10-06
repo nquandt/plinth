@@ -27,7 +27,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
-const APPS = ["counter", "todo", "settings-gallery", "contacts", "budget"];
+const APPS = ["counter", "todo", "settings-gallery", "contacts", "budget", "primitives"];
 
 const EDGE = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
 
@@ -324,6 +324,7 @@ async function main() {
       ["TextArea selection survives a re-render (settings-gallery)", checkTextAreaSelection],
       ["an unchanged row is the same element after a commit (todo)", checkRowIdentity],
       ["one row of 10,000 changes, no other element does (big-list)", checkBigList],
+      ["Level 2 primitives: layout and keyboard (primitives)", checkPrimitives],
     ]) {
       console.log(`== ${name} ==`);
       try {
@@ -652,6 +653,38 @@ async function checkTyping(cdpPort, base) {
     await page.navigate(`${base}/web/index.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(coreUrl)}`);
     const surface = pageSurface(page);
     await typeKeys(page, surface, () => surface.eval(`document.querySelector("#app input[type=text]").focus()`));
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * The Level 2 primitives (UI API 1.6) in Edge: the mapped cards of a row
+ * Scroll are in one row and the Scroll scrolls sideways; a Pressable is a
+ * tab stop that Enter presses; a disabled one is not a tab stop.
+ */
+async function checkPrimitives(cdpPort, base) {
+  const page = await openApp(cdpPort, base, "primitives", `document.querySelector("#app .pl-scroll .pl-pressable")`);
+  try {
+    const layout = await page.eval(`(() => {
+      const cards = [...document.querySelectorAll("#app .pl-scroll .pl-pressable")];
+      const tops = new Set(cards.map((c) => Math.round(c.getBoundingClientRect().top)));
+      const s = document.querySelector("#app .pl-scroll");
+      return { cards: cards.length, rows: tops.size, width: Math.round(cards[0].getBoundingClientRect().width), scrolls: s.scrollWidth > s.clientWidth };
+    })()`);
+    if (layout.cards !== 6 || layout.rows !== 1 || layout.width !== 160 || !layout.scrolls) throw new Error(`the row Scroll: ${JSON.stringify(layout)}`);
+    const reset = `[...document.querySelectorAll("#app [role=link]")].find((e) => e.getAttribute("aria-label") === "Reset the count")`;
+    if ((await page.eval(`${reset}.getAttribute("tabindex")`)) !== null) throw new Error("a disabled Pressable is a tab stop");
+    await page.eval(`[...document.querySelectorAll("#app [role=button]")].find((e) => e.getAttribute("aria-label") === "Press me").focus()`);
+    for (const type of ["keyDown", "keyUp"]) await page.send("Input.dispatchKeyEvent", { type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    await page.waitFor(`document.getElementById("app").innerText.includes("Pressed 1 times") ? true : null`, 3000);
+    if ((await page.eval(`${reset}.getAttribute("tabindex")`)) !== "0") throw new Error("the Reset link is not a tab stop after a press");
+    if (process.env.A11Y_SHOTS) {
+      await mkdir(process.env.A11Y_SHOTS, { recursive: true });
+      const r = await page.send("Page.captureScreenshot", { format: "png" });
+      await writeFile(path.join(process.env.A11Y_SHOTS, "primitives.png"), Buffer.from(r.data, "base64"));
+    }
+    return `${layout.cards} cards in one row, Enter presses, disabled is not a tab stop`;
   } finally {
     await page.close();
   }

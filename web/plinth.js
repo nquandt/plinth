@@ -9,7 +9,7 @@
 
 function plinthBundle(mode, baseUrl) {
   "use strict";
-  const STYLE_CSS = "/* Minimal, runtime-owned look for the web host spike (SPEC.md §3: apps\n   declare intent, the runtime owns layout, spacing and color). */\n\n/* The renderer hides optional parts (an empty label, the back button) with\n   the `hidden` attribute; a class's `display` must not show them again. */\n[hidden] {\n  display: none !important;\n}\n\n:root {\n  --pl-bg: #0b0c0f;\n  --pl-surface: #15171c;\n  --pl-text: #e7e9ec;\n  --pl-muted: #9aa0a8;\n  --pl-accent: #3b63d1;\n  --pl-accent-text: #ffffff;\n  --pl-danger: #e5484d;\n  --pl-border: #262a31;\n  color-scheme: dark;\n  font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif;\n}\n\n/* Light mode: the desktop host's light theme tokens (SPEC.md §3). Only\n   applied when the OS/browser prefers light AND the page has not been\n   forced dark some other way, matching how the desktop theme follows the\n   system setting. */\n@media (prefers-color-scheme: light) {\n  :root {\n    --pl-bg: #f5f6f8;\n    --pl-surface: #ffffff;\n    --pl-text: #1b1d21;\n    --pl-muted: #5b6168;\n    --pl-accent: #2f54c7;\n    --pl-accent-text: #ffffff;\n    --pl-danger: #c62828;\n    --pl-border: #d8dbe0;\n    color-scheme: light;\n  }\n}\n\nbody {\n  margin: 0;\n  background: var(--pl-bg);\n  color: var(--pl-text);\n}\n\n#app {\n  display: flex;\n  min-height: 100vh;\n}\n\n.pl-nav {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  padding: 12px;\n  border-right: 1px solid var(--pl-border);\n  min-width: 160px;\n}\n\n.pl-nav-item {\n  text-align: left;\n  background: transparent;\n  color: var(--pl-text);\n  border: none;\n  border-radius: 6px;\n  padding: 8px 10px;\n  cursor: pointer;\n}\n.pl-nav-item:disabled {\n  background: var(--pl-surface);\n  color: var(--pl-accent);\n  cursor: default;\n}\n\n*, *::before, *::after {\n  box-sizing: border-box;\n}\n\n/* Visible keyboard focus on every interactive element (SPEC.md §6: keyboard\n   parity with the desktop host). */\n:focus-visible {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n\n.pl-row-pressable {\n  cursor: pointer;\n}\n\n.pl-screen {\n  flex: 1;\n  min-width: 0;\n  padding: 24px;\n  max-width: 640px;\n}\n\n.pl-title {\n  font-size: 1.5rem;\n  margin: 0 0 16px;\n}\n\n.pl-section {\n  /* A fieldset is min-content wide by default; let it shrink on compact. */\n  min-width: 0;\n  border: 1px solid var(--pl-border);\n  border-radius: 10px;\n  padding: 12px 16px 16px;\n  margin: 0 0 16px;\n}\n\n.pl-section-title {\n  color: var(--pl-muted);\n  font-size: 0.8rem;\n  text-transform: uppercase;\n  letter-spacing: 0.04em;\n  padding: 0 4px;\n}\n\n.pl-text {\n  margin: 4px 0;\n}\n\n.pl-heading {\n  margin: 8px 0;\n}\n\n.pl-button {\n  background: var(--pl-accent);\n  color: #fff;\n  border: none;\n  border-radius: 6px;\n  padding: 8px 14px;\n  cursor: pointer;\n  margin: 4px 4px 4px 0;\n}\n.pl-button:disabled {\n  opacity: 0.5;\n  cursor: default;\n}\n\n.pl-field {\n  display: block;\n  margin: 8px 0;\n}\n.pl-field-label {\n  display: block;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n  margin-bottom: 4px;\n}\n.pl-input,\n.pl-select,\n.pl-textarea {\n  width: 100%;\n  box-sizing: border-box;\n  background: var(--pl-surface);\n  color: var(--pl-text);\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  padding: 8px 10px;\n  font: inherit;\n  color-scheme: inherit;\n}\n\n.pl-checkbox,\n.pl-slider {\n  accent-color: var(--pl-accent);\n  color-scheme: inherit;\n}\n\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin: 8px 0;\n}\n\n.pl-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.pl-row {\n  display: flex;\n  justify-content: space-between;\n  align-items: center;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  padding: 10px 12px;\n}\n.pl-row-header {\n  display: flex;\n  flex-direction: column;\n}\n.pl-row-title {\n  font-weight: 600;\n}\n.pl-row-subtitle {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-row-trailing {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n  flex: none;\n  white-space: nowrap;\n}\n.pl-row-actions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.pl-empty {\n  color: var(--pl-muted);\n  text-align: center;\n  padding: 24px;\n}\n\n/* UI API 1.2 controls (SPEC.md §6.3) */\n.pl-screen-header {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n}\n.pl-back {\n  border: none;\n  background: transparent;\n  color: var(--pl-accent, #3b7);\n  cursor: pointer;\n  font-size: 0.95rem;\n}\n.pl-toolbar {\n  display: flex;\n  gap: 8px;\n  margin-bottom: 12px;\n}\n.pl-action {\n  border: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n  border-radius: 6px;\n  padding: 6px 10px;\n  cursor: pointer;\n}\n.pl-action-destructive {\n  color: var(--pl-danger);\n  border-color: var(--pl-danger);\n}\n.pl-checkbox-field,\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.pl-textarea {\n  min-height: 72px;\n}\n.pl-slider-field,\n.pl-progress-field {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.pl-slider {\n  width: 100%;\n}\n.pl-segmented {\n  display: flex;\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  overflow: hidden;\n}\n.pl-segment {\n  flex: 1;\n  text-align: center;\n  padding: 6px 8px;\n  cursor: pointer;\n  color: var(--pl-text);\n}\n.pl-segment-input {\n  position: absolute;\n  opacity: 0;\n}\n/* Selected segment: accent background with contrasting text, as the\n   desktop host shows the selected Picker option (SPEC.md §6.3). Updates\n   live because the renderer rebuilds the segment markup on every op-stream\n   commit, including the `value` change the app sends back after `change`. */\n.pl-segment:has(.pl-segment-input:checked) {\n  background: var(--pl-accent);\n  color: var(--pl-accent-text);\n}\n.pl-segment-input:focus-visible ~ .pl-segment-label {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n.pl-badge {\n  display: inline-block;\n  background: var(--pl-accent, #3b7);\n  color: white;\n  border-radius: 999px;\n  padding: 2px 8px;\n  font-size: 0.8rem;\n}\n.pl-image {\n  width: 100%;\n  overflow: hidden;\n  border-radius: 8px;\n}\n.pl-image-img {\n  width: 100%;\n  height: 100%;\n  object-fit: cover;\n  display: block;\n}\n/* Regular/wide: cap the image height and center it horizontally, keeping\n   the aspect ratio (SPEC.md §6.3). Compact keeps the full-width default. */\n@media (min-width: 600px) {\n  .pl-image-square,\n  .pl-image-tall {\n    width: auto;\n    max-width: 100%;\n    max-height: 360px;\n    margin: 0 auto;\n  }\n  .pl-image-wide {\n    width: auto;\n    max-width: 100%;\n    max-height: 280px;\n    margin: 0 auto;\n  }\n}\n.pl-image-placeholder {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: var(--pl-surface-alt, #eee);\n  border: 1px solid var(--pl-border, #ccc);\n  color: var(--pl-text-muted, #666);\n  font-size: 0.8rem;\n  text-align: center;\n  padding: 8px;\n}\n\n/* <Chart> (SPEC.md §6.3, UI API 1.5): the app never picks these colors.\n   The chart palette is derived from the accent, hue-rotated with the CSS\n   relative color syntax, so it stays distinguishable in light and dark\n   without the app or this file naming a single fixed hex value. */\n.pl-chart {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.pl-chart-empty {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  height: 120px;\n  border-radius: 8px;\n  background: var(--pl-surface-alt, #eee);\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-chart-svg {\n  width: 100%;\n  height: 160px;\n}\n.pl-chart-axis-label {\n  font-size: 7px;\n  fill: var(--pl-muted);\n}\n/* `fill: none` here, not as an SVG attribute: the palette class below sets\n   `fill`, and CSS wins over presentation attributes. */\n.pl-chart-line {\n  stroke-width: 2;\n  stroke: currentColor;\n  fill: none !important;\n}\n.pl-chart-c0 { fill: var(--pl-accent); color: var(--pl-accent); stroke: var(--pl-accent); }\n.pl-chart-c1 { fill: hsl(from var(--pl-accent) calc(h + 180) s l); color: hsl(from var(--pl-accent) calc(h + 180) s l); }\n.pl-chart-c2 { fill: hsl(from var(--pl-accent) calc(h + 45) s l); color: hsl(from var(--pl-accent) calc(h + 45) s l); }\n.pl-chart-c3 { fill: hsl(from var(--pl-accent) calc(h + 223) s l); color: hsl(from var(--pl-accent) calc(h + 223) s l); }\n.pl-chart-c4 { fill: hsl(from var(--pl-accent) calc(h + 108) s l); color: hsl(from var(--pl-accent) calc(h + 108) s l); }\n.pl-chart-c5 { fill: var(--pl-muted); color: var(--pl-muted); }\n.pl-chart-legend {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 4px 12px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n}\n.pl-chart-legend-item {\n  display: flex;\n  align-items: center;\n  gap: 4px;\n}\n.pl-chart-legend-swatch {\n  width: 10px;\n  height: 10px;\n  border-radius: 2px;\n  background: currentColor;\n}\n.pl-chart-legend-label {\n  color: var(--pl-text);\n}\n.pl-chart-legend-value {\n  color: var(--pl-muted);\n}\n/* The zero line of bar and line charts: negative values go below it. */\n.pl-chart-zero {\n  stroke: var(--pl-muted);\n  stroke-width: 1;\n}\n/* An all-zero pie: a neutral disc, as on the desktop. */\n.pl-chart-track {\n  fill: var(--pl-border);\n}\n/* Visually hidden but still reachable by a screen reader: the Chart's\n   exact-value data table (SPEC.md §6.3). */\n.pl-sr-only {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n.pl-icon {\n  display: inline-block;\n  color: var(--pl-text);\n}\n.pl-icon.pl-tone-muted {\n  color: var(--pl-muted);\n}\n.pl-icon.pl-tone-danger {\n  color: var(--pl-danger);\n}\n.pl-icon.pl-tone-success {\n  color: #2e7d32;\n}\n.pl-tabs {\n  display: flex;\n  gap: 4px;\n  border-bottom: 1px solid var(--pl-border);\n  margin-bottom: 8px;\n}\n.pl-tab {\n  border: none;\n  background: transparent;\n  padding: 8px 12px;\n  cursor: pointer;\n  color: var(--pl-muted);\n  font: inherit;\n}\n.pl-tab-selected {\n  border-bottom: 2px solid var(--pl-accent, #3b7);\n  font-weight: 600;\n}\n.pl-sheet,\n.pl-dialog {\n  border: none;\n  border-radius: 10px;\n  padding: 20px;\n  max-width: 480px;\n}\n.pl-menu {\n  position: relative;\n  display: inline-block;\n}\n.pl-menu-popover {\n  position: absolute;\n  top: 100%;\n  left: 0;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);\n  display: flex;\n  flex-direction: column;\n  padding: 4px;\n  z-index: 10;\n}\n.pl-menu-item {\n  text-align: left;\n  border: none;\n  background: transparent;\n}\n.pl-grid {\n  display: grid;\n  grid-template-columns: repeat(2, 1fr);\n  gap: 12px;\n}\n@media (min-width: 640px) {\n  .pl-grid {\n    grid-template-columns: repeat(3, 1fr);\n  }\n}\n@media (min-width: 1024px) {\n  .pl-grid {\n    grid-template-columns: repeat(4, 1fr);\n  }\n}\n\n/* Width classes (SPEC.md §6.1): compact < 600px <= regular < 1200px <= wide.\n   Compact: a bottom tab bar. Regular: a narrow icon/label rail. Wide: a\n   full sidebar (the default styles above already give this). */\n@media (max-width: 599.98px) {\n  #app {\n    flex-direction: column;\n  }\n  .pl-nav {\n    position: fixed;\n    left: 0;\n    right: 0;\n    bottom: 0;\n    flex-direction: row;\n    justify-content: space-around;\n    align-items: stretch;\n    gap: 0;\n    padding: 4px;\n    min-width: 0;\n    width: 100%;\n    box-sizing: border-box;\n    border-right: none;\n    border-top: 1px solid var(--pl-border);\n    background: var(--pl-bg);\n    order: 2;\n  }\n  .pl-nav-item {\n    flex: 1;\n    text-align: center;\n    font-size: 0.8rem;\n  }\n  .pl-screen {\n    order: 1;\n    padding: 16px;\n    /* Leave room above the fixed bottom tab bar. */\n    padding-bottom: 72px;\n  }\n}\n\n@media (min-width: 600px) and (max-width: 1199.98px) {\n  .pl-nav {\n    min-width: 72px;\n    padding: 12px 6px;\n  }\n  .pl-nav-item {\n    text-align: center;\n    font-size: 0.78rem;\n    padding: 8px 4px;\n  }\n}\n\n/* Fields (SPEC.md §6.4): label above the input on compact, beside it on\n   regular/wide. */\n@media (min-width: 600px) {\n  .pl-field:not(.pl-slider-field) {\n    display: flex;\n    align-items: baseline;\n    gap: 12px;\n  }\n  .pl-field:not(.pl-slider-field) .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n  .pl-field .pl-input,\n  .pl-field .pl-select,\n  .pl-field .pl-textarea,\n  .pl-field .pl-segmented {\n    flex: 1;\n  }\n  .pl-picker-field .pl-segmented {\n    flex: 1;\n  }\n  /* The slider field has its own column layout (label above the track) so\n     the value stays readable; put its label beside the track instead,\n     matching every other field (SPEC.md §6.4). */\n  .pl-slider-field {\n    flex-direction: row;\n    align-items: center;\n    gap: 12px;\n  }\n  .pl-slider-field .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n}\n\n/* The bar above an app that the web App Hub opened (docs/web-hub.md). */\n.pl-host-bar {\n  padding: 8px 16px;\n  border-bottom: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n}\n.pl-host-bar a {\n  color: var(--pl-text);\n}\n\n/* The app frame of a web export. Height \"content\": the frame takes the\n   height of the app, so the app must not take the height of the frame. */\n.pl-frame-content #app { min-height: 0; }\n.pl-frame-error { padding: 24px; color: var(--pl-danger); white-space: pre-wrap; }\n";
+  const STYLE_CSS = "/* Minimal, runtime-owned look for the web host spike (SPEC.md §3: apps\n   declare intent, the runtime owns layout, spacing and color). */\n\n/* The renderer hides optional parts (an empty label, the back button) with\n   the `hidden` attribute; a class's `display` must not show them again. */\n[hidden] {\n  display: none !important;\n}\n\n:root {\n  --pl-bg: #0b0c0f;\n  --pl-surface: #15171c;\n  --pl-text: #e7e9ec;\n  --pl-muted: #9aa0a8;\n  --pl-accent: #3b63d1;\n  --pl-accent-text: #ffffff;\n  --pl-danger: #e5484d;\n  --pl-border: #262a31;\n  /* Level 2 tokens (UI API 1.6). */\n  --pl-surface-alt: #1f2229;\n  --pl-accent-fg: #8fa8ff;\n  --pl-success: #4cc38a;\n  --pl-hover: #22262e;\n  --pl-selected: rgb(59 99 209 / 0.2);\n  color-scheme: dark;\n  font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif;\n}\n\n/* Light mode: the desktop host's light theme tokens (SPEC.md §3). Only\n   applied when the OS/browser prefers light AND the page has not been\n   forced dark some other way, matching how the desktop theme follows the\n   system setting. */\n@media (prefers-color-scheme: light) {\n  :root {\n    --pl-bg: #f5f6f8;\n    --pl-surface: #ffffff;\n    --pl-text: #1b1d21;\n    --pl-muted: #5b6168;\n    --pl-accent: #2f54c7;\n    --pl-accent-text: #ffffff;\n    --pl-danger: #c62828;\n    --pl-border: #d8dbe0;\n    --pl-surface-alt: #eceef2;\n    --pl-accent-fg: #2f54c7;\n    --pl-success: #2e7d32;\n    --pl-hover: #e6e8ec;\n    --pl-selected: rgb(47 84 199 / 0.12);\n    color-scheme: light;\n  }\n}\n\nbody {\n  margin: 0;\n  background: var(--pl-bg);\n  color: var(--pl-text);\n}\n\n#app {\n  display: flex;\n  min-height: 100vh;\n}\n\n.pl-nav {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  padding: 12px;\n  border-right: 1px solid var(--pl-border);\n  min-width: 160px;\n}\n\n.pl-nav-item {\n  text-align: left;\n  background: transparent;\n  color: var(--pl-text);\n  border: none;\n  border-radius: 6px;\n  padding: 8px 10px;\n  cursor: pointer;\n}\n.pl-nav-item:disabled {\n  background: var(--pl-surface);\n  color: var(--pl-accent);\n  cursor: default;\n}\n\n*, *::before, *::after {\n  box-sizing: border-box;\n}\n\n/* Visible keyboard focus on every interactive element (SPEC.md §6: keyboard\n   parity with the desktop host). */\n:focus-visible {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n\n.pl-row-pressable {\n  cursor: pointer;\n}\n\n.pl-screen {\n  flex: 1;\n  min-width: 0;\n  padding: 24px;\n  max-width: 640px;\n}\n\n.pl-title {\n  font-size: 1.5rem;\n  margin: 0 0 16px;\n}\n\n.pl-section {\n  /* A fieldset is min-content wide by default; let it shrink on compact. */\n  min-width: 0;\n  border: 1px solid var(--pl-border);\n  border-radius: 10px;\n  padding: 12px 16px 16px;\n  margin: 0 0 16px;\n}\n\n.pl-section-title {\n  color: var(--pl-muted);\n  font-size: 0.8rem;\n  text-transform: uppercase;\n  letter-spacing: 0.04em;\n  padding: 0 4px;\n}\n\n.pl-text {\n  margin: 4px 0;\n}\n\n.pl-heading {\n  margin: 8px 0;\n}\n\n.pl-button {\n  background: var(--pl-accent);\n  color: #fff;\n  border: none;\n  border-radius: 6px;\n  padding: 8px 14px;\n  cursor: pointer;\n  margin: 4px 4px 4px 0;\n}\n.pl-button:disabled {\n  opacity: 0.5;\n  cursor: default;\n}\n\n.pl-field {\n  display: block;\n  margin: 8px 0;\n}\n.pl-field-label {\n  display: block;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n  margin-bottom: 4px;\n}\n.pl-input,\n.pl-select,\n.pl-textarea {\n  width: 100%;\n  box-sizing: border-box;\n  background: var(--pl-surface);\n  color: var(--pl-text);\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  padding: 8px 10px;\n  font: inherit;\n  color-scheme: inherit;\n}\n\n.pl-checkbox,\n.pl-slider {\n  accent-color: var(--pl-accent);\n  color-scheme: inherit;\n}\n\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin: 8px 0;\n}\n\n.pl-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.pl-row {\n  display: flex;\n  justify-content: space-between;\n  align-items: center;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  padding: 10px 12px;\n}\n.pl-row-header {\n  display: flex;\n  flex-direction: column;\n}\n.pl-row-title {\n  font-weight: 600;\n}\n.pl-row-subtitle {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-row-trailing {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n  flex: none;\n  white-space: nowrap;\n}\n.pl-row-actions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.pl-empty {\n  color: var(--pl-muted);\n  text-align: center;\n  padding: 24px;\n}\n\n/* UI API 1.2 controls (SPEC.md §6.3) */\n.pl-screen-header {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n}\n.pl-back {\n  border: none;\n  background: transparent;\n  color: var(--pl-accent, #3b7);\n  cursor: pointer;\n  font-size: 0.95rem;\n}\n.pl-toolbar {\n  display: flex;\n  gap: 8px;\n  margin-bottom: 12px;\n}\n.pl-action {\n  border: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n  border-radius: 6px;\n  padding: 6px 10px;\n  cursor: pointer;\n}\n.pl-action-destructive {\n  color: var(--pl-danger);\n  border-color: var(--pl-danger);\n}\n.pl-checkbox-field,\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.pl-textarea {\n  min-height: 72px;\n}\n.pl-slider-field,\n.pl-progress-field {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.pl-slider {\n  width: 100%;\n}\n.pl-segmented {\n  display: flex;\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  overflow: hidden;\n}\n.pl-segment {\n  flex: 1;\n  text-align: center;\n  padding: 6px 8px;\n  cursor: pointer;\n  color: var(--pl-text);\n}\n.pl-segment-input {\n  position: absolute;\n  opacity: 0;\n}\n/* Selected segment: accent background with contrasting text, as the\n   desktop host shows the selected Picker option (SPEC.md §6.3). Updates\n   live because the renderer rebuilds the segment markup on every op-stream\n   commit, including the `value` change the app sends back after `change`. */\n.pl-segment:has(.pl-segment-input:checked) {\n  background: var(--pl-accent);\n  color: var(--pl-accent-text);\n}\n.pl-segment-input:focus-visible ~ .pl-segment-label {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n.pl-badge {\n  display: inline-block;\n  background: var(--pl-accent, #3b7);\n  color: white;\n  border-radius: 999px;\n  padding: 2px 8px;\n  font-size: 0.8rem;\n}\n.pl-image {\n  width: 100%;\n  overflow: hidden;\n  border-radius: 8px;\n}\n.pl-image-img {\n  width: 100%;\n  height: 100%;\n  object-fit: cover;\n  display: block;\n}\n/* Regular/wide: cap the image height and center it horizontally, keeping\n   the aspect ratio (SPEC.md §6.3). Compact keeps the full-width default. */\n@media (min-width: 600px) {\n  .pl-image-square,\n  .pl-image-tall {\n    width: auto;\n    max-width: 100%;\n    max-height: 360px;\n    margin: 0 auto;\n  }\n  .pl-image-wide {\n    width: auto;\n    max-width: 100%;\n    max-height: 280px;\n    margin: 0 auto;\n  }\n}\n.pl-image-placeholder {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: var(--pl-surface-alt, #eee);\n  border: 1px solid var(--pl-border, #ccc);\n  color: var(--pl-text-muted, #666);\n  font-size: 0.8rem;\n  text-align: center;\n  padding: 8px;\n}\n\n/* <Chart> (SPEC.md §6.3, UI API 1.5): the app never picks these colors.\n   The chart palette is derived from the accent, hue-rotated with the CSS\n   relative color syntax, so it stays distinguishable in light and dark\n   without the app or this file naming a single fixed hex value. */\n.pl-chart {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.pl-chart-empty {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  height: 120px;\n  border-radius: 8px;\n  background: var(--pl-surface-alt, #eee);\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-chart-svg {\n  width: 100%;\n  height: 160px;\n}\n.pl-chart-axis-label {\n  font-size: 7px;\n  fill: var(--pl-muted);\n}\n/* `fill: none` here, not as an SVG attribute: the palette class below sets\n   `fill`, and CSS wins over presentation attributes. */\n.pl-chart-line {\n  stroke-width: 2;\n  stroke: currentColor;\n  fill: none !important;\n}\n.pl-chart-c0 { fill: var(--pl-accent); color: var(--pl-accent); stroke: var(--pl-accent); }\n.pl-chart-c1 { fill: hsl(from var(--pl-accent) calc(h + 180) s l); color: hsl(from var(--pl-accent) calc(h + 180) s l); }\n.pl-chart-c2 { fill: hsl(from var(--pl-accent) calc(h + 45) s l); color: hsl(from var(--pl-accent) calc(h + 45) s l); }\n.pl-chart-c3 { fill: hsl(from var(--pl-accent) calc(h + 223) s l); color: hsl(from var(--pl-accent) calc(h + 223) s l); }\n.pl-chart-c4 { fill: hsl(from var(--pl-accent) calc(h + 108) s l); color: hsl(from var(--pl-accent) calc(h + 108) s l); }\n.pl-chart-c5 { fill: var(--pl-muted); color: var(--pl-muted); }\n.pl-chart-legend {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 4px 12px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n}\n.pl-chart-legend-item {\n  display: flex;\n  align-items: center;\n  gap: 4px;\n}\n.pl-chart-legend-swatch {\n  width: 10px;\n  height: 10px;\n  border-radius: 2px;\n  background: currentColor;\n}\n.pl-chart-legend-label {\n  color: var(--pl-text);\n}\n.pl-chart-legend-value {\n  color: var(--pl-muted);\n}\n/* The zero line of bar and line charts: negative values go below it. */\n.pl-chart-zero {\n  stroke: var(--pl-muted);\n  stroke-width: 1;\n}\n/* An all-zero pie: a neutral disc, as on the desktop. */\n.pl-chart-track {\n  fill: var(--pl-border);\n}\n/* Visually hidden but still reachable by a screen reader: the Chart's\n   exact-value data table (SPEC.md §6.3). */\n.pl-sr-only {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n.pl-icon {\n  display: inline-block;\n  color: var(--pl-text);\n}\n.pl-icon.pl-tone-muted {\n  color: var(--pl-muted);\n}\n.pl-icon.pl-tone-danger {\n  color: var(--pl-danger);\n}\n.pl-icon.pl-tone-success {\n  color: #2e7d32;\n}\n.pl-tabs {\n  display: flex;\n  gap: 4px;\n  border-bottom: 1px solid var(--pl-border);\n  margin-bottom: 8px;\n}\n.pl-tab {\n  border: none;\n  background: transparent;\n  padding: 8px 12px;\n  cursor: pointer;\n  color: var(--pl-muted);\n  font: inherit;\n}\n.pl-tab-selected {\n  border-bottom: 2px solid var(--pl-accent, #3b7);\n  font-weight: 600;\n}\n.pl-sheet,\n.pl-dialog {\n  border: none;\n  border-radius: 10px;\n  padding: 20px;\n  max-width: 480px;\n}\n.pl-menu {\n  position: relative;\n  display: inline-block;\n}\n.pl-menu-popover {\n  position: absolute;\n  top: 100%;\n  left: 0;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);\n  display: flex;\n  flex-direction: column;\n  padding: 4px;\n  z-index: 10;\n}\n.pl-menu-item {\n  text-align: left;\n  border: none;\n  background: transparent;\n}\n.pl-grid {\n  display: grid;\n  grid-template-columns: repeat(2, 1fr);\n  gap: 12px;\n}\n@media (min-width: 640px) {\n  .pl-grid {\n    grid-template-columns: repeat(3, 1fr);\n  }\n}\n@media (min-width: 1024px) {\n  .pl-grid {\n    grid-template-columns: repeat(4, 1fr);\n  }\n}\n\n/* Width classes (SPEC.md §6.1): compact < 600px <= regular < 1200px <= wide.\n   Compact: a bottom tab bar. Regular: a narrow icon/label rail. Wide: a\n   full sidebar (the default styles above already give this). */\n@media (max-width: 599.98px) {\n  #app {\n    flex-direction: column;\n  }\n  .pl-nav {\n    position: fixed;\n    left: 0;\n    right: 0;\n    bottom: 0;\n    flex-direction: row;\n    justify-content: space-around;\n    align-items: stretch;\n    gap: 0;\n    padding: 4px;\n    min-width: 0;\n    width: 100%;\n    box-sizing: border-box;\n    border-right: none;\n    border-top: 1px solid var(--pl-border);\n    background: var(--pl-bg);\n    order: 2;\n  }\n  .pl-nav-item {\n    flex: 1;\n    text-align: center;\n    font-size: 0.8rem;\n  }\n  .pl-screen {\n    order: 1;\n    padding: 16px;\n    /* Leave room above the fixed bottom tab bar. */\n    padding-bottom: 72px;\n  }\n}\n\n@media (min-width: 600px) and (max-width: 1199.98px) {\n  .pl-nav {\n    min-width: 72px;\n    padding: 12px 6px;\n  }\n  .pl-nav-item {\n    text-align: center;\n    font-size: 0.78rem;\n    padding: 8px 4px;\n  }\n}\n\n/* Fields (SPEC.md §6.4): label above the input on compact, beside it on\n   regular/wide. */\n@media (min-width: 600px) {\n  .pl-field:not(.pl-slider-field) {\n    display: flex;\n    align-items: baseline;\n    gap: 12px;\n  }\n  .pl-field:not(.pl-slider-field) .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n  .pl-field .pl-input,\n  .pl-field .pl-select,\n  .pl-field .pl-textarea,\n  .pl-field .pl-segmented {\n    flex: 1;\n  }\n  .pl-picker-field .pl-segmented {\n    flex: 1;\n  }\n  /* The slider field has its own column layout (label above the track) so\n     the value stays readable; put its label beside the track instead,\n     matching every other field (SPEC.md §6.4). */\n  .pl-slider-field {\n    flex-direction: row;\n    align-items: center;\n    gap: 12px;\n  }\n  .pl-slider-field .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n}\n\n/* The bar above an app that the web App Hub opened (docs/web-hub.md). */\n.pl-host-bar {\n  padding: 8px 16px;\n  border-bottom: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n}\n.pl-host-bar a {\n  color: var(--pl-text);\n}\n\n/* Level 2 styled primitives (UI API 1.6, docs/UI-ADVANCED.md). The layout,\n   the space and the colors come from inline styles (dom-renderer.js\n   primitiveStyle); these rules give only what every primitive has. */\n.pl-box,\n.pl-scroll,\n.pl-pressable {\n  box-sizing: border-box;\n  min-width: 0;\n}\n.pl-span {\n  overflow-wrap: anywhere;\n}\n/* The items of a List child (also the node of .map() children) take part\n   in the layout of the box, as on the desktop. */\n.pl-box > .pl-list,\n.pl-scroll > .pl-list,\n.pl-pressable > .pl-list {\n  display: contents;\n}\n.pl-pressable {\n  cursor: pointer;\n}\n.pl-pressable[aria-disabled=\"true\"] {\n  cursor: default;\n  opacity: 0.5;\n}\n.pl-pressable-plain:not([aria-disabled=\"true\"]):hover {\n  background: var(--pl-hover);\n}\n.pl-pressable:not(.pl-pressable-plain):not([aria-disabled=\"true\"]):hover {\n  opacity: 0.88;\n}\n.pl-pressable:focus-visible,\n.pl-scroll:focus-visible {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n\n/* The app frame of a web export. Height \"content\": the frame takes the\n   height of the app, so the app must not take the height of the frame. */\n.pl-frame-content #app { min-height: 0; }\n.pl-frame-error { padding: 24px; color: var(--pl-danger); white-space: pre-wrap; }\n";
 
   // ---- zip.js
   const __zip = (() => {
@@ -397,7 +397,7 @@ function encodeInitArgs(records) {
 // GENERATED by scripts/gen-web-ids.mjs from wit/plinth/ui-api.toml.
 // Do not edit by hand; re-run the script after the id table changes.
 
-const UI_API_VERSION = "1.5";
+const UI_API_VERSION = "1.6";
 
 const ControlKind = {
   "screen": 1,
@@ -428,6 +428,10 @@ const ControlKind = {
   "icon": 27,
   "datePicker": 28,
   "chart": 29,
+  "box": 30,
+  "span": 31,
+  "pressable": 32,
+  "scroll": 33,
 };
 
 const Prop = {
@@ -462,6 +466,31 @@ const Prop = {
   "chartKind": 37,
   "data": 38,
   "series": 39,
+  "wrap": 40,
+  "gap": 41,
+  "padding": 42,
+  "paddingX": 43,
+  "paddingY": 44,
+  "crossAlign": 45,
+  "justify": 46,
+  "grow": 47,
+  "width": 48,
+  "widthFraction": 49,
+  "height": 50,
+  "heightFraction": 51,
+  "maxWidth": 52,
+  "maxWidthFraction": 53,
+  "maxHeight": 54,
+  "maxHeightFraction": 55,
+  "bg": 56,
+  "fg": 57,
+  "border": 58,
+  "radius": 59,
+  "textSize": 60,
+  "weight": 61,
+  "italic": 62,
+  "mono": 63,
+  "lines": 64,
 };
 
 const Event = {
@@ -524,7 +553,77 @@ const EnumChartKind = {
   "line": 1,
   "pie": 2,
 };
-  return { UI_API_VERSION, ControlKind, Prop, Event, EnumButtonRole, EnumTextStyle, EnumAxis, EnumButtonSize, EnumTextAlign, EnumTone, EnumAspect, EnumDatePickerMode, EnumChartKind };
+
+const EnumCrossAlign = {
+  "stretch": 0,
+  "start": 1,
+  "center": 2,
+  "end": 3,
+};
+
+const EnumJustify = {
+  "start": 0,
+  "center": 1,
+  "end": 2,
+  "between": 3,
+};
+
+const EnumFraction = {
+  "none": 0,
+  "auto": 1,
+  "full": 2,
+  "half": 3,
+  "third": 4,
+  "twoThirds": 5,
+  "quarter": 6,
+  "threeQuarters": 7,
+};
+
+const EnumColor = {
+  "none": 0,
+  "background": 1,
+  "surface": 2,
+  "surfaceAlt": 3,
+  "accent": 4,
+  "danger": 5,
+  "success": 6,
+  "text": 7,
+  "textMuted": 8,
+  "onAccent": 9,
+  "border": 10,
+  "hover": 11,
+  "selected": 12,
+};
+
+const EnumRadius = {
+  "none": 0,
+  "sm": 1,
+  "md": 2,
+  "lg": 3,
+  "full": 4,
+};
+
+const EnumTextSize = {
+  "sm": 0,
+  "xs": 1,
+  "md": 2,
+  "lg": 3,
+  "xl": 4,
+  "xxl": 5,
+};
+
+const EnumWeight = {
+  "regular": 0,
+  "medium": 1,
+  "semibold": 2,
+  "bold": 3,
+};
+
+const EnumPressableRole = {
+  "button": 0,
+  "link": 1,
+};
+  return { UI_API_VERSION, ControlKind, Prop, Event, EnumButtonRole, EnumTextStyle, EnumAxis, EnumButtonSize, EnumTextAlign, EnumTone, EnumAspect, EnumDatePickerMode, EnumChartKind, EnumCrossAlign, EnumJustify, EnumFraction, EnumColor, EnumRadius, EnumTextSize, EnumWeight, EnumPressableRole };
   })();
 
   // ---- plinth-web.js
@@ -1335,7 +1434,7 @@ class PlinthApp {
 // (from plinth-web.js) feeds `Tree.apply`; the renderer calls
 // `app.onEvent(...)` back.
 
-const { ControlKind, Prop, Event, EnumAspect, EnumTone, EnumDatePickerMode, EnumChartKind } = __ui_api;
+const { ControlKind, Prop, Event, EnumAspect, EnumTone, EnumDatePickerMode, EnumChartKind, EnumAxis, EnumCrossAlign, EnumJustify, EnumFraction, EnumColor, EnumRadius, EnumTextSize, EnumWeight, EnumPressableRole, EnumTextAlign } = __ui_api;
 
 const ASPECT_RATIO = { [EnumAspect.square]: "1 / 1", [EnumAspect.wide]: "16 / 9", [EnumAspect.tall]: "3 / 4" };
 
@@ -1465,6 +1564,143 @@ class Node {
  * Besides the tree, it records what each commit changed (`takeChanges`), so
  * the renderer touches only those nodes.
  */
+// -- UI API 1.6: Level 2 styled primitives (docs/UI-ADVANCED.md) ----------
+
+/** One spacing unit in CSS pixels (the same as the desktop host). */
+const UNIT = 4;
+const MAX_UNITS = 512;
+
+const units = (v) => `${Math.min(Math.max(Math.trunc(v), 0), MAX_UNITS) * UNIT}px`;
+
+/** Color tokens as the CSS custom properties of style.css. */
+const COLOR_VARS = {
+  [EnumColor.background]: "--pl-bg",
+  [EnumColor.surface]: "--pl-surface",
+  [EnumColor.surfaceAlt]: "--pl-surface-alt",
+  [EnumColor.accent]: "--pl-accent",
+  [EnumColor.danger]: "--pl-danger",
+  [EnumColor.success]: "--pl-success",
+  [EnumColor.text]: "--pl-text",
+  [EnumColor.textMuted]: "--pl-muted",
+  [EnumColor.onAccent]: "--pl-accent-text",
+  [EnumColor.border]: "--pl-border",
+  [EnumColor.hover]: "--pl-hover",
+  [EnumColor.selected]: "--pl-selected",
+};
+/**
+ * The CSS value of a color token. `text`: the token colors text (`fg`); the
+ * accent then uses its text variant, which is lighter in dark mode (as the
+ * desktop's dark accents are), so that accent text stays legible.
+ */
+const colorVar = (token, text = false) => {
+  if (text && token === EnumColor.accent) return "var(--pl-accent-fg)";
+  return COLOR_VARS[token] ? `var(${COLOR_VARS[token]})` : null;
+};
+
+const FRACTIONS = {
+  [EnumFraction.auto]: "auto",
+  [EnumFraction.full]: "100%",
+  [EnumFraction.half]: "50%",
+  [EnumFraction.third]: "33.3333%",
+  [EnumFraction.twoThirds]: "66.6667%",
+  [EnumFraction.quarter]: "25%",
+  [EnumFraction.threeQuarters]: "75%",
+};
+
+/** A size prop: spacing units if the int prop is set, else the fraction, else null. */
+function sizeOf(props, unitsProp, fractionProp) {
+  const n = props.get(unitsProp);
+  if (typeof n === "number") return units(n);
+  return FRACTIONS[props.get(fractionProp)?.enum] ?? null;
+}
+
+const TEXT_SIZES = {
+  [EnumTextSize.xs]: "0.75rem",
+  [EnumTextSize.sm]: "0.875rem",
+  [EnumTextSize.md]: "1rem",
+  [EnumTextSize.lg]: "1.125rem",
+  [EnumTextSize.xl]: "1.25rem",
+  [EnumTextSize.xxl]: "1.5rem",
+};
+const WEIGHTS = { [EnumWeight.regular]: "400", [EnumWeight.medium]: "500", [EnumWeight.semibold]: "600", [EnumWeight.bold]: "700" };
+
+/**
+ * The inline CSS of a Level 2 primitive (`Box`, `Pressable`, `Scroll`,
+ * `Span`) from its props: the same mapping as
+ * `crates/plinth-ui/src/primitives.rs`. Returns `{ property: value }`.
+ */
+function primitiveStyle(n) {
+  const p = n.props;
+  const en = (prop) => p.get(prop)?.enum; // an enum prop is { enum: value }
+  const css = {};
+  const grow = p.get(Prop.grow);
+  if (typeof grow === "number" && grow > 0) {
+    css.flex = `${Math.min(Math.trunc(grow), 100)} 1 0px`;
+    css["min-width"] = "0";
+  }
+  if (n.kind === ControlKind.span) {
+    css["font-size"] = TEXT_SIZES[en(Prop.textSize) ?? EnumTextSize.sm] ?? TEXT_SIZES[EnumTextSize.sm];
+    css["font-weight"] = WEIGHTS[en(Prop.weight) ?? EnumWeight.regular] ?? "400";
+    if (p.get(Prop.italic)) css["font-style"] = "italic";
+    if (p.get(Prop.mono)) css["font-family"] = "ui-monospace, Consolas, monospace";
+    css.color = colorVar(en(Prop.fg), true) ?? "var(--pl-text)";
+    const align = en(Prop.align);
+    if (align === EnumTextAlign.center) css["text-align"] = "center";
+    else if (align === EnumTextAlign.end) css["text-align"] = "end";
+    const lines = p.get(Prop.lines);
+    if (typeof lines === "number" && lines > 0) {
+      css.display = "-webkit-box";
+      css["-webkit-box-orient"] = "vertical";
+      css["-webkit-line-clamp"] = String(Math.min(Math.trunc(lines), 1000));
+      css.overflow = "hidden";
+    }
+    return css;
+  }
+  const row = en(Prop.axis) === EnumAxis.row;
+  css.display = "flex";
+  css["flex-direction"] = row ? "row" : "column";
+  if (p.get(Prop.wrap)) css["flex-wrap"] = "wrap";
+  for (const [prop, name] of [
+    [Prop.gap, "gap"],
+    [Prop.padding, "padding"],
+  ]) {
+    const v = p.get(prop);
+    if (typeof v === "number") css[name] = units(v);
+  }
+  const px = p.get(Prop.paddingX);
+  if (typeof px === "number") css["padding-inline"] = units(px);
+  const py = p.get(Prop.paddingY);
+  if (typeof py === "number") css["padding-block"] = units(py);
+  css["align-items"] = { [EnumCrossAlign.start]: "flex-start", [EnumCrossAlign.center]: "center", [EnumCrossAlign.end]: "flex-end" }[en(Prop.crossAlign)] ?? "stretch";
+  css["justify-content"] = { [EnumJustify.center]: "center", [EnumJustify.end]: "flex-end", [EnumJustify.between]: "space-between" }[en(Prop.justify)] ?? "flex-start";
+  // A size in spacing units is fixed: the element does not shrink below it.
+  if (typeof p.get(Prop.width) === "number" || typeof p.get(Prop.height) === "number") css["flex-shrink"] = "0";
+  for (const [u, f, name] of [
+    [Prop.width, Prop.widthFraction, "width"],
+    [Prop.height, Prop.heightFraction, "height"],
+    [Prop.maxWidth, Prop.maxWidthFraction, "max-width"],
+    [Prop.maxHeight, Prop.maxHeightFraction, "max-height"],
+  ]) {
+    const v = sizeOf(p, u, f);
+    if (v) css[name] = v;
+  }
+  const bg = colorVar(en(Prop.bg));
+  if (bg) css.background = bg;
+  const border = colorVar(en(Prop.border));
+  if (border) css.border = `1px solid ${border}`;
+  const radius = { [EnumRadius.sm]: "4px", [EnumRadius.md]: "8px", [EnumRadius.lg]: "12px", [EnumRadius.full]: "9999px" }[en(Prop.radius)];
+  if (radius) css["border-radius"] = radius;
+  if (n.kind === ControlKind.scroll) css[row ? "overflow-x" : "overflow-y"] = "auto";
+  return css;
+}
+
+/** Applies `css` to `e`, changing only the properties that differ from `last` (the previous call). */
+function applyStyle(e, css, last) {
+  for (const name of Object.keys(last)) if (!(name in css)) e.style.removeProperty(name);
+  for (const [name, value] of Object.entries(css)) if (last[name] !== value) e.style.setProperty(name, value);
+  return css;
+}
+
 class Tree {
   constructor() {
     this.nodes = new Map();
@@ -2021,8 +2257,74 @@ class DomRenderer {
       case "icon": return this.iconView();
       case "datePicker": return this.datePickerView();
       case "chart": return this.chartView();
+      case "box":
+      case "scroll":
+      case "pressable": return this.primitiveBoxView(kname);
+      case "span": return this.spanView();
       default: return this.containerView(el("div", `pl-${kname}`));
     }
+  }
+
+  /**
+   * A Level 2 box (`Box`, `Scroll`, `Pressable`): a `<div>` with inline
+   * flex styles. A Pressable is a tab stop with the role button or link;
+   * Enter and Space press it (Space only for a button, as in HTML). A
+   * Scroll is a tab stop too, so the keyboard can scroll it.
+   */
+  primitiveBoxView(kname) {
+    const e = el("div", `pl-${kname}`);
+    let id = 0;
+    let last = {};
+    let disabled = false;
+    let link = false;
+    if (kname === "pressable") {
+      const press = () => {
+        if (!disabled) this.fire(id, Event.press);
+      };
+      e.addEventListener("click", press);
+      e.addEventListener("keydown", (ev) => {
+        if (ev.target !== e) return;
+        if (ev.key === "Enter" || (ev.key === " " && !link)) {
+          ev.preventDefault();
+          press();
+        }
+      });
+    }
+    return {
+      el: e,
+      slot: e,
+      update: (n) => {
+        id = n.id;
+        last = applyStyle(e, primitiveStyle(n), last);
+        const label = n.props.get(Prop.label) ?? null;
+        if (kname === "pressable") {
+          link = n.props.get(Prop.role)?.enum === EnumPressableRole.link;
+          disabled = !!n.props.get(Prop.disabled);
+          setAttr(e, "role", link ? "link" : "button");
+          setAttr(e, "aria-label", label);
+          setAttr(e, "aria-disabled", disabled ? "true" : null);
+          setAttr(e, "tabindex", disabled ? null : "0");
+          e.classList.toggle("pl-pressable-plain", !colorVar(n.props.get(Prop.bg)?.enum));
+        } else {
+          setAttr(e, "role", label ? "group" : null);
+          setAttr(e, "aria-label", label);
+          if (kname === "scroll") setAttr(e, "tabindex", "0");
+        }
+      },
+    };
+  }
+
+  /** A Level 2 Span: styled text. */
+  spanView() {
+    const e = el("span", "pl-span");
+    let last = {};
+    return {
+      el: e,
+      update: (n) => {
+        last = applyStyle(e, primitiveStyle(n), last);
+        setText(e, n.text ?? "");
+      },
+    };
   }
 
   /** A plain element whose children are the node's children. */
@@ -2715,7 +3017,7 @@ class DomRenderer {
     };
   }
 }
-  return { piePath, niceScale, scaleFrac, barSpan, pieLegend, Tree, DomRenderer };
+  return { piePath, niceScale, scaleFrac, barSpan, pieLegend, UNIT, colorVar, primitiveStyle, Tree, DomRenderer };
   })();
 
   // ---- hub-storage.js

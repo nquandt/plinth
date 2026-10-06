@@ -35,7 +35,10 @@ function fail(message) {
 
 /** The body of one module closure: imports replaced, `export` removed. */
 function moduleBody(file) {
-  const text = readFileSync(path.join(web, file), "utf-8").replace(/\r\n/g, "\n");
+  const text = readFileSync(path.join(web, file), "utf-8")
+    .replace(/\r\n/g, "\n")
+    // An import list on more than one line becomes one line.
+    .replace(/^import\s*\{([^}]*)\}\s*from/gm, (_, names) => `import { ${names.replace(/\s+/g, " ").trim()} } from`);
   const exports = [];
   const lines = text.split("\n").map((line) => {
     const imp = line.match(/^import\s*\{([^}]*)\}\s*from\s*"\.\/([\w.-]+)";\s*$/);

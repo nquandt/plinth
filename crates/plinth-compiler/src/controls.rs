@@ -3,7 +3,8 @@
 //! `std_typings_match` compares them.
 
 use plinth_protocol::{
-    ControlKind, aspect, axis, button_role, button_size, chart_kind, date_picker_mode, event, prop, text_align, text_style, tone,
+    ControlKind, aspect, axis, button_role, button_size, chart_kind, color, cross_align, date_picker_mode, event, fraction, justify,
+    pressable_role, prop, radius, text_align, text_size, text_style, tone, weight,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +56,10 @@ pub enum PropTy {
     /// as `Chart.data`. Encoded into one `series` string prop: series
     /// joined with U+001E, each `"name\u0001points"` (UI API 1.5).
     ChartSeries,
+    /// A Level 2 size (UI API 1.6): a number of spacing units, sent as an
+    /// int prop (the target id), or a fraction string literal (`"1/2"`,
+    /// `"full"`, `"auto"`, ...), sent as an enum prop with this id.
+    Size(u16),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +112,75 @@ const ASPECTS: &[(&str, u16)] = &[("square", aspect::SQUARE), ("wide", aspect::W
 const DATE_PICKER_MODES: &[(&str, u16)] =
     &[("date", date_picker_mode::DATE), ("time", date_picker_mode::TIME), ("datetime", date_picker_mode::DATETIME)];
 const CHART_KINDS: &[(&str, u16)] = &[("bar", chart_kind::BAR), ("line", chart_kind::LINE), ("pie", chart_kind::PIE)];
+
+// -- UI API 1.6: Level 2 style props (docs/UI-ADVANCED.md) --
+const DIRECTIONS: &[(&str, u16)] = &[("row", axis::ROW), ("column", axis::COLUMN)];
+const CROSS_ALIGNS: &[(&str, u16)] =
+    &[("stretch", cross_align::STRETCH), ("start", cross_align::START), ("center", cross_align::CENTER), ("end", cross_align::END)];
+const JUSTIFIES: &[(&str, u16)] =
+    &[("start", justify::START), ("center", justify::CENTER), ("end", justify::END), ("between", justify::BETWEEN)];
+pub const FRACTIONS: &[(&str, u16)] = &[
+    ("auto", fraction::AUTO),
+    ("full", fraction::FULL),
+    ("1/2", fraction::HALF),
+    ("1/3", fraction::THIRD),
+    ("2/3", fraction::TWO_THIRDS),
+    ("1/4", fraction::QUARTER),
+    ("3/4", fraction::THREE_QUARTERS),
+];
+const COLORS: &[(&str, u16)] = &[
+    ("none", color::NONE),
+    ("background", color::BACKGROUND),
+    ("surface", color::SURFACE),
+    ("surface.alt", color::SURFACE_ALT),
+    ("accent", color::ACCENT),
+    ("danger", color::DANGER),
+    ("success", color::SUCCESS),
+    ("text", color::TEXT),
+    ("text.muted", color::TEXT_MUTED),
+    ("on.accent", color::ON_ACCENT),
+    ("border", color::BORDER),
+    ("hover", color::HOVER),
+    ("selected", color::SELECTED),
+];
+const RADII: &[(&str, u16)] = &[("none", radius::NONE), ("sm", radius::SM), ("md", radius::MD), ("lg", radius::LG), ("full", radius::FULL)];
+const TEXT_SIZES: &[(&str, u16)] = &[
+    ("xs", text_size::XS),
+    ("sm", text_size::SM),
+    ("md", text_size::MD),
+    ("lg", text_size::LG),
+    ("xl", text_size::XL),
+    ("2xl", text_size::XXL),
+];
+const WEIGHTS: &[(&str, u16)] =
+    &[("regular", weight::REGULAR), ("medium", weight::MEDIUM), ("semibold", weight::SEMIBOLD), ("bold", weight::BOLD)];
+const PRESSABLE_ROLES: &[(&str, u16)] = &[("button", pressable_role::BUTTON), ("link", pressable_role::LINK)];
+
+/// The style props of a Level 2 box (`Box`, `Pressable`, `Scroll`), after
+/// the props of the control itself.
+macro_rules! box_props {
+    ($($extra:expr),* $(,)?) => {
+        &[
+            $($extra,)*
+            p("direction", T::Enum(DIRECTIONS), false, P(prop::AXIS)),
+            p("wrap", T::Bool, false, P(prop::WRAP)),
+            p("gap", T::Int, false, P(prop::GAP)),
+            p("padding", T::Int, false, P(prop::PADDING)),
+            p("paddingX", T::Int, false, P(prop::PADDING_X)),
+            p("paddingY", T::Int, false, P(prop::PADDING_Y)),
+            p("align", T::Enum(CROSS_ALIGNS), false, P(prop::CROSS_ALIGN)),
+            p("justify", T::Enum(JUSTIFIES), false, P(prop::JUSTIFY)),
+            p("grow", T::Int, false, P(prop::GROW)),
+            p("width", T::Size(prop::WIDTH_FRACTION), false, P(prop::WIDTH)),
+            p("height", T::Size(prop::HEIGHT_FRACTION), false, P(prop::HEIGHT)),
+            p("maxWidth", T::Size(prop::MAX_WIDTH_FRACTION), false, P(prop::MAX_WIDTH)),
+            p("maxHeight", T::Size(prop::MAX_HEIGHT_FRACTION), false, P(prop::MAX_HEIGHT)),
+            p("bg", T::Enum(COLORS), false, P(prop::BG)),
+            p("border", T::Enum(COLORS), false, P(prop::BORDER)),
+            p("radius", T::Enum(RADII), false, P(prop::RADIUS)),
+        ]
+    };
+}
 
 const fn p(name: &'static str, ty: PropTy, required: bool, target: Target) -> PropSpec {
     PropSpec { name, ty, required, target }
@@ -407,6 +481,47 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("onChange", T::CallbackStr, false, Ev(event::CHANGE)),
         ],
         children: ChildKind::None,
+    },
+    // -- UI API 1.6: Level 2 styled primitives (docs/UI-ADVANCED.md) --
+    ControlSpec {
+        name: "Box",
+        kind: ControlKind::Box,
+        // `label` names the box as a group for assistive technology.
+        props: box_props![p("label", T::Str, false, P(prop::LABEL))],
+        children: ChildKind::Nodes,
+    },
+    ControlSpec {
+        name: "Span",
+        kind: ControlKind::Span,
+        props: &[
+            p("size", T::Enum(TEXT_SIZES), false, P(prop::TEXT_SIZE)),
+            p("weight", T::Enum(WEIGHTS), false, P(prop::WEIGHT)),
+            p("italic", T::Bool, false, P(prop::ITALIC)),
+            p("mono", T::Bool, false, P(prop::MONO)),
+            p("fg", T::Enum(COLORS), false, P(prop::FG)),
+            p("align", T::Enum(ALIGNS), false, P(prop::ALIGN)),
+            p("lines", T::Int, false, P(prop::LINES)),
+            p("grow", T::Int, false, P(prop::GROW)),
+        ],
+        children: ChildKind::Text,
+    },
+    ControlSpec {
+        name: "Pressable",
+        kind: ControlKind::Pressable,
+        // A label and a role are required (docs/UI-ADVANCED.md §5).
+        props: box_props![
+            p("label", T::Str, true, P(prop::LABEL)),
+            p("role", T::Enum(PRESSABLE_ROLES), true, P(prop::ROLE)),
+            p("onPress", T::Callback0, true, Ev(event::PRESS)),
+            p("disabled", T::Bool, false, P(prop::DISABLED)),
+        ],
+        children: ChildKind::Nodes,
+    },
+    ControlSpec {
+        name: "Scroll",
+        kind: ControlKind::Scroll,
+        props: box_props![p("label", T::Str, false, P(prop::LABEL))],
+        children: ChildKind::Nodes,
     },
 ];
 

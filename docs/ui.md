@@ -233,6 +233,50 @@ Notes:
 The toolbar shows two actions on a narrow window and four on a medium or
 wide one; the rest collapse into an overflow menu.
 
+## Level 2: styled primitives (UI API 1.6)
+
+For the parts of an app that need their own look (a card, a board, an
+editor), four primitives take typed style props (docs/UI-ADVANCED.md).
+They go inside the semantic shell: a `Screen`, a `Section` or a `Sheet`.
+
+| Primitive | What it is | Accessibility |
+|---|---|---|
+| `Box` | A flex box. | No role; with `label`, a named group. |
+| `Span` | Styled text (the children). | A text label. |
+| `Pressable` | A box that the user presses. `label`, `role` (`"button"` or `"link"`) and `onPress` are required. | A button or a link; a tab stop; Enter (and Space for a button) presses it. |
+| `Scroll` | A box that scrolls along its `direction`. Give it a `height` or `maxHeight` for a column. | A scroll view; a tab stop on the web. |
+
+Box props (also on `Pressable` and `Scroll`): `direction` (`"column"`,
+the default, or `"row"`), `wrap`, `gap`, `padding`, `paddingX`, `paddingY`,
+`align` (`"stretch"`, `"start"`, `"center"`, `"end"`), `justify`
+(`"start"`, `"center"`, `"end"`, `"between"`), `grow`, `width`, `height`,
+`maxWidth`, `maxHeight`, `bg`, `border`, `radius` (`"none"`, `"sm"`,
+`"md"`, `"lg"`, `"full"`). Span props: `size` (`"xs"` … `"2xl"`), `weight`,
+`italic`, `mono`, `fg`, `align`, `lines` (the most lines), `grow`.
+
+- **Spaces and sizes** are spacing units: one unit is 4 px on every host.
+  A size can also be a fraction string: `"auto"`, `"full"`, `"1/2"`,
+  `"1/3"`, `"2/3"`, `"1/4"`, `"3/4"` (a string literal). An element with a
+  width or a height in units does not shrink.
+- **Colors** are theme tokens: `"background"`, `"surface"`, `"surface.alt"`,
+  `"accent"`, `"danger"`, `"success"`, `"text"`, `"text.muted"`,
+  `"on.accent"`, `"border"`, `"hover"`, `"selected"`, `"none"`. There are no
+  raw colors and no raw pixels.
+- **`.map()` children** (and a `List`) inside a primitive take part in its
+  layout: mapped cards in a row `Box` are a row.
+- The runtime gives a `Pressable` its hover and disabled states. Custom
+  states (`hover={...}`), width-class styles and motion come in phase U2.
+
+```tsx
+<Pressable label="Open the inbox" role="button" direction="row" gap={3} padding={3}
+           radius="md" bg="surface" border="border" onPress={open}>
+  <Span weight="semibold" grow={1}>Inbox</Span>
+  <Span fg="text.muted">3 new</Span>
+</Pressable>
+```
+
+`examples/primitives` shows all four.
+
 ## Layout rules the runtime owns
 
 - **Forms** stack fields vertically. Labels sit above the field on a

@@ -23,7 +23,7 @@ pub const UI_NAMES: &[&str] = &[
     // UI API 1.3
     "Image", "Aspect",
     // UI API 1.4
-    "Icon", "DatePicker",
+    "Icon", "DatePicker", "Box", "Span", "Pressable", "Scroll",
     // UI API 1.5
     "Chart", "ChartPoint", "ChartSeriesDef",
 ];
