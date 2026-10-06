@@ -1,0 +1,161 @@
+/* Minimal, runtime-owned look for the web host spike (SPEC.md §3: apps
+   declare intent, the runtime owns layout, spacing and color). */
+
+:root {
+  --pl-bg: #0b0c0f;
+  --pl-surface: #15171c;
+  --pl-text: #e7e9ec;
+  --pl-muted: #9aa0a8;
+  --pl-accent: #5b8cff;
+  --pl-danger: #e5484d;
+  --pl-border: #262a31;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  background: var(--pl-bg);
+  color: var(--pl-text);
+}
+
+#app {
+  display: flex;
+  min-height: 100vh;
+}
+
+.pl-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border-right: 1px solid var(--pl-border);
+  min-width: 160px;
+}
+
+.pl-nav-item {
+  text-align: left;
+  background: transparent;
+  color: var(--pl-text);
+  border: none;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.pl-nav-item:disabled {
+  background: var(--pl-surface);
+  color: var(--pl-accent);
+  cursor: default;
+}
+
+.pl-screen {
+  flex: 1;
+  padding: 24px;
+  max-width: 640px;
+}
+
+.pl-title {
+  font-size: 1.5rem;
+  margin: 0 0 16px;
+}
+
+.pl-section {
+  border: 1px solid var(--pl-border);
+  border-radius: 10px;
+  padding: 12px 16px 16px;
+  margin: 0 0 16px;
+}
+
+.pl-section-title {
+  color: var(--pl-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 4px;
+}
+
+.pl-text {
+  margin: 4px 0;
+}
+
+.pl-heading {
+  margin: 8px 0;
+}
+
+.pl-button {
+  background: var(--pl-accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  cursor: pointer;
+  margin: 4px 4px 4px 0;
+}
+.pl-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pl-field {
+  display: block;
+  margin: 8px 0;
+}
+.pl-field-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--pl-muted);
+  margin-bottom: 4px;
+}
+.pl-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--pl-surface);
+  color: var(--pl-text);
+  border: 1px solid var(--pl-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.pl-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.pl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pl-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--pl-surface);
+  border: 1px solid var(--pl-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.pl-row-header {
+  display: flex;
+  flex-direction: column;
+}
+.pl-row-title {
+  font-weight: 600;
+}
+.pl-row-subtitle {
+  color: var(--pl-muted);
+  font-size: 0.85rem;
+}
+.pl-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pl-empty {
+  color: var(--pl-muted);
+  text-align: center;
+  padding: 24px;
+}

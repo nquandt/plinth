@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plinth web host</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="app">Loading&hellip;</div>
+    <script type="module">
+      import { PlinthApp, readPlnt } from "./plinth-web.js";
+      import { Tree, DomRenderer } from "./dom-renderer.js";
+
+      const container = document.getElementById("app");
+
+      function param(name, fallback) {
+        return new URLSearchParams(location.search).get(name) ?? fallback;
+      }
+
+      async function main() {
+        const appUrl = param("app");
+        const coreUrl = param("core", "core.wasm");
+        if (!appUrl) {
+          container.innerHTML =
+            "<p style='padding:24px;font-family:system-ui'>Usage: <code>index.html?app=&lt;url of .plnt&gt;&amp;core=&lt;url of core.wasm&gt;</code></p>";
+          return;
+        }
+        const [pltBytes, coreBytes] = await Promise.all([
+          fetch(appUrl).then((r) => r.arrayBuffer()).then((b) => new Uint8Array(b)),
+          fetch(coreUrl).then((r) => r.arrayBuffer()).then((b) => new Uint8Array(b)),
+        ]);
+        const { appWasm } = await readPlnt(pltBytes);
+
+        const app = new PlinthApp();
+        const tree = new Tree();
+        app.onCommit = (ops) => tree.apply(ops);
+        await app.load(coreBytes, appWasm, { log: (s) => console.log("[app]", s) });
+
+        new DomRenderer(tree, container, app);
+        app.init([]);
+      }
+
+      main().catch((err) => {
+        console.error(err);
+        container.innerHTML = `<pre style="padding:24px;color:#e5484d">${String(err?.stack ?? err)}</pre>`;
+      });
+    </script>
+  </body>
+</html>
