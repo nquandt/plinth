@@ -1,11 +1,11 @@
-//! Path-based geometry for `<Chart kind="line">` and `<Chart kind="pie">`
-//! (SPEC.md §6.3, UI API 1.5). The pure helpers (scales, ticks, wedge
+//! Geometry for `<Chart>` (SPEC.md §6.3, UI API 1.5): bars, and path-based
+//! lines and pies. The pure helpers (scales, ticks, wedge
 //! angles) are unit-tested; the painters draw them with gpui's `canvas`,
 //! `PathBuilder` and `paint_path`. Colors always come from the runtime
 //! theme (`Tokens::chart_palette`); apps never pick them.
 
 use crate::theme::{Tokens, with_alpha};
-use gpui::{AnyElement, Bounds, Hsla, PathBuilder, Pixels, Point, canvas, div, fill, point, prelude::*, px, size};
+use gpui::{AnyElement, Bounds, Hsla, PathBuilder, Pixels, Point, canvas, div, fill, point, prelude::*, px, relative, size};
 use std::f32::consts::{FRAC_PI_2, TAU};
 
 /// One label/value pair.
@@ -105,6 +105,67 @@ pub(crate) fn pie_wedges(values: &[f64]) -> Vec<(usize, f32, f32)> {
 pub(crate) fn pie_percents(values: &[f64]) -> Vec<u32> {
     let total: f64 = values.iter().map(|v| if v.is_finite() { v.abs() } else { 0.0 }).sum();
     values.iter().map(|v| if total > 0.0 && v.is_finite() { (v.abs() / total * 100.0).round() as u32 } else { 0 }).collect()
+}
+
+/// The pie legend: `(index, share)` for each value that has a wedge (finite
+/// and not zero). The share is a whole percent; a small share that rounds
+/// to 0 shows as "<1%". The web host's `pieLegend` is the same.
+pub(crate) fn pie_legend(values: &[f64]) -> Vec<(usize, String)> {
+    let percents = pie_percents(values);
+    values
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.is_finite() && **v != 0.0)
+        .map(|(i, _)| (i, if percents[i] == 0 { "<1%".to_string() } else { format!("{}%", percents[i]) }))
+        .collect()
+}
+
+/// The vertical extent of a bar for `v` as `(from, to)` fractions of the
+/// plot height, from the bottom. A bar starts at the zero line: up for a
+/// positive value, down for a negative one. Zero (or not finite): `None`,
+/// no bar. The web host's `barSpan` is the same.
+pub(crate) fn bar_span(scale: &Scale, v: f64) -> Option<(f32, f32)> {
+    if !v.is_finite() || v == 0.0 {
+        return None;
+    }
+    let (z, f) = (scale.frac(0.0), scale.frac(v));
+    Some((z.min(f), z.max(f)))
+}
+
+/// Draws a bar chart: grouped bars per label in the theme's chart palette,
+/// on the same "nice" scale as the line chart (it always holds zero). Bars
+/// grow up from a zero line for positive values and down for negative
+/// ones; a zero value has no bar.
+pub(crate) fn render_bars(series: &[(String, ChartPoints)], t: &Tokens, height: f32) -> AnyElement {
+    let palette = t.chart_palette();
+    let scale = Scale::for_values(series.iter().flat_map(|(_, pts)| pts.iter().map(|(_, v)| *v)));
+    let labels: Vec<String> = series.first().map(|(_, pts)| pts.iter().map(|(l, _)| l.clone()).collect()).unwrap_or_default();
+    let groups = (0..labels.len()).map(|i| {
+        let bars = series.iter().enumerate().map(|(si, (_, pts))| {
+            let v = pts.get(i).map(|(_, v)| *v).unwrap_or(0.0);
+            let slot = div().flex_1().h_full().relative();
+            match bar_span(&scale, v) {
+                Some((from, to)) => {
+                    let bar = div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom(relative(from))
+                        .h(relative(to - from))
+                        .bg(palette[si % palette.len()]);
+                    slot.child(if v > 0.0 { bar.rounded_t_sm() } else { bar.rounded_b_sm() })
+                }
+                None => slot,
+            }
+        });
+        div().flex().gap_1().flex_1().h_full().children(bars)
+    });
+    let zero_line = div().absolute().left_0().right_0().bottom(relative(scale.frac(0.0))).h(px(1.)).bg(t.border);
+    let plot = div().relative().flex().gap_2().flex_1().w_full().children(groups).child(zero_line);
+    let x_labels = div().flex().gap_2().w_full().flex_none().children(labels.iter().map(|l| {
+        div().flex_1().min_w_0().flex().justify_center().overflow_hidden().text_xs().text_color(t.text_muted).child(l.clone())
+    }));
+    div().flex().flex_col().gap_1().h(px(height)).w_full().child(plot).child(x_labels).into_any_element()
 }
 
 fn on_circle(c: Point<Pixels>, r: f32, a: f32) -> Point<Pixels> {
@@ -256,15 +317,15 @@ pub(crate) fn render_pie(points: &ChartPoints, t: &Tokens, diameter: f32, stacke
     )
     .size_full();
 
-    let percents = pie_percents(&values);
-    let entries = points.iter().enumerate().map(|(i, (label, _))| {
+    // Only the points that have a wedge: a zero value has no color to name.
+    let entries = pie_legend(&values).into_iter().map(|(i, share)| {
         div()
             .flex()
             .items_center()
             .gap_2()
             .child(div().w(px(10.)).h(px(10.)).flex_none().rounded_sm().bg(palette[i % palette.len()]))
-            .child(div().text_sm().text_color(t.text).child(label.clone()))
-            .child(div().text_sm().text_color(t.text_muted).child(format!("{}%", percents[i])))
+            .child(div().text_sm().text_color(t.text).child(points[i].0.clone()))
+            .child(div().text_sm().text_color(t.text_muted).child(share))
     });
     let legend = if stacked {
         div().flex().flex_wrap().gap_x_3().gap_y_1().children(entries)
@@ -329,5 +390,28 @@ mod tests {
         assert!(pie_wedges(&[0.0, 0.0]).is_empty());
         assert_eq!(pie_percents(&[1.0, 3.0]), vec![25, 75]);
         assert_eq!(pie_percents(&[0.0]), vec![0]);
+    }
+
+    #[test]
+    fn pie_legend_skips_zero_and_shows_shares() {
+        assert_eq!(pie_legend(&[1.0, 0.0, 3.0]), vec![(0, "25%".to_string()), (2, "75%".to_string())]);
+        assert_eq!(pie_legend(&[1.0, 999.0]), vec![(0, "<1%".to_string()), (1, "100%".to_string())]);
+        assert_eq!(pie_legend(&[-1.0, 3.0]), vec![(0, "25%".to_string()), (1, "75%".to_string())]);
+        assert!(pie_legend(&[0.0, f64::NAN]).is_empty());
+    }
+
+    #[test]
+    fn bars_grow_from_the_zero_line() {
+        let s = Scale { lo: -50.0, hi: 100.0, step: 25.0 };
+        let zero = s.frac(0.0);
+        assert!((zero - 1. / 3.).abs() < 1e-6);
+        assert_eq!(bar_span(&s, 100.0), Some((zero, 1.0)));
+        assert_eq!(bar_span(&s, -50.0), Some((0.0, zero)));
+        let (from, to) = bar_span(&s, -25.0).unwrap();
+        assert!(to == zero && from > 0.0 && from < zero, "a negative bar hangs below zero");
+        assert_eq!(bar_span(&s, 0.0), None, "no stub bar for zero");
+        assert_eq!(bar_span(&s, f64::NAN), None);
+        // Every value positive: zero is the bottom edge.
+        assert_eq!(Scale::for_values([3.0, 8.0]).frac(0.0), 0.0);
     }
 }

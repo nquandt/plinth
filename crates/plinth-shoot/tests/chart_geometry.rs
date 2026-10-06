@@ -73,6 +73,16 @@ function Home() {
             { label: \"Fun\", value: 220 },
           ]}
         />
+        <Chart
+          label=\"Net by month\"
+          kind=\"bar\"
+          data={[
+            { label: \"Jan\", value: 300 },
+            { label: \"Feb\", value: -150 },
+            { label: \"Mar\", value: 0 },
+            { label: \"Apr\", value: 200 },
+          ]}
+        />
       </Section>
     </Screen>
   );
@@ -88,6 +98,20 @@ fn build() -> plinth_compiler::Artifact {
     let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &[]).expect("compile");
     let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
     artifact.unwrap_or_else(|| panic!("chart test app has errors:\n{}", diags.join("\n")))
+}
+
+/// The top and bottom rows of clearly colored pixels in the x range
+/// `x0..x1` (the middle of one bar column) between `y0` and `y1`.
+fn colored_rows(rgba: &[u8], (w, _h): (u32, u32), x0: u32, x1: u32, y0: u32, y1: u32) -> Option<(u32, u32)> {
+    let mut rows = (y0..y1).filter(|&y| {
+        (x0..x1).any(|x| {
+            let i = ((y * w + x) * 4) as usize;
+            let (r, g, b) = (rgba[i], rgba[i + 1], rgba[i + 2]);
+            r.max(g).max(b) - r.min(g).min(b) > 60
+        })
+    });
+    let first = rows.next()?;
+    Some((first, rows.last().unwrap_or(first)))
 }
 
 /// The share of pixels inside `r` that are clearly colored (the chart
@@ -156,6 +180,7 @@ fn line_and_pie_charts_paint_geometry_at_every_width() {
         assert!(described("2026: Jan: 300"), "[{class}] second series summary missing: {found:#?}");
         assert!(described("Rent: 1200, Groceries: 450, Transport: 160, Fun: 220, Other: 90"), "[{class}] pie summary missing");
         assert!(described("Rent: 1200, Groceries: 450, Fun: 220"), "[{class}] bar summary missing");
+        assert!(described("Jan: 300, Feb: -150, Mar: 0, Apr: 200"), "[{class}] negative bar summary missing");
 
         let image = cx.capture_screenshot(window.into()).expect("render the charts");
         image.save(shots.join(format!("chart-{class}.png"))).expect("write the chart screenshot");
@@ -168,5 +193,19 @@ fn line_and_pie_charts_paint_geometry_at_every_width() {
         assert!(pie > 0.15, "[{class}] pie paints too little color: {pie:.3}");
         assert!(line > 0.01 && line < 0.4, "[{class}] line paints an unexpected amount of color: {line:.3}");
         assert!(bar > 0.05, "[{class}] bars paint too little color: {bar:.3}");
+
+        // Negative values: a bar grows down from the zero line, where the
+        // positive bars end; a zero value has no bar (not even a stub).
+        let net = figure("Net by month");
+        let col = |i: u32| {
+            let cw = (net.x1 - net.x0) / 4.0;
+            let x = net.x0 + cw * i as f64;
+            colored_rows(image.as_raw(), image.dimensions(), (x + cw * 0.3) as u32, (x + cw * 0.5) as u32, net.y0 as u32, net.y1 as u32)
+        };
+        let (jan_top, jan_bottom) = col(0).unwrap_or_else(|| panic!("[{class}] no Jan bar"));
+        let (feb_top, feb_bottom) = col(1).unwrap_or_else(|| panic!("[{class}] no Feb bar"));
+        assert!(col(2).is_none(), "[{class}] a zero value paints a bar: {:?}", col(2));
+        assert!(feb_top + 3 >= jan_bottom, "[{class}] the negative bar does not start at the zero line: Jan {jan_top}..{jan_bottom}, Feb {feb_top}..{feb_bottom}");
+        assert!(feb_bottom > jan_bottom + 10, "[{class}] the negative bar does not go below zero: Jan {jan_top}..{jan_bottom}, Feb {feb_top}..{feb_bottom}");
     }
 }

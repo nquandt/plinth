@@ -165,12 +165,18 @@ needed. There are no size, axis or color props.
   (one series).
 - Empty data (no points, or every series empty) shows a "No data"
   placeholder instead of an empty drawing.
-- Drawing (desktop): `bar` draws grouped proportional bars; `line`
+- Drawing (desktop): `bar` draws grouped bars; `line`
   draws one stroked polyline per series over "nice" y-axis ticks and
   gridlines, with point markers when the points are not too dense and
   x labels thinned by width class; `pie` draws filled wedges with a
   legend of each label and its share (beside the pie, or below it at
   compact width). Colors always come from the theme's chart palette.
+  The web host draws the same kinds as inline SVG.
+- Values (both hosts): `bar` and `line` use one scale that always
+  includes zero. A negative value goes below the zero line (a bar grows
+  down from it); a zero value has no bar. `pie` uses the magnitude of
+  each value; a zero value has no wedge and no legend entry, and a share
+  that rounds to 0 % shows as "<1%".
 - Accessibility: the desktop renderer gives the chart the AccessKit
   role `Figure`, named by `label`, plus a hidden text summary with
   every `"label: value"` pair, so a screen reader gets the numbers
