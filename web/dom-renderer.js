@@ -216,13 +216,14 @@ export class DomRenderer {
 
   render() {
     this.container.innerHTML = "";
-    const nav = el("nav", "pl-nav");
+    const nav = el("nav", "pl-nav", { "aria-label": "Screens" });
     for (const p of this.tree.primaryScreens) {
       const btn = el("button", "pl-nav-item");
       // The nav shows each screen's title, as the desktop shell does.
       const root = this.tree.nodes.get(this.tree.roots.get(p.screen));
       btn.textContent = root?.props.get(Prop.title) ?? `Screen ${p.screen}`;
       btn.disabled = p.screen === this.tree.currentScreen;
+      if (p.screen === this.tree.currentScreen) btn.setAttribute("aria-current", "page");
       btn.addEventListener("click", () => {
         this.tree.currentScreen = p.screen;
         this.tree.stack = [];
@@ -239,6 +240,11 @@ export class DomRenderer {
     }
     if (this.tree.primaryScreens.length) this.container.appendChild(nav);
     this.container.appendChild(main);
+    // document.title follows the current screen, matching the desktop
+    // window title (SPEC.md §6).
+    const rootNode = rootId !== undefined ? this.tree.node(rootId) : null;
+    const screenTitle = rootNode?.props.get(Prop.title);
+    document.title = screenTitle ? `${screenTitle} — Plinth` : "Plinth web host";
   }
 
   renderNode(n) {
@@ -436,11 +442,12 @@ export class DomRenderer {
   }
 
   renderList(n) {
-    return this.renderChildren(n, el("div", "pl-list"));
+    return this.renderChildren(n, el("div", "pl-list", { role: "list" }));
   }
 
   renderRow(n) {
-    const row = el("div", "pl-row");
+    const handler = n.listeners.get(Event.press);
+    const row = el("div", "pl-row", { role: "listitem" });
     const header = el("div", "pl-row-header");
     const title = n.props.get(Prop.title);
     const subtitle = n.props.get(Prop.subtitle);
@@ -452,6 +459,19 @@ export class DomRenderer {
     const actions = el("div", "pl-row-actions");
     this.renderChildren(n, actions);
     row.appendChild(actions);
+    if (handler !== undefined) {
+      // A pressable Row behaves like a button for keyboard users (Tab to
+      // focus, Enter/Space to activate), matching the desktop renderer.
+      row.classList.add("pl-row-pressable");
+      row.tabIndex = 0;
+      row.addEventListener("click", () => this.send(handler, Event.press, null));
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          this.send(handler, Event.press, null);
+        }
+      });
+    }
     return row;
   }
 
@@ -564,7 +584,7 @@ export class DomRenderer {
       }
       wrap.appendChild(group);
     } else {
-      const select = el("select", "pl-select");
+      const select = el("select", "pl-select", label ? { "aria-label": label } : {});
       for (const opt of options) {
         const o = el("option");
         o.value = opt;
@@ -666,15 +686,30 @@ export class DomRenderer {
     const current = n.props.get(Prop.value) ?? items[0];
     const handler = n.listeners.get(Event.change);
     const list = el("div", "pl-tabs", { role: "tablist" });
+    const tabs = [];
     for (const item of items) {
-      const tab = el("button", "pl-tab", { role: "tab", "aria-selected": item === current ? "true" : "false" });
+      const selected = item === current;
+      const tab = el("button", "pl-tab", { role: "tab", "aria-selected": selected ? "true" : "false" });
+      tab.tabIndex = selected ? 0 : -1;
       tab.textContent = item;
-      if (item === current) tab.classList.add("pl-tab-selected");
+      if (selected) tab.classList.add("pl-tab-selected");
       if (handler !== undefined) {
         tab.addEventListener("click", () => this.send(handler, Event.change, item));
       }
+      tabs.push(tab);
       list.appendChild(tab);
     }
+    // Arrow-key roving tabindex between tabs (SPEC.md §6.3): Left/Right
+    // move focus and activate, matching the desktop Tabs control.
+    tabs.forEach((tab, i) => {
+      tab.addEventListener("keydown", (e) => {
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        e.preventDefault();
+        const next = e.key === "ArrowRight" ? (i + 1) % tabs.length : (i - 1 + tabs.length) % tabs.length;
+        tabs[next].focus();
+        if (handler !== undefined) this.send(handler, Event.change, items[next]);
+      });
+    });
     return this.renderChildren(n, (() => {
       const wrap = el("div", "pl-tabs-wrap");
       wrap.appendChild(list);
@@ -709,29 +744,51 @@ export class DomRenderer {
   /** `Menu` is an anchored popover (SPEC.md §6.3): label button + its `action` children. */
   renderMenu(n) {
     const wrap = el("div", "pl-menu");
-    const trigger = el("button", "pl-menu-trigger", { "aria-haspopup": "menu" });
+    const trigger = el("button", "pl-menu-trigger", { "aria-haspopup": "menu", "aria-expanded": "false" });
     trigger.textContent = n.props.get(Prop.label) ?? "";
     const popover = el("div", "pl-menu-popover", { role: "menu" });
     popover.hidden = true;
     const actions = n.children.map((cid) => this.tree.node(cid)).filter((c) => c && kindName[c.kind] === "action");
+    const items = [];
     for (const a of actions) {
       const item = this.renderActionButton(a);
       item.setAttribute("role", "menuitem");
       item.classList.add("pl-menu-item");
-      item.addEventListener("click", () => {
-        popover.hidden = true;
-      });
+      item.tabIndex = -1;
+      item.addEventListener("click", () => closeMenu());
+      items.push(item);
       popover.appendChild(item);
     }
-    const close = (e) => {
-      if (!wrap.contains(e.target)) {
-        popover.hidden = true;
-        document.removeEventListener("click", close);
-      }
+    const closeMenu = () => {
+      popover.hidden = true;
+      trigger.setAttribute("aria-expanded", "false");
+      document.removeEventListener("click", onDocClick);
+      trigger.focus();
     };
+    const onDocClick = (e) => {
+      if (!wrap.contains(e.target)) closeMenu();
+    };
+    popover.addEventListener("keydown", (e) => {
+      const i = items.indexOf(document.activeElement);
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeMenu();
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        items[(i + 1 + items.length) % items.length]?.focus();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        items[(i - 1 + items.length) % items.length]?.focus();
+      }
+    });
     trigger.addEventListener("click", () => {
-      popover.hidden = !popover.hidden;
-      if (!popover.hidden) document.addEventListener("click", close);
+      const willOpen = popover.hidden;
+      popover.hidden = !willOpen;
+      trigger.setAttribute("aria-expanded", willOpen ? "true" : "false");
+      if (willOpen) {
+        document.addEventListener("click", onDocClick);
+        items[0]?.focus();
+      }
     });
     wrap.appendChild(trigger);
     wrap.appendChild(popover);
@@ -740,6 +797,9 @@ export class DomRenderer {
 
   /** CSS grid, column count by width class (SPEC.md §6.3: 2/3/4 columns). */
   renderGrid(n) {
+    // Not every Grid child is a Row (`role=listitem`), so the grid itself
+    // cannot always take `role=list` (that requires only listitem children,
+    // SPEC.md §6.3's "2/3/4 columns" layout is otherwise unconstrained).
     return this.renderChildren(n, el("div", "pl-grid"));
   }
 }

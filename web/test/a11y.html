@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plinth a11y check</title>
+    <link rel="stylesheet" href="../style.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.9.1/axe.min.js"></script>
+  </head>
+  <body>
+    <div id="app">Loading&hellip;</div>
+    <pre id="result" style="display: none"></pre>
+    <script type="module">
+      import { PlinthApp, readPlnt } from "../plinth-web.js";
+      import { Tree, DomRenderer } from "../dom-renderer.js";
+
+      const container = document.getElementById("app");
+      const resultEl = document.getElementById("result");
+
+      function param(name, fallback) {
+        return new URLSearchParams(location.search).get(name) ?? fallback;
+      }
+
+      function writeResult(obj) {
+        resultEl.textContent = JSON.stringify(obj);
+        resultEl.style.display = "block";
+      }
+
+      let stage = "start";
+      setTimeout(() => {
+        if (resultEl.style.display === "none") writeResult({ error: `timeout at stage: ${stage}` });
+      }, 35000);
+
+      async function main() {
+        const appUrl = param("app");
+        const coreUrl = param("core", "../../target/core.wasm");
+        if (!appUrl) {
+          writeResult({ error: "usage: a11y.html?app=<url of .plnt>&core=<url of core.wasm>" });
+          return;
+        }
+        stage = "fetching";
+        const [pltBytes, coreBytes] = await Promise.all([
+          fetch(appUrl).then((r) => r.arrayBuffer()).then((b) => new Uint8Array(b)),
+          fetch(coreUrl).then((r) => r.arrayBuffer()).then((b) => new Uint8Array(b)),
+        ]);
+        stage = "unzipping";
+        const { appWasm, manifestText, assets } = await readPlnt(pltBytes);
+
+        stage = "loading wasm";
+        const app = new PlinthApp();
+        const tree = new Tree();
+        app.onCommit = (ops) => tree.apply(ops);
+        await app.load(coreBytes, appWasm, { log: () => {}, manifestText, storage: window.localStorage });
+
+        stage = "init";
+        new DomRenderer(tree, container, app, assets);
+        app.init([]);
+
+        // Let a tick pass so the renderer's queued dialog open/close calls
+        // settle before axe inspects the DOM. `requestAnimationFrame` is
+        // used nowhere here deliberately: it does not fire under headless
+        // Chrome's virtual-time mode (used by run-a11y.mjs), which would
+        // hang this script forever.
+        await new Promise((r) => setTimeout(r, 50));
+
+        stage = "axe.run";
+        const results = await axe.run(document, {
+          // The nav/main shell is deliberately outside #app (sibling
+          // regions), so scan the whole document.
+        });
+        const violations = results.violations.map((v) => ({
+          id: v.id,
+          impact: v.impact,
+          help: v.help,
+          nodes: v.nodes.map((n) => ({ target: n.target, html: n.html, failureSummary: n.failureSummary })),
+        }));
+        writeResult({ violations });
+      }
+
+      main().catch((err) => {
+        console.error(err);
+        writeResult({ error: String(err?.stack ?? err) });
+      });
+    </script>
+  </body>
+</html>
