@@ -326,7 +326,7 @@ The desktop host runs one app today. The Hub host needs: several guest instances
 
 ### 12.3 The capability map
 
-A table in `plinth-link` maps each runtime function to the capability that it needs. The Hub, the registry, and the compiler (`PL1007`) use the same table. Today the compiler has its own list; it must move to the shared table.
+A table in `plinth-link` maps each runtime function to the capability that it needs. The Hub, the registry, and the compiler (`PL1007`) use the same table. **Exists:** `crates/plinth-link/src/capabilities.rs` (names, risk levels, descriptions); `split::reachable_capabilities` and `split::check_capabilities`; the desktop host refuses an app that can reach an undeclared capability; `plinth validate` prints the declared, reachable and unused capabilities.
 
 ### 12.4 Grants store and prompts
 
