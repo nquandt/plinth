@@ -316,6 +316,16 @@ function hostImports(
     v.setUint32(retptr + 8, ptr, true);
     v.setUint32(retptr + 12, len, true);
   }
+  // Ok(string): tag@0=0, string ptr@4/len@8 (same layout as option<string>'s
+  // "some" case minus the option tag: a plain string's natural alignment is
+  // already 4, so there is no extra tag byte to skip).
+  function writeOkString(retptr, value) {
+    const v = mem();
+    v.setUint8(retptr, 0);
+    const { ptr, len } = writeString(value);
+    v.setUint32(retptr + 4, ptr, true);
+    v.setUint32(retptr + 8, len, true);
+  }
   // Ok(list<string>): tag@0=0, list ptr@4/len@8; each element is (ptr: i32, len: i32).
   function writeOkStringList(retptr, values) {
     const v = mem();
@@ -455,6 +465,30 @@ function hostImports(
             .catch(() => {});
         }
         writeOkOptionString(retptr, clipboardCache);
+      },
+    },
+    // `plinth:hub` (`docs/HUB.md` §4.1, §12.2) is privileged and needs a
+    // real Hub backend (the library, grants, signature checks) that this
+    // early web host does not have yet (`docs/HUB.md` §11: the web Hub is
+    // H6). Every call answers "unsupported", exactly like a desktop host
+    // build with no implementation for a capability (SPEC.md §9.4); it
+    // never traps, so a trusted Hub UI app still loads and runs here, it
+    // just cannot manage the library yet.
+    "plinth:app/hub@1.0.0": {
+      "list-apps"(retptr) {
+        writeDeniedAt4(retptr, DeniedReason.unsupported);
+      },
+      launch(_idPtr, _idLen, retptr) {
+        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      },
+      "set-grant"(_idPtr, _idLen, _capPtr, _capLen, _allowed, retptr) {
+        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      },
+      block(_idPtr, _idLen, retptr) {
+        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      },
+      unblock(_idPtr, _idLen, retptr) {
+        writeDeniedUnit(retptr, DeniedReason.unsupported);
       },
     },
   };

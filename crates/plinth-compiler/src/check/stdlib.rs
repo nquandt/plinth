@@ -46,11 +46,14 @@ pub const STORE_NAMES: &[&str] = &["kv"];
 pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
 pub const DIALOG_NAMES: &[&str] = &["alert", "confirm", "prompt"];
 pub const NET_NAMES: &[&str] = &["fetch", "Response", "FetchOptions"];
+pub const HUB_NAMES: &[&str] = &["listApps", "launch", "setGrant", "block", "unblock", "lastError"];
 
 /// The capability names, from the shared map (`plinth-link`'s
 /// `capabilities` module, `docs/HUB.md` §12.3) rather than a duplicated
 /// list here.
-pub use plinth_link::capabilities::{CLIPBOARD_READ as CAP_CLIPBOARD_READ, CLIPBOARD_WRITE as CAP_CLIPBOARD_WRITE, STORE_KV as CAP_STORE_KV};
+pub use plinth_link::capabilities::{
+    CLIPBOARD_READ as CAP_CLIPBOARD_READ, CLIPBOARD_WRITE as CAP_CLIPBOARD_WRITE, HUB_MANAGE as CAP_HUB_MANAGE, STORE_KV as CAP_STORE_KV,
+};
 
 pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
     match m {
@@ -96,6 +99,15 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             // see the name declared; the editor's own types come from
             // `net.d.ts` directly.
             "Response" | "FetchOptions" => Binding::Type(Type::Error),
+            _ => return None,
+        }),
+        StdModule::Hub => Some(match name {
+            "listApps" => Binding::Std(StdFn::HubListApps),
+            "launch" => Binding::Std(StdFn::HubLaunch),
+            "setGrant" => Binding::Std(StdFn::HubSetGrant),
+            "block" => Binding::Std(StdFn::HubBlock),
+            "unblock" => Binding::Std(StdFn::HubUnblock),
+            "lastError" => Binding::Std(StdFn::HubLastError),
             _ => return None,
         }),
         StdModule::Ui => Some(match name {
@@ -469,6 +481,60 @@ impl Checker<'_> {
                     Type::Void,
                     span,
                 )
+            }
+            StdFn::HubListApps => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                if !args.is_empty() {
+                    self.err(code::ARG_COUNT, span, "`listApps` takes no arguments");
+                }
+                TExpr::new(TExprKind::Rt("hub_list_apps", Vec::new()), Type::String.nullable(), span)
+            }
+            StdFn::HubLaunch => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                if !one_arg(self, "launch") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let id = self.expr_with(&args[0], &Type::String);
+                let id = self.coerce(id, &Type::String);
+                TExpr::new(TExprKind::Rt("hub_launch", vec![id]), Type::Void, span)
+            }
+            StdFn::HubSetGrant => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                if args.len() != 3 {
+                    self.err(code::ARG_COUNT, span, "`setGrant` takes an app id, a capability name and `allowed`");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let id = self.expr_with(&args[0], &Type::String);
+                let id = self.coerce(id, &Type::String);
+                let capability = self.expr_with(&args[1], &Type::String);
+                let capability = self.coerce(capability, &Type::String);
+                let allowed = self.expr_with(&args[2], &Type::Bool);
+                let allowed = self.coerce(allowed, &Type::Bool);
+                TExpr::new(TExprKind::Rt("hub_set_grant", vec![id, capability, allowed]), Type::Void, span)
+            }
+            StdFn::HubBlock => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                if !one_arg(self, "block") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let id = self.expr_with(&args[0], &Type::String);
+                let id = self.coerce(id, &Type::String);
+                TExpr::new(TExprKind::Rt("hub_block", vec![id]), Type::Void, span)
+            }
+            StdFn::HubUnblock => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                if !one_arg(self, "unblock") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let id = self.expr_with(&args[0], &Type::String);
+                let id = self.coerce(id, &Type::String);
+                TExpr::new(TExprKind::Rt("hub_unblock", vec![id]), Type::Void, span)
+            }
+            StdFn::HubLastError => {
+                if !args.is_empty() {
+                    self.err(code::ARG_COUNT, span, "`lastError` takes no arguments");
+                }
+                TExpr::new(TExprKind::Rt("hub_last_error", Vec::new()), Type::String.nullable(), span)
             }
         }
     }

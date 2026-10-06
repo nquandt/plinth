@@ -153,6 +153,13 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("make_date", &[F64, F64, F64, F64, F64, F64], &[F64]),
     ("format_date", &[F64, I32, I32], &[I32]),
     ("parse_date", &[I32], &[I32]),
+    // -- plinth:hub (`docs/HUB.md` §4.1, §12.2; capability: hub.manage) -----
+    ("hub_list_apps", &[], &[I32]),
+    ("hub_launch", &[I32], &[]),
+    ("hub_set_grant", &[I32, I32, I32], &[]),
+    ("hub_block", &[I32], &[]),
+    ("hub_unblock", &[I32], &[]),
+    ("hub_last_error", &[], &[I32]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -209,13 +216,19 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("make_date", 6),
     ("format_date", 6),
     ("parse_date", 6),
+    ("hub_list_apps", 7),
+    ("hub_launch", 7),
+    ("hub_set_grant", 7),
+    ("hub_block", 7),
+    ("hub_unblock", 7),
+    ("hub_last_error", 7),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).
 pub fn added_in(name: &str) -> u32 {
     ADDED_IN.iter().find(|(n, _)| *n == name).map_or(0, |(_, m)| *m)
 }
-pub const CORE_MINOR: u32 = 6;
+pub const CORE_MINOR: u32 = 7;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;

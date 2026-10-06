@@ -7,6 +7,7 @@ use gpui::{App, AppContext, Bounds, KeyBinding, WindowBounds, WindowOptions, act
 use plinth_runner_wasmtime::{Clipboard, Guest, Limits, Runner, kv::Kv, policy::Policy};
 use plinth_ui::{GuestPort, PlinthRoot};
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
@@ -46,8 +47,9 @@ impl HostApp {
     pub fn from_bytes(bytes: Vec<u8>, path: &Path) -> Result<HostApp> {
         if plinth_package::is_package(&bytes) {
             let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("open {}", path.display()))?;
+            let capabilities: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
+            check_hub_trust(&pkg, &capabilities).with_context(|| format!("load {}", path.display()))?;
             let assets = pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
-            let capabilities: Vec<String> = pkg.manifest.capabilities.into_iter().map(|c| c.name).collect();
             Ok(HostApp {
                 component: with_runtime(pkg.component, &capabilities).with_context(|| format!("load {}", path.display()))?,
                 title: pkg.manifest.name,
@@ -69,6 +71,59 @@ impl HostApp {
             })
         }
     }
+}
+
+/// A future key id for the Plinth project itself (`docs/HUB.md` §4.1,
+/// §12.3): a package signed by it is trusted for `hub.manage` on every
+/// host, with no `PLINTH_HUB_TRUSTED_KEYS` setting needed. Left empty
+/// until that key exists; an empty string never matches a real signer.
+const PLINTH_PROJECT_HUB_KEY: &str = "";
+
+/// Checks the trusted-signer rule for `hub.manage` (`docs/HUB.md` §4.1):
+/// the host grants `hub.manage` only to a package signed by a key it
+/// trusts as a Hub key — for now, a key id listed in the comma-separated
+/// `PLINTH_HUB_TRUSTED_KEYS` environment variable, or the (currently
+/// empty) Plinth project key. A package that declares `hub.manage` but is
+/// not signed by a trusted key is refused outright, with a clear error,
+/// before it ever runs; a package that does not declare `hub.manage` is
+/// unaffected (this is the only capability with an extra, signer-based
+/// rule — every other capability only needs the manifest and consent).
+fn check_hub_trust(pkg: &plinth_package::Package, declared: &[String]) -> Result<()> {
+    if !declared.iter().any(|c| c == plinth_runner_wasmtime::capability::HUB_MANAGE) {
+        return Ok(());
+    }
+    let signer = plinth_package::signature::verify(pkg).context("the package signature does not check out")?;
+    let key = signer.map(|s| s.key).unwrap_or_default();
+    let trusted = key_is_trusted(&key);
+    if trusted {
+        Ok(())
+    } else if key.is_empty() {
+        anyhow::bail!(
+            "{} declares `hub.manage` but is unsigned; only a package signed by a trusted Hub key may use `plinth:hub` (docs/HUB.md §4.1)",
+            pkg.manifest.id
+        )
+    } else {
+        anyhow::bail!(
+            "{} declares `hub.manage` but is signed by `{key}`, which this host does not trust as a Hub key (set PLINTH_HUB_TRUSTED_KEYS, docs/HUB.md §4.1)",
+            pkg.manifest.id
+        )
+    }
+}
+
+/// Whether `key` (a signer's key id, for example `ed25519:…`) is one this
+/// host trusts for `hub.manage`.
+fn key_is_trusted(key: &str) -> bool {
+    if key.is_empty() {
+        return false;
+    }
+    if !PLINTH_PROJECT_HUB_KEY.is_empty() && key == PLINTH_PROJECT_HUB_KEY {
+        return true;
+    }
+    std::env::var("PLINTH_HUB_TRUSTED_KEYS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .any(|trusted| !trusted.is_empty() && trusted == key)
 }
 
 /// Links an app module into the installed core that it needs (SPEC.md
@@ -118,8 +173,10 @@ impl Clipboard for SystemClipboard {
 
 struct WasmGuest {
     guest: Guest,
-    // The runner owns the engine's epoch ticker, so it lives as long as the guest.
-    _runner: Runner,
+    // The runner owns the engine's epoch ticker; several guests across
+    // several windows share one runner (`docs/HUB.md` §4.2, §12.2), so it
+    // is kept alive by reference count rather than owned here.
+    _runner: Arc<Runner>,
 }
 
 impl GuestPort for WasmGuest {
@@ -181,30 +238,40 @@ impl GuestPort for NoGuest {
     }
 }
 
-/// Instantiates a component and runs `init`. Builds the capability policy
-/// from `capabilities` (SPEC.md §11: a declared capability is granted;
-/// there is no consent UI yet, SPEC.md §11 stretch) and opens the
-/// `store.kv` file for `app_id`.
-fn start(component: &[u8], app_id: &str, capabilities: &[String], args: &[u8]) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
-    let policy = Policy::new(capabilities.iter().cloned());
-    start_with_policy(component, app_id, policy, args)
+/// Instantiates a component and runs `init`, with a policy the caller
+/// already built (for example from the Hub's grants store, `docs/HUB.md`
+/// §7, §12.4, phase H0 part 2) instead of "declared is granted", and a
+/// `Runner` the caller already has, shared across every app the process
+/// runs (`docs/HUB.md` §4.2, §12.2).
+pub fn start_with_policy(
+    runner: Arc<Runner>,
+    component: &[u8],
+    app_id: &str,
+    policy: Policy,
+    args: &[u8],
+) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
+    start_with_policy_and_hub(runner, component, app_id, policy, None, args)
 }
 
-/// Like `start`, but with a policy the caller already built (for example
-/// from the Hub's grants store, `docs/HUB.md` §7, §12.4, phase H0 part 2),
-/// instead of "declared is granted".
-pub fn start_with_policy(component: &[u8], app_id: &str, policy: Policy, args: &[u8]) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
+/// Like `start_with_policy`, with a `plinth:hub` backend (`docs/HUB.md`
+/// §4.1, §12.2) for a guest the host trusted with `hub.manage`
+/// (`check_hub_trust` must already have passed before this is called).
+pub fn start_with_policy_and_hub(
+    runner: Arc<Runner>,
+    component: &[u8],
+    app_id: &str,
+    policy: Policy,
+    hub: Option<Box<dyn plinth_runner_wasmtime::hub::HubBackend>>,
+    args: &[u8],
+) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
     let kv = Kv::open(&plinth_runner_wasmtime::kv::data_dir(), app_id).unwrap_or_else(|e| {
         log::warn!("store.kv unavailable for {app_id}: {e:#}");
         Kv::in_memory()
     });
     let clipboard: Box<dyn Clipboard> = Box::new(SystemClipboard);
-    let loaded = Runner::new().and_then(|runner| {
-        let guest = runner.load_with_policy(component, Limits::default(), policy, kv, clipboard)?;
-        Ok((runner, guest))
-    });
+    let loaded = runner.load_with_policy_and_hub(component, Limits::default(), policy, kv, clipboard, hub);
     match loaded {
-        Ok((runner, mut guest)) => {
+        Ok(mut guest) => {
             // Hot reload (SPEC.md §13): `args` is the previous instance's
             // signal snapshot, or empty on the first start. A release
             // build of the app ignores it (it never registered anything).
@@ -221,39 +288,93 @@ pub fn start_with_policy(component: &[u8], app_id: &str, policy: Policy, args: &
     }
 }
 
-/// Opens the app window and runs until it closes. Each component that
-/// arrives on `reloads` replaces the running app (hot reload).
+/// Registers the app-level behavior that every host window shares: `Cmd/
+/// Ctrl+Q` quits, and the process exits once the last window closes
+/// (`docs/HUB.md` §4.2: closing one app window must not close the others,
+/// so this is set up once per `gpui::App`, not once per window). Callers
+/// that open more than one window (the Hub, later) call this one time
+/// before the first `open_app`.
+pub fn init_app(cx: &mut App) {
+    plinth_ui::init(cx);
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
+    cx.on_window_closed(|cx, _| {
+        if cx.windows().is_empty() {
+            cx.quit();
+        }
+    })
+    .detach();
+}
+
+/// Opens one app window: its own guest instance (on `runner`, which may be
+/// shared with other open app windows, `docs/HUB.md` §4.2, §12.2), its own
+/// policy, data directory (the `store.kv` file is keyed by `app.app_id`),
+/// assets and `PlinthRoot`. Closing this window does not close any other;
+/// the caller's `gpui::App` already arranged (`init_app`) for the process
+/// to exit when the last window closes. Any code, including the future
+/// Hub UI, can call this to launch an app.
+pub fn open_app(cx: &mut App, runner: Arc<Runner>, app: HostApp, policy: Policy) -> gpui::WindowHandle<PlinthRoot> {
+    open_app_with_hub(cx, runner, app, policy, None)
+}
+
+/// Like `open_app`, with a `plinth:hub` backend (`docs/HUB.md` §4.1,
+/// §12.2) for a guest the host trusted with `hub.manage`.
+pub fn open_app_with_hub(
+    cx: &mut App,
+    runner: Arc<Runner>,
+    app: HostApp,
+    policy: Policy,
+    hub: Option<Box<dyn plinth_runner_wasmtime::hub::HubBackend>>,
+) -> gpui::WindowHandle<PlinthRoot> {
+    let HostApp { component, title, accent, app_id, assets, .. } = app;
+    let (port, init) = start_with_policy_and_hub(runner, &component, &app_id, policy, hub, &[]);
+    let assets = Arc::new(assets);
+
+    let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
+    let options = WindowOptions::new()
+        .window_bounds(Some(WindowBounds::Windowed(bounds)))
+        .titlebar(Some(gpui::TitlebarOptions { title: Some(title.into()), ..Default::default() }));
+    let window = cx
+        .open_window(options, move |_, cx| {
+            cx.new(move |cx| match init {
+                Ok(commits) => PlinthRoot::with_assets(port, commits, accent, assets, cx),
+                Err(e) => PlinthRoot::stopped(port, e, accent, cx),
+            })
+        })
+        .expect("open the window");
+
+    // Drives this window's `plinth:time` timers (SPEC.md §8.4, §8.5,
+    // §9.4). Each app window polls its own guest independently
+    // (`docs/HUB.md` §4.2): one app's timers never touch another's.
+    cx.spawn(async move |cx| loop {
+        cx.background_executor().timer(Duration::from_millis(15)).await;
+        if window.update(cx, |root, _, cx| root.poll_timers(cx)).is_err() {
+            return;
+        }
+    })
+    .detach();
+
+    window
+}
+
+/// Opens the app window and runs until the process's last window closes.
+/// Each component that arrives on `reloads` replaces the running app in
+/// that same window (hot reload); `plinth dev`/`plinth run` only ever open
+/// one window, but the window closing no longer quits other windows a
+/// later caller (the Hub) may have opened in the same process.
 pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
-    let (port, init) = start(&app.component, &app.app_id, &app.capabilities, &[]);
-    let HostApp { title, accent, app_id, capabilities, assets, .. } = app;
-    let assets = std::sync::Arc::new(assets);
+    let runner = Arc::new(Runner::new()?);
+    let app_id = app.app_id.clone();
+    let capabilities = app.capabilities.clone();
+    let policy = Policy::new(capabilities.iter().cloned());
 
     gpui_platform::application().run(move |cx: &mut App| {
-        plinth_ui::init(cx);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-
-        let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
-        let options = WindowOptions::new()
-            .window_bounds(Some(WindowBounds::Windowed(bounds)))
-            .titlebar(Some(gpui::TitlebarOptions { title: Some(title.into()), ..Default::default() }));
-        let window = cx
-            .open_window(options, move |_, cx| {
-                cx.new(move |cx| match init {
-                    Ok(commits) => PlinthRoot::with_assets(port, commits, accent, assets, cx),
-                    Err(e) => PlinthRoot::stopped(port, e, accent, cx),
-                })
-            })
-            .expect("open the window");
+        init_app(cx);
+        let window = open_app(cx, runner.clone(), app, policy);
         cx.activate(true);
 
         if let Some(rx) = reloads {
+            let runner = runner.clone();
             let app_id = app_id.clone();
             let capabilities = capabilities.clone();
             cx.spawn(async move |cx| {
@@ -268,9 +389,18 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
                         }
                     }
                     if let Some(bytes) = latest {
+                        let runner = runner.clone();
+                        let app_id = app_id.clone();
+                        let capabilities = capabilities.clone();
                         let ok = window
                             .update(cx, |root, _, cx| {
-                                root.reload(|args| start(&bytes, &app_id, &capabilities, args), cx)
+                                root.reload(
+                                    |args| {
+                                        let policy = Policy::new(capabilities.iter().cloned());
+                                        start_with_policy(runner, &bytes, &app_id, policy, args)
+                                    },
+                                    cx,
+                                )
                             })
                             .is_ok();
                         if !ok {
@@ -282,18 +412,6 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
             })
             .detach();
         }
-
-        // Drives `plinth:time` timers (SPEC.md §8.4, §8.5, §9.4): a short
-        // fixed tick is simpler and robust enough than sleeping until the
-        // next exact deadline, and `poll_timers` is a cheap no-op when
-        // nothing is due.
-        cx.spawn(async move |cx| loop {
-            cx.background_executor().timer(Duration::from_millis(15)).await;
-            if window.update(cx, |root, _, cx| root.poll_timers(cx)).is_err() {
-                return;
-            }
-        })
-        .detach();
     });
     Ok(())
 }
@@ -358,51 +476,34 @@ pub fn run_from_hub(hub: &plinth_hub::Hub, app_id: &str) -> Result<()> {
     };
 
     let declared: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
+    check_hub_trust(&pkg, &declared)?;
+    let hub_backend = declared
+        .iter()
+        .any(|c| c == plinth_runner_wasmtime::capability::HUB_MANAGE)
+        .then(|| Box::new(plinth_hub::HubService::new(hub.clone())) as Box<dyn plinth_runner_wasmtime::hub::HubBackend>);
     let policy = hub.policy_for(app_id, &declared)?;
     let title = pkg.manifest.name;
     let accent = pkg.manifest.accent.unwrap_or_else(|| "teal".into());
     let component = with_runtime(pkg.component, &declared)?;
     let assets: std::collections::HashMap<String, Vec<u8>> =
         pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
-    run_with_policy(component, title, accent, app_id.to_owned(), policy, assets)
+    let host_app = HostApp { component, title, accent, app_id: app_id.to_owned(), capabilities: declared, assets };
+    run_with_policy_and_hub(host_app, policy, hub_backend)
 }
 
-/// Opens the app window with a policy the caller already built (`Policy`
-/// from grants, instead of "declared is granted"). No hot reload: this
-/// path is for library apps, not `plinth dev`.
-fn run_with_policy(
-    component: Vec<u8>,
-    title: String,
-    accent: String,
-    app_id: String,
-    policy: Policy,
-    assets: std::collections::HashMap<String, Vec<u8>>,
-) -> Result<()> {
-    let (port, init) = start_with_policy(&component, &app_id, policy, &[]);
-    let assets = std::sync::Arc::new(assets);
-
+/// Opens one app window, alone in its own process, with a policy the
+/// caller already built (`Policy` from grants, instead of "declared is
+/// granted") and a `plinth:hub` backend for a guest the host trusted with
+/// `hub.manage` (`None` for an ordinary library app). No hot reload: this
+/// path is for library apps, not `plinth dev`. The Hub UI (`docs/HUB.md`
+/// §4.2, step 2 of this phase) will instead keep its own process alive and
+/// call `open_app` directly for each app it launches, so several run at
+/// once beside the Hub window.
+fn run_with_policy_and_hub(app: HostApp, policy: Policy, hub: Option<Box<dyn plinth_runner_wasmtime::hub::HubBackend>>) -> Result<()> {
+    let runner = Arc::new(Runner::new()?);
     gpui_platform::application().run(move |cx: &mut App| {
-        plinth_ui::init(cx);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-
-        let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
-        let options = WindowOptions::new()
-            .window_bounds(Some(WindowBounds::Windowed(bounds)))
-            .titlebar(Some(gpui::TitlebarOptions { title: Some(title.clone().into()), ..Default::default() }));
-        cx.open_window(options, move |_, cx| {
-            cx.new(move |cx| match init {
-                Ok(commits) => PlinthRoot::with_assets(port, commits, accent, assets, cx),
-                Err(e) => PlinthRoot::stopped(port, e, accent, cx),
-            })
-        })
-        .expect("open the window");
+        init_app(cx);
+        open_app_with_hub(cx, runner.clone(), app, policy, hub);
         cx.activate(true);
     });
     Ok(())
@@ -411,4 +512,70 @@ fn run_with_policy(
 /// Installs the default logger (`RUST_LOG` overrides the level).
 pub fn init_logging() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).try_init();
+}
+
+#[cfg(test)]
+mod hub_trust_tests {
+    //! `docs/HUB.md` §4.1: only a package signed by a trusted Hub key may
+    //! declare `hub.manage`; everyone else is refused at load, with a
+    //! clear error, before it ever runs.
+    use super::*;
+
+    fn identity(name: &str) -> plinth_package::publisher::PublisherIdentity {
+        plinth_package::publisher::PublisherIdentity { name: name.to_owned(), signing_key: ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng) }
+    }
+
+    /// A package declaring `hub.manage`, signed by `signer` if given.
+    fn hub_package(signer: Option<&plinth_package::publisher::PublisherIdentity>) -> plinth_package::Package {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/counter");
+        let fs = plinth_compiler::driver::DiskFs { root };
+        let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &[]).expect("compile");
+        let artifact = artifact.unwrap_or_else(|| {
+            let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+            panic!("counter has errors:\n{}", diags.join("\n"))
+        });
+        let component = artifact.app;
+        let publisher = signer.map(|s| s.name.as_str()).unwrap_or("me");
+        let toml = format!(
+            "id = \"com.example.hub-mini\"\nname = \"Hub mini\"\nversion = \"0.1.0\"\npublisher = \"{publisher}\"\n\n[[capabilities]]\nname = \"hub.manage\"\nrationale = \"manage the library\"\n"
+        );
+        let cfg = plinth_package::ProjectConfig::parse(&toml).unwrap();
+        let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
+        let mut pkg = plinth_package::Package { manifest, component, assets: Vec::new(), signature: None };
+        if let Some(signer) = signer {
+            pkg.signature = Some(plinth_package::signature::sign(&pkg, signer).unwrap());
+        }
+        pkg
+    }
+
+    #[test]
+    fn unsigned_package_declaring_hub_manage_is_refused() {
+        let pkg = hub_package(None);
+        let err = check_hub_trust(&pkg, &["hub.manage".to_owned()]).unwrap_err();
+        assert!(format!("{err:#}").contains("unsigned"), "{err:#}");
+    }
+
+    /// Both halves of the `PLINTH_HUB_TRUSTED_KEYS` check share one test
+    /// (like `split.rs`'s single-env-var tests): two tests racing to set
+    /// and unset the same process-wide variable would be flaky.
+    #[test]
+    fn trusted_keys_env_var_gates_an_untrusted_vs_a_trusted_signer() {
+        let signer = identity("Acme Hub");
+        let pkg = hub_package(Some(&signer));
+        // SAFETY: this test is the only one in this binary that reads the variable.
+        unsafe { std::env::remove_var("PLINTH_HUB_TRUSTED_KEYS") };
+        let err = check_hub_trust(&pkg, &["hub.manage".to_owned()]).unwrap_err();
+        assert!(format!("{err:#}").contains("does not trust"), "{err:#}");
+
+        unsafe { std::env::set_var("PLINTH_HUB_TRUSTED_KEYS", signer.key_id()) };
+        let result = check_hub_trust(&pkg, &["hub.manage".to_owned()]);
+        unsafe { std::env::remove_var("PLINTH_HUB_TRUSTED_KEYS") };
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn a_package_that_does_not_declare_hub_manage_is_unaffected() {
+        let pkg = hub_package(None);
+        assert!(check_hub_trust(&pkg, &[]).is_ok());
+    }
 }

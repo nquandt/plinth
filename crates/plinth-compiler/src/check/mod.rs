@@ -26,6 +26,7 @@ pub enum StdModule {
     Clipboard,
     Dialog,
     Net,
+    Hub,
 }
 
 impl StdModule {
@@ -38,6 +39,7 @@ impl StdModule {
             "plinth:clipboard" => Some(StdModule::Clipboard),
             "plinth:dialog" => Some(StdModule::Dialog),
             "plinth:net" => Some(StdModule::Net),
+            "plinth:hub" => Some(StdModule::Hub),
             _ => None,
         }
     }
@@ -86,6 +88,12 @@ pub enum StdFn {
     FormatDate,
     ToIsoString,
     ParseDate,
+    HubListApps,
+    HubLaunch,
+    HubSetGrant,
+    HubBlock,
+    HubUnblock,
+    HubLastError,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

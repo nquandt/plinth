@@ -124,6 +124,37 @@ interface net {
   fetch: func(url: string, method: string, headers: list<tuple<string, string>>, body: option<string>) -> u32;
 }
 
+/// Privileged library and Hub management calls (`docs/HUB.md` §4.1, §12.2,
+/// §12.3; capability: `hub.manage`, High risk). The host grants
+/// `hub.manage` only to a package signed by a key it trusts as a Hub key
+/// (`docs/HUB.md` §4.1); every other package that imports this interface
+/// is refused at load, with a clear error, before it ever runs.
+interface hub {
+  use error.{host-error};
+
+  /// Every app in the library, as a JSON array of objects (`docs/HUB.md`
+  /// §9.1, §7.1): `id`, `name`, `version`, `signer` (the signer's key id,
+  /// or `""` if unsigned), `blocked`, and `capabilities` (each `{name,
+  /// risk, allowed}`, `risk` one of `"none"`/`"low"`/`"medium"`/`"high"`).
+  /// Plinth TS has no guest-side struct marshaling yet, so this interface
+  /// reuses the `JSON.parse` support `plinth:core` already has (SPEC.md
+  /// §4.7) instead of adding one: `std/hub.d.ts` is typed, and decodes
+  /// this string for the caller.
+  list-apps: func() -> result<string, host-error>;
+  /// Opens `id` in a new window, running the normal consent flow
+  /// (`docs/HUB.md` §4.2, §7.3). Returns at once; the host opens the
+  /// window on its own schedule; a slow or blocked open is not reported
+  /// back to the guest (there is nothing it would do differently).
+  launch: func(id: string) -> result<_, host-error>;
+  /// Changes one capability grant for an installed app (`docs/HUB.md`
+  /// §7.4).
+  set-grant: func(id: string, capability: string, allowed: bool) -> result<_, host-error>;
+  /// Blocks an app: it will not run until `unblock` (`docs/HUB.md` §7.4).
+  block: func(id: string) -> result<_, host-error>;
+  /// Reverses `block`.
+  unblock: func(id: string) -> result<_, host-error>;
+}
+
 world app {
   import ui;
   import dev;
@@ -132,6 +163,7 @@ world app {
   import clipboard;
   import dialog;
   import net;
+  import hub;
 
   /// Builds the initial tree.
   export init: func(args: list<u8>);

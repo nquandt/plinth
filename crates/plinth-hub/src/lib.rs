@@ -220,7 +220,10 @@ pub struct Blocks {
 // -- The Hub ------------------------------------------------------------------
 
 /// A handle to one Hub data directory. Tests use a temp directory
-/// directly; the CLI and the desktop host use `hub_dir()`.
+/// directly; the CLI and the desktop host use `hub_dir()`. Cheap to
+/// clone: it is just the directory path, re-read from disk on every call
+/// (`HubService` keeps one by value, `docs/HUB.md` §4.1, §12.2).
+#[derive(Clone)]
 pub struct Hub {
     dir: PathBuf,
 }
@@ -678,6 +681,95 @@ struct GlobalPolicy {
     denied: Vec<String>,
 }
 
+// -- plinth:hub backend -------------------------------------------------------
+
+/// The native side of `plinth:hub` (`docs/HUB.md` §4.1, §12.2), on top of
+/// this Hub's local library. `plinth-host-desktop` boxes one of these into
+/// the guest's `Policy`/`Runner` only after it has checked that the
+/// package is signed by a trusted Hub key (`docs/HUB.md` §4.1); this type
+/// itself does not re-check that, it only answers the calls.
+pub struct HubService {
+    hub: Hub,
+    launches: Vec<String>,
+}
+
+impl HubService {
+    pub fn new(hub: Hub) -> Self {
+        Self { hub, launches: Vec::new() }
+    }
+}
+
+/// `plinth_link::capabilities::Risk` as the lowercase word `docs/HUB.md`
+/// §7.2 and `wit/plinth/app.wit`'s `hub.list-apps` doc comment use.
+fn risk_word(risk: plinth_link::capabilities::Risk) -> &'static str {
+    use plinth_link::capabilities::Risk;
+    match risk {
+        Risk::None => "none",
+        Risk::Low => "low",
+        Risk::Medium => "medium",
+        Risk::High => "high",
+    }
+}
+
+impl plinth_runner_wasmtime::hub::HubBackend for HubService {
+    fn list_apps_json(&self) -> Result<String, String> {
+        let entries = self.hub.list().map_err(|e| e.to_string())?;
+        let mut apps = Vec::new();
+        for entry in entries {
+            let Some(active) = entry.active_version() else { continue };
+            let report = self.hub.capability_report(&entry.id, &active.capabilities).map_err(|e| e.to_string())?;
+            let blocked = self.hub.is_blocked(&entry.id).unwrap_or(false);
+            let capabilities: Vec<serde_json::Value> = report
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "name": c.name,
+                        "risk": risk_word(c.risk),
+                        "allowed": matches!(c.decision, Some(Decision::Allowed)),
+                    })
+                })
+                .collect();
+            apps.push(serde_json::json!({
+                "id": entry.id,
+                "name": entry.name,
+                "version": active.version,
+                "signer": active.signer.clone().unwrap_or_default(),
+                "blocked": blocked,
+                "capabilities": capabilities,
+            }));
+        }
+        serde_json::to_string(&apps).map_err(|e| e.to_string())
+    }
+
+    fn launch(&mut self, id: &str) {
+        self.launches.push(id.to_owned());
+    }
+
+    fn take_launches(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.launches)
+    }
+
+    fn set_grant(&mut self, id: &str, capability: &str, allowed: bool) -> Result<(), String> {
+        let decision = if allowed { Decision::Allowed } else { Decision::Refused };
+        let version = self
+            .hub
+            .get(id)
+            .map_err(|e| e.to_string())?
+            .and_then(|e| e.active_version().cloned())
+            .map(|v| v.version)
+            .unwrap_or_default();
+        self.hub.set_grant(id, capability, decision, &version).map_err(|e| e.to_string())
+    }
+
+    fn block(&mut self, id: &str) -> Result<(), String> {
+        self.hub.block_app(id).map_err(|e| e.to_string())
+    }
+
+    fn unblock(&mut self, id: &str) -> Result<(), String> {
+        self.hub.unblock_app(id).map_err(|e| e.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -926,6 +1018,40 @@ mod tests {
         hub.add_to_group(&id, "Work").unwrap();
         assert_eq!(hub.groups().unwrap(), vec!["Work".to_string()]);
         assert_eq!(hub.get(&id).unwrap().unwrap().groups, vec!["Work".to_string()]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `docs/HUB.md` §4.1, §12.2: the `plinth:hub` backend's `list-apps`
+    /// reports the library, including a capability's risk and whether it
+    /// is granted, and `launch`/`block`/`unblock`/`set-grant` act on it.
+    #[test]
+    fn hub_service_lists_launches_and_manages_apps() {
+        use plinth_runner_wasmtime::hub::HubBackend;
+        let (hub, dir) = temp_hub();
+        let id = hub.add_package(&fake_package_with_capabilities("com.example.notes", "0.1.0", &[("clipboard.read", "paste")])).unwrap();
+        let mut svc = HubService::new(hub.clone());
+
+        let json = svc.list_apps_json().unwrap();
+        let apps: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(apps[0]["id"], id);
+        assert_eq!(apps[0]["blocked"], false);
+        assert_eq!(apps[0]["capabilities"][0]["name"], "clipboard.read");
+        assert_eq!(apps[0]["capabilities"][0]["risk"], "medium");
+        assert_eq!(apps[0]["capabilities"][0]["allowed"], false);
+
+        svc.set_grant(&id, "clipboard.read", true).unwrap();
+        let apps: serde_json::Value = serde_json::from_str(&svc.list_apps_json().unwrap()).unwrap();
+        assert_eq!(apps[0]["capabilities"][0]["allowed"], true);
+
+        svc.launch(&id);
+        assert_eq!(svc.take_launches(), vec![id.clone()]);
+        assert!(svc.take_launches().is_empty());
+
+        svc.block(&id).unwrap();
+        let apps: serde_json::Value = serde_json::from_str(&svc.list_apps_json().unwrap()).unwrap();
+        assert_eq!(apps[0]["blocked"], true);
+        svc.unblock(&id).unwrap();
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }

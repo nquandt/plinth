@@ -22,12 +22,17 @@ fn artifact(name: &str) -> Option<Vec<u8>> {
 struct Harness {
     guest: Guest,
     tree: Tree,
-    _runner: Runner,
+    _runner: std::sync::Arc<Runner>,
 }
 
 impl Harness {
     fn start(bytes: &[u8]) -> Self {
-        let runner = Runner::new().unwrap();
+        Self::start_on(std::sync::Arc::new(Runner::new().unwrap()), bytes)
+    }
+
+    /// Like `start`, on a `Runner` the caller already has (so several
+    /// harnesses can share one engine, `docs/HUB.md` §4.2, §12.2).
+    fn start_on(runner: std::sync::Arc<Runner>, bytes: &[u8]) -> Self {
         let mut guest = runner.load(bytes, Limits::default()).unwrap();
         let mut tree = Tree::new();
         for commit in guest.init(&[]).unwrap() {
@@ -157,4 +162,30 @@ fn imports_outside_the_world_are_rejected() {
 
 fn wat_to_component(wat: &str) -> Vec<u8> {
     wat::parse_str(wat).unwrap()
+}
+
+/// `docs/HUB.md` §4.2, §12.2: several apps run in one host process, each
+/// with its own guest instance, sharing one `Runner`/engine. This checks
+/// the non-gpui half of that (the window and `open_app` need a running
+/// `gpui::App`, checked instead by the live `plinth hub run` smoke test).
+#[test]
+fn two_guests_share_one_runner_and_stay_independent() {
+    let Some(bytes) = artifact("counter-rs") else { return };
+    let runner = std::sync::Arc::new(Runner::new().unwrap());
+
+    let mut a = Harness::start_on(runner.clone(), &bytes);
+    let mut b = Harness::start_on(runner.clone(), &bytes);
+
+    let inc_a = a.find_one(ControlKind::Button, |n| n.str_prop(prop::LABEL) == Some("Increment"));
+    let value_a = a.find_one(ControlKind::Heading, |_| true);
+    let inc_b = b.find_one(ControlKind::Button, |n| n.str_prop(prop::LABEL) == Some("Increment"));
+    let value_b = b.find_one(ControlKind::Heading, |_| true);
+
+    a.fire(inc_a, event::PRESS, Value::Null);
+    a.fire(inc_a, event::PRESS, Value::Null);
+    b.fire(inc_b, event::PRESS, Value::Null);
+
+    // Each guest kept its own state: dispatching to `a` did not affect `b`.
+    assert_eq!(a.tree.get(value_a).unwrap().text.as_deref(), Some("2"));
+    assert_eq!(b.tree.get(value_b).unwrap().text.as_deref(), Some("1"));
 }

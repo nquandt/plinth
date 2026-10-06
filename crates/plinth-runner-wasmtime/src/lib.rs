@@ -11,12 +11,14 @@ use std::time::{Duration, Instant};
 use wasmtime::component::{Component, HasSelf, Linker, types::ComponentItem};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
 
+pub mod hub;
 pub mod kv;
 pub mod net;
 pub mod policy;
 pub mod requests;
 pub mod timers;
 
+use hub::HubBackend;
 use kv::Kv;
 use policy::{DeniedReason, Policy};
 use requests::RequestQueue;
@@ -35,7 +37,7 @@ use bindings::plinth::app::error::{DeniedReason as WitDeniedReason, HostError};
 /// Capability names (SPEC.md §11), from the shared map in `plinth-link`
 /// (`docs/HUB.md` §12.3) rather than a duplicated list here.
 pub mod capability {
-    pub use plinth_link::capabilities::{CLIPBOARD_READ, CLIPBOARD_WRITE, STORE_KV};
+    pub use plinth_link::capabilities::{CLIPBOARD_READ, CLIPBOARD_WRITE, HUB_MANAGE, STORE_KV};
 }
 
 impl From<DeniedReason> for WitDeniedReason {
@@ -135,6 +137,9 @@ struct HostState {
     /// Overrides `timezone-offset` with a fixed value (minutes east of
     /// UTC), for tests. `None` uses the real OS offset.
     fake_timezone_offset_minutes: Option<i32>,
+    /// The `plinth:hub` backend (`docs/HUB.md` §4.1, §12.2), present only
+    /// for a guest the host trusted with `hub.manage`.
+    hub: Option<Box<dyn HubBackend>>,
 }
 
 impl bindings::plinth::app::ui::Host for HostState {
@@ -221,6 +226,51 @@ impl bindings::plinth::app::clipboard::Host for HostState {
     }
 }
 
+impl bindings::plinth::app::hub::Host for HostState {
+    fn list_apps(&mut self) -> Result<String, HostError> {
+        require(&self.policy, capability::HUB_MANAGE)?;
+        match &self.hub {
+            Some(hub) => hub.list_apps_json().map_err(|_| HostError::Denied(WitDeniedReason::Unsupported)),
+            None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
+        }
+    }
+
+    fn launch(&mut self, id: String) -> Result<(), HostError> {
+        require(&self.policy, capability::HUB_MANAGE)?;
+        match &mut self.hub {
+            Some(hub) => {
+                hub.launch(&id);
+                Ok(())
+            }
+            None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
+        }
+    }
+
+    fn set_grant(&mut self, id: String, capability: String, allowed: bool) -> Result<(), HostError> {
+        require(&self.policy, self::capability::HUB_MANAGE)?;
+        match &mut self.hub {
+            Some(hub) => hub.set_grant(&id, &capability, allowed).map_err(|_| HostError::Denied(WitDeniedReason::Unsupported)),
+            None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
+        }
+    }
+
+    fn block(&mut self, id: String) -> Result<(), HostError> {
+        require(&self.policy, capability::HUB_MANAGE)?;
+        match &mut self.hub {
+            Some(hub) => hub.block(&id).map_err(|_| HostError::Denied(WitDeniedReason::Unsupported)),
+            None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
+        }
+    }
+
+    fn unblock(&mut self, id: String) -> Result<(), HostError> {
+        require(&self.policy, capability::HUB_MANAGE)?;
+        match &mut self.hub {
+            Some(hub) => hub.unblock(&id).map_err(|_| HostError::Denied(WitDeniedReason::Unsupported)),
+            None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
+        }
+    }
+}
+
 impl bindings::plinth::app::dialog::Host for HostState {
     fn alert(&mut self, message: String) -> u32 {
         let id = self.requests.open();
@@ -293,7 +343,9 @@ impl Runner {
     }
 
     /// Compiles a component and checks its imports, with a capability
-    /// policy and host API implementations (SPEC.md §9.4, §11).
+    /// policy and host API implementations (SPEC.md §9.4, §11). No
+    /// `plinth:hub` backend (`docs/HUB.md` §4.1): a `hub.manage` call is
+    /// `unsupported` even if the policy would allow it.
     pub fn load_with_policy(
         &self,
         bytes: &[u8],
@@ -301,6 +353,22 @@ impl Runner {
         policy: Policy,
         kv: Kv,
         clipboard: Box<dyn Clipboard>,
+    ) -> Result<Guest> {
+        self.load_with_policy_and_hub(bytes, limits, policy, kv, clipboard, None)
+    }
+
+    /// Like `load_with_policy`, with a `plinth:hub` backend (`docs/HUB.md`
+    /// §4.1, §12.2) for a guest the host trusted with `hub.manage`
+    /// (`plinth-host-desktop` checks the trusted-signer rule before it
+    /// ever reaches here).
+    pub fn load_with_policy_and_hub(
+        &self,
+        bytes: &[u8],
+        limits: Limits,
+        policy: Policy,
+        kv: Kv,
+        clipboard: Box<dyn Clipboard>,
+        hub: Option<Box<dyn HubBackend>>,
     ) -> Result<Guest> {
         let component = Component::new(&self.engine, bytes)
             .map_err(anyhow::Error::from)
@@ -323,6 +391,7 @@ impl Runner {
             dialogs: Vec::new(),
             net_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             fake_timezone_offset_minutes: None,
+            hub,
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
@@ -423,6 +492,18 @@ impl Guest {
     /// `answer_dialog` (the same generic completion delivery).
     pub fn poll_net_results(&mut self) -> Vec<(u32, plinth_protocol::Value)> {
         std::mem::take(&mut *self.store.data().net_results.lock().unwrap())
+    }
+
+    /// Drains the `plinth:hub` `launch` requests the guest made since the
+    /// last call (`docs/HUB.md` §4.1, §4.2). Empty when the guest has no
+    /// `plinth:hub` backend. The host (`plinth-host-desktop`) polls this
+    /// the same way it polls timers and dialogs, and opens a window with
+    /// `open_app` for each id.
+    pub fn take_hub_launches(&mut self) -> Vec<String> {
+        match self.store.data_mut().hub.as_mut() {
+            Some(hub) => hub.take_launches(),
+            None => Vec::new(),
+        }
     }
 
     /// Answers a request (for example a dialog) by delivering a
