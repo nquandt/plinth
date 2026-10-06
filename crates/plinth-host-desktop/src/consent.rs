@@ -3,7 +3,7 @@
 //! The decision logic is a pure function (`needs_consent`, in `plinth-hub`)
 //! so it is tested without gpui. This module is the gpui view: it shows
 //! the app name, the publisher, each capability that has no grant yet with
-//! a placeholder rationale, and per-capability Allow/Don't allow, then
+//! the capability text from the shared table and the app's reason, and per-capability Allow/Don't allow, then
 //! Continue/Cancel.
 //!
 //! The capability wording table (`docs/HUB.md` §7.2) is being built in
@@ -33,17 +33,21 @@ enum Outcome {
     Continue(Vec<(String, bool)>),
 }
 
-/// A short, fixed-format rationale for a capability (`docs/HUB.md` §7.2).
-/// Placeholder until the shared capability table in `plinth-link` lands;
-/// swapping it for that table only needs this function to change.
-pub fn rationale_for(capability: &str) -> String {
-    match capability {
-        "store.kv" => "Save data on this device.".to_owned(),
-        "clipboard.read" => "Read what you last copied.".to_owned(),
-        "clipboard.write" => "Copy text for you.".to_owned(),
-        "notify" => "Show notifications.".to_owned(),
-        _ => format!("Uses {capability}."),
-    }
+/// The text for one capability (`docs/HUB.md` §7.2): the fixed description
+/// from the shared capability table, the same for every app, then the
+/// app's own reason from its manifest.
+pub fn describe(capability: &str, app_rationale: &str) -> String {
+    let fixed = match plinth_link::capabilities::info(capability) {
+        Some(info) => {
+            let mut d = info.description.to_owned();
+            if let Some(first) = d.get_mut(0..1) {
+                first.make_ascii_uppercase();
+            }
+            format!("{d}.")
+        }
+        None => format!("Uses {capability}."),
+    };
+    if app_rationale.trim().is_empty() { fixed } else { format!("{fixed} The app says: \u{201c}{}\u{201d}", app_rationale.trim()) }
 }
 
 struct ConsentView {
@@ -71,7 +75,13 @@ impl ConsentView {
 impl Render for ConsentView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Tokens::new(window.appearance(), "teal");
-        let publisher_label = if self.publisher.trim().is_empty() { "Unverified publisher".to_owned() } else { self.publisher.clone() };
+        // Publishers are not signed yet (docs/HUB.md §6, phase H1), so the
+        // manifest's publisher name is only a claim.
+        let publisher_label = if self.publisher.trim().is_empty() {
+            "Unverified publisher".to_owned()
+        } else {
+            format!("{} (unverified publisher)", self.publisher.trim())
+        };
 
         let mut list = div().flex().flex_col().gap_3().w_full();
         for i in 0..self.items.len() {
@@ -90,6 +100,8 @@ impl Render for ConsentView {
                 .bg(t.surface)
                 .child(
                     div()
+                        .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .gap_1()
@@ -99,6 +111,7 @@ impl Render for ConsentView {
                 .child(
                     div()
                         .id(("consent-toggle", i))
+                        .flex_none()
                         .cursor_pointer()
                         .px_3()
                         .py_1()
@@ -167,16 +180,17 @@ impl Render for ConsentView {
 actions!(plinth_consent, [ConsentQuit]);
 
 /// Shows the consent screen for `capabilities` (the capabilities that
-/// still need a decision; see `plinth_hub::Hub::needs_consent`) and
+/// still need a decision, each with the app's rationale from its manifest;
+/// see `plinth_hub::Hub::needs_consent`) and
 /// returns the user's per-capability decisions, or `None` if they
 /// cancelled. Blocks until the window closes: it runs its own gpui
 /// application loop, so call it before opening the app's own window.
-pub fn show(app_name: &str, publisher: &str, capabilities: &[String]) -> Option<Vec<(String, bool)>> {
+pub fn show(app_name: &str, publisher: &str, capabilities: &[(String, String)]) -> Option<Vec<(String, bool)>> {
     if capabilities.is_empty() {
         return Some(Vec::new());
     }
     let items: Vec<Item> =
-        capabilities.iter().map(|c| Item { capability: c.clone(), rationale: rationale_for(c), allowed: true }).collect();
+        capabilities.iter().map(|(c, why)| Item { capability: c.clone(), rationale: describe(c, why), allowed: true }).collect();
     let result = Rc::new(Cell::new(None));
     let app_name = app_name.to_owned();
     let publisher = publisher.to_owned();

@@ -369,7 +369,7 @@ No platform SDK is necessary for the Hub path. A developer needs Xcode on a Mac 
 
 | Phase | Content | Depends on |
 |---|---|---|
-| **H0: local library** | Hub services in the desktop host: library, package cache, grants store, blocks; the consent screen (install-time label) in the desktop host; `plinth hub` CLI commands for testing. | — |
+| **H0: local library** | Hub services in the desktop host: library, package cache, grants store, blocks; the consent screen (install-time label) in the desktop host; `plinth hub` CLI commands for testing. **Exists:** crate `plinth-hub` (`PLINTH_HUB_DIR`), `plinth hub add\|list\|run\|remove\|grants\|block\|unblock\|groups`, policies from grants, the consent window before the first run. Not yet: risk-level defaults (§7.2: low risk without a question), consent again on an update that adds a capability (§7.3 step 3). | — |
 | **H1: signing** | `plinth publisher init`, signatures in `.plnt`, verification in the host, the capability map (§12.3), reachable-capability analysis. | H0 |
 | **H2: sources** | The source format (§5.1), a static source that a developer can host on any web server, `plinth publish --to <dir>`, the transparency log. | H1 |
 | **H3: Hub UI** | `plinth:hub` (privileged), the Hub UI as a Plinth app, more than one app per host, shortcuts and the URL scheme on Windows. | H0–H2, §12.2 |

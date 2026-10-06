@@ -289,7 +289,14 @@ pub fn run_from_hub(hub: &plinth_hub::Hub, app_id: &str) -> Result<()> {
     let pending = hub.needs_consent(app_id, &declared)?;
     if !pending.is_empty() {
         let publisher = pkg.manifest.publisher.clone();
-        let Some(decisions) = consent::show(&pkg.manifest.name, &publisher, &pending) else {
+        let with_reasons: Vec<(String, String)> = pending
+            .iter()
+            .map(|c| {
+                let why = pkg.manifest.capabilities.iter().find(|m| &m.name == c).map(|m| m.rationale.clone()).unwrap_or_default();
+                (c.clone(), why)
+            })
+            .collect();
+        let Some(decisions) = consent::show(&pkg.manifest.name, &publisher, &with_reasons) else {
             eprintln!("[plinth] consent cancelled; {app_id} will not run");
             return Ok(());
         };
@@ -300,7 +307,7 @@ pub fn run_from_hub(hub: &plinth_hub::Hub, app_id: &str) -> Result<()> {
     }
 
     let policy = hub.policy_for(app_id, &declared)?;
-    let component = with_runtime(pkg.component)?;
+    let component = with_runtime(pkg.component, &declared)?;
     let assets: std::collections::HashMap<String, Vec<u8>> =
         pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
     run_with_policy(component, pkg.manifest.name, pkg.manifest.accent.unwrap_or_else(|| "teal".into()), app_id.to_owned(), policy, assets)
