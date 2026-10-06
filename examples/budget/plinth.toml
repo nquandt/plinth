@@ -1,0 +1,8 @@
+id = "dev.plinth.examples.budget"
+name = "Budget"
+version = "0.1.0"
+publisher = "plinth"
+
+[[capabilities]]
+name = "store.kv"
+rationale = "Save your transactions on this device."

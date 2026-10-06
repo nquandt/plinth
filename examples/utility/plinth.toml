@@ -1,0 +1,8 @@
+id = "dev.plinth.examples.utility"
+name = "Utility"
+version = "0.1.0"
+publisher = "plinth"
+
+[[capabilities]]
+name = "clipboard.write"
+rationale = "Copy a text tool's result to the clipboard."
