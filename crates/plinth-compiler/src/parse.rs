@@ -245,14 +245,28 @@ impl Cx<'_> {
             self.err(code::CLASS, c.span, "a class declaration needs a name");
             return None;
         };
-        if c.heritage.is_some() || !c.implements.is_empty() {
-            self.err_help(
-                code::CLASS,
-                c.span,
-                "`extends`/`implements` are not supported (v0 has no inheritance)",
-                "give each class its own fields and methods",
-            );
+        if !c.implements.is_empty() {
+            self.err_help(code::CLASS, c.span, "`implements` is not supported", "give the class its own fields and methods");
             return None;
+        }
+        let mut extends = None;
+        if let Some(h) = &c.heritage {
+            if h.type_arguments.is_some() {
+                self.err(code::GENERIC_USER, c.span, "a generic base class is not supported yet");
+                return None;
+            }
+            match &h.expression {
+                o::Expression::Identifier(id) => extends = Some((id.name.to_string(), self.span(id.span))),
+                other => {
+                    self.err_help(
+                        code::CLASS,
+                        oxc_span::GetSpan::span(other),
+                        "the base class must be a plain name",
+                        "write `extends BaseClassName`",
+                    );
+                    return None;
+                }
+            }
         }
         if c.r#abstract {
             self.err(code::CLASS, c.span, "`abstract` classes are not supported");
@@ -361,7 +375,7 @@ impl Cx<'_> {
                 }
             }
         }
-        Some(ClassDecl { name: id.name.to_string(), fields, ctor, methods, exported, span: self.span(c.span) })
+        Some(ClassDecl { name: id.name.to_string(), fields, ctor, methods, exported, span: self.span(c.span), extends })
     }
 
     /// Constructor parameters: like `params`, but parameter properties
@@ -856,6 +870,10 @@ impl Cx<'_> {
             E::NullLiteral(_) => ExprKind::Null,
             E::Identifier(id) if id.name == "undefined" => ExprKind::Null,
             E::Identifier(id) => ExprKind::Ident(id.name.to_string()),
+            // `super` is a reserved word, so it can never collide with a
+            // real binding; the checker recognizes `super(...)` and
+            // `super.m(...)` by this sentinel name (SPEC.md §4.2 v1).
+            E::Super(_) => ExprKind::Ident("super".to_string()),
             E::TemplateLiteral(t) => {
                 let quasis = t.quasis.iter().map(|q| q.value.cooked.as_ref().map(|c| c.to_string()).unwrap_or_default()).collect();
                 let mut exprs = Vec::new();
@@ -968,8 +986,23 @@ impl Cx<'_> {
                         self.err_help(code::LOOSE_EQUALITY, b.span, "loose equality is not allowed", format!("use `{fix}`"));
                         return None;
                     }
-                    B::In | B::Instanceof => {
-                        self.err(code::UNSUPPORTED, b.span, "`in` and `instanceof` are not supported");
+                    B::Instanceof => {
+                        let o::Expression::Identifier(id) = &b.right else {
+                            self.err_help(
+                                code::CLASS,
+                                b.span,
+                                "the right side of `instanceof` must be a class name",
+                                "write `x instanceof ClassName`",
+                            );
+                            return None;
+                        };
+                        return Some(Expr {
+                            kind: ExprKind::InstanceOf(Box::new(self.expr(&b.left)?), id.name.to_string(), self.span(id.span)),
+                            span,
+                        });
+                    }
+                    B::In => {
+                        self.err(code::UNSUPPORTED, b.span, "`in` is not supported");
                         return None;
                     }
                     _ => {

@@ -202,7 +202,11 @@ pub struct Checker<'d> {
 struct ClassInfo {
     /// `None` only right after a "a class needs a constructor" error.
     ctor: Option<FuncId>,
+    /// This class's own methods (not inherited ones), by name.
     methods: HashMap<String, FuncId>,
+    /// The base class, if `extends` names one that resolved (SPEC.md §4.2
+    /// v1: single inheritance).
+    base: Option<types::StructId>,
 }
 
 struct GenericTemplate {
@@ -269,6 +273,9 @@ pub fn check_ex(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>,
                     .help(format!("the {what}s are: {}", names.join(", "))),
             );
         }
+    }
+    for (sid, info) in &c.classes {
+        c.prog.classes.insert(*sid, ClassDef { base: info.base, methods: info.methods.clone() });
     }
     c.prog
 }
@@ -1005,6 +1012,10 @@ impl Checker<'_> {
             (T::Nullable(a), T::Nullable(b)) => {
                 self.conversion(a, b).filter(|c| c.is_none_or(|c| c == Coercion::Retag)).map(|_| Some(Coercion::Retag))
             }
+            // A subclass value is a no-op upcast to a base class (or
+            // itself): the base's fields are a byte-identical prefix of the
+            // subclass's layout (SPEC.md §4.2 v1).
+            (T::Struct(a), T::Struct(b)) if self.is_subclass(*a, *b) => Some(Some(Coercion::Retag)),
             (T::Struct(a), T::Struct(b)) => self.same_layout(*a, *b).then_some(Some(Coercion::Retag)),
             (T::Array(a), T::Array(b)) => {
                 (a.repr() == b.repr() && self.conversion(a, b).is_some_and(|c| c.is_none_or(|c| c == Coercion::Retag)))
@@ -1015,6 +1026,32 @@ impl Checker<'_> {
             (T::StrLits(_), T::Union(members)) if members.contains(&T::String) => Some(Some(Coercion::Retag)),
             _ => None,
         }
+    }
+
+    /// True if `sub` is `base` or a (transitive) subclass of it.
+    fn is_subclass(&self, sub: types::StructId, base: types::StructId) -> bool {
+        let mut cur = Some(sub);
+        while let Some(s) = cur {
+            if s == base {
+                return true;
+            }
+            cur = self.classes.get(&s).and_then(|c| c.base);
+        }
+        false
+    }
+
+    /// The method named `name` reachable from class `sid`: its own, or the
+    /// nearest base class's (SPEC.md §4.2 v1 overriding).
+    fn resolve_method(&self, sid: types::StructId, name: &str) -> Option<FuncId> {
+        let mut cur = Some(sid);
+        while let Some(s) = cur {
+            let info = self.classes.get(&s)?;
+            if let Some(&fid) = info.methods.get(name) {
+                return Some(fid);
+            }
+            cur = info.base;
+        }
+        None
     }
 
     fn same_layout(&self, a: types::StructId, b: types::StructId) -> bool {
@@ -1179,8 +1216,44 @@ impl Checker<'_> {
     /// constructor cannot call a free function declared later in the same
     /// file — forward-declare it, or move the class after it).
     fn declare_class(&mut self, sid: types::StructId, c: &ast::ClassDecl, m: usize) {
-        let mut fields: Vec<Field> = Vec::new();
-        let mut inits: Vec<Option<ast::Expr>> = Vec::new();
+        // -- Base class (SPEC.md §4.2 v1: single inheritance) -------------
+        let base = match &c.extends {
+            None => None,
+            Some((name, espan)) => match self.lookup(name) {
+                Some(Binding::Type(Type::Struct(bsid))) => match self.classes.get(&bsid) {
+                    Some(_) => Some(bsid),
+                    None => {
+                        self.err_help(
+                            code::EXTENDS,
+                            *espan,
+                            format!("`{name}` is not a fully declared class yet"),
+                            "a base class must be declared before its subclass; this also catches a cycle",
+                        );
+                        None
+                    }
+                },
+                Some(Binding::Type(_)) => {
+                    self.err_help(code::EXTENDS, *espan, format!("`{name}` is not a class"), "a class can only extend another class");
+                    None
+                }
+                Some(_) => {
+                    self.err(code::EXTENDS, *espan, format!("`{name}` is not a class"));
+                    None
+                }
+                None => {
+                    self.err(code::UNKNOWN_NAME, *espan, format!("cannot find name `{name}`"));
+                    None
+                }
+            },
+        };
+        let base_fields: Vec<Field> = match base {
+            Some(bsid) => self.prog.structs[bsid as usize].fields.clone(),
+            None => Vec::new(),
+        };
+        let base_field_count = base_fields.len();
+
+        let mut fields: Vec<Field> = base_fields;
+        let mut inits: Vec<Option<ast::Expr>> = vec![None; base_field_count];
         for f in &c.fields {
             if fields.iter().any(|x| x.name == f.name) {
                 self.err(code::DUPLICATE, f.span, format!("duplicate field `{}`", f.name));
@@ -1207,14 +1280,48 @@ impl Checker<'_> {
             synth.params.insert(0, this_param(&c.name, meth.span));
             self.declare_top_func(&synth, m);
             let Some(Binding::Func(fid)) = self.module_scopes[m].get(&mangled).cloned() else { unreachable!() };
+            if let Some(base_fid) = base.and_then(|b| self.resolve_method(b, &name)) {
+                let bft = self.func_type(base_fid, name_span);
+                let oft = self.func_type(fid, name_span);
+                let b_rest = Rc::new(FuncType { params: bft.params[1..].to_vec(), required: bft.required.saturating_sub(1), ret: bft.ret.clone() });
+                let o_rest = Rc::new(FuncType { params: oft.params[1..].to_vec(), required: oft.required.saturating_sub(1), ret: oft.ret.clone() });
+                if !self.func_compatible(&o_rest, &b_rest) {
+                    self.err_help(
+                        code::OVERRIDE,
+                        name_span,
+                        format!("`{name}` does not override the base class's method with a compatible signature"),
+                        "match the base method's parameter and return types",
+                    );
+                }
+            }
             methods.insert(name, fid);
         }
-        self.classes.insert(sid, ClassInfo { ctor: None, methods });
+        self.classes.insert(sid, ClassInfo { ctor: None, methods, base });
 
         // A class with no explicit constructor gets a trivial one that
         // builds the instance from the field initializers alone (every
-        // field needs one, or a zero value, in that case).
-        let default_ctor = ast::CtorDecl { params: Vec::new(), body: Vec::new(), span: c.span };
+        // field needs one, or a zero value, in that case). A subclass's
+        // default constructor forwards to a zero-argument `super()`.
+        let default_ctor = ast::CtorDecl {
+            params: Vec::new(),
+            body: if base.is_some() {
+                vec![ast::Stmt {
+                    kind: ast::StmtKind::Expr(ast::Expr {
+                        kind: ast::ExprKind::Call {
+                            callee: Box::new(ast::Expr { kind: ast::ExprKind::Ident("super".to_string()), span: c.span }),
+                            type_args: Vec::new(),
+                            args: Vec::new(),
+                            optional: false,
+                        },
+                        span: c.span,
+                    }),
+                    span: c.span,
+                }]
+            } else {
+                Vec::new()
+            },
+            span: c.span,
+        };
         let ctor_ast = c.ctor.as_ref().unwrap_or(&default_ctor);
         if ctor_ast.body.iter().any(stmt_has_return) {
             self.err_help(
@@ -1271,12 +1378,64 @@ impl Checker<'_> {
         for (p, v) in ctor_ast.params.iter().zip(&param_vars) {
             self.bind_param(p, *v, &mut prologue);
         }
-        // Each field's value: its class-level initializer (evaluated before
-        // `this` exists, so it cannot read `this`), or a type-appropriate
-        // zero value for a field the constructor body assigns right away
-        // (the `constructor(x: number) { this.x = x; }` pattern).
-        let mut field_vals = Vec::new();
-        for (f, init) in fields.iter().zip(&inits) {
+
+        // A subclass constructor's first statement must be `super(...)`
+        // (SPEC.md §4.2 v1): it runs the base class's constructor, and its
+        // result supplies this class's inherited fields. Any other
+        // `super(...)` call is rejected generically when the body is
+        // checked (it is never valid there).
+        let mut rest_body: &[ast::Stmt] = &ctor_ast.body;
+        let mut base_field_reads: Vec<TExpr> = Vec::new();
+        if let Some(bsid) = base {
+            let super_call = ctor_ast.body.first().and_then(|s| match &s.kind {
+                ast::StmtKind::Expr(ast::Expr { kind: ast::ExprKind::Call { callee, args, .. }, .. }) => match &callee.kind {
+                    ast::ExprKind::Ident(n) if n == "super" => Some(args),
+                    _ => None,
+                },
+                _ => None,
+            });
+            match super_call {
+                Some(args) => {
+                    rest_body = &ctor_ast.body[1..];
+                    match self.classes[&bsid].ctor {
+                        Some(base_ctor) => {
+                            let ft = self.func_type(base_ctor, ctor_ast.span);
+                            let targs = self.call_args(&ft, args, ctor_ast.span);
+                            let base_val = TExpr::new(TExprKind::Call(base_ctor, targs), Type::Struct(bsid), ctor_ast.span);
+                            let base_tmp = self.temp(Type::Struct(bsid));
+                            prologue.push(TStmt::Let(base_tmp, Some(base_val)));
+                            let read = TExpr::new(TExprKind::Var(base_tmp), Type::Struct(bsid), ctor_ast.span);
+                            for i in 0..base_field_count {
+                                base_field_reads.push(TExpr::new(
+                                    TExprKind::Field(Box::new(read.clone()), bsid, i as u32),
+                                    fields[i].ty.clone(),
+                                    ctor_ast.span,
+                                ));
+                            }
+                        }
+                        None => {
+                            // Already reported when the base class was declared.
+                        }
+                    }
+                }
+                None => {
+                    self.err_help(
+                        code::SUPER,
+                        ctor_ast.span,
+                        "a subclass constructor must call `super(...)` as its first statement",
+                        "add `super(...)` before anything else, including any use of `this`",
+                    );
+                }
+            }
+        }
+
+        // Each own field's value: its class-level initializer (evaluated
+        // before `this` exists, so it cannot read `this`), or a
+        // type-appropriate zero value for a field the constructor body
+        // assigns right away (the `constructor(x: number) { this.x = x; }`
+        // pattern).
+        let mut field_vals = base_field_reads;
+        for (f, init) in fields[base_field_count..].iter().zip(&inits[base_field_count..]) {
             let v = match init {
                 Some(e) => {
                     let te = self.expr(e, Some(&f.ty));
@@ -1299,7 +1458,7 @@ impl Checker<'_> {
         prologue.push(TStmt::Let(this_var, Some(this_val)));
 
         let mut body = prologue;
-        body.extend(self.block_stmts(&ctor_ast.body));
+        body.extend(self.block_stmts(rest_body));
         body.push(TStmt::Return(Some(TExpr::new(TExprKind::Var(this_var), Type::Struct(sid), ctor_ast.span))));
 
         self.fx.scopes.pop();

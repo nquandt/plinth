@@ -39,9 +39,10 @@ fn rejected_features() {
     assert_eq!(codes(&with_app("import _ from \"lodash\";")), ["PL1001"]);
     assert_eq!(codes(&with_app("let x: any = 1;")), ["PL2001"]);
     assert_eq!(codes(&with_app("const a = 1 == 2;")), ["PL2002"]);
-    // Basic classes are supported (v0: no `extends`); see `tests/lang.rs`'s
-    // "Classes" section for the behavior and other class diagnostics.
-    assert_eq!(codes(&with_app("class B {}\nclass A extends B {}")), ["PL2003"]);
+    // Basic classes and single inheritance are supported; see
+    // `tests/lang.rs`'s "Classes" section for the behavior and other class
+    // diagnostics. `implements` is still rejected.
+    assert_eq!(codes(&with_app("interface I {}\nclass A implements I {}")), ["PL2003"]);
     assert_eq!(codes(&with_app("var v = 1;")), ["PL2014"]);
     assert_eq!(codes(&with_app("const d = document;")), ["PL3002"]);
     assert_eq!(codes(&with_app("const n: number = \"x\";")), ["PL3001"]);

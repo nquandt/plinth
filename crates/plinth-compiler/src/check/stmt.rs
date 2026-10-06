@@ -463,6 +463,13 @@ impl Checker<'_> {
                 fa.extend(fb);
                 (Vec::new(), fa)
             }
+            // `x instanceof C` (SPEC.md §4.2 v1): narrows `x` to `C` in the
+            // true branch. The false branch keeps `x`'s declared type (a
+            // subclass is not the only thing it could still not be).
+            TExprKind::InstanceOf(obj, sid) => match self.narrowable_var(obj) {
+                Some(v) => (vec![(v, Type::Struct(*sid))], Vec::new()),
+                None => (Vec::new(), Vec::new()),
+            },
             // `typeof x === "..."` or a discriminant comparison, both
             // compiled to `UnionIs` (HANDOFF.md item 2).
             TExprKind::UnionIs(obj, idxs) => match (self.narrowable_var(obj), &obj.ty) {

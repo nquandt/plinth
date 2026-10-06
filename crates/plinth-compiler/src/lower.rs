@@ -479,6 +479,10 @@ impl Cx<'_> {
             }
             TExprKind::Rt(n, args) => TExprKind::Rt(n, args.into_iter().map(|a| self.expr(a)).collect()),
             TExprKind::MathOp(op, args) => TExprKind::MathOp(op, args.into_iter().map(|a| self.expr(a)).collect()),
+            TExprKind::MethodCall(sid, name, this, args) => {
+                TExprKind::MethodCall(sid, name, self.bx(this), args.into_iter().map(|a| self.expr(a)).collect())
+            }
+            TExprKind::InstanceOf(a, sid) => TExprKind::InstanceOf(self.bx(a), sid),
             k @ (TExprKind::Num(_)
             | TExprKind::Bool(_)
             | TExprKind::Str(_)
