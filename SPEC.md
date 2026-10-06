@@ -213,6 +213,8 @@ In M1, `plinth:core` exports `Math`, `parseNumber`, `toString` and `console`; `p
 
 `JSON.stringify` (core 1.1) is generated for the static type of its argument: `number`, `int`, `boolean`, `string`, nullable types, arrays, objects of known shape (fields in declaration order) and `Map<string, V>`. `NaN` and `Infinity` become `null`, as in JS. `JSON.parse<T>(text): T | null` (core 1.2) decodes the same shapes for an explicit type argument. It returns `null` for invalid JSON or a shape mismatch (a missing field, a wrong type, trailing text); it ignores extra object fields.
 
+`plinth:dialog` (core 1.3, no capability) has `alert(message, done)`, `confirm(message, done)` and `prompt(message, done)`. Each returns at once; the answer arrives through a `completion` event (§8.4) and calls `done` (`alert`: no value, `confirm`: `boolean`, `prompt`: `string | null`). Pending callbacks are GC roots. The runner and the web host implement it; the desktop dialog window is in progress.
+
 M2 adds three modules:
 - `plinth:time`: `now()`, `monotonicNow()`, `setTimeout(f, ms)`, `setInterval(f, ms)`, `clearTimeout(id)` and `clearInterval(id)`. A timer id is a `number`. No capability is necessary.
 - `plinth:store`: `kv.get(key): string | null`, `kv.set(key, value)`, `kv.remove(key)` and `kv.keys(): string[]`. Capability `store.kv`.
@@ -691,7 +693,7 @@ A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version i
 - A host keeps more than one core, as a version manager (for example `nvm`) does: the core that it was built with, and the cores in its cores directory (`%LOCALAPPDATA%\plinth\cores\<version>\core.wasm` on Windows, `$XDG_DATA_HOME/plinth/cores/...` on other systems, or `PLINTH_CORES_DIR`).
 - **Selection.** For each app, the host picks the core with the same major version and the highest minor version that is not lower than the app's minor version. If there is no such core, the host tells the user which core to install.
 - **Backward compatibility.** Because a core only adds functions inside its major version, the newest core of a major version runs every older app of that major version. A breaking change makes a new major version, and the old and the new core stay installed side by side.
-- **The native part of a host** (the renderer and the host APIs) must also support the WIT world that a core imports (`plinth:app@1.0.0`). A new core major version that needs a new WIT world also needs a host that supports it.
+- **The native part of a host** (the renderer and the host APIs) must also support every host interface that a core imports. A minor core version can add an interface (core 1.3 added `plinth:app/dialog`), so a host must check a core's imports before it uses the core, and use only cores whose imports it supports. A host that ships a core also ships the support for it; an installed core from elsewhere can need a newer host.
 - **Commands:** `plinth core list`, `plinth core install <core.wasm>`, `plinth core export <file>`. Later, the hub and npm distribute cores.
 
 ---

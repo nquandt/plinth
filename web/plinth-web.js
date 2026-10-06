@@ -175,11 +175,37 @@ export function parseManifest(manifestText) {
  * kicks off an async read to refresh the cache for next time). Timers are
  * real (JS `setTimeout`/`setInterval`), driven by `scheduleTimerEvent`.
  */
+/**
+ * The default dialog answers: the browser's own dialogs when they exist
+ * (`alert` → null, `confirm` → boolean, `prompt` → string or null), else
+ * (Node) a declined answer.
+ */
+function defaultAskDialog(kind, message) {
+  const g = globalThis;
+  if (kind === "alert") {
+    if (typeof g.alert === "function") g.alert(message);
+    return null;
+  }
+  if (kind === "confirm") return typeof g.confirm === "function" ? Boolean(g.confirm(message)) : false;
+  return typeof g.prompt === "function" ? g.prompt(message) : null;
+}
+
 function hostImports(
   getExports,
   onCommit,
-  { log = (s) => console.log(s), scheduleTimerEvent, cancelTimerEvent, kvStore, capabilities = new Set() } = {},
+  { log = (s) => console.log(s), scheduleTimerEvent, cancelTimerEvent, kvStore, capabilities = new Set(), askDialog, completeRequest } = {},
 ) {
+  // plinth:dialog (core 1.3, SPEC.md §8.5): each call returns a request id at
+  // once; the answer arrives later as a `completion` event.
+  let nextRequest = 1;
+  function openDialog(kind, message) {
+    const id = nextRequest++;
+    const ask = askDialog ?? defaultAskDialog;
+    Promise.resolve()
+      .then(() => ask(kind, message))
+      .then((answer) => completeRequest?.(id, answer ?? null));
+    return id;
+  }
   function mem() {
     return new DataView(getExports().memory.buffer);
   }
@@ -309,6 +335,17 @@ function hostImports(
         writeOkStringList(retptr, kvStore.keys());
       },
     },
+    "plinth:app/dialog@1.0.0": {
+      alert(ptr, len) {
+        return openDialog("alert", readString(ptr, len));
+      },
+      confirm(ptr, len) {
+        return openDialog("confirm", readString(ptr, len));
+      },
+      prompt(ptr, len) {
+        return openDialog("prompt", readString(ptr, len));
+      },
+    },
     "plinth:app/clipboard@1.0.0": {
       "write-text"(ptr, len, retptr) {
         const text = readString(ptr, len);
@@ -419,12 +456,14 @@ export class PlinthApp {
    */
   async load(coreBytes, appBytes, opts = {}) {
     const scheduleTimerEvent = opts.scheduleTimerEvent ?? ((id) => this.onEvent({ kind: "timer", timer: id }));
+    const completeRequest = (id, result) => this.onEvent({ kind: "completion", request: id, result });
     const { id: appId, capabilities } = opts.manifestText ? parseManifest(opts.manifestText) : { id: "", capabilities: new Set() };
     const kvStore =
       opts.kvStore ?? (opts.storage ? localStorageKvStore(opts.storage, `plinth:${appId}:`) : mapKvStore(opts.sharedMap));
     this.core = await loadCore(coreBytes, {
       ...opts,
       scheduleTimerEvent,
+      completeRequest,
       capabilities,
       kvStore,
       onCommit: (ops) => this.onCommit(ops),
