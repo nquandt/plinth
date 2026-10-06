@@ -8,7 +8,9 @@
 //! The linker also:
 //! - grows the function table for the app's closures,
 //! - sets the start function (it gives the app entry point to the runtime),
-//! - removes the `__plinth_rt_*` exports, which only the app code uses.
+//! - removes the `__plinth_rt_*` exports, which only the app code uses,
+//! - stubs the runtime functions that the app cannot reach (`stub_unused`).
+//!   A stub keeps its index, so the append rule still holds.
 
 use crate::rt_abi;
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -246,7 +248,14 @@ pub fn link(rt: &[u8], layout: &Layout, app: &AppCode) -> Result<Vec<u8>> {
         match id {
             1 => out.section(&append_section(1, old, types.len(), &entries_of(&types))?),
             3 => out.section(&append_section(3, old, funcs.len(), &entries_of(&funcs))?),
-            10 => out.section(&append_section(10, old, code.len(), &entries_of(&code))?),
+            10 => {
+                let app_code = entries_of(&code);
+                let rt_code = match old {
+                    Some(old) => Some(stub_unused(rt, layout, old, &app_code, &app.table, app.start)?),
+                    None => None,
+                };
+                out.section(&append_section(10, rt_code.as_deref(), code.len(), &app_code)?)
+            }
             6 if !app.globals.is_empty() || old.is_some() => {
                 out.section(&append_section(6, old, globals.len(), &entries_of(&globals))?)
             }
@@ -335,6 +344,123 @@ pub fn link(rt: &[u8], layout: &Layout, app: &AppCode) -> Result<Vec<u8>> {
         .validate_all(&bytes)
         .context("the linked module is not valid")?;
     Ok(bytes)
+}
+
+/// The body of a stub: no locals, `unreachable`, `end`.
+const STUB_BODY: [u8; 4] = [3, 0x00, 0x00, 0x0B];
+
+/// Returns the runtime code section content, with each runtime function that
+/// the app cannot reach replaced by a stub.
+///
+/// The roots are the runtime's own exports (except `__plinth_rt_*`), its start
+/// function, its table entries, and the runtime functions that the app code
+/// calls or puts in the table. A function that a root calls, or takes with
+/// `ref.func`, is reachable too. `call_indirect` can only reach table entries,
+/// and all of them are roots.
+fn stub_unused(rt: &[u8], layout: &Layout, rt_code: &[u8], app_code: &[u8], app_table: &[u32], app_start: Option<u32>) -> Result<Vec<u8>> {
+    let mut imported = 0u32;
+    let mut roots: Vec<u32> = Vec::new();
+    for payload in Parser::new(0).parse_all(rt) {
+        match payload? {
+            Payload::ImportSection(r) => {
+                for imp in r.into_imports() {
+                    if let TypeRef::Func(_) = imp?.ty {
+                        imported += 1;
+                    }
+                }
+            }
+            Payload::ExportSection(r) => {
+                for e in r {
+                    let e = e?;
+                    if e.kind == wasmparser::ExternalKind::Func && !e.name.starts_with(rt_abi::PREFIX) {
+                        roots.push(e.index);
+                    }
+                }
+            }
+            Payload::StartSection { func, .. } => roots.push(func),
+            Payload::ElementSection(r) => {
+                for el in r {
+                    match el?.items {
+                        wasmparser::ElementItems::Functions(fs) => {
+                            for f in fs {
+                                roots.push(f?);
+                            }
+                        }
+                        wasmparser::ElementItems::Expressions(_, es) => {
+                            for e in es {
+                                for op in e?.get_operators_reader() {
+                                    if let wasmparser::Operator::RefFunc { function_index } = op? {
+                                        roots.push(function_index);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    roots.extend(app_table.iter().copied());
+    roots.extend(app_start);
+    // The app bodies: the runtime functions that they call.
+    let app_entries = app_code;
+    let mut r = BinaryReader::new(app_entries, 0);
+    while !r.eof() {
+        let size = r.read_var_u32()? as usize;
+        let start = r.original_position();
+        roots.extend(callees(&app_entries[start..start + size])?);
+        r.read_bytes(size)?;
+    }
+
+    // The runtime bodies, as raw entries in function order.
+    let (count, entries) = split_vec(rt_code)?;
+    let mut bodies: Vec<&[u8]> = Vec::with_capacity(count as usize);
+    let mut r = BinaryReader::new(entries, 0);
+    for _ in 0..count {
+        let size = r.read_var_u32()? as usize;
+        let start = r.original_position();
+        bodies.push(&entries[start..start + size]);
+        r.read_bytes(size)?;
+    }
+    debug_assert_eq!(imported + count, layout.func_count);
+
+    let mut live = vec![false; count as usize];
+    while let Some(f) = roots.pop() {
+        let Some(i) = f.checked_sub(imported) else { continue };
+        let Some(slot) = live.get_mut(i as usize) else { continue };
+        if !*slot {
+            *slot = true;
+            roots.extend(callees(bodies[i as usize])?);
+        }
+    }
+
+    let mut out = Vec::new();
+    count.encode(&mut out);
+    for (body, live) in bodies.iter().zip(live) {
+        if live {
+            (body.len() as u32).encode(&mut out);
+            out.extend_from_slice(body);
+        } else {
+            out.extend_from_slice(&STUB_BODY);
+        }
+    }
+    Ok(out)
+}
+
+/// The functions that one code body calls or takes with `ref.func`.
+fn callees(body: &[u8]) -> Result<Vec<u32>> {
+    let body = wasmparser::FunctionBody::new(BinaryReader::new(body, 0));
+    let mut out = Vec::new();
+    for op in body.get_operators_reader()? {
+        match op? {
+            wasmparser::Operator::Call { function_index }
+            | wasmparser::Operator::ReturnCall { function_index }
+            | wasmparser::Operator::RefFunc { function_index } => out.push(function_index),
+            _ => {}
+        }
+    }
+    Ok(out)
 }
 
 fn emit_custom(out: &mut Module, content: &[u8]) -> Result<()> {
