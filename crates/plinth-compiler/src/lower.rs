@@ -133,7 +133,9 @@ fn visit_expr(e: &TExpr, f: &mut dyn FnMut(&TExpr)) {
         | TExprKind::SignalPeek(o)
         | TExprKind::ComputedNew(o)
         | TExprKind::ComputedGet(o)
-        | TExprKind::EffectNew(o) => go(o),
+        | TExprKind::EffectNew(o)
+        | TExprKind::UnionTag(o) => go(o),
+        TExprKind::UnionIs(o, _) => go(o),
         TExprKind::Index(a, b)
         | TExprKind::Num2(_, a, b)
         | TExprKind::Cmp(_, _, a, b)
@@ -346,6 +348,8 @@ impl Cx<'_> {
             TExprKind::Or(a, b) => TExprKind::Or(self.bx(a), self.bx(b)),
             TExprKind::Cond(a, b, c) => TExprKind::Cond(self.bx(a), self.bx(b), self.bx(c)),
             TExprKind::IsNull(a) => TExprKind::IsNull(self.bx(a)),
+            TExprKind::UnionTag(a) => TExprKind::UnionTag(self.bx(a)),
+            TExprKind::UnionIs(a, idxs) => TExprKind::UnionIs(self.bx(a), idxs),
             TExprKind::Coerce(c, a) => TExprKind::Coerce(c, self.bx(a)),
             TExprKind::Block(stmts, v) => TExprKind::Block(self.stmts(stmts), self.bx(v)),
             TExprKind::ArrayLit(items) => TExprKind::ArrayLit(items.into_iter().map(|(s, a)| (s, self.expr(a))).collect()),

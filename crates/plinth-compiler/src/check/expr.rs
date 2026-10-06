@@ -100,6 +100,16 @@ impl Checker<'_> {
                     let te = self.coerce(te, &Type::Number);
                     if *op == UnOp::Plus { te } else { TExpr::new(TExprKind::Neg(bx(te)), Type::Number, span) }
                 }
+                UnOp::Typeof => {
+                    self.err_help(
+                        code::ADVANCED_TYPE,
+                        span,
+                        "`typeof` is only allowed directly in `typeof x === \"...\"`",
+                        "narrow a union: `if (typeof x === \"string\") { ... }`",
+                    );
+                    self.expr(x, None);
+                    TExpr::new(TExprKind::Str("undefined".into()), Type::Error, span)
+                }
             },
             ExprKind::Binary(op, l, r) => self.binary(*op, l, r, span),
             ExprKind::Logical(op, l, r) => self.logical(*op, l, r, span, expected),
@@ -294,6 +304,22 @@ impl Checker<'_> {
                 self.err_help(code::NULLABLE, o.span, msg, "check for null first, or use `?.`");
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
+            Type::Union(members) => match self.union_discriminant(&members) {
+                Some((name, lits)) if name == prop => {
+                    let ty = Type::str_lits(lits.into_iter().map(|(l, _)| l).collect());
+                    TExpr::new(TExprKind::UnionTag(bx(o)), ty, span)
+                }
+                Some((name, _)) => {
+                    let msg = format!("`{}` has no property `{prop}`", self.show(&o.ty));
+                    self.err_help(code::NO_PROPERTY, prop_span, msg, format!("narrow it first, or read `.{name}`"));
+                    TExpr::new(TExprKind::Null, Type::Error, span)
+                }
+                None => {
+                    let msg = format!("`{}` has no property `{prop}`", self.show(&o.ty));
+                    self.err_help(code::NO_PROPERTY, prop_span, msg, "narrow the union first (with `typeof` or a shared literal field)");
+                    TExpr::new(TExprKind::Null, Type::Error, span)
+                }
+            },
             Type::Signal(_) | Type::Computed(_) => {
                 self.err_help(
                     code::NO_PROPERTY,
@@ -771,12 +797,32 @@ impl Checker<'_> {
     }
 
     fn object_lit(&mut self, props: &[ObjProp], expected: Option<&Type>, span: Span) -> TExpr {
+        // A union target: pick the member whose discriminant literal
+        // matches this literal's discriminant field (an object union,
+        // HANDOFF.md item 2).
+        let union_target = |c: &Self, members: &[Type]| -> Option<crate::types::StructId> {
+            let (name, lits) = c.union_discriminant(members)?;
+            let found = props.iter().find_map(|p| match p {
+                ObjProp::Field(n, e, _) if *n == name => match &e.kind {
+                    ExprKind::Str(s) => Some(s.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })?;
+            let (_, idx) = lits.into_iter().find(|(l, _)| *l == found)?;
+            match &members[idx] {
+                Type::Struct(s) => Some(*s),
+                _ => None,
+            }
+        };
         let target = match expected {
             Some(Type::Struct(s)) => Some(*s),
             Some(Type::Nullable(inner)) => match &**inner {
                 Type::Struct(s) => Some(*s),
+                Type::Union(members) => union_target(self, members),
                 _ => None,
             },
+            Some(Type::Union(members)) => union_target(self, members),
             _ => None,
         };
         // Evaluate the parts in source order into temporaries. `source`
@@ -915,6 +961,9 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Num2(nop, bx(a), bx(b)), Type::Number, span)
             }
             BinOp::Eq | BinOp::Ne => {
+                if let Some(test) = self.typeof_narrow(l, r, span) {
+                    return if op == BinOp::Ne { TExpr::new(TExprKind::Not(bx(test)), Type::Bool, span) } else { test };
+                }
                 let lt = self.expr(l, None);
                 let rt = self.expr(r, Some(&lt.ty.clone()));
                 let test = self.equality(lt, rt, span);
@@ -940,7 +989,59 @@ impl Checker<'_> {
     }
 
     /// `a === b`.
+    /// `typeof x === "string"` or `"string" === typeof x`: narrows a union
+    /// to its `string` member (or, for `"object"`, to its non-string
+    /// members). `None` if this is not that pattern.
+    fn typeof_narrow(&mut self, l: &Expr, r: &Expr, span: Span) -> Option<TExpr> {
+        let (inner, cat, cat_span) = match (&l.kind, &r.kind) {
+            (ExprKind::Unary(UnOp::Typeof, inner), ExprKind::Str(cat)) => (inner, cat, r.span),
+            (ExprKind::Str(cat), ExprKind::Unary(UnOp::Typeof, inner)) => (inner, cat, l.span),
+            _ => return None,
+        };
+        let te = self.expr(inner, None);
+        let Type::Union(members) = &te.ty else {
+            self.err_help(
+                code::ADVANCED_TYPE,
+                inner.span,
+                format!("`typeof` narrowing needs a union type, not `{}`", self.show(&te.ty)),
+                "give the value a union type, e.g. `let x: Shape | string`",
+            );
+            return Some(TExpr::new(TExprKind::Bool(false), Type::Error, span));
+        };
+        let idxs: Vec<usize> = match cat.as_str() {
+            "string" => members.iter().enumerate().filter(|(_, m)| m.is_stringish()).map(|(i, _)| i).collect(),
+            "object" => members.iter().enumerate().filter(|(_, m)| matches!(m, Type::Struct(_))).map(|(i, _)| i).collect(),
+            _ => {
+                self.err_help(code::ADVANCED_TYPE, cat_span, format!("`typeof` narrowing to {cat:?} is not supported yet"), "use \"string\" or \"object\"");
+                Vec::new()
+            }
+        };
+        if idxs.is_empty() {
+            let msg = format!("`{}` has no `{cat}` member", self.show(&te.ty));
+            self.err(code::TYPE_MISMATCH, cat_span, msg);
+            return Some(TExpr::new(TExprKind::Bool(false), Type::Error, span));
+        }
+        Some(TExpr::new(TExprKind::UnionIs(Box::new(te), idxs), Type::Bool, span))
+    }
+
+    /// `union.tag === "lit"` or `"lit" === union.tag`: narrows the union
+    /// to the member whose discriminant literal is `lit`.
+    fn discriminant_narrow(&mut self, a: &TExpr, b: &TExpr, span: Span) -> Option<TExpr> {
+        let (tag, lit) = match (&a.kind, &b.kind) {
+            (TExprKind::UnionTag(o), TExprKind::Str(s)) => (o, s),
+            (TExprKind::Str(s), TExprKind::UnionTag(o)) => (o, s),
+            _ => return None,
+        };
+        let Type::Union(members) = &tag.ty else { return None };
+        let (_, lits) = self.union_discriminant(members)?;
+        let idx = lits.into_iter().find(|(l, _)| l == lit)?.1;
+        Some(TExpr::new(TExprKind::UnionIs(Box::new((**tag).clone()), vec![idx]), Type::Bool, span))
+    }
+
     fn equality(&mut self, a: TExpr, b: TExpr, span: Span) -> TExpr {
+        if let Some(t) = self.discriminant_narrow(&a, &b, span) {
+            return t;
+        }
         let is_null = |t: &TExpr| matches!(t.kind, TExprKind::Null);
         if is_null(&a) || is_null(&b) {
             let other = if is_null(&a) { b } else { a };

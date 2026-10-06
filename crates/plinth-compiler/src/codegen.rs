@@ -237,6 +237,16 @@ impl<'p> Codegen<'p> {
         FIRST_USER_TYPE + self.user_types.len() as u32 - 1
     }
 
+    /// The GC type id a union member has at runtime, to narrow via the
+    /// header's `type_id` (`UnionIs`).
+    fn type_id_of(&self, member: &Type) -> u32 {
+        match member {
+            Type::Struct(sid) => self.structs[*sid as usize].type_id,
+            Type::String | Type::StrLits(_) => crate::rt_abi::T_STRING,
+            other => panic!("a union member of type `{other:?}` has no runtime tag yet"),
+        }
+    }
+
     fn sig_type(&mut self, ft: &crate::types::FuncType) -> u32 {
         let mut params = vec![ValType::I32];
         params.extend(ft.params.iter().filter_map(|t| t.repr().val_type()));
@@ -519,7 +529,13 @@ fn expr_vars(e: &TExpr, out: &mut Vec<VarId>) {
             }
             expr_vars(v, out);
         }
-        TExprKind::Field(o, ..) | TExprKind::Neg(o) | TExprKind::Not(o) | TExprKind::IsNull(o) | TExprKind::Coerce(_, o) => go(o),
+        TExprKind::Field(o, ..)
+        | TExprKind::Neg(o)
+        | TExprKind::Not(o)
+        | TExprKind::IsNull(o)
+        | TExprKind::Coerce(_, o)
+        | TExprKind::UnionTag(o)
+        | TExprKind::UnionIs(o, _) => go(o),
         TExprKind::Index(a, b)
         | TExprKind::Num2(_, a, b)
         | TExprKind::Cmp(_, _, a, b)
@@ -1229,6 +1245,29 @@ impl FnGen {
             TExprKind::ThunkOf(sig) => {
                 let slot = g.thunk(sig);
                 self.emit(I::I32Const(slot as i32));
+            }
+            TExprKind::UnionTag(o) => {
+                // The discriminant is the first field of every member
+                // struct, so it is always at the header offset.
+                self.expr(g, o);
+                self.emit(load(HEADER, Repr::Ref));
+            }
+            TExprKind::UnionIs(o, idxs) => {
+                let Type::Union(members) = &o.ty else { panic!("UnionIs on a non-union") };
+                let ids: Vec<u32> = idxs.iter().map(|i| g.type_id_of(&members[*i])).collect();
+                self.expr(g, o);
+                self.emit(load(0, Repr::I32));
+                let th = self.tmp(Repr::I32);
+                self.emit(I::LocalSet(th));
+                for (i, id) in ids.iter().enumerate() {
+                    self.emit(I::LocalGet(th));
+                    self.emit(I::I32Const(*id as i32));
+                    self.emit(I::I32Eq);
+                    if i > 0 {
+                        self.emit(I::I32Or);
+                    }
+                }
+                self.free(th, Repr::I32);
             }
             other => panic!("codegen: `lower` must remove {other:?}"),
         }

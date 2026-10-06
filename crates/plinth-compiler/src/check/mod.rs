@@ -509,11 +509,13 @@ impl Checker<'_> {
                     _ => {
                         if others.iter().all(|t| *t == Type::Number) && lits.is_empty() {
                             Type::Number
+                        } else if lits.is_empty() {
+                            self.union_of(others, *span)
                         } else {
                             self.err_help(
                                 code::ADVANCED_TYPE,
                                 *span,
-                                "general union types come in v1",
+                                "a union cannot mix string literals with other types",
                                 "use `T | null`, or a union of string literals",
                             );
                             return Type::Error;
@@ -630,6 +632,69 @@ impl Checker<'_> {
         Type::Struct(id)
     }
 
+    /// Builds a `Type::Union` from distinct object and string member
+    /// types (SPEC.md §4.2). Members with another representation (number,
+    /// boolean, enum, array, function, …) are not supported yet.
+    fn union_of(&mut self, mut members: Vec<Type>, span: Span) -> Type {
+        members.dedup();
+        let mut strings = 0;
+        for m in &members {
+            match m {
+                Type::Struct(_) => {}
+                Type::String | Type::StrLits(_) => strings += 1,
+                other => {
+                    let msg = format!("a union member of type `{}` is not supported yet", self.show(other));
+                    self.err_help(code::ADVANCED_TYPE, span, msg, "union members can be object types or `string`");
+                    return Type::Error;
+                }
+            }
+        }
+        if strings > 1 {
+            self.err(code::ADVANCED_TYPE, span, "a union can have at most one string-like member");
+            return Type::Error;
+        }
+        if members.len() < 2 {
+            return members.pop().unwrap_or(Type::Error);
+        }
+        Type::Union(members.into())
+    }
+
+    /// If the object (struct) members of a union all share a literal-string
+    /// field, declared first, with a distinct literal per member: the
+    /// field's name and `(literal, member index)` pairs (indices into the
+    /// full `members`, including any non-struct member). A union needs at
+    /// least one struct member for this. This field is readable without
+    /// narrowing, and narrows the union when compared to one of its
+    /// literals (HANDOFF.md item 2).
+    pub(crate) fn union_discriminant(&self, members: &[Type]) -> Option<(String, Vec<(String, usize)>)> {
+        let mut name: Option<String> = None;
+        let mut out = Vec::new();
+        let mut any_struct = false;
+        for (i, m) in members.iter().enumerate() {
+            let Type::Struct(sid) = m else { continue };
+            any_struct = true;
+            let f = self.prog.structs[*sid as usize].fields.first()?;
+            let Type::StrLits(lits) = &f.ty else { return None };
+            if lits.len() != 1 {
+                return None;
+            }
+            match &name {
+                None => name = Some(f.name.clone()),
+                Some(n) if *n != f.name => return None,
+                _ => {}
+            }
+            out.push((lits[0].clone(), i));
+        }
+        if !any_struct {
+            return None;
+        }
+        let mut seen = std::collections::HashSet::new();
+        if !out.iter().all(|(l, _)| seen.insert(l.clone())) {
+            return None;
+        }
+        Some((name?, out))
+    }
+
     // -- Assignability ----------------------------------------------------
 
     /// How a value of `from` converts to `to`: `None` if it cannot,
@@ -657,6 +722,8 @@ impl Checker<'_> {
                     .then_some(Some(Coercion::Retag))
             }
             (T::Func(f), T::Func(g)) => self.func_compatible(f, g).then_some(Some(Coercion::Retag)),
+            (t, T::Union(members)) if members.iter().any(|m| m == t) => Some(Some(Coercion::Retag)),
+            (T::StrLits(_), T::Union(members)) if members.contains(&T::String) => Some(Some(Coercion::Retag)),
             _ => None,
         }
     }

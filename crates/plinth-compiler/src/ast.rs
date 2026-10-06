@@ -214,6 +214,8 @@ pub enum UnOp {
     Neg,
     Plus,
     Not,
+    /// Only valid directly in `typeof x === "..."` (union narrowing).
+    Typeof,
 }
 
 #[derive(Debug, Clone)]

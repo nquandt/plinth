@@ -224,6 +224,12 @@ pub enum TExprKind {
     Or(Box<TExpr>, Box<TExpr>),
     Cond(Box<TExpr>, Box<TExpr>, Box<TExpr>),
     IsNull(Box<TExpr>),
+    /// Reads a discriminated union's shared literal field (the first field
+    /// of every member struct, so every member has it at the same offset).
+    UnionTag(Box<TExpr>),
+    /// True if the union value's runtime member is one of these indices
+    /// into the `Type::Union` member list of the operand's static type.
+    UnionIs(Box<TExpr>, Vec<usize>),
     Coerce(Coercion, Box<TExpr>),
     /// Statements, then a value.
     Block(Vec<TStmt>, Box<TExpr>),

@@ -766,10 +766,7 @@ impl Cx<'_> {
                         self.err_help(code::DELETE, u.span, "`delete` is not allowed", "use a Map and `map.delete(key)`");
                         return None;
                     }
-                    U::Typeof => {
-                        self.err(code::UNSUPPORTED, u.span, "`typeof` comes in v1 with union narrowing");
-                        return None;
-                    }
+                    U::Typeof => UnOp::Typeof,
                     _ => {
                         self.err(code::UNSUPPORTED, u.span, "this operator is not supported");
                         return None;

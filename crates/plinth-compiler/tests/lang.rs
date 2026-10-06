@@ -122,6 +122,102 @@ function Home() { return <Screen title="Home"><Button label="go" onPress={() => 
     assert_eq!(codes(&main), Vec::<&str>::new());
 }
 
+// -- 2. Discriminated unions + narrowing -------------------------------------
+
+const SHAPE: &str = r#"
+interface Circle { kind: "circle"; radius: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+function area(s: Shape): number {
+  if (s.kind === "circle") {
+    return s.radius * s.radius * 3;
+  } else {
+    return s.side * s.side;
+  }
+}
+"#;
+
+#[test]
+fn discriminant_narrowing_compiles_and_runs() {
+    let main = format!(
+        "import {{ app, Screen, Text }} from \"plinth:ui\";\n{SHAPE}\nfunction Home() {{ return <Screen title=\"Home\"><Text>{{area({{ kind: \"circle\", radius: 2 }})}}</Text></Screen>; }}{APP}"
+    );
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "12");
+}
+
+#[test]
+fn discriminant_narrowing_other_member() {
+    let main = format!(
+        "import {{ app, Screen, Text }} from \"plinth:ui\";\n{SHAPE}\nfunction Home() {{ return <Screen title=\"Home\"><Text>{{area({{ kind: \"square\", side: 3 }})}}</Text></Screen>; }}{APP}"
+    );
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "9");
+}
+
+#[test]
+fn union_field_without_narrowing_is_rejected() {
+    let main = format!(
+        "import {{ app, Screen }} from \"plinth:ui\";\n{SHAPE}\nfunction bad(s: Shape): number {{ return s.radius; }}\nfunction Home() {{ return <Screen title=\"Home\" />; }}{APP}"
+    );
+    assert_eq!(codes(&main), ["PL3004"]);
+}
+
+#[test]
+fn union_member_mismatch_is_rejected() {
+    // `number` is not a supported union member type yet.
+    let main = with_app("function f(x: number | { a: number }): number { return 1; }");
+    assert_eq!(codes(&main), ["PL2012"]);
+}
+
+#[test]
+fn typeof_narrows_string_or_object_union() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Circle { kind: "circle"; radius: number; }
+function describe(x: string | Circle): string {
+  if (typeof x === "string") {
+    return x;
+  } else {
+    return "circle " + x.radius;
+  }
+}
+function Home() {
+  return <Screen title="Home"><Text>{describe("hi")}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi");
+}
+
+#[test]
+fn typeof_narrows_to_object_branch() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Circle { kind: "circle"; radius: number; }
+function describe(x: string | Circle): string {
+  if (typeof x === "string") {
+    return x;
+  } else {
+    return "circle " + x.radius;
+  }
+}
+function Home() {
+  return <Screen title="Home"><Text>{describe({ kind: "circle", radius: 5 })}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "circle 5");
+}
+
+#[test]
+fn bare_typeof_outside_comparison_is_rejected() {
+    let main = with_app("function f(x: number): string { return typeof x; }");
+    assert_eq!(codes(&main), ["PL2012"]);
+}
+
 // -- Behavior smoke test: confirms the `run` harness works and the lint
 // does not fire on a normal counter-style program. -------------------------
 

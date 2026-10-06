@@ -26,6 +26,11 @@ pub enum Type {
     Element,
     Enum(EnumId),
     App,
+    /// A discriminated union (SPEC.md §4.2): the runtime value is a plain
+    /// heap reference and the GC type-id in its header tells which member
+    /// it is. Members are `Struct` (object shapes) and at most one
+    /// `String`. Narrowed with `typeof` or a shared literal field.
+    Union(Rc<[Type]>),
     /// The type of an expression with an error. It is compatible with all
     /// types, so one error does not cause more.
     Error,
@@ -71,7 +76,8 @@ impl Type {
             | Type::Nullable(_)
             | Type::Array(_)
             | Type::Struct(_)
-            | Type::Func(_) => Repr::Ref,
+            | Type::Func(_)
+            | Type::Union(_) => Repr::Ref,
             Type::Void => Repr::Void,
             Type::Error => Repr::I32,
         }
@@ -167,6 +173,10 @@ impl fmt::Display for Display<'_> {
             Type::Element => write!(f, "JSX.Element"),
             Type::Enum(id) => write!(f, "{}", self.enums[*id as usize].name),
             Type::App => write!(f, "App"),
+            Type::Union(members) => {
+                let parts: Vec<String> = members.iter().map(|m| sub(m).to_string()).collect();
+                write!(f, "{}", parts.join(" | "))
+            }
             Type::Error => write!(f, "<error>"),
         }
     }
