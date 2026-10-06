@@ -51,6 +51,10 @@ pub struct Screen {
     pub name: String,
     pub icon: Option<String>,
     pub component: FuncId,
+    /// A top-level destination, shown in the tab bar / rail / sidebar
+    /// (SPEC.md §6.2). A non-primary screen is reachable only through
+    /// `navigate.push` (UI API 1.2).
+    pub primary: bool,
 }
 
 #[derive(Debug, Default)]
@@ -248,6 +252,11 @@ pub enum TExprKind {
     Jsx(Box<TJsx>),
     /// `navigate("name")`. The screen index is resolved after the app config.
     Navigate(String),
+    /// `navigate.push("name")` (UI API 1.2). The screen index is resolved
+    /// after the app config, like `Navigate`.
+    NavigatePush(String),
+    /// `navigate.back()` (UI API 1.2).
+    NavigateBack,
 
     // -- Forms that only `lower` makes. ------------------------------------
     /// The table index of the thunk adapter for a closure signature.

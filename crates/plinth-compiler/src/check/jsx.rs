@@ -44,6 +44,7 @@ impl Checker<'_> {
 
     fn control(&mut self, el: &JsxElement, spec: &'static controls::ControlSpec) -> TJsx {
         let mut props = Vec::new();
+        let mut action_children: Vec<TChild> = Vec::new();
         let mut seen: Vec<&str> = Vec::new();
         // `items` first: it gives the item type to `key` and `row`.
         let mut attrs: Vec<_> = el.attrs.iter().collect();
@@ -76,6 +77,46 @@ impl Checker<'_> {
                 Some(v) => v.clone(),
                 None => Expr { kind: ExprKind::Bool(true), span: a.span },
             };
+            if ps.ty == PropTy::StrList {
+                let ExprKind::Array(items) = &value.kind else {
+                    self.err(code::TYPE_MISMATCH, value.span, format!("`{}` must be an array literal of strings", ps.name));
+                    continue;
+                };
+                let mut parts = Vec::new();
+                for (spread, it) in items {
+                    match &it.kind {
+                        _ if *spread => self.err(code::TYPE_MISMATCH, it.span, "each item must be a string literal"),
+                        ExprKind::Str(s) if !s.contains('\u{1f}') => parts.push(s.clone()),
+                        ExprKind::Str(_) => self.err(code::TYPE_MISMATCH, it.span, "the character U+001F is not allowed here"),
+                        _ => self.err(code::TYPE_MISMATCH, it.span, "each item must be a string literal"),
+                    }
+                }
+                let Target::Prop(id) = ps.target else { unreachable!("StrList always targets a prop") };
+                let joined = TExpr::new(TExprKind::Str(parts.join("\u{1f}")), Type::String, value.span);
+                props.push(TProp { target: PropTarget::Str(id), value: joined });
+                continue;
+            }
+            if ps.ty == PropTy::ActionList {
+                let ExprKind::Array(items) = &value.kind else {
+                    self.err(code::TYPE_MISMATCH, value.span, format!("`{}` must be an array literal of `<Action>` elements", ps.name));
+                    continue;
+                };
+                for (_, it) in items {
+                    match &it.kind {
+                        ExprKind::Jsx(jel) if jel.name == "Action" => {
+                            let j = self.jsx(jel);
+                            action_children.push(TChild::Element(j));
+                        }
+                        _ => self.err_help(
+                            code::TYPE_MISMATCH,
+                            it.span,
+                            "an action must be an `<Action>` element",
+                            "write `<Action label=\"...\" onPress={...} />`",
+                        ),
+                    }
+                }
+                continue;
+            }
             let id = match ps.target {
                 Target::Prop(id) | Target::Event(id) => id,
                 _ => 0,
@@ -155,34 +196,6 @@ impl Checker<'_> {
                         }
                     }
                 }
-                PropTy::StrList => {
-                    let mut parts = Vec::new();
-                    let mut ok = matches!(value.kind, ExprKind::Array(_));
-                    if let ExprKind::Array(items) = &value.kind {
-                        for (spread, item) in items {
-                            if *spread {
-                                ok = false;
-                                break;
-                            }
-                            if let ExprKind::Str(s) = &item.kind {
-                                parts.push(s.clone());
-                            } else {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    if !ok {
-                        self.err_help(
-                            code::TYPE_MISMATCH,
-                            value.span,
-                            format!("`{}` must be an array literal of string literals", ps.name),
-                            "pass [\"a\", \"b\"]",
-                        );
-                    }
-                    let joined = parts.join("\u{1f}");
-                    (PropTarget::Str(id), TExpr::new(TExprKind::Str(joined), Type::String, value.span))
-                }
                 PropTy::ListItems => {
                     let te = self.expr(&value, None);
                     match &te.ty {
@@ -218,6 +231,7 @@ impl Checker<'_> {
                     (PropTarget::ListRow, f)
                 }
                 PropTy::Element => (PropTarget::ListEmpty, self.typed(&value, &Type::Element)),
+                PropTy::StrList | PropTy::ActionList => unreachable!("handled above with `continue`"),
             };
             props.push(TProp { target, value: te });
         }
@@ -234,7 +248,14 @@ impl Checker<'_> {
                 "remove `onChange`, or pass `value={s()}` and handle `onChange`",
             );
         }
-        let children = self.children(el, spec);
+        let mut children = self.children(el, spec);
+        if !action_children.is_empty() {
+            match &mut children {
+                TChildren::Nodes(out) => out.extend(action_children),
+                TChildren::None => children = TChildren::Nodes(action_children),
+                TChildren::Text(_) => self.err(code::BAD_CHILD, el.name_span, format!("`<{}>` cannot mix text children and `actions`", spec.name)),
+            }
+        }
         TJsx::Control { kind: spec.kind, props, children, span: el.span }
     }
 

@@ -70,6 +70,14 @@ pub struct Tree {
     pub current_screen: u32,
     /// Ids that were removed since the last call to `take_removed`.
     removed: Vec<NodeId>,
+    /// The screen indices the guest marked as primary destinations
+    /// (`mark-primary`, UI API 1.2). Empty means "treat every root as
+    /// primary", for guests built before UI API 1.2.
+    primary: Vec<u32>,
+    /// Primary screen index → stack of screen indices, top of stack first
+    /// shown (SPEC.md §6.2, UI API 1.2: "the host keeps a stack per primary
+    /// tab").
+    stacks: BTreeMap<u32, Vec<u32>>,
 }
 
 /// The upper limit of node ids. It stops a hostile guest from making the
@@ -97,14 +105,47 @@ impl Tree {
         self.len() == 0
     }
 
-    /// Returns `(screen index, root node)` pairs in screen order.
+    /// Returns `(screen index, root node)` pairs of every screen, in screen
+    /// order. For the primary (tab bar / rail / sidebar) destinations only,
+    /// use `primary_screens`.
     pub fn screens(&self) -> impl Iterator<Item = (u32, NodeId)> + '_ {
         self.roots.iter().map(|(s, id)| (*s, *id))
     }
 
+    /// Returns `(screen index, root node)` pairs of the primary destinations
+    /// only (SPEC.md §6.2). Falls back to every root when the guest never
+    /// sent `mark-primary` (pre-UI-API-1.2 guests), so old behavior and
+    /// tests are unaffected.
+    pub fn primary_screens(&self) -> impl Iterator<Item = (u32, NodeId)> + '_ {
+        self.roots.iter().filter(|(s, _)| self.primary.is_empty() || self.primary.contains(s)).map(|(s, id)| (*s, *id))
+    }
+
+    /// The screen index currently shown: the top of the current primary
+    /// tab's stack, or the tab itself when it has no stack yet.
+    fn displayed_screen(&self) -> u32 {
+        self.stacks.get(&self.current_screen).and_then(|s| s.last()).copied().unwrap_or(self.current_screen)
+    }
+
     pub fn current_root(&self) -> Option<&Node> {
-        let id = self.roots.get(&self.current_screen).or_else(|| self.roots.values().next())?;
+        let id = self.roots.get(&self.displayed_screen()).or_else(|| self.roots.values().next())?;
         self.get(*id)
+    }
+
+    /// `true` when the current primary tab's stack has more than one entry,
+    /// so the screen header should show a back affordance (SPEC.md §6.2).
+    pub fn can_go_back(&self) -> bool {
+        self.stacks.get(&self.current_screen).is_some_and(|s| s.len() > 1)
+    }
+
+    /// Pops the current primary tab's stack. A no-op at the bottom. The host
+    /// calls this directly for the Escape key / Alt+Left, and also when the
+    /// guest sends a `navigate.back()` op.
+    pub fn go_back(&mut self) {
+        if let Some(stack) = self.stacks.get_mut(&self.current_screen)
+            && stack.len() > 1
+        {
+            stack.pop();
+        }
     }
 
     /// Returns the node ids that were removed since the last call. The
@@ -213,7 +254,20 @@ impl Tree {
                     self.current_screen = screen;
                     Ok(())
                 }
-                // The stack navigator comes with M2.
+                nav_kind::MARK_PRIMARY => {
+                    if !self.primary.contains(&screen) {
+                        self.primary.push(screen);
+                    }
+                    Ok(())
+                }
+                nav_kind::PUSH => {
+                    self.stacks.entry(self.current_screen).or_insert_with(|| vec![self.current_screen]).push(screen);
+                    Ok(())
+                }
+                nav_kind::BACK => {
+                    self.go_back();
+                    Ok(())
+                }
                 _ => Err(format!("navigate: kind {kind} is not supported yet")),
             },
             Op::Text { id, value } => {
@@ -398,5 +452,68 @@ mod tests {
         assert!(commit(&mut t, &[Op::Create { id: 1, kind: 999 }]).is_empty());
         let n = t.get(1).unwrap();
         assert_eq!((n.kind, n.raw_kind), (None, 999));
+    }
+
+    // -- UI API 1.2: stack navigation ---------------------------------------
+
+    fn screen(t: &mut Tree, id: NodeId, screen: u32) {
+        commit(t, &[create(id, ControlKind::Screen), Op::SetRoot { screen, id }]);
+    }
+
+    #[test]
+    fn push_and_back_work_a_stack_per_primary_tab() {
+        let mut t = Tree::new();
+        screen(&mut t, 1, 0); // "home" (primary)
+        screen(&mut t, 2, 1); // "settings" (primary)
+        screen(&mut t, 3, 2); // "detail" (pushed only)
+        commit(&mut t, &[Op::Navigate { kind: nav_kind::MARK_PRIMARY, screen: 0, args: Value::Null }]);
+        commit(&mut t, &[Op::Navigate { kind: nav_kind::MARK_PRIMARY, screen: 1, args: Value::Null }]);
+
+        assert_eq!(t.current_root().unwrap().id, 1);
+        assert!(!t.can_go_back());
+
+        commit(&mut t, &[Op::Navigate { kind: nav_kind::PUSH, screen: 2, args: Value::Null }]);
+        assert_eq!(t.current_root().unwrap().id, 3);
+        assert!(t.can_go_back());
+
+        // Switching tabs and back keeps each tab's own stack.
+        commit(&mut t, &[Op::Navigate { kind: nav_kind::SELECT_PRIMARY, screen: 1, args: Value::Null }]);
+        assert_eq!(t.current_root().unwrap().id, 2);
+        assert!(!t.can_go_back());
+        commit(&mut t, &[Op::Navigate { kind: nav_kind::SELECT_PRIMARY, screen: 0, args: Value::Null }]);
+        assert_eq!(t.current_root().unwrap().id, 3);
+        assert!(t.can_go_back());
+
+        commit(&mut t, &[Op::Navigate { kind: nav_kind::BACK, screen: 0, args: Value::Null }]);
+        assert_eq!(t.current_root().unwrap().id, 1);
+        assert!(!t.can_go_back());
+
+        // `back` at the bottom of the stack is a no-op.
+        commit(&mut t, &[Op::Navigate { kind: nav_kind::BACK, screen: 0, args: Value::Null }]);
+        assert_eq!(t.current_root().unwrap().id, 1);
+    }
+
+    #[test]
+    fn primary_screens_filters_by_mark_primary() {
+        let mut t = Tree::new();
+        screen(&mut t, 1, 0);
+        screen(&mut t, 2, 1);
+        commit(&mut t, &[Op::Navigate { kind: nav_kind::MARK_PRIMARY, screen: 0, args: Value::Null }]);
+        let names: Vec<u32> = t.primary_screens().map(|(s, _)| s).collect();
+        assert_eq!(names, vec![0]);
+        // Without any `mark-primary` op, every root counts as primary
+        // (pre-UI-API-1.2 guests).
+        let mut u = Tree::new();
+        screen(&mut u, 1, 0);
+        screen(&mut u, 2, 1);
+        assert_eq!(u.primary_screens().map(|(s, _)| s).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
+    fn go_back_from_the_host_is_a_no_op_with_no_stack() {
+        let mut t = Tree::new();
+        screen(&mut t, 1, 0);
+        t.go_back();
+        assert_eq!(t.current_root().unwrap().id, 1);
     }
 }

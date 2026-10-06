@@ -1,0 +1,4 @@
+id = "dev.plinth.examples.contacts"
+name = "Contacts"
+version = "0.1.0"
+publisher = "plinth"

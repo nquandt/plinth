@@ -356,4 +356,9 @@ abi! {
     }
     fn __plinth_rt_set_root(screen: i32, id: i32) { ui::set_root(screen as u32, id as u32) }
     fn __plinth_rt_navigate(screen: i32) { ui::navigate(screen as u32) }
+
+    // -- UI API 1.2: structure and stack navigation ----------------------------
+    fn __plinth_rt_mark_primary(screen: i32) { ui::mark_primary(screen as u32) }
+    fn __plinth_rt_navigate_push(screen: i32) { ui::navigate_push(screen as u32) }
+    fn __plinth_rt_navigate_back() { ui::navigate_back() }
 }

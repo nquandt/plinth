@@ -61,6 +61,9 @@ fn make_main(prog: &mut Program) -> FuncId {
             body.push(rt_stmt("prop_str", vec![read.clone(), i32c(prop::ICON as i32), TExpr::new(TExprKind::Str(icon.clone()), Type::String, span)]));
         }
         body.push(rt_stmt("set_root", vec![i32c(i as i32), read]));
+        if s.primary {
+            body.push(rt_stmt("mark_primary", vec![i32c(i as i32)]));
+        }
     }
     prog.funcs[main as usize].body = body;
     main
@@ -320,6 +323,11 @@ impl Cx<'_> {
                 let idx = self.prog.screens.iter().position(|s| s.name == name).unwrap_or(0);
                 TExprKind::Rt("navigate", vec![i32c(idx as i32)])
             }
+            TExprKind::NavigatePush(name) => {
+                let idx = self.prog.screens.iter().position(|s| s.name == name).unwrap_or(0);
+                TExprKind::Rt("navigate_push", vec![i32c(idx as i32)])
+            }
+            TExprKind::NavigateBack => TExprKind::Rt("navigate_back", Vec::new()),
             TExprKind::Jsx(j) => return self.jsx(*j, span),
             // Structural recursion for the rest.
             TExprKind::Assign(p, v) => {

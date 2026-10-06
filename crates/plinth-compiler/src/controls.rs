@@ -28,12 +28,17 @@ pub enum PropTy {
     ValueBool,
     /// `Signal<number> | number`
     ValueNum,
-    /// A string array literal (e.g. `options`), joined with U+001F.
+    /// A literal array of string literals (`Picker.options`, `Tabs.items`),
+    /// joined with U+001F into one string prop. Not reactive.
     StrList,
     ListItems,
     ListKey,
     ListRow,
     Element,
+    /// A literal array of `<Action>` elements (UI API 1.2, `Screen`/`Dialog`/
+    /// `Menu` `actions`). The elements become child nodes; the renderer
+    /// tells them apart from body children by their control kind.
+    ActionList,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,7 +99,7 @@ pub const CONTROLS: &[ControlSpec] = &[
     ControlSpec {
         name: "Screen",
         kind: ControlKind::Screen,
-        props: &[p("title", T::Str, true, P(prop::TITLE))],
+        props: &[p("title", T::Str, true, P(prop::TITLE)), p("actions", T::ActionList, false, Target::List)],
         children: ChildKind::Nodes,
     },
     ControlSpec {
@@ -268,6 +273,67 @@ pub const CONTROLS: &[ControlSpec] = &[
         props: &[
             p("label", T::Str, true, P(prop::LABEL)),
             p("tone", T::Enum(TONES), false, P(prop::TONE)),
+        ],
+        children: ChildKind::None,
+    },
+    // -- UI API 1.2: structure and stack navigation ------------------------
+    ControlSpec {
+        name: "Tabs",
+        kind: ControlKind::Tabs,
+        props: &[
+            p("items", T::StrList, true, P(prop::ITEMS)),
+            p("value", T::ValueStr, true, Target::Value),
+            p("onChange", T::CallbackStr, false, Ev(event::CHANGE)),
+        ],
+        children: ChildKind::None,
+    },
+    ControlSpec {
+        name: "Sheet",
+        kind: ControlKind::Sheet,
+        props: &[
+            p("open", T::ValueBool, true, Target::Value),
+            p("title", T::Str, true, P(prop::TITLE)),
+            p("onClose", T::Callback0, false, Ev(event::CLOSE)),
+        ],
+        children: ChildKind::Nodes,
+    },
+    ControlSpec {
+        name: "Dialog",
+        kind: ControlKind::Dialog,
+        props: &[
+            p("open", T::ValueBool, true, Target::Value),
+            p("title", T::Str, true, P(prop::TITLE)),
+            p("message", T::Str, false, P(prop::MESSAGE)),
+            p("actions", T::ActionList, true, Target::List),
+        ],
+        children: ChildKind::Nodes,
+    },
+    ControlSpec {
+        name: "Menu",
+        kind: ControlKind::Menu,
+        props: &[p("label", T::Str, true, P(prop::LABEL)), p("actions", T::ActionList, true, Target::List)],
+        children: ChildKind::Nodes,
+    },
+    ControlSpec {
+        name: "Grid",
+        kind: ControlKind::Grid,
+        props: &[
+            p("items", T::ListItems, true, Target::List),
+            p("key", T::ListKey, true, Target::List),
+            p("cell", T::ListRow, true, Target::List),
+            p("empty", T::Element, false, Target::List),
+        ],
+        children: ChildKind::None,
+    },
+    ControlSpec {
+        name: "Action",
+        kind: ControlKind::Action,
+        props: &[
+            p("label", T::Str, true, P(prop::LABEL)),
+            p("onPress", T::Callback0, true, Ev(event::PRESS)),
+            p("icon", T::StrOneOf(ICONS), false, P(prop::ICON)),
+            p("role", T::Enum(BUTTON_ROLES), false, P(prop::ROLE)),
+            p("confirm", T::Bool, false, P(prop::CONFIRM)),
         ],
         children: ChildKind::None,
     },

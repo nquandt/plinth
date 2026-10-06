@@ -85,6 +85,10 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("list", &[I32, I32, I32, I32, I32, I32, I32, I32, I32], &[]),
     ("set_root", &[I32, I32], &[]),
     ("navigate", &[I32], &[]),
+    // -- UI API 1.2: structure and stack navigation ------------------------
+    ("mark_primary", &[I32], &[]),
+    ("navigate_push", &[I32], &[]),
+    ("navigate_back", &[], &[]),
 ];
 
 pub const PREFIX: &str = "__plinth_rt_";

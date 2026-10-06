@@ -14,6 +14,8 @@ pub const UI_NAMES: &[&str] = &[
     "signal", "computed", "effect", "app", "navigate", "Signal", "Computed", "Accent", "IconName", "ScreenDef", "AppConfig",
     "App", "Tone", "Align", "Group", "Screen", "Section", "Text", "Heading", "Button", "TextField", "Toggle", "List", "Row", "Empty",
     "Checkbox", "TextArea", "Slider", "NumberField", "Picker", "Progress", "Badge",
+    // UI API 1.2
+    "Tabs", "Sheet", "Dialog", "Menu", "Grid", "Action",
 ];
 pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console"];
 
@@ -24,7 +26,7 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "computed" => Binding::Std(StdFn::Computed),
             "effect" => Binding::Std(StdFn::Effect),
             "app" => Binding::Std(StdFn::App),
-            "navigate" => Binding::Std(StdFn::Navigate),
+            "navigate" => Binding::StdObj(StdObj::Navigate),
             "Signal" => Binding::Type(Type::Signal(Box::new(Type::Error))),
             "Computed" => Binding::Type(Type::Computed(Box::new(Type::Error))),
             "Accent" => Binding::Type(Type::str_lits(controls::ACCENTS.iter().map(|s| s.to_string()).collect())),
@@ -127,7 +129,7 @@ impl Checker<'_> {
                 }
                 match &args[0].kind {
                     ExprKind::Str(name) => {
-                        self.navigations.push((name.clone(), args[0].span));
+                        self.navigations.push((name.clone(), args[0].span, true));
                         TExpr::new(TExprKind::Navigate(name.clone()), Type::Void, span)
                     }
                     _ => {
@@ -156,6 +158,39 @@ impl Checker<'_> {
 
     pub(super) fn std_obj_call(&mut self, o: StdObj, prop: &str, prop_span: Span, args: &[Expr], span: Span) -> TExpr {
         match o {
+            StdObj::Navigate => match prop {
+                "push" => {
+                    if args.len() != 1 {
+                        self.err(code::ARG_COUNT, span, "`navigate.push` takes one argument: a screen name literal");
+                        return TExpr::new(TExprKind::Null, Type::Error, span);
+                    }
+                    match &args[0].kind {
+                        ExprKind::Str(name) => {
+                            self.navigations.push((name.clone(), args[0].span, false));
+                            TExpr::new(TExprKind::NavigatePush(name.clone()), Type::Void, span)
+                        }
+                        _ => {
+                            self.err_help(
+                                code::BAD_NAVIGATE,
+                                args[0].span,
+                                "`navigate.push` takes a screen name literal",
+                                "write `navigate.push(\"detail\")`",
+                            );
+                            TExpr::new(TExprKind::Null, Type::Error, span)
+                        }
+                    }
+                }
+                "back" => {
+                    if !args.is_empty() {
+                        self.err(code::ARG_COUNT, span, "`navigate.back` takes no arguments");
+                    }
+                    TExpr::new(TExprKind::NavigateBack, Type::Void, span)
+                }
+                _ => {
+                    self.err(code::NO_PROPERTY, prop_span, format!("`navigate.{prop}` does not exist; use `.push` or `.back`"));
+                    TExpr::new(TExprKind::Null, Type::Error, span)
+                }
+            },
             StdObj::Console => {
                 if prop != "log" {
                     self.err(code::NO_PROPERTY, prop_span, format!("`console.{prop}` does not exist; use `console.log`"));
@@ -278,29 +313,29 @@ impl Checker<'_> {
             self.err(code::BAD_APP, *obj_span, "the app needs at least one screen");
             return;
         }
-        let order: Vec<String> = match primary {
+        // Primary screens first (their index doubles as their tab position),
+        // then the non-primary screens, pushable with `navigate.push`
+        // (SPEC.md §6.2, UI API 1.2).
+        let primary_names: Vec<String> = match primary {
             Some(names) => {
                 for (n, sp) in &names {
                     if !screens.iter().any(|s| s.0 == *n) {
                         self.err(code::BAD_APP, *sp, format!("there is no screen named \"{n}\""));
                     }
                 }
-                for s in &screens {
-                    if !names.iter().any(|(n, _)| *n == s.0) {
-                        self.diags.push(crate::diag::Diagnostic::warning(
-                            code::BAD_APP,
-                            s.3,
-                            format!("the screen \"{}\" is not primary; stack navigation comes in M2, so it is not shown", s.0),
-                        ));
-                    }
-                }
                 names.into_iter().map(|(n, _)| n).collect()
             }
             None => screens.iter().map(|s| s.0.clone()).collect(),
         };
-        for name in order {
+        let mut order: Vec<(String, bool)> = primary_names.iter().map(|n| (n.clone(), true)).collect();
+        for s in &screens {
+            if !primary_names.contains(&s.0) {
+                order.push((s.0.clone(), false));
+            }
+        }
+        for (name, is_primary) in order {
             if let Some((n, icon, component, _)) = screens.iter().find(|s| s.0 == name) {
-                self.prog.screens.push(Screen { name: n.clone(), icon: icon.clone(), component: *component });
+                self.prog.screens.push(Screen { name: n.clone(), icon: icon.clone(), component: *component, primary: is_primary });
             }
         }
     }
