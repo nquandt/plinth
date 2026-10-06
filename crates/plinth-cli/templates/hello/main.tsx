@@ -1,25 +1,14 @@
-import { app, signal, Screen, Section, Heading, Text, Button } from "plinth:ui";
-
-function Home() {
-  const count = signal(0);
-
-  return (
-    <Screen title="Hello">
-      <Section>
-        <Heading level={1}>Hello, Plinth!</Heading>
-        <Text tone="muted">Edit app/main.tsx and save. The app reloads.</Text>
-      </Section>
-      <Section title="Counter">
-        <Text>{count() === 1 ? "You pressed the button 1 time." : `You pressed the button ${count()} times.`}</Text>
-        <Button label="Press me" role="primary" onPress={() => count.update((n) => n + 1)} />
-      </Section>
-    </Screen>
-  );
-}
+import { app } from "plinth:ui";
+import Tasks from "./tasks";
+import TaskDetail from "./detail";
 
 export default app({
   accent: "teal",
   screens: {
-    home: { title: "Home", icon: "house", component: Home },
+    tasks: { title: "Tasks", icon: "list", component: Tasks },
+    // Not in `primary`: reachable only through `navigate.push("detail")`
+    // (SPEC.md §6.2, UI API 1.2).
+    detail: { title: "Task", component: TaskDetail },
   },
+  primary: ["tasks"],
 });

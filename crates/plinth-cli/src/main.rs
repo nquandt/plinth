@@ -235,12 +235,17 @@ fn new_project(dir: &Path) -> Result<()> {
         std::fs::write(&p, text.replace("{{name}}", &name).replace("{{slug}}", &slug)).with_context(|| format!("write {}", p.display()))
     };
     write("app/main.tsx", include_str!("../templates/hello/main.tsx"))?;
+    write("app/model.ts", include_str!("../templates/hello/model.ts"))?;
+    write("app/tasks.tsx", include_str!("../templates/hello/tasks.tsx"))?;
+    write("app/detail.tsx", include_str!("../templates/hello/detail.tsx"))?;
     write("tsconfig.json", include_str!("../templates/tsconfig.json"))?;
     write(".gitignore", include_str!("../templates/gitignore"))?;
     write("README.md", include_str!("../templates/README.md"))?;
     write(
         "plinth.toml",
-        &format!("# The app metadata (SPEC.md §10.2).\nid = \"com.example.{id_part}\"\nname = \"{name}\"\nversion = \"0.1.0\"\npublisher = \"example\"\n"),
+        &format!(
+            "# The app metadata (SPEC.md §10.2).\nid = \"com.example.{id_part}\"\nname = \"{name}\"\nversion = \"0.1.0\"\npublisher = \"example\"\n\n[[capabilities]]\nname = \"store.kv\"\nrationale = \"Save your tasks on this device.\"\n"
+        ),
     )?;
     write(
         "package.json",

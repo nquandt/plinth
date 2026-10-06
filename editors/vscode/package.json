@@ -1,0 +1,45 @@
+{
+  "name": "plinth-vscode",
+  "displayName": "Plinth",
+  "description": "Diagnostics from `plinth check` for Plinth TS apps",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "publisher": "plinth",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nquandt/plinth"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Plinth",
+      "properties": {
+        "plinth.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the plinth binary. Defaults to node_modules/.bin/plinth in the project, then plinth on PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "node --test test/mapDiagnostics.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
