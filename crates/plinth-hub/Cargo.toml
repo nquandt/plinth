@@ -16,3 +16,5 @@ plinth-runner-wasmtime = { workspace = true }
 [dev-dependencies]
 plinth-compiler = { workspace = true }
 toml = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand_core = { workspace = true }

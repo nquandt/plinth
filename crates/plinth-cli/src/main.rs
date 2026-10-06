@@ -21,8 +21,12 @@ usage:
   plinth dev [dir]                 run the app; reload it when a file changes
   plinth check [dir] [--json] [--watch]
                                    type-check, with no build
-  plinth build [dir] [--out <file>]
-                                   make dist/<name>.plnt
+  plinth build [dir] [--out <file>] [--sign]
+                                   make dist/<name>.plnt (--sign adds signature.json)
+  plinth sign <file.plnt>          add signature.json to an existing package
+  plinth publisher init [--name <publisher>]
+                                   create a publisher key pair (docs/HUB.md §6.1)
+  plinth publisher show            print the publisher name and public key id
   plinth run <app.plnt | app.wasm> run a package
   plinth native <app.plnt | dir> [-o <file>]
                                    make one executable: this host and the app
@@ -39,6 +43,8 @@ usage:
                                    show or set a grant
   plinth hub block|unblock <app id>
                                    block or unblock an app
+  plinth hub block-publisher|unblock-publisher <key id>
+                                   block or unblock a publisher (all its apps)
   plinth hub groups [create <name> | add <app id> <name>]
                                    list, or manage, library groups
   plinth hub source add <name> <base> | list | remove <name>
@@ -108,8 +114,14 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
         Some("build") => {
             let out = args.iter().position(|a| *a == "--out").and_then(|i| args.get(i + 1)).map(PathBuf::from);
             let project = positional.get(1).filter(|p| Some(**p) != out.as_ref().and_then(|o| o.to_str())).map(PathBuf::from);
-            Ok(if build(&project.unwrap_or_else(|| PathBuf::from(".")), out)? { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+            Ok(if build(&project.unwrap_or_else(|| PathBuf::from(".")), out, flag("--sign"))? { ExitCode::SUCCESS } else { ExitCode::FAILURE })
         }
+        Some("sign") => {
+            let file = positional.get(1).context("usage: plinth sign <file.plnt>")?;
+            sign_file(Path::new(file))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some("publisher") => publisher_command(&positional[1..], &args[1..]),
         Some("dev") => dev(&dir(1)),
         Some("run") => {
             let file = positional.get(1).context("usage: plinth run <app.plnt | app.wasm>")?;
@@ -400,18 +412,24 @@ fn compile_ex(dir: &Path, dev: bool) -> Result<Option<Built>> {
     }
 }
 
-fn build(dir: &Path, out: Option<PathBuf>) -> Result<bool> {
-    Ok(build_package(dir, out)?.is_some())
+fn build(dir: &Path, out: Option<PathBuf>, sign: bool) -> Result<bool> {
+    Ok(build_package(dir, out, sign)?.is_some())
 }
 
 /// Builds the package and returns its path, or `None` when the app has
-/// errors.
-fn build_package(dir: &Path, out: Option<PathBuf>) -> Result<Option<PathBuf>> {
+/// errors. `sign`: adds `signature.json` with the loaded publisher
+/// identity (`docs/HUB.md` §6.1); the manifest's `publisher` must equal
+/// the identity's name.
+fn build_package(dir: &Path, out: Option<PathBuf>, sign: bool) -> Result<Option<PathBuf>> {
     let started = std::time::Instant::now();
     let Some(b) = compile(dir)? else { return Ok(None) };
     let manifest = b.config.manifest(plinth_protocol::UI_API_VERSION, &b.runtime, b.accent, &b.app);
     let assets: Vec<(String, Vec<u8>)> = read_assets(dir).into_iter().map(|(name, bytes)| (format!("assets/{name}"), bytes)).collect();
-    let pkg = Package { manifest, component: b.app, assets, signature: None };
+    let mut pkg = Package { manifest, component: b.app, assets, signature: None };
+    if sign {
+        let identity = plinth_package::publisher::load()?;
+        pkg.signature = Some(plinth_package::signature::sign(&pkg, &identity)?);
+    }
     let bytes = pkg.write()?;
     let out = out.unwrap_or_else(|| {
         let slug = b.config.id.rsplit('.').next().unwrap_or("app").to_owned();
@@ -437,7 +455,7 @@ fn build_package(dir: &Path, out: Option<PathBuf>) -> Result<Option<PathBuf>> {
 /// or a project directory, which is built first.
 fn native(input: &Path, out: Option<PathBuf>) -> Result<bool> {
     let plnt_path = if input.is_dir() {
-        match build_package(input, None)? {
+        match build_package(input, None, false)? {
             Some(p) => p,
             None => return Ok(false),
         }
@@ -554,6 +572,44 @@ fn dev(dir: &Path) -> Result<ExitCode> {
     };
     plinth_host_desktop::run(app, Some(rx))?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Adds `signature.json` to an existing `.plnt` (`plinth sign`,
+/// `docs/HUB.md` §6.1).
+fn sign_file(path: &Path) -> Result<()> {
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let mut pkg = Package::read(&bytes).context("not a valid .plnt package")?;
+    let identity = plinth_package::publisher::load()?;
+    pkg.signature = Some(plinth_package::signature::sign(&pkg, &identity)?);
+    std::fs::write(path, pkg.write()?).with_context(|| format!("write {}", path.display()))?;
+    println!("signed {} as {} ({})", path.display(), identity.name, identity.key_id());
+    Ok(())
+}
+
+/// `plinth publisher init|show` (`docs/HUB.md` §6.1, phase H1).
+fn publisher_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
+    match args.first().copied() {
+        Some("init") => {
+            let name = raw
+                .iter()
+                .position(|a| *a == "--name")
+                .and_then(|i| raw.get(i + 1))
+                .copied()
+                .or(args.get(1).copied())
+                .context("usage: plinth publisher init [--name <publisher>]")?;
+            let identity = plinth_package::publisher::init(name)?;
+            println!("created publisher key at {}", plinth_package::publisher::publisher_dir().display());
+            println!("{}  {}", identity.name, identity.key_id());
+            Ok(ExitCode::SUCCESS)
+        }
+        Some("show") => {
+            let identity = plinth_package::publisher::load()?;
+            println!("{}  {}", identity.name, identity.key_id());
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(other) => bail!("unknown `plinth publisher {other}`; use init or show"),
+        None => bail!("usage: plinth publisher init|show"),
+    }
 }
 
 /// `plinth hub …` (`docs/HUB.md` §4.3, §9, §15 phase H0 part 4): a thin CLI
@@ -713,6 +769,16 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
             let id = args.get(1).context("usage: plinth hub unblock <app id>")?;
             hub.unblock_app(id)?;
             println!("unblocked {id}");
+        }
+        Some("block-publisher") => {
+            let key = args.get(1).context("usage: plinth hub block-publisher <key id>")?;
+            hub.block_publisher(key)?;
+            println!("blocked publisher {key} (and all its apps)");
+        }
+        Some("unblock-publisher") => {
+            let key = args.get(1).context("usage: plinth hub unblock-publisher <key id>")?;
+            hub.unblock_publisher(key)?;
+            println!("unblocked publisher {key}");
         }
         Some("groups") => match args.get(1).copied() {
             None => {

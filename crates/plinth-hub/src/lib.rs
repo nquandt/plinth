@@ -80,6 +80,11 @@ pub struct VersionEntry {
     /// without re-reading the package (`docs/HUB.md` §7.3 step 3).
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// The signer's key id (`docs/HUB.md` §6.1, phase H1), if the package
+    /// was signed. `None` for an unsigned package (still allowed: draft
+    /// registries and packages without signatures keep working).
+    #[serde(default)]
+    pub signer: Option<String>,
 }
 
 /// Where the Hub got an app. Only `"file"` exists until H2 (sources).
@@ -267,6 +272,16 @@ impl Hub {
         if self.is_blocked(&pkg.manifest.id)? {
             bail!("{} is blocked", pkg.manifest.id);
         }
+        // A package with a signature that does not check out (tampered
+        // bytes, wrong publisher name, bad digests) is refused outright; an
+        // unsigned package (`None`) is still allowed (`docs/HUB.md` §6.1,
+        // §6.2 "Unverified publisher").
+        let signer = plinth_package::signature::verify(&pkg).context("the package signature does not check out")?;
+        if let Some(s) = &signer
+            && self.is_publisher_blocked(&s.key)?
+        {
+            bail!("publisher {} ({}) is blocked", s.publisher, s.key);
+        }
         let digest = hex(&Sha256::digest(bytes));
         let cache_path = self.packages_dir().join(format!("{digest}.plnt"));
         if !cache_path.exists() {
@@ -283,10 +298,31 @@ impl Hub {
             source: Source::File,
             registry: None,
         });
+        // A new version signed by a different key than the previously
+        // installed version is refused (`docs/HUB.md` §6.1: "a later
+        // version must have the same key, or a key that the old key has
+        // signed"). Key rotation statements are not implemented yet
+        // (future work); for now a key change needs a fresh app id.
+        if let Some(previous) = entry.versions.last()
+            && let (Some(old_key), Some(new)) = (&previous.signer, &signer)
+            && old_key != &new.key
+        {
+            bail!(
+                "{} is signed by a different key ({}) than the installed version ({}); key rotation is not supported yet",
+                pkg.manifest.id,
+                new.key,
+                old_key
+            );
+        }
         entry.name = pkg.manifest.name.clone();
         let declared: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
         if !entry.versions.iter().any(|v| v.version == pkg.manifest.version) {
-            entry.versions.push(VersionEntry { version: pkg.manifest.version.clone(), digest, capabilities: declared.clone() });
+            entry.versions.push(VersionEntry {
+                version: pkg.manifest.version.clone(),
+                digest,
+                capabilities: declared.clone(),
+                signer: signer.map(|s| s.key),
+            });
         }
         self.save_library(&lib)?;
         self.grant_low_risk_defaults(&pkg.manifest.id, &pkg.manifest.version, &declared)?;
@@ -683,6 +719,61 @@ mod tests {
         let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
         let pkg = plinth_package::Package { manifest, component, assets: Vec::new(), signature: None };
         pkg.write().unwrap()
+    }
+
+    /// Like `fake_package`, but signed with `identity` (`docs/HUB.md`
+    /// §6.1, phase H1). `identity.name` becomes the manifest's publisher.
+    fn fake_signed_package(id: &str, version: &str, identity: &plinth_package::publisher::PublisherIdentity) -> Vec<u8> {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/counter");
+        let fs = plinth_compiler::driver::DiskFs { root };
+        let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &[]).expect("compile");
+        let artifact = artifact.unwrap_or_else(|| {
+            let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+            panic!("counter has errors:\n{}", diags.join("\n"))
+        });
+        let component = artifact.app;
+        let toml = format!("id = \"{id}\"\nname = \"Test App\"\nversion = \"{version}\"\npublisher = \"{}\"\n", identity.name);
+        let cfg = plinth_package::ProjectConfig::parse(&toml).unwrap();
+        let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
+        let mut pkg = plinth_package::Package { manifest, component, assets: Vec::new(), signature: None };
+        pkg.signature = Some(plinth_package::signature::sign(&pkg, identity).unwrap());
+        pkg.write().unwrap()
+    }
+
+    fn fake_identity(name: &str) -> plinth_package::publisher::PublisherIdentity {
+        plinth_package::publisher::PublisherIdentity {
+            name: name.to_owned(),
+            signing_key: ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng),
+        }
+    }
+
+    /// §6.1: a signed package records its signer key, and a publisher
+    /// block refuses every one of its apps.
+    #[test]
+    fn signed_package_records_signer_and_publisher_block() {
+        let (hub, dir) = temp_hub();
+        let identity = fake_identity("Acme");
+        let id = hub.add_package(&fake_signed_package("com.example.notes", "0.1.0", &identity)).unwrap();
+        let entry = hub.get(&id).unwrap().unwrap();
+        assert_eq!(entry.versions[0].signer.as_deref(), Some(identity.key_id().as_str()));
+
+        hub.block_publisher(&identity.key_id()).unwrap();
+        assert!(hub.add_package(&fake_signed_package("com.other.app", "0.1.0", &identity)).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// §6.1: a new version signed by a different key than the installed
+    /// version is refused (rotation is future work, `docs/HUB.md` §6.1).
+    #[test]
+    fn key_change_is_refused() {
+        let (hub, dir) = temp_hub();
+        let acme = fake_identity("Acme");
+        let other = fake_identity("Acme");
+        let id = hub.add_package(&fake_signed_package("com.example.notes", "0.1.0", &acme)).unwrap();
+        assert_eq!(id, "com.example.notes");
+        let err = hub.add_package(&fake_signed_package("com.example.notes", "0.2.0", &other)).unwrap_err();
+        assert!(err.to_string().contains("different key"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

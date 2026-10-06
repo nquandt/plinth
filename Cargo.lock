@@ -4962,10 +4962,12 @@ name = "plinth-hub"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ed25519-dalek",
  "plinth-compiler",
  "plinth-link",
  "plinth-package",
  "plinth-runner-wasmtime",
+ "rand_core 0.6.4",
  "serde",
  "serde_json",
  "sha2",
