@@ -269,6 +269,100 @@ impl bindings::plinth::app::hub::Host for HostState {
             None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
         }
     }
+
+    fn list_groups(&mut self) -> Result<String, HostError> {
+        require(&self.policy, capability::HUB_MANAGE)?;
+        match &self.hub {
+            Some(hub) => hub.list_groups_json().map_err(|_| HostError::Denied(WitDeniedReason::Unsupported)),
+            None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
+        }
+    }
+
+    fn create_group(&mut self, name: String) -> Result<(), HostError> {
+        require(&self.policy, capability::HUB_MANAGE)?;
+        match &mut self.hub {
+            Some(hub) => hub.create_group(&name).map_err(|_| HostError::Denied(WitDeniedReason::Unsupported)),
+            None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
+        }
+    }
+
+    fn set_group(&mut self, id: String, group: String, member: bool) -> Result<(), HostError> {
+        require(&self.policy, capability::HUB_MANAGE)?;
+        match &mut self.hub {
+            Some(hub) => hub.set_group(&id, &group, member).map_err(|_| HostError::Denied(WitDeniedReason::Unsupported)),
+            None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
+        }
+    }
+
+    fn remove(&mut self, id: String) -> Result<(), HostError> {
+        require(&self.policy, capability::HUB_MANAGE)?;
+        match &mut self.hub {
+            Some(hub) => hub.remove(&id).map_err(|_| HostError::Denied(WitDeniedReason::Unsupported)),
+            None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
+        }
+    }
+
+    fn search(&mut self, query: String) -> u32 {
+        let id = self.requests.open();
+        let job = self.hub_job(|hub| hub.search(&query));
+        match job {
+            // Denied: the completion result is null (`wit/plinth/app.wit`).
+            Err(_) => self.net_results.lock().unwrap().push((id, plinth_protocol::Value::Null)),
+            Ok(job) => {
+                let tx = self.net_results.clone();
+                std::thread::spawn(move || {
+                    let result = match job() {
+                        Ok(json) => plinth_protocol::Value::Str(json),
+                        Err(e) => {
+                            log::warn!("hub search failed: {e}");
+                            plinth_protocol::Value::Null
+                        }
+                    };
+                    tx.lock().unwrap().push((id, result));
+                });
+            }
+        }
+        id
+    }
+
+    fn install(&mut self, app: String) -> u32 {
+        let id = self.requests.open();
+        match self.hub_job(|hub| hub.install(&app)) {
+            // Denied: the completion result is the reason text.
+            Err(reason) => self.net_results.lock().unwrap().push((id, plinth_protocol::Value::Str(denied_text(reason).to_owned()))),
+            Ok(job) => {
+                let tx = self.net_results.clone();
+                std::thread::spawn(move || {
+                    let result = match job() {
+                        Ok(_) => plinth_protocol::Value::Null,
+                        Err(e) => plinth_protocol::Value::Str(e),
+                    };
+                    tx.lock().unwrap().push((id, result));
+                });
+            }
+        }
+        id
+    }
+}
+
+impl HostState {
+    /// Builds a `plinth:hub` worker job, or the reason the call is denied.
+    fn hub_job(&self, make: impl FnOnce(&dyn HubBackend) -> hub::HubJob) -> Result<hub::HubJob, DeniedReason> {
+        self.policy.check(capability::HUB_MANAGE)?;
+        match &self.hub {
+            Some(hub) => Ok(make(hub.as_ref())),
+            None => Err(DeniedReason::Unsupported),
+        }
+    }
+}
+
+/// The `"denied:<reason>"` text that `lastError()` and async results use.
+fn denied_text(reason: DeniedReason) -> &'static str {
+    match reason {
+        DeniedReason::Undeclared => "denied:undeclared",
+        DeniedReason::Refused => "denied:refused",
+        DeniedReason::Unsupported => "denied:unsupported",
+    }
 }
 
 impl bindings::plinth::app::dialog::Host for HostState {

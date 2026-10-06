@@ -490,6 +490,31 @@ function hostImports(
       unblock(_idPtr, _idLen, retptr) {
         writeDeniedUnit(retptr, DeniedReason.unsupported);
       },
+      // Core 1.8 (`docs/HUB.md` §9.1, §5.2, H3 step 2).
+      "list-groups"(retptr) {
+        writeDeniedAt4(retptr, DeniedReason.unsupported);
+      },
+      "create-group"(_namePtr, _nameLen, retptr) {
+        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      },
+      "set-group"(_idPtr, _idLen, _groupPtr, _groupLen, _member, retptr) {
+        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      },
+      remove(_idPtr, _idLen, retptr) {
+        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      },
+      // Async: a request id now, a denied completion later (null for
+      // `search`, the reason text for `install`; `wit/plinth/app.wit`).
+      search(_queryPtr, _queryLen) {
+        const id = nextRequest++;
+        Promise.resolve().then(() => completeRequest?.(id, null));
+        return id;
+      },
+      install(_idPtr, _idLen) {
+        const id = nextRequest++;
+        Promise.resolve().then(() => completeRequest?.(id, "denied:unsupported"));
+        return id;
+      },
     },
   };
 }

@@ -99,6 +99,12 @@ pub const FUNCTION_CAPABILITIES: &[(&str, &str)] = &[
     ("hub_set_grant", HUB_MANAGE),
     ("hub_block", HUB_MANAGE),
     ("hub_unblock", HUB_MANAGE),
+    ("hub_list_groups", HUB_MANAGE),
+    ("hub_create_group", HUB_MANAGE),
+    ("hub_set_group", HUB_MANAGE),
+    ("hub_remove", HUB_MANAGE),
+    ("hub_search", HUB_MANAGE),
+    ("hub_install", HUB_MANAGE),
     // `hub_last_error` needs no capability, like `kv_last_error` above.
 ];
 

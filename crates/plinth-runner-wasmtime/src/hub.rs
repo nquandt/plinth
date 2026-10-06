@@ -25,4 +25,45 @@ pub trait HubBackend: Send {
     fn set_grant(&mut self, id: &str, capability: &str, allowed: bool) -> Result<(), String>;
     fn block(&mut self, id: &str) -> Result<(), String>;
     fn unblock(&mut self, id: &str) -> Result<(), String>;
+
+    // -- Core 1.8 (`docs/HUB.md` §9.1, §5.2, phase H3 step 2). Each has a
+    // default, so a test double that does not need them stays small.
+
+    /// The library's groups, as a JSON array of strings.
+    fn list_groups_json(&self) -> Result<String, String> {
+        Ok("[]".to_owned())
+    }
+    fn create_group(&mut self, name: &str) -> Result<(), String> {
+        let _ = name;
+        Err("unsupported".to_owned())
+    }
+    /// Puts `id` in `group` (`member`) or takes it out.
+    fn set_group(&mut self, id: &str, group: &str, member: bool) -> Result<(), String> {
+        let _ = (id, group, member);
+        Err("unsupported".to_owned())
+    }
+    /// Removes `id` from the library (its data and grants stay).
+    fn remove(&mut self, id: &str) -> Result<(), String> {
+        let _ = id;
+        Err("unsupported".to_owned())
+    }
+    /// A job that searches the configured sources for `query`. The runner
+    /// runs it on a worker thread; it must not touch the guest. `Ok` is the
+    /// JSON text that `wit/plinth/app.wit`'s `hub.search` describes.
+    fn search(&self, query: &str) -> HubJob {
+        let _ = query;
+        Box::new(|| Err("unsupported".to_owned()))
+    }
+    /// A job that installs the latest version of `id` from the first
+    /// source that lists it. The runner runs it on a worker thread. `Ok` is
+    /// the installed app id.
+    fn install(&self, id: &str) -> HubJob {
+        let _ = id;
+        Box::new(|| Err("unsupported".to_owned()))
+    }
 }
+
+/// Work that a `plinth:hub` call does off the UI thread (network, disk):
+/// `search` and `install`. The runner delivers its result to the guest as
+/// a `completion` event (SPEC.md §8.4).
+pub type HubJob = Box<dyn FnOnce() -> Result<String, String> + Send>;

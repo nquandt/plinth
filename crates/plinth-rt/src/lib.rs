@@ -33,7 +33,7 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 3] = *b"1.7";
+static CORE_VERSION: [u8; 3] = *b"1.8";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;
@@ -438,6 +438,17 @@ abi! {
     fn __plinth_rt_hub_block(id: i32) { host::hub_block(id) }
     fn __plinth_rt_hub_unblock(id: i32) { host::hub_unblock(id) }
     fn __plinth_rt_hub_last_error() -> i32 { host::hub_last_error() }
+    // -- plinth:hub, core 1.8 (`docs/HUB.md` §9.1, §5.2, H3 step 2) ------------
+    fn __plinth_rt_hub_list_groups() -> i32 { host::hub_list_groups() }
+    fn __plinth_rt_hub_create_group(name: i32) { host::hub_create_group(name) }
+    fn __plinth_rt_hub_set_group(id: i32, group: i32, member: i32) { host::hub_set_group(id, group, member) }
+    fn __plinth_rt_hub_remove(id: i32) { host::hub_remove(id) }
+    fn __plinth_rt_hub_search(thunk: i32, env: i32, query: i32) {
+        host::hub_search(Callable { thunk: thunk as u32, env: env as u32 }, query)
+    }
+    fn __plinth_rt_hub_install(thunk: i32, env: i32, id: i32) {
+        host::hub_install(Callable { thunk: thunk as u32, env: env as u32 }, id)
+    }
 
     // -- JSON (plinth:core, SPEC.md §4.7) --------------------------------------
     fn __plinth_rt_json_num_str(v: f64) -> i32 { strings::from_str(&strings::json_number_to_string(v)) as i32 }

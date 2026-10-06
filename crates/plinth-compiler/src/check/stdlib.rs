@@ -48,7 +48,20 @@ pub const STORE_NAMES: &[&str] = &["kv"];
 pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
 pub const DIALOG_NAMES: &[&str] = &["alert", "confirm", "prompt"];
 pub const NET_NAMES: &[&str] = &["fetch", "Response", "FetchOptions"];
-pub const HUB_NAMES: &[&str] = &["listApps", "launch", "setGrant", "block", "unblock", "lastError"];
+pub const HUB_NAMES: &[&str] = &[
+    "listApps",
+    "launch",
+    "setGrant",
+    "block",
+    "unblock",
+    "lastError",
+    "listGroups",
+    "createGroup",
+    "setGroup",
+    "remove",
+    "search",
+    "install",
+];
 
 /// The capability names, from the shared map (`plinth-link`'s
 /// `capabilities` module, `docs/HUB.md` §12.3) rather than a duplicated
@@ -110,6 +123,12 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "block" => Binding::Std(StdFn::HubBlock),
             "unblock" => Binding::Std(StdFn::HubUnblock),
             "lastError" => Binding::Std(StdFn::HubLastError),
+            "listGroups" => Binding::Std(StdFn::HubListGroups),
+            "createGroup" => Binding::Std(StdFn::HubCreateGroup),
+            "setGroup" => Binding::Std(StdFn::HubSetGroup),
+            "remove" => Binding::Std(StdFn::HubRemove),
+            "search" => Binding::Std(StdFn::HubSearch),
+            "install" => Binding::Std(StdFn::HubInstall),
             _ => return None,
         }),
         StdModule::Ui => Some(match name {
@@ -537,6 +556,63 @@ impl Checker<'_> {
                     self.err(code::ARG_COUNT, span, "`lastError` takes no arguments");
                 }
                 TExpr::new(TExprKind::Rt("hub_last_error", Vec::new()), Type::String.nullable(), span)
+            }
+            StdFn::HubListGroups => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                if !args.is_empty() {
+                    self.err(code::ARG_COUNT, span, "`listGroups` takes no arguments");
+                }
+                TExpr::new(TExprKind::Rt("hub_list_groups", Vec::new()), Type::String.nullable(), span)
+            }
+            StdFn::HubCreateGroup => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                if !one_arg(self, "createGroup") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let name = self.expr_with(&args[0], &Type::String);
+                let name = self.coerce(name, &Type::String);
+                TExpr::new(TExprKind::Rt("hub_create_group", vec![name]), Type::Void, span)
+            }
+            StdFn::HubSetGroup => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                if args.len() != 3 {
+                    self.err(code::ARG_COUNT, span, "`setGroup` takes an app id, a group name and `member`");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let id = self.expr_with(&args[0], &Type::String);
+                let id = self.coerce(id, &Type::String);
+                let group = self.expr_with(&args[1], &Type::String);
+                let group = self.coerce(group, &Type::String);
+                let member = self.expr_with(&args[2], &Type::Bool);
+                let member = self.coerce(member, &Type::Bool);
+                TExpr::new(TExprKind::Rt("hub_set_group", vec![id, group, member]), Type::Void, span)
+            }
+            StdFn::HubRemove => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                if !one_arg(self, "remove") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let id = self.expr_with(&args[0], &Type::String);
+                let id = self.coerce(id, &Type::String);
+                TExpr::new(TExprKind::Rt("hub_remove", vec![id]), Type::Void, span)
+            }
+            StdFn::HubSearch | StdFn::HubInstall => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                let (name, rt_fn, what) = match f {
+                    StdFn::HubSearch => ("search", "hub_search", "a query"),
+                    _ => ("install", "hub_install", "an app id"),
+                };
+                if args.len() != 2 {
+                    self.err(code::ARG_COUNT, span, format!("`{name}` takes {what} and a done callback"));
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let text = self.expr_with(&args[0], &Type::String);
+                let text = self.coerce(text, &Type::String);
+                let (cb, _) = self.callback(&args[1], &[Type::String.nullable()], Some(Type::Void));
+                // The same request/completion shape as `dialog.prompt`
+                // (SPEC.md §8.4): one string argument, then a callback
+                // that gets `string | null`.
+                TExpr::new(TExprKind::DialogCall(rt_fn, Box::new(text), Box::new(cb)), Type::Void, span)
             }
         }
     }
