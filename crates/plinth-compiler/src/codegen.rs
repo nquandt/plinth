@@ -108,6 +108,17 @@ fn lay_out(fields: &[Repr], start: u32) -> (Vec<u32>, u32) {
     (offsets, off.div_ceil(8) * 8)
 }
 
+/// The instructions that push the table index `slot`. In an app module the
+/// index is relative to the imported `table_base` global (SPEC.md §10.4);
+/// the host's link step turns `global.get` into a constant.
+fn table_ref(layout: &Layout, slot: u32) -> Vec<I<'static>> {
+    match layout.table_base_global {
+        Some(g) if slot == 0 => vec![I::GlobalGet(g)],
+        Some(g) => vec![I::GlobalGet(g), I::I32Const(slot as i32), I::I32Add],
+        None => vec![I::I32Const(slot as i32)],
+    }
+}
+
 pub fn generate(prog: &Program, layout: &Layout, main: FuncId) -> AppCode {
     let mut g = Codegen {
         prog,
@@ -153,7 +164,9 @@ pub fn generate(prog: &Program, layout: &Layout, main: FuncId) -> AppCode {
     if let Some(s) = layout.rt_start {
         start.instruction(&I::Call(s));
     }
-    start.instruction(&I::I32Const(entry_table as i32));
+    for i in table_ref(layout, entry_table) {
+        start.instruction(&i);
+    }
     start.instruction(&I::Call(layout.rt("set_main")));
     start.instruction(&I::End);
     let void_ty = g.type_of(vec![], vec![]);
@@ -1256,7 +1269,9 @@ impl FnGen {
             }
             TExprKind::ThunkOf(sig) => {
                 let slot = g.thunk(sig);
-                self.emit(I::I32Const(slot as i32));
+                for i in table_ref(g.layout, slot) {
+                    self.emit(i);
+                }
             }
             TExprKind::UnionTag(o) => {
                 // The discriminant is the first field of every member
@@ -1289,7 +1304,9 @@ impl FnGen {
         let def = &g.prog.funcs[fid as usize];
         let idx = g.func_ref(fid);
         let slot = g.table_slot(idx);
-        self.emit(I::I32Const(slot as i32));
+        for i in table_ref(g.layout, slot) {
+            self.emit(i);
+        }
         if def.kind == FuncKind::Closure {
             let desc = self.current_desc();
             match g.env_desc.get(&fid) {

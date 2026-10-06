@@ -21,7 +21,8 @@ pub struct Artifact {
     /// The app module: only the app code, the `app.wasm` of a `.plnt`
     /// (SPEC.md §10.1). It names its runtime build in a custom section.
     pub app: Vec<u8>,
-    /// The id of the runtime build that `app` needs (`split::runtime_id`).
+    /// The runtime ABI that `app` needs (`split::abi_id`), for example
+    /// `plinth-abi/1`.
     pub runtime: String,
     /// The app linked into the runtime, as a `plinth:app` component. The dev
     /// host and the tests run it directly.
@@ -52,10 +53,10 @@ pub fn compile_with_capabilities(fs: &dyn FileSystem, capabilities: &[String]) -
     let main = lower::lower(&mut program);
     let rt = link::runtime();
     let layout = link::layout(rt)?;
-    let app_layout = split::app_layout(&layout);
+    let app_layout = split::app_layout();
     let code = codegen::generate(&program, &app_layout.layout, main);
-    let runtime = split::runtime_id(rt);
-    let app = split::encode_app(&app_layout, &code, &runtime)?;
+    let runtime = split::abi_id();
+    let app = split::encode_app(&app_layout, &code)?;
     // Link the app module the same way a host does, so each build checks
     // the load path too.
     let loaded = split::load_app(rt, &layout, &app)?;

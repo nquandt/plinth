@@ -1119,6 +1119,11 @@ impl Checker<'_> {
         self.in_progress.insert(fid);
         let saved_module = std::mem::replace(&mut self.module, p.module);
         let declared = (p.decl.ret.is_some()).then(|| self.prog.funcs[fid as usize].ret.clone());
+        // A component body runs one time, so a signal read there is not
+        // reactive (PL2020). Components have capitalized names, as JSX needs.
+        // Other functions can run inside JSX slots, `computed` or handlers,
+        // where reads are fine, so they are not checked.
+        let is_component = p.decl.name.as_ref().is_some_and(|(n, _)| n.starts_with(|c: char| c.is_ascii_uppercase()));
         let saved_fx = std::mem::replace(
             &mut self.fx,
             FnCx {
@@ -1127,7 +1132,7 @@ impl Checker<'_> {
                 loops: Vec::new(),
                 ret: declared.clone(),
                 inferred: None,
-                reactive: ReactiveCtx::Plain,
+                reactive: if is_component { ReactiveCtx::Plain } else { ReactiveCtx::Callback },
             },
         );
         let params = self.prog.funcs[fid as usize].params.clone();

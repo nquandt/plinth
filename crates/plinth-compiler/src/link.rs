@@ -34,6 +34,9 @@ pub struct Layout {
     pub rt_start: Option<u32>,
     /// Runtime function name (without the prefix) → function index.
     pub rt_funcs: HashMap<&'static str, u32>,
+    /// For an app module (SPEC.md §10.4): the imported global that holds the
+    /// first table index of the app. Table indices are then relative to it.
+    pub table_base_global: Option<u32>,
 }
 
 impl Layout {
@@ -157,6 +160,7 @@ pub fn layout(rt: &[u8]) -> Result<Layout> {
         data_count,
         rt_start,
         rt_funcs,
+        table_base_global: None,
     })
 }
 

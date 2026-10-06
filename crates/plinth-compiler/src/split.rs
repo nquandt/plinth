@@ -7,9 +7,13 @@
 //!
 //! The host supplies the runtime. At load time, `load_app` checks the app
 //! module and remaps its indices into the index spaces of the runtime, and
-//! the append linker (`link::link`) makes one module from the two. Thus a
-//! host can run an app only with the runtime build that the app was compiled
-//! against: the custom section `plinth-runtime` names that build.
+//! the append linker (`link::link`) makes one module from the two.
+//!
+//! An app module does not depend on one runtime build. It names the ABI
+//! major version (`rt_abi::ABI_MAJOR`) in the custom section `plinth-abi`,
+//! it imports runtime functions by name and type, and its table indices are
+//! relative to the imported global `table_base`. Thus a `.plnt` is built one
+//! time and runs on every host whose runtime implements that ABI version.
 
 use crate::link::{AppCode, Layout};
 use crate::rt_abi;
@@ -26,21 +30,29 @@ use wasmparser::{BinaryReader, Parser, Payload, TypeRef};
 
 /// The import module name of the runtime.
 pub const RT_MODULE: &str = "plinth-rt";
-/// The custom section that names the runtime build of an app module.
-pub const RUNTIME_SECTION: &str = "plinth-runtime";
+/// The custom section that names the ABI version of an app module.
+pub const ABI_SECTION: &str = "plinth-abi";
+/// The import name of the global that holds the app's first table index.
+pub const TABLE_BASE: &str = "table_base";
+
+/// The ABI id that this compiler writes: `plinth-abi/<major>`. The manifest
+/// field `runtime` has the same value.
+pub fn abi_id() -> String {
+    format!("plinth-abi/{}", rt_abi::ABI_MAJOR)
+}
 
 /// The id of a runtime build: `plinth-rt/` and the first 16 hex digits of
-/// the SHA-256 of the runtime module.
-pub fn runtime_id(rt: &[u8]) -> String {
+/// the SHA-256 of the runtime module. Tools show it; packages do not use it.
+pub fn runtime_build_id(rt: &[u8]) -> String {
     let digest = Sha256::digest(rt);
     let hex: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
     format!("plinth-rt/{hex}")
 }
 
 /// The layout that codegen uses for a standalone app module: the runtime
-/// functions are imports, in the order of `rt_abi::FUNCTIONS`, and the app's
-/// own index spaces start at zero. The table entries still start after the
-/// runtime's table, because the app shares that table.
+/// functions are imports, in the order of `rt_abi::FUNCTIONS`, global 0 is
+/// the imported `table_base`, and the app's own index spaces start at zero.
+/// Table indices are relative to `table_base`.
 pub struct AppLayout {
     pub layout: Layout,
     import_types: Vec<(Vec<ValType>, Vec<ValType>)>,
@@ -48,7 +60,7 @@ pub struct AppLayout {
     imports: Vec<(&'static str, u32)>,
 }
 
-pub fn app_layout(rt: &Layout) -> AppLayout {
+pub fn app_layout() -> AppLayout {
     let mut import_types: Vec<(Vec<ValType>, Vec<ValType>)> = Vec::new();
     let mut imports = Vec::new();
     let mut rt_funcs = HashMap::new();
@@ -67,11 +79,12 @@ pub fn app_layout(rt: &Layout) -> AppLayout {
     let layout = Layout {
         type_count: import_types.len() as u32,
         func_count: imports.len() as u32,
-        global_count: 0,
-        table_size: rt.table_size,
+        global_count: 1,
+        table_size: 0,
         data_count: 0,
         rt_start: None,
         rt_funcs,
+        table_base_global: Some(0),
     };
     AppLayout { layout, import_types, imports }
 }
@@ -82,10 +95,26 @@ struct Remap {
     types: u32,
     globals: u32,
     data: u32,
+    /// At load time: the value of the imported global 0 (`table_base`).
+    /// `global.get 0` becomes this constant, and the app's own globals move
+    /// down by one.
+    table_base: Option<u32>,
 }
 
 impl Reencode for Remap {
     type Error = std::convert::Infallible;
+
+    fn instruction<'a>(
+        &mut self,
+        op: wasmparser::Operator<'a>,
+    ) -> Result<wasm_encoder::Instruction<'a>, wasm_encoder::reencode::Error<Self::Error>> {
+        match (self.table_base, &op) {
+            (Some(base), wasmparser::Operator::GlobalGet { global_index: 0 }) => {
+                Ok(wasm_encoder::Instruction::I32Const(base as i32))
+            }
+            _ => wasm_encoder::reencode::utils::instruction(self, op),
+        }
+    }
 
     fn function_index(&mut self, func: u32) -> Result<u32, wasm_encoder::reencode::Error<Self::Error>> {
         Ok(self.funcs[func as usize])
@@ -94,7 +123,8 @@ impl Reencode for Remap {
         Ok(self.types + ty)
     }
     fn global_index(&mut self, global: u32) -> Result<u32, wasm_encoder::reencode::Error<Self::Error>> {
-        Ok(self.globals + global)
+        // At load time the imported `table_base` (global 0) is gone.
+        Ok(self.globals + global - u32::from(self.table_base.is_some()))
     }
     fn data_index(&mut self, data: u32) -> Result<u32, wasm_encoder::reencode::Error<Self::Error>> {
         Ok(self.data + data)
@@ -123,7 +153,7 @@ fn encoded(f: &wasm_encoder::Function) -> Vec<u8> {
 
 /// Encodes the app code as a standalone app module. It imports only the
 /// runtime functions that the app calls.
-pub fn encode_app(al: &AppLayout, app: &AppCode, runtime_id: &str) -> Result<Vec<u8>> {
+pub fn encode_app(al: &AppLayout, app: &AppCode) -> Result<Vec<u8>> {
     let n = al.imports.len() as u32;
     let bodies: Vec<Vec<u8>> = app.funcs.iter().map(|(_, f)| encoded(f)).collect();
 
@@ -152,7 +182,7 @@ pub fn encode_app(al: &AppLayout, app: &AppCode, runtime_id: &str) -> Result<Vec
     for j in 0..app.funcs.len() {
         funcs[n as usize + j] = kept + j as u32;
     }
-    let mut remap = Remap { funcs, types: 0, globals: 0, data: 0 };
+    let mut remap = Remap { funcs, types: 0, globals: 0, data: 0, table_base: None };
 
     let mut types = TypeSection::new();
     for (params, results) in al.import_types.iter().chain(app.types.iter()) {
@@ -169,7 +199,12 @@ pub fn encode_app(al: &AppLayout, app: &AppCode, runtime_id: &str) -> Result<Vec
         "memory",
         EntityType::Memory(MemoryType { minimum: 0, maximum: None, memory64: false, shared: false, page_size_log2: None }),
     );
-    let table_min = (al.layout.table_size + app.table.len() as u32) as u64;
+    imports.import(
+        RT_MODULE,
+        TABLE_BASE,
+        EntityType::Global(GlobalType { val_type: ValType::I32, mutable: false, shared: false }),
+    );
+    let table_min = app.table.len() as u64;
     imports.import(
         RT_MODULE,
         "table",
@@ -190,7 +225,7 @@ pub fn encode_app(al: &AppLayout, app: &AppCode, runtime_id: &str) -> Result<Vec
     if !table.is_empty() {
         elements.active(
             Some(0),
-            &ConstExpr::i32_const(al.layout.table_size as i32),
+            &ConstExpr::global_get(0),
             Elements::Functions(std::borrow::Cow::Borrowed(&table)),
         );
     }
@@ -212,7 +247,7 @@ pub fn encode_app(al: &AppLayout, app: &AppCode, runtime_id: &str) -> Result<Vec
     }
     module.section(&DataCountSection { count: app.data.len() as u32 });
     module.section(&code).section(&data);
-    module.section(&CustomSection { name: RUNTIME_SECTION.into(), data: runtime_id.as_bytes().into() });
+    module.section(&CustomSection { name: ABI_SECTION.into(), data: abi_id().as_bytes().into() });
     let bytes = module.finish();
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(&bytes)
@@ -220,11 +255,11 @@ pub fn encode_app(al: &AppLayout, app: &AppCode, runtime_id: &str) -> Result<Vec
     Ok(bytes)
 }
 
-/// Returns the runtime id that an app module names, if it has one.
-pub fn app_runtime_id(app: &[u8]) -> Option<String> {
+/// Returns the ABI id that an app module names, if it has one.
+pub fn app_abi_id(app: &[u8]) -> Option<String> {
     for payload in Parser::new(0).parse_all(app) {
         if let Ok(Payload::CustomSection(c)) = payload
-            && c.name() == RUNTIME_SECTION
+            && c.name() == ABI_SECTION
         {
             return std::str::from_utf8(c.data()).ok().map(str::to_owned);
         }
@@ -240,17 +275,19 @@ pub fn is_app_module(bytes: &[u8]) -> bool {
 /// Checks an app module against the runtime `rt` and remaps it into the
 /// runtime's index spaces, for `link::link`.
 ///
-/// The app may import only runtime functions (with the types in `rt_abi`),
+/// The app must name the ABI major version of this runtime. It may import
+/// only runtime functions (with the types in `rt_abi`), `table_base`, and
 /// the memory and the table of `plinth-rt`. It must not define a memory or
 /// a table, export anything, or have active data. Its one element segment
-/// must start at the end of the runtime's table.
+/// must start at `table_base`.
 pub fn load_app(rt: &[u8], rt_layout: &Layout, app: &[u8]) -> Result<AppCode> {
+    let _ = rt;
     ensure!(is_app_module(app), "app.wasm is not a core Wasm module");
-    let want = runtime_id(rt);
-    match app_runtime_id(app) {
+    let want = abi_id();
+    match app_abi_id(app) {
         Some(id) if id == want => {}
-        Some(id) => bail!("the app was built for the runtime `{id}`, but this host has `{want}`; rebuild the app"),
-        None => bail!("app.wasm does not name its runtime (no `{RUNTIME_SECTION}` section)"),
+        Some(id) => bail!("the app needs the runtime ABI `{id}`, but this host has `{want}`"),
+        None => bail!("app.wasm does not name its runtime ABI (no `{ABI_SECTION}` section)"),
     }
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(app)
@@ -284,16 +321,16 @@ pub fn load_app(rt: &[u8], rt_layout: &Layout, app: &[u8]) -> Result<AppCode> {
                     ensure!(imp.module == RT_MODULE, "app.wasm imports from `{}`; only `{RT_MODULE}` is allowed", imp.module);
                     match imp.ty {
                         TypeRef::Func(t) => {
-                            let (_, params, results) = rt_abi::FUNCTIONS
-                                .iter()
-                                .find(|(n, _, _)| *n == imp.name)
-                                .with_context(|| format!("app.wasm imports `{}`, which is not a runtime function", imp.name))?;
+                            let (_, params, results) = rt_abi::FUNCTIONS.iter().find(|(n, _, _)| *n == imp.name).with_context(|| {
+                                format!("app.wasm imports `{}`, which this runtime does not have; a newer host may run it", imp.name)
+                            })?;
                             let ty = types.get(t as usize).context("bad import type")?;
                             let same = ty.params().iter().map(val_type).eq(params.iter().copied())
                                 && ty.results().iter().map(val_type).eq(results.iter().copied());
                             ensure!(same, "app.wasm imports `{}` with a wrong type", imp.name);
                             funcs.push(rt_layout.rt(imp.name));
                         }
+                        TypeRef::Global(g) if imp.name == TABLE_BASE && !g.mutable && g.content_type == wasmparser::ValType::I32 => {}
                         TypeRef::Memory(_) if imp.name == "memory" => {}
                         TypeRef::Table(_) if imp.name == "table" => {}
                         _ => bail!("app.wasm has a bad import `{}`", imp.name),
@@ -330,11 +367,10 @@ pub fn load_app(rt: &[u8], rt_layout: &Layout, app: &[u8]) -> Result<AppCode> {
                     };
                     ensure!(table_index.unwrap_or(0) == 0 && table.is_empty(), "app.wasm has more than one element segment");
                     let mut ops = offset_expr.get_operators_reader();
-                    let offset = match ops.read()? {
-                        wasmparser::Operator::I32Const { value } => value as u32,
-                        _ => bail!("app.wasm has an element segment with a computed offset"),
-                    };
-                    ensure!(offset == rt_layout.table_size, "app.wasm was linked for a different runtime table");
+                    ensure!(
+                        matches!(ops.read()?, wasmparser::Operator::GlobalGet { global_index: 0 }),
+                        "the element segment of app.wasm must start at `table_base`"
+                    );
                     let wasmparser::ElementItems::Functions(fs) = el.items else {
                         bail!("app.wasm has an element segment of expressions");
                     };
@@ -368,7 +404,13 @@ pub fn load_app(rt: &[u8], rt_layout: &Layout, app: &[u8]) -> Result<AppCode> {
     for j in 0..func_types.len() as u32 {
         funcs.push(defined_base + j);
     }
-    let mut remap = Remap { funcs, types: rt_layout.type_count, globals: rt_layout.global_count, data: rt_layout.data_count };
+    let mut remap = Remap {
+        funcs,
+        types: rt_layout.type_count,
+        globals: rt_layout.global_count,
+        data: rt_layout.data_count,
+        table_base: Some(rt_layout.table_size),
+    };
     for ty in &types {
         out.types.push((ty.params().iter().map(val_type).collect(), ty.results().iter().map(val_type).collect()));
     }

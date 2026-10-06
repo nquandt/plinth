@@ -618,7 +618,7 @@ The loader rejects path traversal, absolute paths, symlinks, duplicate entries, 
 
 ### 10.2 Manifest
 
-`runtime` names the runtime build that the app needs, for example `plinth-rt/6e3f…` (§10.4).
+`runtime` names the runtime ABI that the app needs, for example `plinth-abi/1` (§10.4).
 
 ```toml
 id        = "com.example.notes"
@@ -626,7 +626,7 @@ name      = "Notes"
 version   = "1.2.0"
 publisher = "example"
 ui-api    = "1.0"
-runtime   = ">=0.3"
+runtime   = "plinth-abi/1"
 entry     = "app.wasm"
 accent    = "teal"
 icon      = "assets/icon.png"
@@ -660,15 +660,15 @@ The stub finds its payload through a footer: the magic bytes `PLNTH\0`, the offs
 
 ### 10.4 App modules and the runtime
 
-**A `.plnt` holds only app code.** The runtime (`plinth-rt`) belongs to the host, which the user installs one time. A person runs an app with a host: `plinth run app.plnt`, a Plinth runner app, or a single-file export (§10.3).
+**A `.plnt` is built one time and runs everywhere.** It holds only app code and is the same file for every OS and device. The runtime (`plinth-rt`) belongs to the host. Each user installs a host one time: the `plinth` CLI (`plinth run app.plnt`) or, later, a Plinth runner app. A native export (`plinth native`, §10.3) is the opposite case: it is specific to one host platform and contains the runtime.
 
-- `app.wasm` is a core Wasm module. It imports the runtime functions (the `rt_abi` table, without the `__plinth_rt_` prefix), `memory` and `table` from the module `plinth-rt`. It imports only the runtime functions that it calls. It has no exports, no own memory or table, and only passive data.
-- Its one element segment starts at the end of the runtime's table.
-- The custom section `plinth-runtime` names the runtime build: `plinth-rt/` and the first 16 hex digits of the SHA-256 of the runtime module. The manifest field `runtime` has the same value.
-- **Load:** the host checks the imports (names and types), checks the runtime id, remaps the indices of the app into the index spaces of its runtime, and uses the append linker (§5.1 step 8) to make one module. Then it runs that module. The link takes some milliseconds.
-- **Security:** the app can reach only the runtime functions. All host APIs go through the runtime and the capability policy (§11).
-- **Versions:** today the runtime id must match exactly. A host can carry more than one runtime build. A stable runtime ABI with version ranges comes later.
-- **Sizes (2026-10-05):** the counter app module is 1.8 KB and its package is 2 KiB; the todo app module is 5 KB.
+- `app.wasm` is a core Wasm module. It imports from the module `plinth-rt`: the runtime functions that it calls (the names in `rt_abi`, without the `__plinth_rt_` prefix), the immutable `i32` global `table_base`, `memory` and `table`. It has no exports, no own memory or table, and only passive data.
+- **No dependency on one runtime build.** The app uses runtime functions only by name and type. Its table indices are relative to `table_base`, and its one element segment starts at `table_base`. It contains no runtime index, size or build id.
+- **ABI version.** The custom section `plinth-abi` holds the ABI id, for example `plinth-abi/1`. The manifest field `runtime` has the same value.
+- **Compatibility rule.** Inside one ABI major version, the runtime only adds functions and constants. It never removes a function, changes its type or its behavior, or changes the object layout (`HEADER`, `STR_BYTES`, the built-in type ids). A breaking change makes a new major version, and a host can carry one runtime for each major version that it supports. An app that imports a function that an older host does not have fails to load with a clear message.
+- **Load.** The host checks the ABI id and each import (name and type), remaps the app indices into the index spaces of its runtime, replaces `global.get table_base` with its own table size, and uses the append linker (§5.1 step 8) to make one module. Then it runs that module. The link takes some milliseconds. A host can cache the result by the digest of the app.
+- **Security.** The app can reach only the runtime functions. All host APIs go through the runtime and the capability policy (§11).
+- **Sizes (2026-10-05).** The counter app module is about 1.8 KB and its package is 2 KiB. The todo app module is about 5 KB.
 
 The compiler runs the same load step after each build, so each build tests it.
 
@@ -850,7 +850,7 @@ Each milestone has exit criteria. Work in this order. Windows is the first platf
 | Q4 | Should the runtime embed `gpui-component`, or own all controls? | Evaluate in M0. |
 | Q5 | String indexing semantics | UTF-16 compatibility vs. code points. Pick before M1 ends. |
 | Q6 | Guest-side or host-side list virtualization | Host-side is better for scroll speed. Guest-side is simpler. |
-| Q7 | Is the artifact a component or a core module plus a custom ABI? | **Decided:** the package holds a core app module that imports `plinth-rt` (§10.4). The host links it into its runtime and runs a `plinth:app` component (WIT) on desktop. |
+| Q7 | Is the artifact a component or a core module plus a custom ABI? | **Decided:** the package holds a core app module that imports `plinth-rt` through a versioned app ABI (§10.4). The host links it into its runtime and runs a `plinth:app` component (WIT) on desktop. |
 | Q8 | Multi-window apps | Not in UI API 1.0. Add with `ui.window.multi` later. |
 | Q9 | How do chunks share memory and the runtime? | Core modules that import one memory, one table and `plinth-rt` from the entry module, or a component-model feature. It is related to Q7. **Partly decided:** an app module already imports the memory, the table and the runtime (§10.4); a lazy chunk can use the same form. |
 | Q10 | The cache policy for browsed apps | The size budget, the time limit, the eviction order, and what happens to the data of an evicted app (§18.2). |

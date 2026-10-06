@@ -1,6 +1,15 @@
-//! The `plinth-rt` functions that generated code calls. Keep this table in
-//! sync with `plinth-rt/src/lib.rs`. The linker checks each name and type
-//! against the runtime module, so a mismatch fails at link time.
+//! The app ABI: the `plinth-rt` functions and constants that generated code
+//! uses (SPEC.md §10.4). Keep this table in sync with `plinth-rt/src/lib.rs`.
+//! The linker checks each name and type against the runtime module, so a
+//! mismatch fails at link time.
+//!
+//! **Compatibility rule.** A `.plnt` is built one time and runs on every host
+//! whose runtime implements its ABI major version. Thus, inside one major
+//! version, only ADD functions (at the end of `FUNCTIONS`) and constants. Do
+//! not remove a function, change its type, or change what it does, and do
+//! not change a constant or the object layout (`HEADER`, `STR_BYTES`, the
+//! type ids). A change of that kind needs a new major version, and the hosts
+//! then carry a runtime for each major version that they support.
 
 use wasm_encoder::ValType::{self, F64, I32};
 
@@ -104,6 +113,10 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
 ];
 
 pub const PREFIX: &str = "__plinth_rt_";
+
+/// The ABI major version. An app module declares it in its `plinth-abi`
+/// custom section (SPEC.md §10.4).
+pub const ABI_MAJOR: u32 = 1;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;
