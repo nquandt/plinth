@@ -98,7 +98,7 @@ fn print_capability_report(bytes: &[u8], declared: &[plinth_package::Capability]
     } else {
         println!("  reachable: {}", reachable.iter().cloned().collect::<Vec<_>>().join(", "));
     }
-    let unused: Vec<&str> = declared.iter().map(|c| c.name.as_str()).filter(|n| !reachable.contains(*n)).collect();
+    let unused: Vec<&str> = declared.iter().map(|c| c.name.as_str()).filter(|n| !reachable.iter().any(|r| plinth_link::capabilities::covers(n, r))).collect();
     if !unused.is_empty() {
         println!("  declared but not used: {}", unused.join(", "));
     }

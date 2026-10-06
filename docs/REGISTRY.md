@@ -65,8 +65,11 @@ The client reads the **service index** at:
       "publisher": "example",
       "latest": "1.2.0",
       "categories": ["productivity"],
-      "icon": "apps/com.example.notes/icon.png",
+      "icon": "com.example.notes/icon.png",
       "capabilities": ["store.kv"],
+      "labels": [
+        { "name": "store.kv", "risk": "low", "description": "save data on this device", "rationale": "Save your notes." }
+      ],
       "updated": "2026-10-06T12:00:00Z"
     }
   ],
@@ -75,6 +78,8 @@ The client reads the **service index** at:
 ```
 
 - `capabilities` are the capabilities of the latest version, so a list view can show the capability label without more requests.
+- `labels` (optional) is the capability label of the latest version (`docs/HUB.md` §7.2): for each capability, the risk level (`none`, `low`, `medium`, `high`), the fixed description, and the reason of the app. `plinth registry build` writes it from the shared capability map (`crates/plinth-link/src/capabilities.rs`) each time it runs. `net:<host>` is medium ("connect to <host>"); `net:*` is high. A client must not trust it for consent decisions; the web App Hub (`docs/web-hub.md`) uses it only to show the label.
+- `icon` (optional): `plinth registry build` copies the icon that the manifest names from the package to `apps/<id>/<path>`.
 - URLs in the app list (for example `icon`) are relative to the app list's own URL, not to an app document.
 - **Paging.** A large registry splits the list into pages. `next` is the URL of the next page, or `null`. A static registry can always use one page.
 - App ids are compared in lower case.
@@ -189,6 +194,8 @@ my-registry/
 Running it again is safe: the output for the same input is the same (stable order, stable JSON). For this, the generator does not use the clock for derived times: `published` is set one time when a version is added, and `generated` and `updated` are the latest `published` time of the versions that they cover.
 
 `plinth registry serve <folder> [--port 8080]` serves the folder on `127.0.0.1` for local development. A client can also use the folder path directly as the base URL.
+
+`plinth registry serve <folder> --web` also serves the web App Hub: a browser page that lists the apps and runs them in the web host, on the same origin. Refer to `docs/web-hub.md`; `bash scripts/web-hub-demo.sh` makes and serves a registry of the example apps.
 
 ---
 
