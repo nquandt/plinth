@@ -71,3 +71,22 @@ small local change), per the dogfooding task's scope.
   `CORE_MINOR`/`CORE_VERSION` bumped to 1.4. Tests: a new "Strings" section
   in `crates/plinth-compiler/tests/lang.rs` (includes a non-ASCII
   `split("")` case and a non-ASCII `charAt` case).
+- #3 (fixed): JSX fragments (`<>...</>`) are now allowed directly in a
+  JSX child position. `parse.rs`'s `jsx()` now builds the child list
+  through a new `jsx_children_into` helper that recurses into
+  `JSXChild::Fragment` and splices its children straight into the
+  parent's list; no node is created and no new AST/IR concept is
+  needed. This flattening happens at parse time, so it only applies to
+  a fragment that is itself a direct JSX child; a fragment nested
+  inside a dynamic expression (a ternary branch, a `.map()` callback,
+  …) is not flattened (that would need a child slot that holds more
+  than one element at run time, which is out of scope here) and still
+  gets the diagnostic, as does a fragment used as a component's return
+  value or any other standalone expression (no caller-side parent to
+  splice into). Documented in `docs/language.md` ("Supported syntax").
+  Tests: `fragment_as_jsx_child_splices_its_children`,
+  `fragment_as_component_return_value_is_rejected`,
+  `fragment_inside_a_ternary_branch_is_still_rejected` in
+  `crates/plinth-compiler/tests/lang.rs`. No example app used a
+  fragment workaround precisely matching this shape, so no app changes
+  were needed for this item.

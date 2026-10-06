@@ -1694,3 +1694,57 @@ function Home() {
     let tree = run(&main);
     assert_eq!(text_of(&tree, ControlKind::Text), "6");
 }
+
+// -- JSX fragments as children (dogfooding gap #3): `<>...</>` creates no
+// node of its own; its children splice straight into the parent's child
+// list. Allowed only as a child, not as a component's return value. ------
+
+#[test]
+fn fragment_as_jsx_child_splices_its_children() {
+    let main = r#"import { app, Screen, Section, Text } from "plinth:ui";
+function Home() {
+  return (
+    <Screen title="Home">
+      <Section>
+        <><Text>{"a"}</Text><Text>{"b"}</Text></>
+      </Section>
+    </Screen>
+  );
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+    let mut texts = Vec::new();
+    while let Some(id) = stack.pop() {
+        let node = tree.get(id).unwrap();
+        if node.kind == Some(ControlKind::Text) {
+            if let Some(t) = &node.text {
+                texts.push(t.clone());
+            }
+        }
+        stack.extend(node.children.iter());
+    }
+    texts.sort();
+    assert_eq!(texts, vec!["a".to_string(), "b".to_string()]);
+}
+
+#[test]
+fn fragment_as_component_return_value_is_rejected() {
+    let main = with_app(
+        "function Frag() { return <><Text>{\"a\"}</Text></>; }",
+    );
+    assert_eq!(codes(&main), vec!["PL4004"]);
+}
+
+#[test]
+fn fragment_inside_a_ternary_branch_is_still_rejected() {
+    // Flattening is purely syntactic: a fragment nested inside a dynamic
+    // expression (here, one branch of a ternary) is not a direct JSX
+    // child, so it is not flattened and is still rejected.
+    let main = with_app(
+        "const cond = true;\nfunction Frag() { return <Text>{cond ? <><Text>{\"a\"}</Text></> : <Text>{\"b\"}</Text>}</Text>; }",
+    );
+    assert_eq!(codes(&main), vec!["PL4004"]);
+}

@@ -50,7 +50,20 @@ yet:** static members, getters/setters, generic classes,
 - Object literals, array literals, destructuring, spread into arrays and
   objects of a known shape.
 - `interface`, `type` aliases, string literal unions, `enum`.
-- JSX with Plinth control tags only (see [ui.md](ui.md)).
+- JSX with Plinth control tags only (see [ui.md](ui.md)). A fragment
+  (`<>...</>`) is allowed directly in a JSX child position — it
+  creates no node of its own; the parser splices its children straight
+  into the parent's child list at compile time
+  (`<Section><>{a}{b}</></Section>` is valid, and is exactly the same
+  tree as `<Section>{a}{b}</Section>`). This flattening is purely
+  syntactic, so a fragment **inside a dynamic expression** (one branch
+  of a ternary, a `.map()` callback, …) is not supported — that child
+  slot can only ever hold a single element at run time today — and
+  neither is a fragment as a component's return value or any other
+  standalone expression, because lowering has no caller-side parent to
+  splice its children into there. For a conditional block with more
+  than one sibling, wrap the elements in a `<Section>` or `<Group>` and
+  put the condition inside it instead of around it.
 - `import`/`export` within the closed world (see below).
 - Classes, single inheritance, `instanceof`, general union narrowing,
   generic functions and interfaces (all implemented; see "Status"
