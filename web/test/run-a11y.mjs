@@ -172,7 +172,7 @@ async function main() {
   try {
     await waitForCdp(cdpPort);
 
-    for (const app of hubOnly ? [] : APPS) {
+    for (const app of hubOnly || process.argv.includes("--typing-only") ? [] : APPS) {
       const appUrl = `${base}/examples/${app}/dist/${app}.plnt`;
       const coreUrl = `${base}/target/core.wasm`;
       const testUrl = `${base}/web/test/a11y.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(coreUrl)}`;
@@ -219,9 +219,27 @@ async function main() {
       if (serious.length > 0) failed = true;
     }
 
-    // The web App Hub (docs/web-hub.md): served by `plinth registry serve --web`.
-    console.log("== web App Hub ==");
+    // Typing: each key re-renders the page, and the TextField must keep the
+    // focus and the caret (a regression: the first key moved the focus away).
+    console.log("== typing in todo ==");
     try {
+      await checkTyping(cdpPort, base);
+      console.log("  focus and caret kept after each key: ok");
+    } catch (err) {
+      console.error(`  FAILED: ${err.stack ?? err}`);
+      failed = true;
+    }
+    console.log("== one click stops the stopwatch ==");
+    try {
+      await checkStopwatch(cdpPort, base);
+      console.log("  ok");
+    } catch (err) {
+      console.error(`  FAILED: ${err.stack ?? err}`);
+      failed = true;
+    }
+    // The web App Hub (docs/web-hub.md): served by `plinth registry serve --web`.
+    if (!process.argv.includes("--typing-only")) console.log("== web App Hub ==");
+    if (!process.argv.includes("--typing-only")) try {
       const hub = await checkHub(cdpPort);
       for (const r of hub) {
         const serious = r.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
@@ -252,7 +270,72 @@ async function main() {
   console.log("\nOK: no serious/critical accessibility violations.");
 }
 
-const AXE_URL = "https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.9.1/axe.min.js";
+/**
+ * Clicks Stop on the running stopwatch with a real mouse press and release
+ * 150 ms apart, while the timer re-renders the page (a regression: the
+ * re-render replaced the button between press and release, so no click).
+ */
+async function checkStopwatch(cdpPort, base) {
+  const appUrl = `${base}/examples/timer/dist/timer.plnt`;
+  const coreUrl = `${base}/target/core.wasm`;
+  const page = await openPage(cdpPort);
+  const button = (label) => `[...document.querySelectorAll("#app button")].find((b) => b.textContent.trim() === ${JSON.stringify(label)})`;
+  const shown = `document.querySelector("#app main").textContent`;
+  const click = async (label) => {
+    const r = await page.eval(`(() => { const b = ${button(label)}; if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    if (!r) throw new Error(`no "${label}" button`);
+    await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: r.x, y: r.y });
+    await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: r.x, y: r.y, button: "left", clickCount: 1 });
+    await new Promise((res) => setTimeout(res, 150));
+    await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: r.x, y: r.y, button: "left", clickCount: 1 });
+  };
+  try {
+    await page.navigate(`${base}/web/index.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(coreUrl)}`);
+    await page.waitFor(`${button("Start")} ? true : null`, 20000);
+    await click("Start");
+    await new Promise((res) => setTimeout(res, 400));
+    const before = await page.eval(shown);
+    await new Promise((res) => setTimeout(res, 200));
+    if ((await page.eval(shown)) === before) throw new Error("the stopwatch did not start");
+    await click("Stop");
+    await new Promise((res) => setTimeout(res, 100));
+    const stopped = await page.eval(shown);
+    await new Promise((res) => setTimeout(res, 400));
+    const later = await page.eval(shown);
+    if (later !== stopped) throw new Error(`one Stop click did not stop the stopwatch: "${stopped}" then "${later}"`);
+  } finally {
+    await page.close();
+  }
+}
+
+/** Types into todo's TextField key by key, as a person does (real input events). */
+async function checkTyping(cdpPort, base) {
+  const appUrl = `${base}/examples/todo/dist/todo.plnt`;
+  const coreUrl = `${base}/target/core.wasm`;
+  const page = await openPage(cdpPort);
+  try {
+    await page.navigate(`${base}/web/index.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(coreUrl)}`);
+    await page.waitFor(`document.querySelector("#app input[type=text]") ? true : null`, 20000);
+    await page.eval(`document.querySelector("#app input[type=text]").focus()`);
+    const word = "milk";
+    for (let i = 0; i < word.length; i++) {
+      await page.send("Input.insertText", { text: word[i] });
+      const want = word.slice(0, i + 1);
+      const state = await page.waitFor(
+        `(() => { const a = document.activeElement; return a && a.tagName === "INPUT" && a.value === ${JSON.stringify(want)} ? { caret: a.selectionStart } : null; })()`,
+        3000
+      ).catch(async () => {
+        const got = await page.eval(`({ tag: document.activeElement?.tagName, value: document.querySelector("#app input[type=text]")?.value })`);
+        throw new Error(`after typing "${want}": focus on ${got.tag}, field value "${got.value}"`);
+      });
+      if (state.caret !== want.length) throw new Error(`after typing "${want}": caret at ${state.caret}, not ${want.length}`);
+    }
+  } finally {
+    await page.close();
+  }
+}
+
+const AXE_URL ="https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.9.1/axe.min.js";
 
 /** Runs axe-core in the page (loads it from the CDN the first time). */
 async function axeRun(page) {

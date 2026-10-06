@@ -46,6 +46,9 @@ const ICON_GLYPH = {
 
 const TONE_CLASS = { [EnumTone.muted]: "pl-tone-muted", [EnumTone.danger]: "pl-tone-danger", [EnumTone.success]: "pl-tone-success" };
 
+/** Elements that can hold the focus, in document order (see `saveFocus`). */
+const FOCUSABLE = "input, textarea, select, button, a[href], [tabindex]";
+
 const kindName = Object.fromEntries(Object.entries(ControlKind).map(([k, v]) => [v, k]));
 
 class Node {
@@ -247,6 +250,32 @@ export class DomRenderer {
     this.assets = assets;
     this.assetUrls = new Map(); // path -> blob: URL, built lazily and kept for the page's life
     tree.onChange = () => this.render();
+    // A re-render during IME composition would end the composition; wait
+    // for compositionend instead.
+    this.composing = false;
+    this.renderPending = false;
+    container.addEventListener("compositionstart", () => { this.composing = true; });
+    container.addEventListener("compositionend", () => {
+      this.composing = false;
+      if (this.renderPending) this.render();
+    });
+    // A click is a press and a release on the same element. A re-render
+    // between them (a running timer re-renders many times a second) replaces
+    // the element, and the browser sends no click. Wait while a pointer or
+    // Space is down; render after the release, when the click has run.
+    this.pressing = false;
+    const press = () => { this.pressing = true; };
+    const release = () => {
+      if (!this.pressing) return;
+      this.pressing = false;
+      if (this.renderPending) setTimeout(() => { if (this.renderPending) this.render(); }, 0);
+    };
+    container.addEventListener("pointerdown", press);
+    container.addEventListener("keydown", (e) => { if (e.key === " ") press(); });
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    window.addEventListener("keyup", (e) => { if (e.key === " ") release(); });
+    window.addEventListener("blur", release);
   }
 
   assetUrl(path) {
@@ -262,7 +291,70 @@ export class DomRenderer {
     this.app.onEvent({ kind: "ui", handler, event: eventCode, value });
   }
 
+  /**
+   * A `change` of a two-way bound `value`. The guest does not echo the value
+   * back, so the tree keeps it here; otherwise the next re-render (from any
+   * other prop change) writes the old value into the new element.
+   */
+  sendChange(n, handler, value) {
+    n.props.set(Prop.value, value);
+    this.send(handler, Event.change, value);
+  }
+
+  /**
+   * The focused element, as the node id of its closest rendered node, the
+   * index among that node's focusable descendants (-1: the node element
+   * itself), and the text selection. `render()` replaces every element, so
+   * without this the focus is lost after each change (one key in a TextField).
+   */
+  saveFocus() {
+    const a = document.activeElement;
+    if (!a || a === document.body || !this.container.contains(a)) return null;
+    const host = a.closest("[data-pl-id]");
+    if (!host) return null;
+    const saved = {
+      id: host.dataset.plId,
+      index: host === a ? -1 : [...host.querySelectorAll(FOCUSABLE)].indexOf(a),
+      start: null,
+      end: null,
+      dir: undefined,
+    };
+    try {
+      saved.start = a.selectionStart;
+      saved.end = a.selectionEnd;
+      saved.dir = a.selectionDirection ?? undefined;
+    } catch {
+      // Inputs without a text selection (checkbox, range) throw in old engines.
+    }
+    return saved;
+  }
+
+  restoreFocus(saved) {
+    if (!saved) return;
+    const host = this.container.querySelector(`[data-pl-id="${saved.id}"]`);
+    if (!host) return;
+    const target = saved.index < 0 ? host : host.querySelectorAll(FOCUSABLE)[saved.index];
+    if (!target) return;
+    target.focus({ preventScroll: true });
+    if (saved.start !== null && typeof target.setSelectionRange === "function") {
+      const len = target.value?.length ?? 0;
+      try {
+        target.setSelectionRange(Math.min(saved.start, len), Math.min(saved.end, len), saved.dir);
+      } catch {
+        // Not a text input after all.
+      }
+    }
+  }
+
   render() {
+    if (this.composing || this.pressing) {
+      this.renderPending = true;
+      return;
+    }
+    this.renderPending = false;
+    const focus = this.saveFocus();
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
     this.container.innerHTML = "";
     const nav = el("nav", "pl-nav", { "aria-label": "Screens" });
     for (const p of this.tree.primaryScreens) {
@@ -293,9 +385,18 @@ export class DomRenderer {
     const rootNode = rootId !== undefined ? this.tree.node(rootId) : null;
     const screenTitle = rootNode?.props.get(Prop.title);
     document.title = screenTitle ? `${screenTitle} — Plinth` : "Plinth web host";
+    this.restoreFocus(focus);
+    window.scrollTo(scrollX, scrollY);
   }
 
+  /** Renders one node and tags its element with the node id (see `saveFocus`). */
   renderNode(n) {
+    const dom = this.renderNodeElement(n);
+    if (dom && dom.nodeType === 1) dom.dataset.plId = String(n.id);
+    return dom;
+  }
+
+  renderNodeElement(n) {
     const kname = kindName[n.kind] ?? `kind${n.kind}`;
     switch (kname) {
       case "screen":
@@ -466,7 +567,7 @@ export class DomRenderer {
     const changeHandler = n.listeners.get(Event.change);
     const submitHandler = n.listeners.get(Event.submit);
     if (changeHandler !== undefined) {
-      input.addEventListener("input", () => this.send(changeHandler, Event.change, input.value));
+      input.addEventListener("input", () => this.sendChange(n, changeHandler, input.value));
     }
     if (submitHandler !== undefined) {
       input.addEventListener("keydown", (e) => {
@@ -483,7 +584,7 @@ export class DomRenderer {
     input.checked = !!n.props.get(Prop.value);
     const handler = n.listeners.get(Event.change);
     if (handler !== undefined) {
-      input.addEventListener("change", () => this.send(handler, Event.change, input.checked));
+      input.addEventListener("change", () => this.sendChange(n, handler, input.checked));
     }
     wrap.appendChild(input);
     const label = n.props.get(Prop.label);
@@ -544,7 +645,7 @@ export class DomRenderer {
     input.checked = !!n.props.get(Prop.value);
     const handler = n.listeners.get(Event.change);
     if (handler !== undefined) {
-      input.addEventListener("change", () => this.send(handler, Event.change, input.checked));
+      input.addEventListener("change", () => this.sendChange(n, handler, input.checked));
     }
     wrap.appendChild(input);
     const label = n.props.get(Prop.label);
@@ -561,7 +662,7 @@ export class DomRenderer {
     input.placeholder = n.props.get(Prop.placeholder) ?? "";
     const handler = n.listeners.get(Event.change);
     if (handler !== undefined) {
-      input.addEventListener("input", () => this.send(handler, Event.change, input.value));
+      input.addEventListener("input", () => this.sendChange(n, handler, input.value));
     }
     wrap.appendChild(input);
     return wrap;
@@ -581,7 +682,7 @@ export class DomRenderer {
     if (handler !== undefined) {
       // Pointer drag on the track is native <input type=range> behavior,
       // snapped to `step` by the browser (SPEC.md §6.3).
-      input.addEventListener("input", () => this.send(handler, Event.change, Number(input.value)));
+      input.addEventListener("input", () => this.sendChange(n, handler, Number(input.value)));
     }
     wrap.appendChild(input);
     return wrap;
@@ -603,7 +704,7 @@ export class DomRenderer {
     if (handler !== undefined) {
       input.addEventListener("input", () => {
         const v = input.valueAsNumber;
-        if (!Number.isNaN(v)) this.send(handler, Event.change, v);
+        if (!Number.isNaN(v)) this.sendChange(n, handler, v);
       });
     }
     wrap.appendChild(input);
@@ -626,7 +727,7 @@ export class DomRenderer {
         const radio = el("input", "pl-segment-input", { type: "radio", name: `picker-${n.id}` });
         radio.checked = opt === current;
         if (handler !== undefined) {
-          radio.addEventListener("change", () => this.send(handler, Event.change, opt));
+          radio.addEventListener("change", () => this.sendChange(n, handler, opt));
         }
         optLabel.appendChild(radio);
         optLabel.appendChild(el("span", "pl-segment-label")).appendChild(text(opt));
@@ -643,7 +744,7 @@ export class DomRenderer {
         select.appendChild(o);
       }
       if (handler !== undefined) {
-        select.addEventListener("change", () => this.send(handler, Event.change, select.value));
+        select.addEventListener("change", () => this.sendChange(n, handler, select.value));
       }
       wrap.appendChild(select);
     }
@@ -700,7 +801,7 @@ export class DomRenderer {
     input.value = n.props.get(Prop.value) ?? "";
     const handler = n.listeners.get(Event.change);
     if (handler !== undefined) {
-      input.addEventListener("change", () => this.send(handler, Event.change, input.value));
+      input.addEventListener("change", () => this.sendChange(n, handler, input.value));
     }
     wrap.appendChild(input);
     return wrap;
@@ -901,7 +1002,7 @@ export class DomRenderer {
       tab.textContent = item;
       if (selected) tab.classList.add("pl-tab-selected");
       if (handler !== undefined) {
-        tab.addEventListener("click", () => this.send(handler, Event.change, item));
+        tab.addEventListener("click", () => this.sendChange(n, handler, item));
       }
       tabs.push(tab);
       list.appendChild(tab);
@@ -914,7 +1015,7 @@ export class DomRenderer {
         e.preventDefault();
         const next = e.key === "ArrowRight" ? (i + 1) % tabs.length : (i - 1 + tabs.length) % tabs.length;
         tabs[next].focus();
-        if (handler !== undefined) this.send(handler, Event.change, items[next]);
+        if (handler !== undefined) this.sendChange(n, handler, items[next]);
       });
     });
     return this.renderChildren(n, (() => {
