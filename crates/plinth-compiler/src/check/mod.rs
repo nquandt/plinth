@@ -597,7 +597,37 @@ impl Checker<'_> {
                 self.err(code::ANY, span, format!("`{name}` is not allowed"));
                 return Type::Error;
             }
-            "Map" | "Set" | "Promise" | "Record" | "Partial" | "Readonly" => {
+            "Map" => {
+                if !arity(self, 2) {
+                    return Type::Error;
+                }
+                let k = self.resolve_type(&args[0]);
+                let v = self.resolve_type(&args[1]);
+                if !self.valid_key_type(&k) {
+                    let msg = format!("a `Map` key must be `string`, `int`, `number`, `boolean` or an enum, not `{}`", self.show(&k));
+                    self.err(code::ADVANCED_TYPE, span, msg);
+                    return Type::Error;
+                }
+                if !self.valid_map_value_type(&v) {
+                    let msg = format!("a `Map`/`Set` value of type `{}` is not supported yet", self.show(&v));
+                    self.err_help(code::ADVANCED_TYPE, span, msg, "use `string`, `number` or an object type");
+                    return Type::Error;
+                }
+                return Type::Map(Box::new(k), Box::new(v));
+            }
+            "Set" => {
+                if !arity(self, 1) {
+                    return Type::Error;
+                }
+                let t = self.resolve_type(&args[0]);
+                if !self.valid_key_type(&t) {
+                    let msg = format!("a `Set` element must be `string`, `int`, `number`, `boolean` or an enum, not `{}`", self.show(&t));
+                    self.err(code::ADVANCED_TYPE, span, msg);
+                    return Type::Error;
+                }
+                return Type::Set(Box::new(t));
+            }
+            "Promise" | "Record" | "Partial" | "Readonly" => {
                 self.err(code::ADVANCED_TYPE, span, format!("`{name}` is not supported yet"));
                 return Type::Error;
             }
@@ -643,6 +673,50 @@ impl Checker<'_> {
         self.module = saved;
         self.resolving_alias.remove(&(m, idx));
         t
+    }
+
+    /// A `Map` key or `Set` element type (SPEC.md §4.2).
+    fn valid_key_type(&self, t: &Type) -> bool {
+        matches!(t, Type::String | Type::StrLits(_) | Type::Number | Type::Int | Type::Bool | Type::Enum(_))
+    }
+
+    /// A `Map` value type. Narrower than general types for v0: no
+    /// `boolean`/`int`/enum (`get` needs a nullable result, and those
+    /// types cannot be `| null` yet; HANDOFF.md item 5).
+    fn valid_map_value_type(&self, t: &Type) -> bool {
+        matches!(t, Type::String | Type::StrLits(_) | Type::Number | Type::Struct(_) | Type::Array(_) | Type::Union(_))
+    }
+
+    /// The comparison for a `Map` key or `Set` element.
+    pub(crate) fn key_eq(&self, k: &Type) -> EqKind {
+        match self.widen(k.clone()) {
+            Type::String => EqKind::Str,
+            Type::Number => EqKind::F64,
+            _ => EqKind::I32,
+        }
+    }
+
+    /// The internal 2-field struct `{ keys: K[], values: V[] }` that backs
+    /// a `Map<K, V>` at run time (HANDOFF.md item 5). A `Map`'s own fields
+    /// are never exposed to user code; only `Checker` methods read them.
+    pub(crate) fn map_struct(&mut self, k: &Type, v: &Type) -> types::StructId {
+        let fields = vec![
+            Field { name: "keys".into(), ty: Type::Array(Box::new(k.clone())), optional: false },
+            Field { name: "values".into(), ty: Type::Array(Box::new(v.clone())), optional: false },
+        ];
+        match self.anon_struct(fields) {
+            Type::Struct(s) => s,
+            _ => unreachable!(),
+        }
+    }
+
+    /// The internal 1-field struct `{ keys: T[] }` that backs a `Set<T>`.
+    pub(crate) fn set_struct(&mut self, t: &Type) -> types::StructId {
+        let fields = vec![Field { name: "keys".into(), ty: Type::Array(Box::new(t.clone())), optional: false }];
+        match self.anon_struct(fields) {
+            Type::Struct(s) => s,
+            _ => unreachable!(),
+        }
     }
 
     fn anon_struct(&mut self, fields: Vec<Field>) -> Type {

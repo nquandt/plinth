@@ -914,8 +914,22 @@ impl Cx<'_> {
                 return None;
             }
             E::NewExpression(n) => {
-                self.err_help(code::CLASS, n.span, "`new` is not supported yet", "use object literals and functions");
-                return None;
+                let name = match &n.callee {
+                    o::Expression::Identifier(id) => id.name.to_string(),
+                    _ => String::new(),
+                };
+                if (name == "Map" || name == "Set") && n.arguments.is_empty() {
+                    let mut type_args = Vec::new();
+                    if let Some(a) = &n.type_arguments {
+                        for t in &a.params {
+                            type_args.push(self.ty(t)?);
+                        }
+                    }
+                    ExprKind::New(name, type_args)
+                } else {
+                    self.err_help(code::CLASS, n.span, "`new` is only supported for `new Map()` and `new Set()`", "use object literals and functions");
+                    return None;
+                }
             }
             E::AwaitExpression(a) => {
                 self.err(code::ASYNC, a.span, "`await` comes in v1");

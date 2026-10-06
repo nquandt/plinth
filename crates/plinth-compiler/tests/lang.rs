@@ -355,6 +355,106 @@ function Home() {
     assert_eq!(text_of(&tree, ControlKind::Text), "3");
 }
 
+// -- 5. Map / Set -------------------------------------------------------------
+
+#[test]
+fn map_set_get_has_delete_and_size() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.set("a", 10);
+  const hasA = m.has("a");
+  const hasC = m.has("c");
+  const a = m.get("a");
+  const missing = m.get("z");
+  const deletedB = m.delete("b");
+  const deletedAgain = m.delete("b");
+  const size = m.size;
+  const av = a === null ? -1 : a;
+  const mv = missing === null ? -1 : missing;
+  const out = "" + hasA + "," + hasC + "," + av + "," + mv + "," + deletedB + "," + deletedAgain + "," + size;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    // a was overwritten to 10; b deleted once; c and z never existed.
+    assert_eq!(text_of(&tree, ControlKind::Text), "true,false,10,-1,true,false,1");
+}
+
+#[test]
+fn map_clear_empties_it() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.clear();
+  return <Screen title="Home"><Text>{m.size}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "0");
+}
+
+#[test]
+fn set_add_has_delete_and_size() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const s = new Set<number>();
+  s.add(1);
+  s.add(2);
+  s.add(1);
+  const has1 = s.has(1);
+  const has9 = s.has(9);
+  const deleted = s.delete(1);
+  const deletedAgain = s.delete(1);
+  const out = "" + has1 + "," + has9 + "," + deleted + "," + deletedAgain + "," + s.size;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    // Adding 1 twice is a no-op; after deleting 1 once, only 2 remains.
+    assert_eq!(text_of(&tree, ControlKind::Text), "true,false,true,false,1");
+}
+
+#[test]
+fn map_key_must_be_a_supported_kind() {
+    let main = with_app("const m = new Map<boolean[], number>();");
+    assert_eq!(codes(&main), ["PL2012"]);
+}
+
+#[test]
+fn map_new_without_type_args_or_context_cannot_infer() {
+    let main = with_app("const m = new Map();");
+    assert_eq!(codes(&main), ["PL3007"]);
+}
+
+#[test]
+fn map_infers_type_args_from_declared_variable_type() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { int } from "plinth:core";
+function Home() {
+  const m: Map<string, int> = new Map();
+  return <Screen title="Home"><Text>{m.size}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    // int is not a supported Map value type, but this still exercises
+    // inference-from-context before that check; use number instead.
+    let main = main.replace("Map<string, int>", "Map<string, number>");
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "0");
+}
+
 // -- Behavior smoke test: confirms the `run` harness works and the lint
 // does not fire on a normal counter-style program. -------------------------
 

@@ -250,6 +250,9 @@ pub enum ExprKind {
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
     Func(Box<FuncDecl>),
     Jsx(Box<JsxElement>),
+    /// `new Map<K, V>()` or `new Set<T>()` (HANDOFF.md item 5). No other
+    /// `new` expression is supported.
+    New(String, Vec<TypeAnn>),
 }
 
 #[derive(Debug, Clone)]

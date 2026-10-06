@@ -44,6 +44,31 @@ interface Number {
   toFixed(digits?: number): string;
 }
 
+/**
+ * A key must be `string`, `int`, `number`, `boolean` or an enum
+ * (SPEC.md §4.2). `get` returns `null`, not `undefined`, when the key is
+ * absent (§4.6). Lookup, insert and delete are linear scans.
+ */
+declare class Map<K, V> {
+  constructor();
+  get(key: K): V | null;
+  set(key: K, value: V): void;
+  has(key: K): boolean;
+  delete(key: K): boolean;
+  clear(): void;
+  readonly size: number;
+}
+
+/** An element must be `string`, `int`, `number`, `boolean` or an enum. */
+declare class Set<T> {
+  constructor();
+  add(value: T): void;
+  has(value: T): boolean;
+  delete(value: T): boolean;
+  clear(): void;
+  readonly size: number;
+}
+
 interface Boolean {}
 interface Function {}
 interface CallableFunction extends Function {}

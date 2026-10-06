@@ -35,6 +35,12 @@ pub enum Type {
     /// it is. Members are `Struct` (object shapes) and at most one
     /// `String`. Narrowed with `typeof` or a shared literal field.
     Union(Rc<[Type]>),
+    /// `Map<K, V>` (SPEC.md §4.2). `K` is `string`, `int`, `number`,
+    /// `boolean` or an enum. At run time it is a 2-field struct of a keys
+    /// array and a values array (linear scan; HANDOFF.md item 5).
+    Map(Box<Type>, Box<Type>),
+    /// `Set<T>`: a 1-field struct holding a keys array, the same way.
+    Set(Box<Type>),
     /// The type of an expression with an error. It is compatible with all
     /// types, so one error does not cause more.
     Error,
@@ -81,7 +87,9 @@ impl Type {
             | Type::Array(_)
             | Type::Struct(_)
             | Type::Func(_)
-            | Type::Union(_) => Repr::Ref,
+            | Type::Union(_)
+            | Type::Map(..)
+            | Type::Set(_) => Repr::Ref,
             Type::Void => Repr::Void,
             Type::Error => Repr::I32,
         }
@@ -182,6 +190,8 @@ impl fmt::Display for Display<'_> {
                 let parts: Vec<String> = members.iter().map(|m| sub(m).to_string()).collect();
                 write!(f, "{}", parts.join(" | "))
             }
+            Type::Map(k, v) => write!(f, "Map<{}, {}>", sub(k), sub(v)),
+            Type::Set(t) => write!(f, "Set<{}>", sub(t)),
             Type::Error => write!(f, "<error>"),
         }
     }
