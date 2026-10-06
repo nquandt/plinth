@@ -25,6 +25,7 @@ pub enum StdModule {
     Store,
     Clipboard,
     Dialog,
+    Net,
 }
 
 impl StdModule {
@@ -36,6 +37,7 @@ impl StdModule {
             "plinth:store" => Some(StdModule::Store),
             "plinth:clipboard" => Some(StdModule::Clipboard),
             "plinth:dialog" => Some(StdModule::Dialog),
+            "plinth:net" => Some(StdModule::Net),
             _ => None,
         }
     }
@@ -77,6 +79,7 @@ pub enum StdFn {
     DialogAlert,
     DialogConfirm,
     DialogPrompt,
+    NetFetch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -308,6 +311,54 @@ impl Checker<'_> {
                 format!("add `[[capabilities]]` with `name = \"{capability}\"` and a `rationale` to plinth.toml (SPEC.md §11)"),
             );
         }
+    }
+
+    /// Reports `code::CAPABILITY_UNDECLARED` unless the manifest declares
+    /// at least one `net:<host>` or `net.local` capability (SPEC.md §11).
+    /// Capability names for `plinth:net` are dynamic (one per declared
+    /// host), so this reachability check can only confirm that `net` is
+    /// reachable at all; the real per-host decision happens at call time
+    /// in the runner's `Policy` (`crates/plinth-runner-wasmtime`).
+    pub(super) fn require_net_capability(&mut self, span: Span) {
+        let ok = self.capabilities.iter().any(|c| c == plinth_link::capabilities::NET_LOCAL || c.starts_with("net:"));
+        if !ok {
+            self.err_help(
+                code::CAPABILITY_UNDECLARED,
+                span,
+                "this call needs a `net:<host>` (or `net.local`) capability, which `plinth.toml` does not declare",
+                "add `[[capabilities]]` with `name = \"net:api.example.com\"` and a `rationale` to plinth.toml (SPEC.md §11)",
+            );
+        }
+    }
+
+    /// The memoized `{ ok: boolean; status: number; text: string; error:
+    /// string | null }` struct that `net.fetch`'s `done` callback receives
+    /// (SPEC.md §8.5). Built ad hoc (not from `std/net.d.ts`'s `Response`
+    /// interface, which exists for the editor/`tsc` only): the callback's
+    /// parameter type is inferred from context, like `dialog.confirm`'s
+    /// `ok: boolean`.
+    pub(crate) fn response_struct(&mut self) -> types::StructId {
+        let fields = vec![
+            Field { name: "ok".into(), ty: Type::Bool, optional: false },
+            Field { name: "status".into(), ty: Type::Number, optional: false },
+            Field { name: "text".into(), ty: Type::String, optional: false },
+            Field { name: "error".into(), ty: Type::String.nullable(), optional: false },
+        ];
+        match self.anon_struct(fields) {
+            Type::Struct(s) => s,
+            _ => unreachable!(),
+        }
+    }
+
+    /// A synthetic `() => { ...body }` closure, built directly from typed
+    /// IR rather than parsed source (mirrors `lower.rs`'s `synthetic`, for
+    /// the checker phase: `net.fetch`'s completion wrapper needs one before
+    /// `lower` ever runs, since it embeds the already-checked `done`
+    /// callback value).
+    pub(crate) fn synthetic_closure(&mut self, name: &str, body: Vec<TStmt>, ret: Type, span: Span) -> TExpr {
+        let fid = self.prog.new_func(FuncDef { name: name.to_owned(), kind: FuncKind::Closure, params: Vec::new(), ret, body, span });
+        let ft = FuncType { params: Vec::new(), required: 0, ret: self.prog.funcs[fid as usize].ret.clone() };
+        TExpr::new(TExprKind::Closure(fid), Type::Func(Rc::new(ft)), span)
     }
 
     fn show(&self, ty: &Type) -> String {

@@ -312,6 +312,12 @@ pub enum TExprKind {
     /// message, done callback)`. Returns `void`; the done callback carries
     /// the result (SPEC.md §8.4, §8.5).
     DialogCall(&'static str, Box<TExpr>, Box<TExpr>),
+    /// `plinth:net`'s `fetch`: `(url, method, headers, body, wrapper)`.
+    /// `headers` is a `Map<string, string>` value or `Null`; `body` is a
+    /// nullable string. `wrapper` is a synthetic 0-arg closure the checker
+    /// built (`check/stdlib.rs`) that decodes the completion result into a
+    /// `Response` and calls the app's `done` (SPEC.md §8.4, §8.5, §11).
+    NetFetchCall(Box<TExpr>, Box<TExpr>, Box<TExpr>, Box<TExpr>, Box<TExpr>),
 
     // -- Forms that only `lower` makes. ------------------------------------
     /// The table index of the thunk adapter for a closure signature.

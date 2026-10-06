@@ -12,6 +12,7 @@ use wasmtime::component::{Component, HasSelf, Linker, types::ComponentItem};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
 
 pub mod kv;
+pub mod net;
 pub mod policy;
 pub mod requests;
 pub mod timers;
@@ -125,6 +126,12 @@ struct HostState {
     /// Dialog requests the guest opened that no `completion` event has
     /// answered yet (SPEC.md §8.4, §8.5).
     dialogs: Vec<PendingDialog>,
+    /// `net.fetch` results a worker thread finished, waiting for the host
+    /// to deliver them as a `completion` event (SPEC.md §8.4, §8.5). An
+    /// `Arc<Mutex<_>>` because the worker thread writes to it directly:
+    /// it never touches `HostState`/the wasmtime `Store`, which are not
+    /// `Send` across the call.
+    net_results: std::sync::Arc<std::sync::Mutex<Vec<(u32, plinth_protocol::Value)>>>,
 }
 
 impl bindings::plinth::app::ui::Host for HostState {
@@ -222,6 +229,23 @@ impl bindings::plinth::app::dialog::Host for HostState {
     }
 }
 
+impl bindings::plinth::app::net::Host for HostState {
+    fn fetch(&mut self, url: String, method: String, headers: Vec<(String, String)>, body: Option<String>) -> u32 {
+        let id = self.requests.open();
+        match net::check_url(&self.policy, &url) {
+            Err(reason) => self.net_results.lock().unwrap().push((id, net::denied(reason))),
+            Ok(()) => {
+                let tx = self.net_results.clone();
+                std::thread::spawn(move || {
+                    let outcome = net::blocking_fetch(&url, &method, &headers, body.as_deref());
+                    tx.lock().unwrap().push((id, outcome));
+                });
+            }
+        }
+        id
+    }
+}
+
 /// The engine is shared by all guests. It owns the epoch ticker thread.
 pub struct Runner {
     engine: Engine,
@@ -285,6 +309,7 @@ impl Runner {
             monotonic_origin: Instant::now(),
             requests: RequestQueue::new(),
             dialogs: Vec::new(),
+            net_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
@@ -371,6 +396,14 @@ impl Guest {
     /// way it polls timers; a test reads it to simulate the host answering.
     pub fn pending_dialogs(&self) -> &[PendingDialog] {
         &self.store.data().dialogs
+    }
+
+    /// Drains the `net.fetch` requests a worker thread has finished since
+    /// the last call (SPEC.md §8.4, §8.5). The desktop host polls this the
+    /// same way it polls timers and dialogs, and answers each one with
+    /// `answer_dialog` (the same generic completion delivery).
+    pub fn poll_net_results(&mut self) -> Vec<(u32, plinth_protocol::Value)> {
+        std::mem::take(&mut *self.store.data().net_results.lock().unwrap())
     }
 
     /// Answers a request (for example a dialog) by delivering a

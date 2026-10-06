@@ -56,6 +56,7 @@ wit-component = "0.251"
 wasmparser = "0.251"
 wasm-encoder = "0.251"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 sha2 = "0.10.9"
 gpui = { path = "../gpui-ce/crates/gpui", package = "gpui-ce" }
 gpui_platform = { path = "../gpui-ce/crates/gpui_platform", package = "gpui_ce_platform" }

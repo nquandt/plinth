@@ -227,6 +227,13 @@ fn visit_expr(e: &TExpr, f: &mut dyn FnMut(&TExpr)) {
             go(message);
             go(cb);
         }
+        TExprKind::NetFetchCall(url, method, headers, body, cb) => {
+            go(url);
+            go(method);
+            go(headers);
+            go(body);
+            go(cb);
+        }
         _ => {}
     }
 }
@@ -440,6 +447,15 @@ impl Cx<'_> {
                 let f = self.expr(*f);
                 let thunk = thunk_of(&f);
                 TExprKind::Rt(rt_fn, vec![thunk, f, message])
+            }
+            TExprKind::NetFetchCall(url, method, headers, body, f) => {
+                let url = self.expr(*url);
+                let method = self.expr(*method);
+                let headers = self.expr(*headers);
+                let body = self.expr(*body);
+                let f = self.expr(*f);
+                let thunk = thunk_of(&f);
+                TExprKind::Rt("net_fetch", vec![thunk, f, url, method, headers, body])
             }
             TExprKind::Navigate(name) => {
                 let idx = self.prog.screens.iter().position(|s| s.name == name).unwrap_or(0);
