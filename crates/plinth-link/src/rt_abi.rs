@@ -134,6 +134,13 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("dialog_alert", &[I32, I32, I32], &[]),
     ("dialog_confirm", &[I32, I32, I32], &[]),
     ("dialog_prompt", &[I32, I32, I32], &[]),
+    // -- more string methods (gap #4) ---------------------------------------
+    ("str_last_index_of", &[I32, I32], &[F64]),
+    ("str_replace", &[I32, I32, I32], &[I32]),
+    ("str_replace_all", &[I32, I32, I32], &[I32]),
+    ("str_pad_start", &[I32, F64, I32], &[I32]),
+    ("str_pad_end", &[I32, F64, I32], &[I32]),
+    ("str_split", &[I32, I32], &[I32]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -174,13 +181,19 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("dialog_alert", 3),
     ("dialog_confirm", 3),
     ("dialog_prompt", 3),
+    ("str_last_index_of", 4),
+    ("str_replace", 4),
+    ("str_replace_all", 4),
+    ("str_pad_start", 4),
+    ("str_pad_end", 4),
+    ("str_split", 4),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).
 pub fn added_in(name: &str) -> u32 {
     ADDED_IN.iter().find(|(n, _)| *n == name).map_or(0, |(_, m)| *m)
 }
-pub const CORE_MINOR: u32 = 3;
+pub const CORE_MINOR: u32 = 4;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;

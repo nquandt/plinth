@@ -38,6 +38,13 @@ interface String {
   indexOf(search: string): number;
   slice(start?: number, end?: number): string;
   repeat(count: number): string;
+  lastIndexOf(search: string): number;
+  replace(search: string, replacement: string): string;
+  replaceAll(search: string, replacement: string): string;
+  padStart(targetLength: number, pad?: string): string;
+  padEnd(targetLength: number, pad?: string): string;
+  charAt(index: number): string;
+  split(separator: string): string[];
 }
 
 interface Number {

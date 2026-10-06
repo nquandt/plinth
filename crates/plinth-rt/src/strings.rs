@@ -121,6 +121,93 @@ pub fn index_of(p: u32, q: u32) -> f64 {
     }
 }
 
+pub fn last_index_of(p: u32, q: u32) -> f64 {
+    let (s, q) = (as_str(p), as_str(q));
+    match s.rfind(q) {
+        Some(i) => len16(&s[..i]) as f64,
+        None => -1.0,
+    }
+}
+
+/// Replaces occurrences of `from` with `to` in `s`. `all` replaces every
+/// non-overlapping occurrence (JS `replaceAll`); otherwise only the first
+/// (JS `replace`, plain-string pattern). An empty `from` is left alone
+/// (matches JS `replace`'s "insert at start" only loosely; Plinth TS does
+/// not need that edge case).
+pub fn replace(p: u32, from: u32, to: u32, all: bool) -> u32 {
+    let (s, from, to) = (as_str(p), as_str(from), as_str(to));
+    if from.is_empty() {
+        return from_str(s);
+    }
+    if all {
+        from_str(&s.replace(from, to))
+    } else {
+        from_str(&s.replacen(from, to, 1))
+    }
+}
+
+/// Pads `s` with repeated copies of `pad` (default behavior matches JS:
+/// an empty `pad` is a no-op) until it reaches `target` UTF-16 code units,
+/// adding at the start (`at_start`) or end.
+pub fn pad(p: u32, target: f64, pad_str: u32, at_start: bool) -> u32 {
+    let s = as_str(p);
+    let cur = len16(s);
+    let target = if target.is_finite() && target > 0.0 { target as usize } else { 0 };
+    let pad_s = as_str(pad_str);
+    if target <= cur || pad_s.is_empty() {
+        return from_str(s);
+    }
+    let need = target - cur;
+    let mut fill = String::new();
+    while len16(&fill) < need {
+        fill.push_str(pad_s);
+    }
+    // Trim the filler to exactly `need` UTF-16 units.
+    let fill = if fill.is_ascii() {
+        &fill[..need]
+    } else {
+        let mut units = 0usize;
+        let mut end = fill.len();
+        for (i, c) in fill.char_indices() {
+            if units >= need {
+                end = i;
+                break;
+            }
+            units += c.len_utf16();
+        }
+        &fill[..end]
+    };
+    let mut out = String::with_capacity(s.len() + fill.len());
+    if at_start {
+        out.push_str(fill);
+        out.push_str(s);
+    } else {
+        out.push_str(s);
+        out.push_str(fill);
+    }
+    from_str(&out)
+}
+
+/// Splits `s` on `sep`, returning the piece strings in `parts`. An empty
+/// `sep` splits per Unicode scalar value (close enough to the per-UTF-16-
+/// unit semantics `slice`/`length` use for the BMP text Plinth apps target;
+/// astral characters split as a whole character rather than a lone
+/// surrogate).
+pub fn split(p: u32, sep: u32, parts: &mut Vec<u32>) {
+    let s = as_str(p);
+    let sep = as_str(sep);
+    if sep.is_empty() {
+        for c in s.chars() {
+            let mut buf = [0u8; 4];
+            parts.push(from_str(c.encode_utf8(&mut buf)));
+        }
+    } else {
+        for part in s.split(sep) {
+            parts.push(from_str(part));
+        }
+    }
+}
+
 fn push_u64(out: &mut String, mut v: u64) {
     let mut buf = [0u8; 20];
     let mut i = buf.len();

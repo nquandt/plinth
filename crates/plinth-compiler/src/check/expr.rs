@@ -874,6 +874,48 @@ impl Checker<'_> {
                 let n = self.num_arg(args, 0, 0.0, span);
                 rt("str_repeat", vec![o, n], Type::String)
             }
+            "lastIndexOf" => rt("str_last_index_of", vec![o, self.str_arg(args, 0, span)], Type::Number),
+            "replace" => {
+                let a = self.str_arg(args, 0, span);
+                let b = self.str_arg(args, 1, span);
+                rt("str_replace", vec![o, a, b], Type::String)
+            }
+            "replaceAll" => {
+                let a = self.str_arg(args, 0, span);
+                let b = self.str_arg(args, 1, span);
+                rt("str_replace_all", vec![o, a, b], Type::String)
+            }
+            "padStart" => {
+                let n = self.num_arg(args, 0, 0.0, span);
+                let pad = match args.get(1) {
+                    Some(_) => self.str_arg(args, 1, span),
+                    None => TExpr::new(TExprKind::Str(" ".into()), Type::String, span),
+                };
+                rt("str_pad_start", vec![o, n, pad], Type::String)
+            }
+            "padEnd" => {
+                let n = self.num_arg(args, 0, 0.0, span);
+                let pad = match args.get(1) {
+                    Some(_) => self.str_arg(args, 1, span),
+                    None => TExpr::new(TExprKind::Str(" ".into()), Type::String, span),
+                };
+                rt("str_pad_end", vec![o, n, pad], Type::String)
+            }
+            "charAt" => {
+                let a = self.num_arg(args, 0, 0.0, span);
+                let a2 = match &a.kind {
+                    TExprKind::Num(v) => TExpr::new(TExprKind::Num(v + 1.0), Type::Number, span),
+                    _ => {
+                        let one = TExpr::new(TExprKind::Num(1.0), Type::Number, span);
+                        TExpr::new(TExprKind::Num2(NumOp::Add, bx(a.clone()), bx(one)), Type::Number, span)
+                    }
+                };
+                rt("str_slice", vec![o, a, a2], Type::String)
+            }
+            "split" => {
+                let sep = self.str_arg(args, 0, span);
+                rt("str_split", vec![o, sep], Type::Array(Box::new(Type::String)))
+            }
             _ => {
                 self.err(code::NO_PROPERTY, prop_span, format!("`string` has no method `{prop}` in Plinth TS"));
                 TExpr::new(TExprKind::Null, Type::Error, span)

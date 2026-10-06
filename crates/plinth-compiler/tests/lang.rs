@@ -1511,3 +1511,120 @@ fn json_parse_without_a_type_argument_is_rejected() {
     let codes = codes(&main);
     assert_eq!(codes, ["PL2015"]);
 }
+
+// -- Strings (dogfooding gap #4 and neighbors: split, replace(All),
+// padStart/padEnd, charAt, lastIndexOf) ------------------------------------
+
+#[test]
+fn split_joins_back_with_the_right_pieces() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const parts = "a,bb,ccc".split(",");
+  return <Screen title="Home"><Text>{parts.length + ":" + parts.join("|")}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "3:a|bb|ccc");
+}
+
+#[test]
+fn split_with_empty_separator_splits_per_character_including_non_ascii() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const parts = "aé€".split("");
+  return <Screen title="Home"><Text>{parts.length + ":" + parts.join("-")}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    // "aé€" is 3 Unicode scalar values (Plinth TS splits on scalars for an
+    // empty separator; `length`/`slice` elsewhere use UTF-16 code units,
+    // which agrees here since none of these three characters are astral).
+    assert_eq!(text_of(&tree, ControlKind::Text), "3:a-é-€");
+}
+
+#[test]
+fn replace_only_replaces_the_first_match() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const s = "ab ab ab".replace("ab", "X");
+  return <Screen title="Home"><Text>{s}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "X ab ab");
+}
+
+#[test]
+fn replace_all_replaces_every_match() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const s = "ab ab ab".replaceAll("ab", "X");
+  return <Screen title="Home"><Text>{s}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "X X X");
+}
+
+#[test]
+fn pad_start_and_pad_end_use_the_given_fill() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const s = "7".padStart(3, "0") + "-" + "ab".padEnd(5, "xy");
+  return <Screen title="Home"><Text>{s}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "007-abxyx");
+}
+
+#[test]
+fn pad_default_fill_is_a_space() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  return <Screen title="Home"><Text>{"5".padStart(3) + "|"}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "  5|");
+}
+
+#[test]
+fn char_at_reads_one_utf16_unit() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const s = "héllo";
+  return <Screen title="Home"><Text>{s.charAt(0) + s.charAt(1) + s.charAt(10)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hé");
+}
+
+#[test]
+fn last_index_of_finds_the_final_occurrence() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const i = "ab ab ab".lastIndexOf("ab");
+  return <Screen title="Home"><Text>{"" + i}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "6");
+}

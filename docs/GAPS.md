@@ -40,3 +40,18 @@ small local change), per the dogfooding task's scope.
   `icon_glyph` in `crates/plinth-ui/src/theme.rs` to U+270D (WRITING HAND),
   which renders. Verified with `plinth-shoot` on `examples/utility`
   before/after the change.
+- #4 (fixed, plus neighbors): added `String.split(sep)`, `replace(a, b)`
+  (first match only), `replaceAll(a, b)`, `padStart`/`padEnd`, `charAt`,
+  `lastIndexOf` to `std/lib.d.ts` and the checker (`check/expr.rs`'s
+  `string_method`). `split("")` splits per Unicode scalar value (not a
+  lone UTF-16 surrogate), which agrees with the UTF-16-unit `length`/
+  `slice` semantics for all non-astral text; documented on `strings::split`
+  in `plinth-rt/src/strings.rs`. New runtime functions (`str_split`,
+  `str_replace`, `str_replace_all`, `str_pad_start`, `str_pad_end`,
+  `str_last_index_of`) were added rather than compiler-generated loops,
+  since `split`'s result needs GC array allocation and the others are
+  simple one-shot string scans better done once in Rust; `charAt` instead
+  reuses `str_slice` from the checker (no new runtime function).
+  `CORE_MINOR`/`CORE_VERSION` bumped to 1.4. Tests: a new "Strings" section
+  in `crates/plinth-compiler/tests/lang.rs` (includes a non-ASCII
+  `split("")` case and a non-ASCII `charAt` case).

@@ -33,7 +33,7 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 3] = *b"1.3";
+static CORE_VERSION: [u8; 3] = *b"1.4";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;
@@ -313,6 +313,20 @@ abi! {
     }
     fn __plinth_rt_str_to_f64(a: i32) -> f64 { strings::parse_number(strings::as_str(ptr(a))) }
     fn __plinth_rt_f64_to_fixed(v: f64, digits: f64) -> i32 { strings::from_str(&strings::to_fixed(v, digits)) as i32 }
+    fn __plinth_rt_str_last_index_of(a: i32, b: i32) -> f64 { strings::last_index_of(ptr(a), ptr(b)) }
+    fn __plinth_rt_str_replace(a: i32, from: i32, to: i32) -> i32 { strings::replace(ptr(a), ptr(from), ptr(to), false) as i32 }
+    fn __plinth_rt_str_replace_all(a: i32, from: i32, to: i32) -> i32 { strings::replace(ptr(a), ptr(from), ptr(to), true) as i32 }
+    fn __plinth_rt_str_pad_start(a: i32, target: f64, pad: i32) -> i32 { strings::pad(ptr(a), target, ptr(pad), true) as i32 }
+    fn __plinth_rt_str_pad_end(a: i32, target: f64, pad: i32) -> i32 { strings::pad(ptr(a), target, ptr(pad), false) as i32 }
+    fn __plinth_rt_str_split(a: i32, sep: i32) -> i32 {
+        let mut parts: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
+        strings::split(ptr(a), ptr(sep), &mut parts);
+        let arr = arrays::new(crate::gc::T_ARR_REF, parts.len() as u32);
+        for v in parts {
+            arrays::push_i32(arr, v as i32);
+        }
+        arr as i32
+    }
 
     // -- Arrays ----------------------------------------------------------------
     fn __plinth_rt_arr_new(kind: i32, cap: i32) -> i32 { arrays::new(kind as u32, cap as u32) as i32 }
