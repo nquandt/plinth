@@ -80,6 +80,22 @@ yet:** static members, getters/setters, generic classes,
 - Classes, single inheritance, `instanceof`, general union narrowing,
   generic functions and interfaces (all implemented; see "Status"
   above).
+- Narrowing on member expressions, not just plain variables: `if (r.subtitle
+  !== null) { use(r.subtitle); }`, `r.subtitle !== null ? r.subtitle : "x"`,
+  `r.subtitle === null ? "x" : r.subtitle`, and the same for `if (... ===
+  null) return;`/`throw` at the end of a block narrowing the rest of it.
+  `r.subtitle ?? "x"` and `r?.subtitle ?? "x"` already typed correctly
+  without this (`??` and `?.` build their own null check, independent of
+  the narrowing map). The rule, deliberately conservative: a path `a.b` or
+  `a.b.c` is narrowed only when `a` is a `const` or a parameter (never
+  reassigned) and every step is a direct struct field read — not a method
+  call, not a computed/array index. The narrowing is dropped (not carried
+  past) any assignment to any field, or any function/method call, anywhere
+  in between the test and the use, since either could change the field
+  through an alias that the checker cannot rule out. This is strictly more
+  conservative than necessary (a call that provably cannot reach the path
+  still drops it), by design: it costs an extra local variable in the rare
+  case that trips it, in exchange for never needing an alias analysis.
 - `expr as T`, but only for a checked, safe narrowing: `string` (or a
   wider string literal union) to a narrower string literal union, or a
   discriminated union to one of its members. Each accepted cast carries

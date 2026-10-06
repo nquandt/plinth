@@ -23,8 +23,7 @@ export default function Rows() {
           row={(r) => {
             const badge = r.badge ? <Badge label="Every 10th" tone="success" /> : null;
             const toggle = <Toggle label="On" value={r.on} onChange={(on) => setRowOn(r.id, on)} />;
-            const subtitle = r.subtitle;
-            if (subtitle === null) {
+            if (r.subtitle === null) {
               return (
                 <ListRow title={r.title}>
                   {badge}
@@ -33,7 +32,7 @@ export default function Rows() {
               );
             }
             return (
-              <ListRow title={r.title} subtitle={subtitle}>
+              <ListRow title={r.title} subtitle={r.subtitle}>
                 {badge}
                 {toggle}
               </ListRow>

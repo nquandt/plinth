@@ -46,7 +46,7 @@ impl Checker<'_> {
         out
     }
 
-    fn with_narrowing(&mut self, narrow: Vec<(VarId, Type)>, s: &ast::Stmt) -> Vec<TStmt> {
+    fn with_narrowing(&mut self, narrow: Vec<(super::NarrowKey, Type)>, s: &ast::Stmt) -> Vec<TStmt> {
         self.push_scope();
         self.fx.scopes.last_mut().unwrap().narrow.extend(narrow);
         let out = match &s.kind {
@@ -436,8 +436,9 @@ impl Checker<'_> {
         }
     }
 
-    /// The variables that a condition narrows: `(when true, when false)`.
-    pub(super) fn narrowing(&self, cond: &TExpr) -> (Vec<(VarId, Type)>, Vec<(VarId, Type)>) {
+    /// The variables/member paths that a condition narrows: `(when true,
+    /// when false)`.
+    pub(super) fn narrowing(&self, cond: &TExpr) -> (Vec<(super::NarrowKey, Type)>, Vec<(super::NarrowKey, Type)>) {
         match &cond.kind {
             TExprKind::IsNull(inner) => match self.narrowable(inner) {
                 Some((v, t)) => (Vec::new(), vec![(v, t)]),
@@ -466,17 +467,17 @@ impl Checker<'_> {
             // `x instanceof C` (SPEC.md §4.2 v1): narrows `x` to `C` in the
             // true branch. The false branch keeps `x`'s declared type (a
             // subclass is not the only thing it could still not be).
-            TExprKind::InstanceOf(obj, sid) => match self.narrowable_var(obj) {
-                Some(v) => (vec![(v, Type::Struct(*sid))], Vec::new()),
+            TExprKind::InstanceOf(obj, sid) => match self.narrow_path(obj) {
+                Some(k) => (vec![(k, Type::Struct(*sid))], Vec::new()),
                 None => (Vec::new(), Vec::new()),
             },
             // `typeof x === "..."` or a discriminant comparison, both
             // compiled to `UnionIs` (HANDOFF.md item 2).
-            TExprKind::UnionIs(obj, idxs) => match (self.narrowable_var(obj), &obj.ty) {
-                (Some(v), Type::Union(members)) => {
+            TExprKind::UnionIs(obj, idxs) => match (self.narrow_path(obj), &obj.ty) {
+                (Some(k), Type::Union(members)) => {
                     let picked: Vec<Type> = idxs.iter().map(|i| members[*i].clone()).collect();
                     let rest: Vec<Type> = members.iter().enumerate().filter(|(i, _)| !idxs.contains(i)).map(|(_, m)| m.clone()).collect();
-                    (vec![(v, one_of(picked))], vec![(v, one_of(rest))])
+                    (vec![(k.clone(), one_of(picked))], vec![(k, one_of(rest))])
                 }
                 _ => (Vec::new(), Vec::new()),
             },
@@ -484,30 +485,39 @@ impl Checker<'_> {
         }
     }
 
-    /// The variable a (possibly narrowed/retagged) expression reads, for
-    /// narrowing. Unlike `narrowable`, any type is allowed; like it, only a
-    /// `const` or a parameter (never reassigned inside the branch).
-    fn narrowable_var(&self, e: &TExpr) -> Option<VarId> {
-        let v = match &e.kind {
-            TExprKind::Var(v) => *v,
-            TExprKind::Coerce(Coercion::Retag, inner) => return self.narrowable_var(inner),
-            _ => return None,
-        };
-        let info = &self.prog.vars[v as usize];
-        let is_param = self.prog.funcs[info.owner as usize].params.contains(&v);
-        if info.mutable && !is_param { None } else { Some(v) }
+    /// The narrowing key a (possibly narrowed/retagged) expression reads,
+    /// if it is one the checker is willing to narrow: a plain `const`/
+    /// parameter variable, or a member path `a.b`/`a.b.c` rooted at one,
+    /// where every step is a direct struct field read (`check/expr.rs`'s
+    /// `property`), never a method call or computed index. See
+    /// `docs/language.md` ("Narrowing") for the exact rule and why it is
+    /// capped at two field hops and dropped on assignment/calls.
+    pub(super) fn narrow_path(&self, e: &TExpr) -> Option<super::NarrowKey> {
+        match &e.kind {
+            TExprKind::Var(v) => {
+                let info = &self.prog.vars[*v as usize];
+                let is_param = self.prog.funcs[info.owner as usize].params.contains(v);
+                if info.mutable && !is_param { None } else { Some((*v, Vec::new())) }
+            }
+            TExprKind::Coerce(Coercion::Retag, inner) => self.narrow_path(inner),
+            TExprKind::Field(obj, _sid, idx) => {
+                let (v, mut path) = self.narrow_path(obj)?;
+                if path.len() >= 2 {
+                    return None;
+                }
+                path.push(*idx);
+                Some((v, path))
+            }
+            _ => None,
+        }
     }
 
-    /// A read of a `const` or a parameter of a nullable type.
-    fn narrowable(&self, e: &TExpr) -> Option<(VarId, Type)> {
-        let TExprKind::Var(v) = e.kind else { return None };
-        let info = &self.prog.vars[v as usize];
-        let is_param = self.prog.funcs[info.owner as usize].params.contains(&v);
-        if info.mutable && !is_param {
-            return None;
-        }
-        match &info.ty {
-            Type::Nullable(inner) => Some((v, (**inner).clone())),
+    /// Like `narrow_path`, but only for a path whose current type is
+    /// `T | null` (the common case: `if (x !== null)`, `x ?? y`).
+    fn narrowable(&self, e: &TExpr) -> Option<(super::NarrowKey, Type)> {
+        let key = self.narrow_path(e)?;
+        match &e.ty {
+            Type::Nullable(inner) => Some((key, (**inner).clone())),
             _ => None,
         }
     }
@@ -515,10 +525,18 @@ impl Checker<'_> {
     pub(super) fn var_read(&mut self, v: VarId, span: Span) -> TExpr {
         let ty = self.prog.vars[v as usize].ty.clone();
         let read = TExpr::new(TExprKind::Var(v), ty.clone(), span);
+        self.apply_narrowing(read, (v, Vec::new()))
+    }
+
+    /// Wraps a freshly-built variable/member read in the coercion that
+    /// matches whatever that path is currently narrowed to, or returns it
+    /// unchanged if it is not narrowed.
+    pub(super) fn apply_narrowing(&mut self, read: TExpr, key: super::NarrowKey) -> TExpr {
+        let span = read.span;
         // `narrowed` only ever comes from `narrowable`, which only narrows a
-        // variable whose declared type is `T | null`; `ty` here is that
+        // path whose static type is `T | null`; `read.ty` here is that
         // `Nullable(_)`, so the box, if any, always needs unwrapping.
-        match self.narrowed(v) {
+        match self.narrowed(&key) {
             Some(n) if n.repr() == crate::types::Repr::F64 => TExpr::new(TExprKind::Coerce(Coercion::UnboxNum, Box::new(read)), n, span),
             Some(n) if n.repr() == crate::types::Repr::I32 => TExpr::new(TExprKind::Coerce(Coercion::UnboxI32, Box::new(read)), n, span),
             Some(n) => TExpr::new(TExprKind::Coerce(Coercion::Retag, Box::new(read)), n, span),

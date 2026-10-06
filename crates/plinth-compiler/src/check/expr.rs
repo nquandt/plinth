@@ -361,7 +361,20 @@ impl Checker<'_> {
     fn property(&mut self, o: TExpr, prop: &str, prop_span: Span, span: Span) -> TExpr {
         match o.ty.clone() {
             Type::Struct(sid) => match self.prog.structs[sid as usize].field(prop).map(|(i, f)| (i, f.ty.clone())) {
-                Some((idx, ty)) => TExpr::new(TExprKind::Field(bx(o), sid, idx as u32), ty, span),
+                Some((idx, ty)) => {
+                    // A member path rooted at a `const`/parameter (`r.subtitle`)
+                    // is narrowed the same way a plain variable is (HANDOFF.md
+                    // "Found later": narrowing on member expressions).
+                    let base_path = self.narrow_path(&o);
+                    let field = TExpr::new(TExprKind::Field(bx(o), sid, idx as u32), ty, span);
+                    match base_path {
+                        Some((v, mut path)) if path.len() < 2 => {
+                            path.push(idx as u32);
+                            self.apply_narrowing(field, (v, path))
+                        }
+                        _ => field,
+                    }
+                }
                 None => {
                     if self.resolve_method(sid, prop).is_some() {
                         let msg = format!("`{prop}` is a method; it cannot be used without calling it");
@@ -440,6 +453,17 @@ impl Checker<'_> {
     // -- Calls ------------------------------------------------------------
 
     fn call(&mut self, callee: &Expr, type_args: &[ast::TypeAnn], args: &[Expr], span: Span, expected: Option<&Type>) -> TExpr {
+        let r = self.call_impl(callee, type_args, args, span, expected);
+        // Any call can mutate state reached through aliases of a narrowed
+        // member path (`r.subtitle`), so a call conservatively drops all
+        // member-path narrowing (docs/language.md "Narrowing"). Plain
+        // variable narrowing is unaffected: it only ever applies to a
+        // `const`/parameter, which a call cannot reassign.
+        self.invalidate_member_narrowing();
+        r
+    }
+
+    fn call_impl(&mut self, callee: &Expr, type_args: &[ast::TypeAnn], args: &[Expr], span: Span, expected: Option<&Type>) -> TExpr {
         match &callee.kind {
             ExprKind::Ident(name) if name == "super" => {
                 // The one legitimate `super(...)` call is the first
@@ -2130,6 +2154,12 @@ impl Checker<'_> {
             self.expr(value, None);
             return TExpr::new(TExprKind::Null, Type::Error, span);
         };
+        // An assignment to a field (or an index, conservatively) drops any
+        // member-path narrowing: nothing proves it wasn't the narrowed path
+        // itself, or an alias of its root, that just changed.
+        if !matches!(&place, Place::Var(_)) {
+            self.invalidate_member_narrowing();
+        }
         match op {
             None => {
                 let v = self.expr_with(value, &ty);

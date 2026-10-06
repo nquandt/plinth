@@ -167,5 +167,47 @@ small local change), per the dogfooding task's scope.
 
 ## Found later
 
-- **Narrowing on member expressions (medium).** `r.subtitle ?? undefined` and `r.subtitle === null ? undefined : r.subtitle` still have the type `string | null` (PL3001), because `??` and null narrowing work on local variables only. Workaround: `const subtitle = r.subtitle;` then `if (subtitle === null) { … }`. Found while building `examples/big-list` (rows.tsx).
+- **Narrowing on member expressions (fixed, gap batch 3 item 1).**
+  `if (r.subtitle !== null) { use(r.subtitle); }`,
+  `r.subtitle !== null ? r.subtitle : "x"`, and `if (r.subtitle === null)
+  return;` followed by a use later in the block now narrow the member path,
+  not just a plain local. `r.subtitle ?? "x"` and `r?.subtitle ?? "x"`
+  needed no change: `??`/`?.` already build their own null check
+  independent of the narrowing map. Implementation
+  (`crates/plinth-compiler/src/check/{mod,stmt,expr}.rs`): the narrowing
+  map's key widened from `VarId` to `(VarId, Vec<u32>)` (a root variable
+  plus up to two struct-field indices, i.e. `a.b`/`a.b.c`); a new
+  `narrow_path` builds this key by walking `Field`/`Retag` chains back to a
+  `const`/parameter root, reused by `narrowable` (null narrowing),
+  `instanceof` and `UnionIs` narrowing, and by `property()`'s struct-field
+  read (which now applies the lookup the same way `var_read` always did).
+  Dropped conservatively: `invalidate_member_narrowing` clears every
+  non-empty-path entry whenever an assignment's target is not a plain
+  variable, or whenever any call (`Checker::call`, wrapping the renamed
+  `call_impl`) is checked — not just a call that could reach the narrowed
+  path, since the checker does no alias analysis. No new runtime function;
+  this is purely a type-checking change. Along the way, fixed a latent bug
+  that made this (and `instanceof`/discriminant narrowing) silently not
+  apply to a closure's own parameters: `Checker::closure`
+  (`check/mod.rs`) only wrote the closure's `FuncDef.params` *after*
+  checking its body, so any narrowing lookup during the body that needs
+  `is_param` (to tell a parameter from a captured, possibly-reassigned
+  `let`) saw an empty list and always said "not a parameter"; moved that
+  write before the body is checked. Documented in `docs/language.md`
+  ("Supported syntax"), including why the rule is deliberately more
+  conservative than necessary. Tests in
+  `crates/plinth-compiler/tests/lang.rs`:
+  `nullish_coalesce_on_a_member_expression`,
+  `nullish_coalesce_on_optional_chaining`,
+  `ternary_narrows_a_member_expression`, `if_narrows_a_member_expression`,
+  `if_early_return_narrows_a_member_expression_for_the_rest_of_the_block`,
+  `if_early_return_narrows_a_member_expression_inside_a_closure`,
+  `two_level_member_path_is_narrowed`,
+  `member_narrowing_is_dropped_after_a_call`,
+  `member_narrowing_is_dropped_after_an_assignment`. Removed the
+  workaround in `examples/big-list/app/rows.tsx` (the `const subtitle =
+  r.subtitle;` hoist before the `if (subtitle === null)` check): the row
+  renderer now narrows `r.subtitle` directly. Verified with
+  `npx -y -p typescript@7 tsc -p .` in `examples/big-list` (clean) and
+  `plinth.exe build examples/big-list`.
 

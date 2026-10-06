@@ -1075,6 +1075,179 @@ function Home() {
     assert_eq!(text_of(&tree, ControlKind::Text), "no");
 }
 
+// -- Narrowing on member expressions (docs/GAPS.md "Found later") ---------
+
+#[test]
+fn nullish_coalesce_on_a_member_expression() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function sub(r: Row): string { return r.subtitle ?? "x"; }
+function Home() {
+  const r: Row = { subtitle: null };
+  const r2: Row = { subtitle: "hi" };
+  return <Screen title="Home"><Text>{sub(r) + "," + sub(r2)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "x,hi");
+}
+
+#[test]
+fn nullish_coalesce_on_optional_chaining() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function sub(r: Row | null): string { return r?.subtitle ?? "x"; }
+function Home() {
+  const r: Row = { subtitle: "hi" };
+  return <Screen title="Home"><Text>{sub(r) + "," + sub(null)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi,x");
+}
+
+#[test]
+fn ternary_narrows_a_member_expression() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function sub(r: Row): string { return r.subtitle !== null ? r.subtitle : "x"; }
+function Home() {
+  const r: Row = { subtitle: null };
+  const r2: Row = { subtitle: "hi" };
+  return <Screen title="Home"><Text>{sub(r) + "," + sub(r2)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "x,hi");
+}
+
+#[test]
+fn if_narrows_a_member_expression() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function sub(r: Row): string {
+  if (r.subtitle !== null) {
+    return r.subtitle;
+  }
+  return "x";
+}
+function Home() {
+  const r: Row = { subtitle: "hi" };
+  return <Screen title="Home"><Text>{sub(r)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi");
+}
+
+#[test]
+fn if_early_return_narrows_a_member_expression_for_the_rest_of_the_block() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function sub(r: Row): string {
+  if (r.subtitle === null) {
+    return "x";
+  }
+  return r.subtitle;
+}
+function Home() {
+  const r: Row = { subtitle: "hi" };
+  return <Screen title="Home"><Text>{sub(r)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi");
+}
+
+#[test]
+fn two_level_member_path_is_narrowed() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Inner { subtitle: string | null; }
+interface Row { inner: Inner; }
+function sub(r: Row): string { return r.inner.subtitle !== null ? r.inner.subtitle : "x"; }
+function Home() {
+  const r: Row = { inner: { subtitle: "hi" } };
+  return <Screen title="Home"><Text>{sub(r)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi");
+}
+
+#[test]
+fn member_narrowing_is_dropped_after_a_call() {
+    // Conservative rule (docs/language.md): a call between the test and the
+    // use drops member-path narrowing, even though this particular call
+    // cannot actually change `r.subtitle`.
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function noop(): void {}
+function sub(r: Row): string {
+  if (r.subtitle !== null) {
+    noop();
+    return r.subtitle;
+  }
+  return "x";
+}
+function Home() { return <Screen title="Home"><Text>{""}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL3001"]);
+}
+
+#[test]
+fn member_narrowing_is_dropped_after_an_assignment() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function sub(r: Row): string {
+  if (r.subtitle !== null) {
+    r.subtitle = r.subtitle;
+    return r.subtitle;
+  }
+  return "x";
+}
+function Home() { return <Screen title="Home"><Text>{""}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL3001"]);
+}
+
+#[test]
+fn if_early_return_narrows_a_member_expression_inside_a_closure() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function Home() {
+  const sub = (r: Row): string => {
+    const dummy = 1;
+    if (r.subtitle === null) {
+      return "x";
+    }
+    return r.subtitle;
+  };
+  const r: Row = { subtitle: "hi" };
+  return <Screen title="Home"><Text>{sub(r)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi");
+}
+
 #[test]
 fn extends_a_non_class_is_rejected() {
     let main = with_app("interface I { x: number }\nclass C extends I { constructor() { super(); } }");
