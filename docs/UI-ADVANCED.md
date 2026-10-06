@@ -13,6 +13,7 @@ Today Plinth has one UI level: semantic controls (SPEC.md §6). Apps declare int
 | Layout | The runtime | Flexbox and grid (gpui's taffy model) |
 | Accessibility | Automatic | Required props, checked by the compiler |
 | Adapts to platforms | Fully | Through width classes and tokens |
+| Rendering | Built on Level 2 (phase U5) | gpui on desktop and mobile; DOM on the web |
 
 **Islands, not whole apps.** Level 2 elements live inside Level 1 containers: a `Section`, a `Sheet`, or a new `Surface` control. The shell stays semantic: screens, navigation, toolbars, dialogs and the consent UI. So every app keeps the same navigation, back behavior and accessibility in the shell, and the advanced parts are where the app needs them (a note editor, a board, a chart, a game).
 
@@ -32,8 +33,8 @@ The host builds gpui elements from the op stream on each frame, as it does today
 **Style props** are a typed subset of gpui's `Styled` methods:
 
 - layout: `direction`, `wrap`, `grow`, `shrink`, `basis`, `align`, `justify`, `gap`, `grid` (columns, rows, span), `position` (`relative` or `absolute` with insets), `overflow`;
-- size: `width`, `height`, `min`/`max`, `aspect`;
-- space: `padding`, `margin`, from a spacing scale (tokens), with raw pixels as an exception;
+- size: `width`, `height`, `min`/`max`, `aspect`, from the spacing scale, fractions (`"1/2"`, `"full"`) and `auto` (no raw pixels, §8);
+- space: `padding`, `margin`, from the spacing scale (tokens) only;
 - look: `bg`, `fg`, `border` (width, color), `radius`, `shadow`, `opacity`, from **theme tokens** (`surface.raised`, `accent`, `danger`, `text.muted`, ...), not raw colors;
 - text: `size` (type scale), `weight`, `italic`, `mono`, `align`, `lines` (clamp);
 - states: `hover`, `active`, `focus`, `disabled`: each a partial style, as gpui's `hover(|s| ...)`;
@@ -83,12 +84,13 @@ Level 2 can make inaccessible UI, so the compiler checks it:
 2. **U2:** states (`hover`, `active`, `focus`, `disabled`), width classes, transitions and springs.
 3. **U3:** gestures and drag (`onDrag`, drop targets), which also give drag and drop for the notes app (docs/VALIDATION.md V2).
 4. **U4:** `Canvas` in the same layer (7GUIs Circle drawer).
+5. **U5:** rebuild the semantic controls on Level 2 primitives (§8, UA-Q4). The look and the behavior of every control must stay the same; the screenshot and AccessKit tests prove it.
 
 The notes app is a good first user: a live preview of Markdown needs styled `Span` runs inside the editor.
 
-## 8. Open questions
+## 8. Decisions (owner, 2026-10-06)
 
-- UA-Q1: Typed object props (as above), or a short class string like Tailwind (`"flex gap-2 p-3"`), which matches gpui's method names? Object props get full `tsc` checks; strings need template literal types.
-- UA-Q2: Raw pixel values: allow them, or only the spacing scale plus `fraction` sizes?
-- UA-Q3: Mobile: if a mobile host does not use gpui, the same vocabulary must map to native views. Keep the vocabulary small enough for that.
-- UA-Q4: Can built-in semantic controls be rebuilt on Level 2 later, so that the runtime has one rendering path?
+- UA-Q1, props: **typed object props**, checked by `tsc` through `std/ui.d.ts`. No class strings.
+- UA-Q2, raw pixels: **not allowed for now.** Sizes and spaces come from the spacing scale, fractions (`"1/2"`, `"full"`) and `auto`. Raw pixels may come later.
+- UA-Q3, mobile: **mobile hosts use gpui.** Assume this in every design. The vocabulary maps to gpui on every platform; only the web host maps it to the DOM.
+- UA-Q4, one rendering path: **yes.** The runtime rebuilds the semantic controls on Level 2 primitives (phase U5). Then the desktop, mobile and web hosts each need only one renderer for primitives, and the semantic controls become runtime code on top of it.
