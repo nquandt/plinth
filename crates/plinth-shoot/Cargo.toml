@@ -1,0 +1,19 @@
+[package]
+name = "plinth-shoot"
+description = "Renders each screen of a Plinth app to PNG files, without a window (SPEC.md §13)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# This crate is not a default member: it needs the `test-support` features
+# of gpui, and these must not go into the `plinth` binary.
+
+[dependencies]
+plinth-ui.workspace = true
+plinth-runner-wasmtime.workspace = true
+plinth-host-desktop.workspace = true
+anyhow.workspace = true
+log.workspace = true
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+gpui_wgpu = { path = "../../../gpui-ce/crates/gpui_wgpu", package = "gpui_ce_wgpu", features = ["test-support"] }

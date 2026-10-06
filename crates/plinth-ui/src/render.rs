@@ -76,6 +76,12 @@ impl PlinthRoot {
         &self.tree
     }
 
+    /// Shows the screen with the given index (`plinth shoot` uses it).
+    pub fn select_screen(&mut self, screen: u32, cx: &mut Context<Self>) {
+        self.tree.current_screen = screen;
+        cx.notify();
+    }
+
     /// Replaces the guest with a new build (hot reload). The selected screen
     /// stays; the guest state starts again.
     pub fn reload(&mut self, guest: Box<dyn GuestPort>, init: Result<Vec<Vec<u8>>, String>, cx: &mut Context<Self>) {
