@@ -35,12 +35,20 @@ pub struct Policy {
     /// Capabilities the user explicitly refused. Empty until the consent
     /// UI exists; a declared, non-refused capability is granted.
     refused: HashSet<String>,
+    /// Bypasses the "undeclared" check (used by `Runner::load` and tests
+    /// that do not care about capabilities).
+    allow_all: bool,
 }
 
 impl Policy {
     /// Builds a policy from the manifest's declared capability names.
     pub fn new(declared: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self { declared: declared.into_iter().map(Into::into).collect(), unsupported: HashSet::new(), refused: HashSet::new() }
+        Self {
+            declared: declared.into_iter().map(Into::into).collect(),
+            unsupported: HashSet::new(),
+            refused: HashSet::new(),
+            allow_all: false,
+        }
     }
 
     /// Marks a capability as unsupported on this host build.
@@ -56,7 +64,7 @@ impl Policy {
     /// Checks whether `capability` is allowed. `Ok(())` means the call may
     /// proceed.
     pub fn check(&self, capability: &str) -> Result<(), DeniedReason> {
-        if !self.declared.contains(capability) {
+        if !self.allow_all && !self.declared.contains(capability) {
             return Err(DeniedReason::Undeclared);
         }
         if self.unsupported.contains(capability) {
@@ -68,10 +76,10 @@ impl Policy {
         Ok(())
     }
 
-    /// A policy that allows every capability (used by tests and by `time`,
-    /// which needs none).
+    /// A policy that allows every capability (used by `Runner::load` and
+    /// by tests that do not care about capabilities).
     pub fn allow_all() -> Self {
-        Self { declared: HashSet::new(), unsupported: HashSet::new(), refused: HashSet::new() }
+        Self { declared: HashSet::new(), unsupported: HashSet::new(), refused: HashSet::new(), allow_all: true }
     }
 }
 
@@ -103,5 +111,11 @@ mod tests {
         let mut policy = Policy::new(["clipboard.read"]);
         policy.refuse("clipboard.read");
         assert_eq!(policy.check("clipboard.read"), Err(DeniedReason::Refused));
+    }
+
+    #[test]
+    fn allow_all_grants_an_undeclared_capability() {
+        let policy = Policy::allow_all();
+        assert_eq!(policy.check("store.kv"), Ok(()));
     }
 }

@@ -2,3 +2,7 @@ id = "dev.plinth.examples.notes"
 name = "Notes"
 version = "0.1.0"
 publisher = "plinth"
+
+[[capabilities]]
+name = "store.kv"
+rationale = "Save your notes on this device."

@@ -8,9 +8,24 @@ use plinth_ui::tree::{Node, Tree};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// The capability names declared in `<example>/plinth.toml`'s
+/// `[[capabilities]]` tables (SPEC.md §11), read with a minimal parse so
+/// this test crate does not need a `plinth-package` dev-dependency.
+fn declared_capabilities(root: &std::path::Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(root.join("plinth.toml")) else { return Vec::new() };
+    let Ok(value) = text.parse::<toml::Value>() else { return Vec::new() };
+    value
+        .get("capabilities")
+        .and_then(|c| c.as_array())
+        .map(|caps| caps.iter().filter_map(|c| c.get("name")?.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default()
+}
+
 fn build(name: &str) -> plinth_compiler::Artifact {
-    let fs = DiskFs { root: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples").join(name) };
-    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples").join(name);
+    let caps = declared_capabilities(&root);
+    let fs = DiskFs { root };
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &caps).expect("compile");
     let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
     artifact.unwrap_or_else(|| panic!("{name} has errors:\n{}", diags.join("\n")))
 }
