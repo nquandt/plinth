@@ -1,0 +1,8 @@
+id = "dev.plinth.examples.hub-mini"
+name = "Hub mini"
+version = "0.1.0"
+publisher = "you"
+
+[[capabilities]]
+name = "hub.manage"
+rationale = "List and launch the apps in the library (docs/HUB.md §4.1)."
