@@ -13,6 +13,7 @@ members = [
   "crates/plinth-package",
   "crates/plinth-shoot",
   "crates/plinth-hub",
+  "crates/plinth-registry",
   "examples/counter-rs",
   "examples/todo-rs",
 ]
@@ -27,6 +28,7 @@ default-members = [
   "crates/plinth-link",
   "crates/plinth-package",
   "crates/plinth-hub",
+  "crates/plinth-registry",
 ]
 
 [workspace.package]
@@ -43,6 +45,7 @@ plinth-compiler = { path = "crates/plinth-compiler" }
 plinth-link = { path = "crates/plinth-link" }
 plinth-package = { path = "crates/plinth-package" }
 plinth-hub = { path = "crates/plinth-hub" }
+plinth-registry = { path = "crates/plinth-registry" }
 plinth-host-desktop = { path = "crates/plinth-host-desktop" }
 anyhow = "1"
 log = "0.4"

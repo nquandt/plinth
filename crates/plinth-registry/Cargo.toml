@@ -1,0 +1,20 @@
+[package]
+name = "plinth-registry"
+description = "The Plinth registry format: documents, a static-registry generator, and a Source client (docs/REGISTRY.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+plinth-package = { workspace = true }
+plinth-link = { workspace = true }
+ureq = { version = "2", default-features = false, features = ["tls"] }
+
+[dev-dependencies]
+plinth-compiler = { workspace = true }
+plinth-hub = { workspace = true }
+toml = { workspace = true }

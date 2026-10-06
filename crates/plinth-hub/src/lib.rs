@@ -97,7 +97,25 @@ pub struct LibraryEntry {
     /// Unix seconds.
     pub added: u64,
     pub source: Source,
+    /// The registry (`docs/REGISTRY.md` §9) this app was installed from, if
+    /// any; `None` for an app added from a bare file (`plinth hub add`).
+    #[serde(default)]
+    pub registry: Option<RegistrySource>,
 }
+
+/// The registry source of a library app: the configured source name
+/// (`docs/REGISTRY.md` §9, `hub source add`) and its base, recorded so
+/// `plinth hub update` knows where to look for a newer version.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RegistrySource {
+    pub name: String,
+    pub base: String,
+}
+
+/// The registry sources known to this Hub (`hub source add/list/remove`),
+/// stored in `sources.json`: name -> base URL/path.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Sources(pub BTreeMap<String, String>);
 
 impl LibraryEntry {
     /// The version the Hub should run: the pinned one, or the latest added
@@ -190,6 +208,9 @@ impl Hub {
     fn blocks_path(&self) -> PathBuf {
         self.dir.join("blocks.json")
     }
+    fn sources_path(&self) -> PathBuf {
+        self.dir.join("sources.json")
+    }
 
     fn library(&self) -> Result<Library> {
         read_json(&self.library_path())
@@ -223,6 +244,7 @@ impl Hub {
             groups: Vec::new(),
             added: now(),
             source: Source::File,
+            registry: None,
         });
         entry.name = pkg.manifest.name.clone();
         if !entry.versions.iter().any(|v| v.version == pkg.manifest.version) {
@@ -394,6 +416,44 @@ impl Hub {
             }
         }
         Ok(policy)
+    }
+
+    /// Records (or replaces) the registry source of an installed app
+    /// (`docs/REGISTRY.md` §9).
+    pub fn set_registry(&self, id: &str, name: &str, base: &str) -> Result<()> {
+        let mut lib = self.library()?;
+        let entry = lib.apps.get_mut(id).with_context(|| format!("{id} is not in the library"))?;
+        entry.registry = Some(RegistrySource { name: name.to_owned(), base: base.to_owned() });
+        self.save_library(&lib)
+    }
+
+    // -- Sources (registries, `docs/REGISTRY.md` §9) ------------------------
+
+    fn sources_store(&self) -> Result<Sources> {
+        read_json(&self.sources_path())
+    }
+
+    /// The configured registry sources, name -> base.
+    pub fn sources(&self) -> Result<BTreeMap<String, String>> {
+        Ok(self.sources_store()?.0)
+    }
+
+    pub fn source_add(&self, name: &str, base: &str) -> Result<()> {
+        let mut store = self.sources_store()?;
+        store.0.insert(name.to_owned(), base.to_owned());
+        write_json(&self.sources_path(), &store)
+    }
+
+    pub fn source_remove(&self, name: &str) -> Result<()> {
+        let mut store = self.sources_store()?;
+        if store.0.remove(name).is_none() {
+            bail!("no source named `{name}`");
+        }
+        write_json(&self.sources_path(), &store)
+    }
+
+    pub fn source_base(&self, name: &str) -> Result<String> {
+        self.sources_store()?.0.remove(name).with_context(|| format!("no source named `{name}`"))
     }
 
     /// The declared capabilities of `id` that have no grant decision yet,
