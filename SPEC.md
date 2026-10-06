@@ -626,7 +626,7 @@ plinth-profile          # one line: "plinth/1"
 manifest.toml
 app.wasm                # the app module: only the app code (§10.4)
 assets/…                # read-only resources (images, data, fonts are NOT allowed: the runtime owns typography)
-signature.json          # optional: publisher signature over the digests of all other entries
+signature.json          # optional: publisher signature over the digests of all other entries (schema plinth.signature/1, Ed25519; docs/HUB.md §6.1)
 source/…                # optional: app sources, for "open as project"
 ```
 

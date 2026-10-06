@@ -687,8 +687,13 @@ mod tests {
         (Hub::open(&dir).unwrap(), dir)
     }
 
-    fn rand_suffix() -> u64 {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64
+    /// A unique suffix for a test directory. The clock alone is not enough:
+    /// on Windows two parallel tests can read the same time.
+    fn rand_suffix() -> String {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        format!("{t}-{n}")
     }
 
     /// Compiles `examples/counter` (small, no capabilities) into an app
