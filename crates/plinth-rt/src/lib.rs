@@ -33,7 +33,7 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 3] = *b"1.2";
+static CORE_VERSION: [u8; 3] = *b"1.3";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;
@@ -199,6 +199,10 @@ impl bindings::Guest for Rt {
                 }
                 plinth_protocol::Event::Timer { timer } => {
                     host::dispatch_timer(timer);
+                    reactive::flush();
+                }
+                plinth_protocol::Event::Completion { request, result } => {
+                    host::dispatch_completion(request, &result);
                     reactive::flush();
                 }
                 #[cfg(feature = "dev")]
@@ -433,6 +437,17 @@ abi! {
     fn __plinth_rt_json_arr_next() -> i32 { json::arr_next() }
     fn __plinth_rt_json_obj_begin() { json::obj_begin() }
     fn __plinth_rt_json_obj_next_key() -> i32 { json::obj_next_key() }
+
+    // -- plinth:dialog (SPEC.md §8.5; capability: none, it is UI) -------------
+    fn __plinth_rt_dialog_alert(thunk: i32, env: i32, message: i32) {
+        host::dialog_alert(Callable { thunk: thunk as u32, env: env as u32 }, message)
+    }
+    fn __plinth_rt_dialog_confirm(thunk: i32, env: i32, message: i32) {
+        host::dialog_confirm(Callable { thunk: thunk as u32, env: env as u32 }, message)
+    }
+    fn __plinth_rt_dialog_prompt(thunk: i32, env: i32, message: i32) {
+        host::dialog_prompt(Callable { thunk: thunk as u32, env: env as u32 }, message)
+    }
 }
 
 // Hot reload (SPEC.md §13): a dev-only ABI function, not declared with the

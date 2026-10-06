@@ -49,6 +49,13 @@ pub fn trace_roots(f: &mut dyn FnMut(u32)) {
             f(timer.callable.env);
         }
     });
+    // A pending request's callback must survive a GC between the host call
+    // and its `completion` event, exactly like a pending timer above.
+    REQUESTS.with(|r| {
+        for req in r.iter() {
+            f(req.callable.env);
+        }
+    });
 }
 
 /// Dispatches a `timer` event (SPEC.md §8.4) to its registered callback,
@@ -65,6 +72,35 @@ pub fn dispatch_timer(timer: u32) {
         TIMERS.with(|t| t.retain(|x| x.id != timer));
     }
     crate::reactive::untracked(|| invoke(callable, Val::None));
+}
+
+/// A pending async host call: the request id the host gave us, and the
+/// callback to invoke when its `completion` event (SPEC.md §8.4) arrives.
+struct Request {
+    id: u32,
+    callable: Callable,
+}
+
+static REQUESTS: Global<Vec<Request>> = Global::new(Vec::new());
+
+/// Registers `callable` under the request id a host API call returned, so
+/// `dispatch_completion` can find it when the completion arrives.
+pub fn register_request(id: u32, callable: Callable) {
+    REQUESTS.with(|r| r.push(Request { id, callable }));
+}
+
+/// Dispatches a `completion` event (SPEC.md §8.4) to its registered
+/// callback with the decoded result, then forgets the request. An unknown
+/// (already-answered, or never registered) request id is ignored, not an
+/// error.
+pub fn dispatch_completion(request: u32, result: &plinth_protocol::Value) {
+    let callable = REQUESTS.with(|r| {
+        let i = r.iter().position(|x| x.id == request)?;
+        Some(r.remove(i).callable)
+    });
+    if let Some(callable) = callable {
+        crate::reactive::untracked(|| invoke(callable, crate::ui::value_to_val(result)));
+    }
 }
 
 /// The last denial reason for `plinth:store`'s `kv.*` calls, as the string
@@ -271,4 +307,39 @@ pub fn clipboard_read_text() -> i32 {
     }
     #[cfg(not(target_arch = "wasm32"))]
     0
+}
+
+/// `dialog.alert(message, done)`: shows a host-owned modal with an OK
+/// button (SPEC.md §8.5). `done` is called with no argument once the user
+/// dismisses it. No capability is needed: it is UI, not data access.
+pub fn dialog_alert(callable: Callable, message: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let message = strings::as_str(message as u32);
+        let id = host::dialog::alert(message);
+        register_request(id, callable);
+    }
+}
+
+/// `dialog.confirm(message, done)`: shows a host-owned modal with OK and
+/// Cancel. `done` is called with a `boolean` (`true` for OK).
+pub fn dialog_confirm(callable: Callable, message: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let message = strings::as_str(message as u32);
+        let id = host::dialog::confirm(message);
+        register_request(id, callable);
+    }
+}
+
+/// `dialog.prompt(message, done)`: shows a host-owned modal with a text
+/// field. `done` is called with the entered text, or `null` if the user
+/// canceled.
+pub fn dialog_prompt(callable: Callable, message: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let message = strings::as_str(message as u32);
+        let id = host::dialog::prompt(message);
+        register_request(id, callable);
+    }
 }

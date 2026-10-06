@@ -130,6 +130,10 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("json_arr_next", &[], &[I32]),
     ("json_obj_begin", &[], &[]),
     ("json_obj_next_key", &[], &[I32]),
+    // -- plinth:dialog (SPEC.md §8.4, §8.5) ---------------------------------
+    ("dialog_alert", &[I32, I32, I32], &[]),
+    ("dialog_confirm", &[I32, I32, I32], &[]),
+    ("dialog_prompt", &[I32, I32, I32], &[]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -167,13 +171,16 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("json_arr_next", 2),
     ("json_obj_begin", 2),
     ("json_obj_next_key", 2),
+    ("dialog_alert", 3),
+    ("dialog_confirm", 3),
+    ("dialog_prompt", 3),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).
 pub fn added_in(name: &str) -> u32 {
     ADDED_IN.iter().find(|(n, _)| *n == name).map_or(0, |(_, m)| *m)
 }
-pub const CORE_MINOR: u32 = 2;
+pub const CORE_MINOR: u32 = 3;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;

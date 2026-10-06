@@ -223,6 +223,10 @@ fn visit_expr(e: &TExpr, f: &mut dyn FnMut(&TExpr)) {
             go(ms);
             go(cb);
         }
+        TExprKind::DialogCall(_, message, cb) => {
+            go(message);
+            go(cb);
+        }
         _ => {}
     }
 }
@@ -430,6 +434,12 @@ impl Cx<'_> {
                 let f = self.expr(*f);
                 let thunk = thunk_of(&f);
                 TExprKind::Rt("set_timer", vec![thunk, f, ms, i32c(repeat as i32)])
+            }
+            TExprKind::DialogCall(rt_fn, message, f) => {
+                let message = self.expr(*message);
+                let f = self.expr(*f);
+                let thunk = thunk_of(&f);
+                TExprKind::Rt(rt_fn, vec![thunk, f, message])
             }
             TExprKind::Navigate(name) => {
                 let idx = self.prog.screens.iter().position(|s| s.name == name).unwrap_or(0);

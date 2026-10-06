@@ -308,6 +308,10 @@ pub enum TExprKind {
     /// `setTimeout`/`setInterval`: `(ms, repeat, callback)`. Returns the
     /// timer id as a `number` (SPEC.md §8.5, `plinth:time`).
     TimerNew(Box<TExpr>, bool, Box<TExpr>),
+    /// `plinth:dialog`'s `alert`/`confirm`/`prompt`: `(rt function name,
+    /// message, done callback)`. Returns `void`; the done callback carries
+    /// the result (SPEC.md §8.4, §8.5).
+    DialogCall(&'static str, Box<TExpr>, Box<TExpr>),
 
     // -- Forms that only `lower` makes. ------------------------------------
     /// The table index of the thunk adapter for a closure signature.
