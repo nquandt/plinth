@@ -608,7 +608,7 @@ A `.plnt` file is a zip archive with these entries:
 ```
 plinth-profile          # one line: "plinth/1"
 manifest.toml
-app.wasm                # the component
+app.wasm                # the app module: only the app code (§10.4)
 assets/…                # read-only resources (images, data, fonts are NOT allowed: the runtime owns typography)
 signature.json          # optional: publisher signature over the digests of all other entries
 source/…                # optional: app sources, for "open as project"
@@ -617,6 +617,8 @@ source/…                # optional: app sources, for "open as project"
 The loader rejects path traversal, absolute paths, symlinks, duplicate entries, and archives that expand too much (zip bombs). It checks that `manifest.entry` matches `app.wasm`. Opening a package grants nothing.
 
 ### 10.2 Manifest
+
+`runtime` names the runtime build that the app needs, for example `plinth-rt/6e3f…` (§10.4).
 
 ```toml
 id        = "com.example.notes"
@@ -655,6 +657,20 @@ exclude = []            # e.g. ["ios"] if a capability is unsupported there
 | Android | `.apk` / `.aab` |
 
 The stub finds its payload through a footer: the magic bytes `PLNTH\0`, the offset, the length, and a digest.
+
+### 10.4 App modules and the runtime
+
+**A `.plnt` holds only app code.** The runtime (`plinth-rt`) belongs to the host, which the user installs one time. A person runs an app with a host: `plinth run app.plnt`, a Plinth runner app, or a single-file export (§10.3).
+
+- `app.wasm` is a core Wasm module. It imports the runtime functions (the `rt_abi` table, without the `__plinth_rt_` prefix), `memory` and `table` from the module `plinth-rt`. It imports only the runtime functions that it calls. It has no exports, no own memory or table, and only passive data.
+- Its one element segment starts at the end of the runtime's table.
+- The custom section `plinth-runtime` names the runtime build: `plinth-rt/` and the first 16 hex digits of the SHA-256 of the runtime module. The manifest field `runtime` has the same value.
+- **Load:** the host checks the imports (names and types), checks the runtime id, remaps the indices of the app into the index spaces of its runtime, and uses the append linker (§5.1 step 8) to make one module. Then it runs that module. The link takes some milliseconds.
+- **Security:** the app can reach only the runtime functions. All host APIs go through the runtime and the capability policy (§11).
+- **Versions:** today the runtime id must match exactly. A host can carry more than one runtime build. A stable runtime ABI with version ranges comes later.
+- **Sizes (2026-10-05):** the counter app module is 1.8 KB and its package is 2 KiB; the todo app module is 5 KB.
+
+The compiler runs the same load step after each build, so each build tests it.
 
 ---
 
@@ -834,9 +850,9 @@ Each milestone has exit criteria. Work in this order. Windows is the first platf
 | Q4 | Should the runtime embed `gpui-component`, or own all controls? | Evaluate in M0. |
 | Q5 | String indexing semantics | UTF-16 compatibility vs. code points. Pick before M1 ends. |
 | Q6 | Guest-side or host-side list virtualization | Host-side is better for scroll speed. Guest-side is simpler. |
-| Q7 | Is the artifact a component or a core module plus a custom ABI? | This spec uses a component (WIT). Check the `jco` and iOS AOT costs in M0. |
+| Q7 | Is the artifact a component or a core module plus a custom ABI? | **Decided:** the package holds a core app module that imports `plinth-rt` (§10.4). The host links it into its runtime and runs a `plinth:app` component (WIT) on desktop. |
 | Q8 | Multi-window apps | Not in UI API 1.0. Add with `ui.window.multi` later. |
-| Q9 | How do chunks share memory and the runtime? | Core modules that import one memory, one table and `plinth-rt` from the entry module, or a component-model feature. It is related to Q7. Decide in M1 (§18.3). |
+| Q9 | How do chunks share memory and the runtime? | Core modules that import one memory, one table and `plinth-rt` from the entry module, or a component-model feature. It is related to Q7. **Partly decided:** an app module already imports the memory, the table and the runtime (§10.4); a lazy chunk can use the same form. |
 | Q10 | The cache policy for browsed apps | The size budget, the time limit, the eviction order, and what happens to the data of an evicted app (§18.2). |
 | Q11 | Consent for browsed apps | Grants for one session or persistent grants. Which capabilities a browsed app can get without an install (§18.2). |
 | Q12 | The address of a browsed app | A hub id, a `plinth://` URL, or an `https://` URL to a `.plnt`. What is the origin of an app: the publisher key or the URL? |
