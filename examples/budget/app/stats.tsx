@@ -1,4 +1,4 @@
-import { Screen, Section, Text, Progress, Button, navigate, List } from "plinth:ui";
+import { Screen, Section, Text, Progress, Button, navigate } from "plinth:ui";
 import { Math } from "plinth:core";
 import { totalsByCategory, maxCategoryMagnitude, income, spending, balance } from "./model";
 import { categories } from "./types";
@@ -25,11 +25,7 @@ export default function Stats() {
         <Text tone={balance() >= 0 ? "success" : "danger"}>{`Balance: ${balance().toFixed(2)}`}</Text>
       </Section>
       <Section title="By category">
-        <List
-          items={categories}
-          key={(c) => c}
-          row={(c) => <Progress label={categoryLabel(c)} value={progressFor(c)} />}
-        />
+        {categories.map((c) => <Progress label={categoryLabel(c)} value={progressFor(c)} />)}
       </Section>
       <Section title="Navigation">
         <Button label="Back to transactions" onPress={() => navigate.back()} />

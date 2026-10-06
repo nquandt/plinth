@@ -126,3 +126,41 @@ small local change), per the dogfooding task's scope.
   now takes `Category` instead of `string`. Verified with
   `npx -y -p typescript@7 tsc -p .` (clean) and
   `cargo test -p plinth-compiler --test apps`.
+- #2 (fixed): `{arr.map(x => <Row .../>)}` (optionally preceded by
+  `.filter(...)`) is now allowed as a JSX child. The checker
+  (`check/jsx.rs::map_child`, called from `children()`'s
+  `ChildKind::Nodes` case before the generic "an array of elements is
+  not a child" diagnostic) recognizes this exact shape — a `.map` call
+  whose single argument is an inline arrow/function — and desugars it
+  to a `<List>` control built directly in TIR: `items` is the `.map`
+  receiver (already a plain array; `.filter` needs no special-casing
+  since it already returns one), `row` is the user's arrow
+  type-checked exactly like a literal `<List>`'s `row` prop, and `key`
+  is a synthetic `(item, index) => index` closure keyed by array
+  position, built as a tiny AST `FuncDecl` (`index_key_fn`) so it goes
+  through the normal closure-checking path and infers its parameter
+  types from the offered `FuncType` like a user arrow would. Because
+  the desugared control's props (`PropTarget::ListItems/ListKey/
+  ListRow`) are exactly what a literal `<List>` produces, `lower.rs`
+  needed no changes at all: it is the same keyed reconciler, run
+  through the same runtime `list`/`run_list` path, with **no new
+  runtime function**. A named function reference (`arr.map(row)`), or
+  anything that is not a literal arrow/function, is unaffected and
+  still rejected with `PL4004`, since the task scoped this to "an
+  array expression with an arrow function returning JSX". Documented
+  in `docs/language.md` ("Supported syntax"), including why a literal
+  `<List>` is still the better choice when a hand-written `key` should
+  track identity across a reorder rather than by position. Tests in
+  `crates/plinth-compiler/tests/lang.rs`:
+  `map_as_jsx_child_renders_all_items`,
+  `filter_then_map_as_jsx_child_is_allowed`,
+  `map_as_jsx_child_updates_on_add_remove_and_reorder` (push/reverse/
+  pop via `signal.set`, checking no op errors after each), 
+  `map_as_jsx_child_survives_gc_stress` (same, with
+  `plinth_protocol::init_arg::GC_STRESS` on), and
+  `map_with_a_named_function_reference_is_still_rejected`. Removed the
+  workaround in `examples/budget/app/stats.tsx`: the `<List items={categories}
+  key={(c) => c} row={...} />` wrapper around `<Progress>` rows is now
+  a plain `{categories.map((c) => <Progress .../>)}`. Verified with
+  `npx -y -p typescript@7 tsc -p .` (clean) and
+  `cargo test -p plinth-compiler --test apps`.

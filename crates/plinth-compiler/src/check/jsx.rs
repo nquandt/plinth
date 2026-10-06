@@ -360,6 +360,16 @@ impl Checker<'_> {
                     match c {
                         JsxChild::Element(e) => out.push(TChild::Element(self.jsx(e))),
                         JsxChild::Expr(e) => {
+                            // `{items.map(x => <Row .../>)}` (dogfooding
+                            // gap #2) desugars to the same keyed `List`
+                            // reconciler a literal `<List>` lowers to,
+                            // keyed by position, before the generic
+                            // "array is not a child" diagnostic below
+                            // would otherwise fire for it.
+                            if let Some(list) = self.map_child(e) {
+                                out.push(TChild::Element(list));
+                                continue;
+                            }
                             let te = self.expr(e, Some(&Type::Element));
                             if let Type::Array(_) = te.ty {
                                 self.err_help(
@@ -386,6 +396,54 @@ impl Checker<'_> {
                 TChildren::Nodes(out)
             }
         }
+    }
+
+    /// Recognizes `arr.map(x => <Row .../>)` (optionally preceded by a
+    /// `.filter(...)`, since `filter` already returns a plain array) as a
+    /// JSX child and desugars it to a `<List>` control, keyed by position
+    /// — the same keyed reconciler a literal `<List items key row>`
+    /// lowers to (`lower.rs`'s `PropTarget::List*` handling, the runtime
+    /// `list`/`run_list`). Only this exact shape is recognized: a `.map`
+    /// call whose argument is an inline arrow/function expression. A
+    /// named function reference, or any other array-producing
+    /// expression, falls through to the ordinary "an array of elements
+    /// is not a child" diagnostic.
+    fn map_child(&mut self, e: &Expr) -> Option<TJsx> {
+        let ExprKind::Call { callee, args, optional: false, .. } = &e.kind else { return None };
+        let ExprKind::Member { obj, prop, optional: false, .. } = &callee.kind else { return None };
+        if prop != "map" || args.len() != 1 {
+            return None;
+        }
+        if !matches!(&args[0].kind, ExprKind::Func(_)) {
+            return None;
+        }
+        let ExprKind::Func(row_fn) = &args[0].kind else { unreachable!() };
+        let items_te = self.expr(obj, None);
+        let item_ty = match &items_te.ty {
+            Type::Array(t) => (**t).clone(),
+            Type::Error => Type::Error,
+            other => {
+                let msg = format!("`.map` here needs an array, not `{}`", self.show(other));
+                self.err_help(code::TYPE_MISMATCH, obj.span, msg, "use <List items={...} key={...} row={...} /> for anything more complex");
+                return Some(TJsx::Control {
+                    kind: plinth_protocol::ControlKind::Section,
+                    props: Vec::new(),
+                    children: TChildren::None,
+                    span: e.span,
+                });
+            }
+        };
+        let row_expr = Expr { kind: ExprKind::Func(row_fn.clone()), span: args[0].span };
+        let (row, _) = self.callback(&row_expr, &[item_ty.clone()], Some(Type::Element));
+        let key_fn = index_key_fn(e.span);
+        let key_expr = Expr { kind: ExprKind::Func(Box::new(key_fn)), span: e.span };
+        let (key, _) = self.callback(&key_expr, &[item_ty, Type::Number], None);
+        let props = vec![
+            TProp { target: PropTarget::ListItems, value: items_te },
+            TProp { target: PropTarget::ListKey, value: key },
+            TProp { target: PropTarget::ListRow, value: row },
+        ];
+        Some(TJsx::Control { kind: plinth_protocol::ControlKind::List, props, children: TChildren::None, span: e.span })
     }
 
     fn component(&mut self, el: &JsxElement, fid: FuncId) -> TJsx {
@@ -430,5 +488,28 @@ impl Checker<'_> {
             }
         };
         TJsx::Component { func: fid, props, span: el.span }
+    }
+}
+
+/// `(item, index) => index`: the synthetic key function for `map_child`'s
+/// desugared `<List>`, keyed by position. Built as an AST node (rather
+/// than directly as `TExpr`) so it goes through the normal closure
+/// type-checking path (`Checker::closure`), which infers each
+/// unannotated parameter's type from the `FuncType` offered by the
+/// caller's `callback(..., &[item_ty, Type::Number], ...)` call.
+fn index_key_fn(span: crate::diag::Span) -> crate::ast::FuncDecl {
+    use crate::ast::{Body, FuncDecl, Param, Pattern};
+    FuncDecl {
+        name: None,
+        params: vec![
+            Param { pattern: Pattern::Ident("__item".to_string(), span), ty: None, default: None, optional: false, span },
+            Param { pattern: Pattern::Ident("__index".to_string(), span), ty: None, default: None, optional: false, span },
+        ],
+        ret: None,
+        body: Body::Expr(Box::new(Expr { kind: ExprKind::Ident("__index".to_string()), span })),
+        exported: false,
+        is_default: false,
+        span,
+        type_params: Vec::new(),
     }
 }

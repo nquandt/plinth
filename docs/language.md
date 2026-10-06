@@ -64,6 +64,18 @@ yet:** static members, getters/setters, generic classes,
   splice its children into there. For a conditional block with more
   than one sibling, wrap the elements in a `<Section>` or `<Group>` and
   put the condition inside it instead of around it.
+- `{arr.map(x => <Row .../>)}` as a JSX child (optionally after a
+  `.filter(...)`, since `filter` already returns a plain array): the
+  checker desugars it to the same keyed `List` the reconciler uses for
+  a literal `<List items key row>`, keyed by position (array index),
+  with no node of its own for the `.map` itself. Only this exact shape
+  is recognized — a `.map` call whose argument is an inline
+  arrow/function expression that returns an element. A named function
+  reference (`arr.map(row)`) or any other array-producing expression
+  as a JSX child is still rejected (`PL4004`); use a literal `<List
+  items={...} key={...} row={...} />` for those, since a hand-written
+  `key` lets the reconciler track identity across a reorder instead of
+  by position.
 - `import`/`export` within the closed world (see below).
 - Classes, single inheritance, `instanceof`, general union narrowing,
   generic functions and interfaces (all implemented; see "Status"

@@ -1860,3 +1860,201 @@ fn as_cast_between_unrelated_types_is_rejected() {
     let main = with_app("const n: number = 5; const x = n as boolean;");
     assert_eq!(codes(&main), vec!["PL2006"]);
 }
+
+// -- `.map()` as JSX children (dogfooding gap #2): desugars to the same
+// keyed `List` reconciler a literal `<List>` lowers to, keyed by
+// position. -----------------------------------------------------------
+
+fn texts_in(tree: &Tree) -> Vec<String> {
+    let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+    let mut texts = Vec::new();
+    while let Some(id) = stack.pop() {
+        let node = tree.get(id).unwrap();
+        if node.kind == Some(ControlKind::Text) {
+            if let Some(t) = &node.text {
+                texts.push(t.clone());
+            }
+        }
+        stack.extend(node.children.iter());
+    }
+    texts
+}
+
+#[test]
+fn map_as_jsx_child_renders_all_items() {
+    let main = r#"import { app, Screen, Section, Text, signal } from "plinth:ui";
+function Home() {
+  const items = signal(["a", "b", "c"]);
+  return (
+    <Screen title="Home">
+      <Section>
+        {items().map((x) => <Text>{x}</Text>)}
+      </Section>
+    </Screen>
+  );
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    let mut texts = texts_in(&tree);
+    texts.sort();
+    assert_eq!(texts, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+}
+
+#[test]
+fn filter_then_map_as_jsx_child_is_allowed() {
+    let main = r#"import { app, Screen, Section, Text, signal } from "plinth:ui";
+function Home() {
+  const items = signal([1, 2, 3, 4]);
+  return (
+    <Screen title="Home">
+      <Section>
+        {items().filter((x) => x % 2 === 0).map((x) => <Text>{"" + x}</Text>)}
+      </Section>
+    </Screen>
+  );
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    let mut texts = texts_in(&tree);
+    texts.sort();
+    assert_eq!(texts, vec!["2".to_string(), "4".to_string()]);
+}
+
+#[test]
+fn map_as_jsx_child_updates_on_add_remove_and_reorder() {
+    let main = r#"import { app, Screen, Section, Text, Button, signal } from "plinth:ui";
+function Home() {
+  const items = signal(["a", "b", "c"]);
+  return (
+    <Screen title="Home">
+      <Section>
+        {items().map((x) => <Text>{x}</Text>)}
+      </Section>
+      <Button label="Push" onPress={() => items.set([...items(), "d"])} />
+      <Button label="Shift" onPress={() => { const xs = items().slice(); xs.reverse(); items.set(xs); }} />
+      <Button label="Pop" onPress={() => items.set(items().slice(0, items().length - 1))} />
+    </Screen>
+  );
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        let errors = tree.apply(&commit).unwrap();
+        assert!(errors.is_empty(), "op errors: {errors:?}");
+    }
+
+    fn press(guest: &mut plinth_runner_wasmtime::Guest, tree: &mut Tree, label: &str) {
+        let button = {
+            let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+            loop {
+                let id = stack.pop().expect("no Button found");
+                let node = tree.get(id).unwrap();
+                if node.kind == Some(ControlKind::Button) && node.str_prop(prop::LABEL) == Some(label) {
+                    break id;
+                }
+                stack.extend(node.children.iter());
+            }
+        };
+        let handler = tree.get(button).unwrap().handler(event::PRESS).expect("button has a handler");
+        let mut w = Writer::new();
+        w.event(&Event::Ui { handler, event: event::PRESS, value: Value::Null });
+        for commit in guest.on_event(w.as_bytes()).unwrap() {
+            let errors = tree.apply(&commit).unwrap();
+            assert!(errors.is_empty(), "op errors: {errors:?}");
+        }
+    }
+
+    let mut initial = texts_in(&tree);
+    initial.sort();
+    assert_eq!(initial, vec!["a", "b", "c"]);
+    press(&mut guest, &mut tree, "Push");
+    let mut after_push = texts_in(&tree);
+    after_push.sort();
+    assert_eq!(after_push, vec!["a", "b", "c", "d"]);
+    press(&mut guest, &mut tree, "Shift");
+    let mut after_reverse = texts_in(&tree);
+    after_reverse.sort();
+    assert_eq!(after_reverse, vec!["a", "b", "c", "d"]);
+    press(&mut guest, &mut tree, "Pop");
+    let mut after_pop = texts_in(&tree);
+    after_pop.sort();
+    assert_eq!(after_pop, vec!["b", "c", "d"]);
+}
+
+#[test]
+fn map_as_jsx_child_survives_gc_stress() {
+    let main = r#"import { app, Screen, Section, Text, Button, signal } from "plinth:ui";
+function Home() {
+  const items = signal(["a", "b", "c"]);
+  return (
+    <Screen title="Home">
+      <Section>
+        {items().map((x) => <Text>{x}</Text>)}
+      </Section>
+      <Button label="Push" onPress={() => items.set([...items(), "d"])} />
+    </Screen>
+  );
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    let stress_args = plinth_protocol::init_arg::one(plinth_protocol::init_arg::GC_STRESS, &[]);
+    for commit in guest.init(&stress_args).unwrap() {
+        let errors = tree.apply(&commit).unwrap();
+        assert!(errors.is_empty(), "op errors: {errors:?}");
+    }
+    let button = {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        loop {
+            let id = stack.pop().expect("no Button found");
+            let node = tree.get(id).unwrap();
+            if node.kind == Some(ControlKind::Button) {
+                break id;
+            }
+            stack.extend(node.children.iter());
+        }
+    };
+    let handler = tree.get(button).unwrap().handler(event::PRESS).expect("button has a handler");
+    let mut w = Writer::new();
+    w.event(&Event::Ui { handler, event: event::PRESS, value: Value::Null });
+    for commit in guest.on_event(w.as_bytes()).unwrap() {
+        let errors = tree.apply(&commit).unwrap();
+        assert!(errors.is_empty(), "op errors: {errors:?}");
+    }
+}
+
+#[test]
+fn map_with_a_named_function_reference_is_still_rejected() {
+    // Only an inline arrow/function is desugared; a named reference falls
+    // through to the ordinary "array is not a child" diagnostic.
+    let main = with_app("function row(x: string) { return <Text>{x}</Text>; }\nconst items: string[] = [\"a\", \"b\"];")
+        .replace(
+            "import { app, Screen, Text, signal, computed, effect } from \"plinth:ui\";",
+            "import { app, Screen, Section, Text, signal, computed, effect } from \"plinth:ui\";",
+        )
+        .replace("<Screen title=\"Home\" />", "<Screen title=\"Home\"><Section>{items.map(row)}</Section></Screen>");
+    assert_eq!(codes(&main), vec!["PL4004"]);
+}
