@@ -325,7 +325,12 @@ impl Cx<'_> {
                     }
                     let f = &m.value;
                     if f.r#async || f.generator {
-                        self.err(code::ASYNC, m.span, "async methods and generators come in v1");
+                        self.err_help(
+                            code::ASYNC,
+                            m.span,
+                            "async methods and generators are not supported yet",
+                            "use a top-level `async function` that takes the object as a parameter",
+                        );
                         continue;
                     }
                     let Some(body) = &f.body else {
@@ -362,6 +367,7 @@ impl Cx<'_> {
                         is_default: false,
                         span: self.span(m.span),
                         type_params: Vec::new(),
+                        is_async: false,
                     });
                 }
                 o::ClassElement::AccessorProperty(a) => {
@@ -778,13 +784,42 @@ impl Cx<'_> {
             }
             S::ThrowStatement(t) => StmtKind::Throw(self.expr(&t.argument)?),
             S::TryStatement(t) => {
-                self.err_help(
-                    code::TRY,
-                    t.span,
-                    "`try`/`catch` comes in v1",
-                    "return a `Result` for recoverable errors; `throw` stops the app",
-                );
-                return None;
+                let block = self.block(&t.block.body);
+                let catch = match &t.handler {
+                    None => None,
+                    Some(h) => {
+                        let param = match &h.param {
+                            None => None,
+                            Some(p) => {
+                                if let Some(ann) = &p.type_annotation
+                                    && !matches!(ann.type_annotation, o::TSType::TSUnknownKeyword(_))
+                                {
+                                    self.err_help(
+                                        code::TRY,
+                                        ann.span,
+                                        "a `catch` variable can only have the type `unknown`",
+                                        "remove the type; the variable is an `Error`, narrow it with `instanceof`",
+                                    );
+                                }
+                                match &p.pattern {
+                                    o::BindingPattern::BindingIdentifier(id) => Some((id.name.to_string(), self.span(id.span))),
+                                    _ => {
+                                        self.err_help(
+                                            code::TRY,
+                                            p.span,
+                                            "a `catch` variable cannot be a pattern",
+                                            "write `catch (e)` and read `e.message`",
+                                        );
+                                        None
+                                    }
+                                }
+                            }
+                        };
+                        Some(Catch { param, body: self.block(&h.body.body) })
+                    }
+                };
+                let finally = t.finalizer.as_ref().map(|f| self.block(&f.body));
+                StmtKind::Try { block, catch, finally }
             }
             S::LabeledStatement(l) => {
                 self.err(code::LABEL, l.span, "labels are not supported");
@@ -824,8 +859,8 @@ impl Cx<'_> {
     }
 
     fn function(&mut self, f: &o::Function) -> Option<FuncDecl> {
-        if f.r#async || f.generator {
-            self.err(code::ASYNC, f.span, "async functions and generators come in v1");
+        if f.generator {
+            self.err(code::ASYNC, f.span, "generators are not supported");
             return None;
         }
         let mut type_params = Vec::new();
@@ -863,6 +898,7 @@ impl Cx<'_> {
             is_default: false,
             span: self.span(f.span),
             type_params,
+            is_async: f.r#async,
         })
     }
 
@@ -1082,10 +1118,6 @@ impl Cx<'_> {
                 target: Box::new(self.simple_target(&u.argument)?),
             },
             E::ArrowFunctionExpression(a) => {
-                if a.r#async {
-                    self.err(code::ASYNC, a.span, "async functions come in v1");
-                    return None;
-                }
                 if a.type_parameters.is_some() {
                     self.err(code::GENERIC_USER, a.span, "generic functions come in v1");
                     return None;
@@ -1109,6 +1141,7 @@ impl Cx<'_> {
                     is_default: false,
                     span,
                     type_params: Vec::new(),
+                    is_async: a.r#async,
                 }))
             }
             E::FunctionExpression(f) => ExprKind::Func(Box::new(self.function(f)?)),
@@ -1185,10 +1218,7 @@ impl Cx<'_> {
                     ExprKind::NewInstance(name, args)
                 }
             }
-            E::AwaitExpression(a) => {
-                self.err(code::ASYNC, a.span, "`await` comes in v1");
-                return None;
-            }
+            E::AwaitExpression(a) => ExprKind::Await(Box::new(self.expr(&a.argument)?)),
             E::RegExpLiteral(r) => {
                 self.err(code::REGEX, r.span, "regular expressions are not supported");
                 return None;

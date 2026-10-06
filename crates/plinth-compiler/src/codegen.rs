@@ -35,7 +35,11 @@ struct UserType {
 }
 
 struct StructLayout {
-    type_id: u32,
+    /// The GC type id, given on first use (`sid_type`), so a struct that
+    /// the program never makes or tests costs no type-table entry.
+    type_id: Option<u32>,
+    size: u32,
+    refs: Vec<u32>,
     offsets: Vec<(u32, Repr)>,
 }
 
@@ -64,6 +68,31 @@ pub struct Codegen<'p> {
     literal_index: HashMap<String, u32>,
     /// Captured variables (used by a function other than the owner).
     captured: HashSet<VarId>,
+    /// Exceptions (SPEC.md §5.6): the functions that can return with a
+    /// pending exception. Only a call of one of these needs a check after
+    /// it, so an app with no `throw` pays nothing.
+    may_throw: HashSet<FuncId>,
+    /// True if a closure value (any function used as a value) can throw:
+    /// then every closure call and every thunk checks for an exception.
+    closures_throw: bool,
+    /// Method names with an implementation that can throw.
+    throwing_methods: HashSet<String>,
+    /// The `(flag, value)` globals of the pending exception, made on first
+    /// use. `flag` is 1 while an exception is pending; `value` is the
+    /// thrown `Error`.
+    exc: Option<(u32, u32)>,
+}
+
+/// A `finally` block that a `return`, `break` or `continue` inside its
+/// `try` must run first.
+#[derive(Clone)]
+struct FinallyCx {
+    body: Vec<TStmt>,
+    /// `FnGen::labels.len()` at the `try`: a jump to a label below this
+    /// index leaves the `try`.
+    labels: usize,
+    /// `FnGen::handlers.len()` outside the `try`.
+    handlers: usize,
 }
 
 fn mem(offset: u32, repr: Repr) -> MemArg {
@@ -141,8 +170,13 @@ pub fn generate(prog: &Program, layout: &Layout, main: FuncId) -> AppCode {
         literals: Vec::new(),
         literal_index: HashMap::new(),
         captured: HashSet::new(),
+        may_throw: HashSet::new(),
+        closures_throw: false,
+        throwing_methods: HashSet::new(),
+        exc: None,
     };
     g.find_captures();
+    g.find_throwers();
     g.lay_out_structs();
     g.lay_out_module_envs();
 
@@ -156,7 +190,7 @@ pub fn generate(prog: &Program, layout: &Layout, main: FuncId) -> AppCode {
     }
     // Thunks and frames can add more functions only through the queue, which
     // is empty now.
-    let entry_body = g.entry(main_idx);
+    let entry_body = g.entry(main_idx, main);
     let thunk_ty = g.type_of(vec![ValType::I32], vec![]);
     g.set_body(entry_idx, thunk_ty, entry_body);
     let entry_table = g.table_slot(entry_idx);
@@ -250,11 +284,22 @@ impl<'p> Codegen<'p> {
         FIRST_USER_TYPE + self.user_types.len() as u32 - 1
     }
 
+    /// The GC type id of struct `sid`.
+    fn sid_type(&mut self, sid: StructId) -> u32 {
+        if let Some(t) = self.structs[sid as usize].type_id {
+            return t;
+        }
+        let (size, refs) = (self.structs[sid as usize].size, self.structs[sid as usize].refs.clone());
+        let t = self.user_type(size, refs);
+        self.structs[sid as usize].type_id = Some(t);
+        t
+    }
+
     /// The GC type id a union member has at runtime, to narrow via the
     /// header's `type_id` (`UnionIs`).
-    fn type_id_of(&self, member: &Type) -> u32 {
+    fn type_id_of(&mut self, member: &Type) -> u32 {
         match member {
-            Type::Struct(sid) => self.structs[*sid as usize].type_id,
+            Type::Struct(sid) => self.sid_type(*sid),
             Type::String | Type::StrLits(_) => crate::rt_abi::T_STRING,
             other => panic!("a union member of type `{other:?}` has no runtime tag yet"),
         }
@@ -319,7 +364,7 @@ impl<'p> Codegen<'p> {
         raw.into_iter()
             .map(|(d, fid)| {
                 let idx = self.func_ref(fid);
-                (self.structs[d as usize].type_id, idx)
+                (self.sid_type(d), idx)
             })
             .collect()
     }
@@ -338,8 +383,7 @@ impl<'p> Codegen<'p> {
             let reprs: Vec<Repr> = s.fields.iter().map(|f| f.ty.repr()).collect();
             let (offsets, size) = lay_out(&reprs, HEADER);
             let refs = offsets.iter().zip(&reprs).filter(|(_, r)| **r == Repr::Ref).map(|(o, _)| *o).collect();
-            let type_id = self.user_type(size, refs);
-            self.structs.push(StructLayout { type_id, offsets: offsets.into_iter().zip(reprs).collect() });
+            self.structs.push(StructLayout { type_id: None, size, refs, offsets: offsets.into_iter().zip(reprs).collect() });
         }
     }
 
@@ -395,7 +439,7 @@ impl<'p> Codegen<'p> {
 
     // -- Entry ----------------------------------------------------------------
 
-    fn entry(&mut self, main_idx: u32) -> Function {
+    fn entry(&mut self, main_idx: u32, main: FuncId) -> Function {
         let rt = |n: &str| self.layout.rt(n);
         let mut f = Function::new(vec![(1, ValType::I32)]);
         // 1. The type table.
@@ -442,8 +486,126 @@ impl<'p> Codegen<'p> {
         // 4. Module initializers and the screens.
         f.instruction(&I::I32Const(0));
         f.instruction(&I::Call(main_idx));
+        if self.may_throw.contains(&main) {
+            // An uncaught exception in the start-up code (a module's
+            // top-level statements or a screen's component): report it,
+            // then stop, because the app has no complete UI (SPEC.md §5.6).
+            let mut report = self.report_uncaught();
+            report.insert(report.len() - 1, I::Unreachable);
+            for i in report {
+                f.instruction(&i);
+            }
+        }
         f.instruction(&I::End);
         f
+    }
+
+    // -- Exceptions (SPEC.md §5.6) --------------------------------------------
+
+    /// The `(flag, value)` globals of the pending exception.
+    fn exc_globals(&mut self) -> (u32, u32) {
+        if let Some(e) = self.exc {
+            return e;
+        }
+        let e = (self.global(), self.global());
+        self.exc = Some(e);
+        e
+    }
+
+    /// Code for a boundary where app code returns to the runtime (a thunk,
+    /// the entry): if an exception is pending, clear it and report it to
+    /// the host as uncaught. The app keeps running.
+    fn report_uncaught(&mut self) -> Vec<I<'static>> {
+        let (flag, val) = self.exc_globals();
+        let sid = self.prog.error_class.expect("a program that throws has the Error class");
+        let (name_off, _) = self.structs[sid as usize].offsets[0];
+        let (msg_off, _) = self.structs[sid as usize].offsets[1];
+        vec![
+            I::GlobalGet(flag),
+            I::If(BlockType::Empty),
+            I::I32Const(0),
+            I::GlobalSet(flag),
+            I::GlobalGet(val),
+            I::I32Load(mem(name_off, Repr::Ref)),
+            I::GlobalGet(val),
+            I::I32Load(mem(msg_off, Repr::Ref)),
+            I::Call(self.layout.rt("uncaught")),
+            I::End,
+        ]
+    }
+
+    /// The may-throw analysis: a function can throw if it has a `throw`, or
+    /// calls a function, a closure or a method that can throw. Runtime
+    /// functions never throw: a callback that the runtime calls reports
+    /// its own uncaught exception at its thunk.
+    fn find_throwers(&mut self) {
+        struct Facts {
+            throws: bool,
+            calls: Vec<FuncId>,
+            closure_calls: bool,
+            methods: Vec<String>,
+        }
+        let mut closure_fids: HashSet<FuncId> = HashSet::new();
+        let mut facts = Vec::new();
+        for f in &self.prog.funcs {
+            let mut fa = Facts { throws: false, calls: Vec::new(), closure_calls: false, methods: Vec::new() };
+            let mut throws = false;
+            // Code inside a `try` with a `catch` cannot let an exception
+            // out ("covered"), so it does not make the function throw.
+            walk_covered(
+                &f.body,
+                false,
+                &mut |s, covered| {
+                    if !covered && matches!(s, TStmt::Throw(_)) {
+                        throws = true;
+                    }
+                },
+                &mut |e, covered| match &e.kind {
+                    TExprKind::Closure(fid) => {
+                        closure_fids.insert(*fid);
+                    }
+                    _ if covered => {}
+                    TExprKind::Call(fid, _) => fa.calls.push(*fid),
+                    TExprKind::CallClosure(..) | TExprKind::ArrayHof { .. } => fa.closure_calls = true,
+                    TExprKind::MethodCall(_, name, ..) => fa.methods.push(name.clone()),
+                    _ => {}
+                },
+            );
+            fa.throws = throws;
+            facts.push(fa);
+        }
+        loop {
+            let mut changed = false;
+            for (fid, fa) in facts.iter().enumerate() {
+                let fid = fid as FuncId;
+                if self.may_throw.contains(&fid) {
+                    continue;
+                }
+                if fa.throws
+                    || fa.calls.iter().any(|c| self.may_throw.contains(c))
+                    || (fa.closure_calls && self.closures_throw)
+                    || fa.methods.iter().any(|m| self.throwing_methods.contains(m))
+                {
+                    self.may_throw.insert(fid);
+                    changed = true;
+                }
+            }
+            let closures_throw = closure_fids.iter().any(|f| self.may_throw.contains(f));
+            if closures_throw != self.closures_throw {
+                self.closures_throw = closures_throw;
+                changed = true;
+            }
+            for info in self.prog.classes.values() {
+                for (name, fid) in &info.methods {
+                    if self.may_throw.contains(fid) && self.throwing_methods.insert(name.clone()) {
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
     }
 
     fn literal_bytes(&self) -> Vec<u8> {
@@ -487,6 +649,12 @@ impl<'p> Codegen<'p> {
         f.instruction(&I::LocalGet(0));
         f.instruction(&I::I32Load(mem(HEADER, Repr::I32)));
         f.instruction(&I::CallIndirect { type_index: call_ty, table_index: 0 });
+        if self.closures_throw {
+            for i in self.report_uncaught() {
+                f.instruction(&i);
+            }
+        }
+        let rt = |n: &str| self.layout.rt(n);
         match sig.ret {
             Repr::F64 => {
                 f.instruction(&I::Call(rt("ret_f64")));
@@ -513,6 +681,7 @@ impl<'p> Codegen<'p> {
         let idx = self.func_index[&fid];
         let env = self.env_desc.get(&fid).copied().flatten();
         let mut fg = FnGen::new(self, fid, env);
+        fg.ret = def.ret.repr();
         let mut params = vec![ValType::I32];
         for (i, v) in def.params.iter().enumerate() {
             let r = self.prog.vars[*v as usize].ty.repr();
@@ -546,7 +715,16 @@ fn stmt_vars(s: &TStmt, out: &mut Vec<VarId>) {
                 expr_vars(e, out);
             }
         }
-        TStmt::Expr(e) | TStmt::Return(Some(e)) | TStmt::Throw(e) => expr_vars(e, out),
+        TStmt::Expr(e) | TStmt::Return(Some(e)) | TStmt::Throw(e) | TStmt::Trap(e) => expr_vars(e, out),
+        TStmt::Try { body, catch, finally } => {
+            if let Some((v, _)) = catch {
+                out.push(*v);
+            }
+            let catch_body = catch.iter().flat_map(|(_, b)| b.iter());
+            for x in body.iter().chain(catch_body).chain(finally.iter().flatten()) {
+                stmt_vars(x, out);
+            }
+        }
         TStmt::If(c, a, b) => {
             expr_vars(c, out);
             for x in a.iter().chain(b) {
@@ -694,6 +872,14 @@ struct FnGen {
     labels: Vec<Label>,
     scratch_i32: Vec<u32>,
     scratch_f64: Vec<u32>,
+    /// The function's return representation, for an early `return` when an
+    /// exception leaves the function.
+    ret: Repr,
+    /// The block depths of the enclosing exception handlers (`try`
+    /// regions); an exception branches to the innermost one.
+    handlers: Vec<u32>,
+    /// The enclosing `finally` blocks.
+    finallies: Vec<FinallyCx>,
 }
 
 impl FnGen {
@@ -710,7 +896,127 @@ impl FnGen {
             labels: Vec::new(),
             scratch_i32: Vec::new(),
             scratch_f64: Vec::new(),
+            ret: Repr::Void,
+            handlers: Vec::new(),
+            finallies: Vec::new(),
         }
+    }
+
+    // -- Exceptions (SPEC.md §5.6) ------------------------------------------
+
+    /// Leaves for the innermost handler, or returns from the function (with
+    /// a zero value) when there is none: the caller checks the flag.
+    fn propagate(&mut self) {
+        match self.handlers.last() {
+            Some(&d) => self.emit(I::Br(self.depth - d)),
+            None => {
+                self.zero(self.ret);
+                self.emit(I::Return);
+            }
+        }
+    }
+
+    /// After a call that can throw: propagate a pending exception.
+    fn check_exc(&mut self, g: &mut Codegen) {
+        let (flag, _) = g.exc_globals();
+        self.emit(I::GlobalGet(flag));
+        self.open(I::If(BlockType::Empty));
+        self.propagate();
+        self.close();
+    }
+
+    /// Runs the `finally` blocks from index `from` outward (innermost
+    /// first), for a jump out of them. Each one runs with the handlers and
+    /// the `finally` blocks outside its own `try`.
+    fn run_finallies(&mut self, g: &mut Codegen, from: usize) {
+        let saved_f = self.finallies.clone();
+        let saved_h = self.handlers.clone();
+        for i in (from..saved_f.len()).rev() {
+            self.finallies.truncate(i);
+            self.handlers.truncate(saved_f[i].handlers);
+            let body = saved_f[i].body.clone();
+            self.stmts(g, &body);
+        }
+        self.finallies = saved_f;
+        self.handlers = saved_h;
+    }
+
+    /// Before a jump to label `idx`: runs the `finally` blocks of the `try`
+    /// statements that the jump leaves.
+    fn leave_finallies(&mut self, g: &mut Codegen, idx: usize) {
+        if let Some(from) = self.finallies.iter().position(|f| f.labels > idx) {
+            self.run_finallies(g, from);
+        }
+    }
+
+    fn try_stmt(&mut self, g: &mut Codegen, body: &[TStmt], catch: &Option<(VarId, Vec<TStmt>)>, finally: &Option<Vec<TStmt>>) {
+        let (flag, val) = g.exc_globals();
+        let outer = self.handlers.len();
+        self.open(I::Block(BlockType::Empty));
+        let done = self.depth;
+        let exc = finally.as_ref().map(|_| {
+            self.open(I::Block(BlockType::Empty));
+            self.depth
+        });
+        let catch_l = catch.as_ref().map(|_| {
+            self.open(I::Block(BlockType::Empty));
+            self.depth
+        });
+        let fin_cx = |s: &Self, f: &Vec<TStmt>| FinallyCx { body: f.clone(), labels: s.labels.len(), handlers: outer };
+        // The `try` body.
+        self.handlers.push(catch_l.or(exc).expect("a try has a catch or a finally"));
+        if let Some(f) = finally {
+            let cx = fin_cx(self, f);
+            self.finallies.push(cx);
+        }
+        self.stmts(g, body);
+        if finally.is_some() {
+            self.finallies.pop();
+        }
+        self.handlers.pop();
+        if let Some(f) = finally {
+            self.stmts(g, f);
+        }
+        self.emit(I::Br(self.depth - done));
+        // The `catch` body: the exception is caught, so clear it.
+        if let Some((v, cbody)) = catch {
+            self.close();
+            self.emit(I::GlobalGet(val));
+            self.set_var(g, *v);
+            self.emit(I::I32Const(0));
+            self.emit(I::GlobalSet(flag));
+            if let (Some(e), Some(f)) = (exc, finally) {
+                self.handlers.push(e);
+                let cx = fin_cx(self, f);
+                self.finallies.push(cx);
+            }
+            self.stmts(g, cbody);
+            if exc.is_some() {
+                self.finallies.pop();
+                self.handlers.pop();
+            }
+            if let Some(f) = finally {
+                self.stmts(g, f);
+            }
+            self.emit(I::Br(self.depth - done));
+        }
+        // An exception left the `try` (or the `catch`): run the `finally`
+        // block with the exception put aside, then throw it again.
+        if let Some(f) = finally {
+            self.close();
+            let t = self.local(ValType::I32);
+            self.emit(I::GlobalGet(val));
+            self.emit(I::LocalSet(t));
+            self.emit(I::I32Const(0));
+            self.emit(I::GlobalSet(flag));
+            self.stmts(g, f);
+            self.emit(I::LocalGet(t));
+            self.emit(I::GlobalSet(val));
+            self.emit(I::I32Const(1));
+            self.emit(I::GlobalSet(flag));
+            self.propagate();
+        }
+        self.close();
     }
 
     fn finish(self) -> Function {
@@ -1022,24 +1328,53 @@ impl FnGen {
                 self.close();
             }
             TStmt::Return(e) => {
-                if let Some(e) = e {
-                    self.expr(g, e);
+                if self.finallies.is_empty() {
+                    if let Some(e) = e {
+                        self.expr(g, e);
+                    }
+                } else {
+                    // Keep the value while the `finally` blocks run.
+                    let t = e.as_ref().and_then(|e| {
+                        self.expr(g, e);
+                        let t = e.repr().val_type().map(|vt| self.local(vt));
+                        if let Some(t) = t {
+                            self.emit(I::LocalSet(t));
+                        }
+                        t
+                    });
+                    self.run_finallies(g, 0);
+                    if let Some(t) = t {
+                        self.emit(I::LocalGet(t));
+                    }
                 }
                 self.emit(I::Return);
             }
             TStmt::Break => {
+                let idx = self.labels.len() - 1;
+                self.leave_finallies(g, idx);
                 let l = self.labels.last().expect("break inside a loop or switch").brk;
                 self.emit(I::Br(self.depth - l));
             }
             TStmt::Continue => {
-                let l = self.labels.iter().rev().find_map(|l| l.cont).expect("continue inside a loop");
+                let idx = self.labels.iter().rposition(|l| l.cont.is_some()).expect("continue inside a loop");
+                self.leave_finallies(g, idx);
+                let l = self.labels[idx].cont.expect("a loop label");
                 self.emit(I::Br(self.depth - l));
             }
             TStmt::Throw(e) => {
+                let (flag, val) = g.exc_globals();
+                self.expr(g, e);
+                self.emit(I::GlobalSet(val));
+                self.emit(I::I32Const(1));
+                self.emit(I::GlobalSet(flag));
+                self.propagate();
+            }
+            TStmt::Trap(e) => {
                 self.expr(g, e);
                 self.rt(g, "throw");
                 self.emit(I::Unreachable);
             }
+            TStmt::Try { body, catch, finally } => self.try_stmt(g, body, catch, finally),
             TStmt::Switch { disc, eq, cases } => self.switch(g, disc, *eq, cases),
         }
     }
@@ -1161,6 +1496,9 @@ impl FnGen {
                 }
                 let idx = g.func_ref(*fid);
                 self.emit(I::Call(idx));
+                if g.may_throw.contains(fid) {
+                    self.check_exc(g);
+                }
             }
             TExprKind::CallClosure(c, args) => {
                 let Type::Func(ft) = &c.ty else { panic!("calling a non-function") };
@@ -1176,6 +1514,9 @@ impl FnGen {
                 self.emit(I::I32Load(mem(HEADER, Repr::I32)));
                 self.free(t, Repr::I32);
                 self.emit(I::CallIndirect { type_index: ty, table_index: 0 });
+                if g.closures_throw {
+                    self.check_exc(g);
+                }
             }
             TExprKind::Closure(fid) => self.closure(g, *fid),
             TExprKind::Num2(op, a, b) => {
@@ -1311,7 +1652,7 @@ impl FnGen {
             }
             TExprKind::StructLit(sid, values) => {
                 let t = self.local(ValType::I32);
-                let layout_type = g.structs[*sid as usize].type_id;
+                let layout_type = g.sid_type(*sid);
                 self.emit(I::I32Const(layout_type as i32));
                 self.rt(g, "alloc");
                 self.emit(I::LocalSet(t));
@@ -1405,9 +1746,12 @@ impl FnGen {
                         self.free(t, ar);
                     }
                 }
+                if g.throwing_methods.contains(name) {
+                    self.check_exc(g);
+                }
             }
             TExprKind::InstanceOf(o, sid) => {
-                let ids: Vec<u32> = g.class_descendants(*sid).iter().map(|s| g.structs[*s as usize].type_id).collect();
+                let ids: Vec<u32> = g.class_descendants(*sid).iter().map(|s| g.sid_type(*s)).collect();
                 self.expr(g, o);
                 self.emit(load(0, Repr::I32));
                 let th = self.tmp(Repr::I32);
@@ -1667,6 +2011,9 @@ impl FnGen {
         self.emit(I::LocalGet(tf));
         self.emit(I::I32Load(mem(HEADER, Repr::I32)));
         self.emit(I::CallIndirect { type_index: call_ty, table_index: 0 });
+        if g.closures_throw {
+            self.check_exc(g);
+        }
         let found = |s: &mut Self| {
             s.open(I::If(BlockType::Empty));
         };
@@ -1794,5 +2141,291 @@ fn arr_kind(r: Repr) -> i32 {
         Repr::F64 => ARR_F64,
         Repr::Ref => ARR_REF,
         _ => ARR_I32,
+    }
+}
+
+/// Calls `fs` on every statement and `fe` on every expression in `stmts`,
+/// without entering closures (which are other functions).
+pub(crate) fn walk_stmts(stmts: &[TStmt], fs: &mut dyn FnMut(&TStmt), fe: &mut dyn FnMut(&TExpr)) {
+    for s in stmts {
+        walk_stmt(s, fs, fe);
+    }
+}
+
+pub(crate) fn walk_stmt(s: &TStmt, fs: &mut dyn FnMut(&TStmt), fe: &mut dyn FnMut(&TExpr)) {
+    fs(s);
+    match s {
+        TStmt::Let(_, e) => {
+            if let Some(e) = e {
+                walk_expr(e, fs, fe);
+            }
+        }
+        TStmt::Expr(e) | TStmt::Throw(e) | TStmt::Trap(e) | TStmt::Return(Some(e)) => walk_expr(e, fs, fe),
+        TStmt::If(c, a, b) => {
+            walk_expr(c, fs, fe);
+            walk_stmts(a, fs, fe);
+            walk_stmts(b, fs, fe);
+        }
+        TStmt::Loop { cond, update, body, .. } => {
+            if let Some(c) = cond {
+                walk_expr(c, fs, fe);
+            }
+            if let Some(u) = update {
+                walk_expr(u, fs, fe);
+            }
+            walk_stmts(body, fs, fe);
+        }
+        TStmt::ForOf { arr, body, .. } => {
+            walk_expr(arr, fs, fe);
+            walk_stmts(body, fs, fe);
+        }
+        TStmt::Switch { disc, cases, .. } => {
+            walk_expr(disc, fs, fe);
+            for (t, b) in cases {
+                if let Some(t) = t {
+                    walk_expr(t, fs, fe);
+                }
+                walk_stmts(b, fs, fe);
+            }
+        }
+        TStmt::Try { body, catch, finally } => {
+            walk_stmts(body, fs, fe);
+            if let Some((_, c)) = catch {
+                walk_stmts(c, fs, fe);
+            }
+            if let Some(f) = finally {
+                walk_stmts(f, fs, fe);
+            }
+        }
+        TStmt::Block(b) => walk_stmts(b, fs, fe),
+        TStmt::Return(None) | TStmt::Break | TStmt::Continue => {}
+    }
+}
+
+/// Like `walk_stmts`, with a flag that is true inside the body of a `try`
+/// that has a `catch`.
+fn walk_covered(stmts: &[TStmt], covered: bool, fs: &mut dyn FnMut(&TStmt, bool), fe: &mut dyn FnMut(&TExpr, bool)) {
+    for s in stmts {
+        if let TStmt::Try { body, catch: Some((_, c)), finally } = s {
+            walk_covered(body, true, fs, fe);
+            walk_covered(c, covered, fs, fe);
+            if let Some(f) = finally {
+                walk_covered(f, covered, fs, fe);
+            }
+            continue;
+        }
+        fs(s, covered);
+        let (exprs, lists) = stmt_parts(s);
+        for e in exprs {
+            walk_expr(e, &mut |s| fs(s, covered), &mut |e| fe(e, covered));
+        }
+        for l in lists {
+            walk_covered(l, covered, fs, fe);
+        }
+    }
+}
+
+/// The direct expressions and statement lists of a statement.
+pub(crate) fn stmt_parts(s: &TStmt) -> (Vec<&TExpr>, Vec<&[TStmt]>) {
+    match s {
+        TStmt::Let(_, e) => (e.iter().collect(), Vec::new()),
+        TStmt::Expr(e) | TStmt::Throw(e) | TStmt::Trap(e) | TStmt::Return(Some(e)) => (vec![e], Vec::new()),
+        TStmt::If(c, a, b) => (vec![c], vec![a, b]),
+        TStmt::Loop { cond, update, body, .. } => (cond.iter().chain(update.iter()).collect(), vec![body]),
+        TStmt::ForOf { arr, body, .. } => (vec![arr], vec![body]),
+        TStmt::Switch { disc, cases, .. } => {
+            let mut es = vec![disc];
+            es.extend(cases.iter().filter_map(|(t, _)| t.as_ref()));
+            (es, cases.iter().map(|(_, b)| b.as_slice()).collect())
+        }
+        TStmt::Try { body, catch, finally } => {
+            let mut ls: Vec<&[TStmt]> = vec![body];
+            if let Some((_, c)) = catch {
+                ls.push(c);
+            }
+            if let Some(f) = finally {
+                ls.push(f);
+            }
+            (Vec::new(), ls)
+        }
+        TStmt::Block(b) => (Vec::new(), vec![b]),
+        TStmt::Return(None) | TStmt::Break | TStmt::Continue => (Vec::new(), Vec::new()),
+    }
+}
+
+pub(crate) fn walk_expr(e: &TExpr, fs: &mut dyn FnMut(&TStmt), fe: &mut dyn FnMut(&TExpr)) {
+    fe(e);
+    if let TExprKind::Block(stmts, _) = &e.kind {
+        walk_stmts(stmts, fs, fe);
+    }
+    for c in expr_children(e) {
+        walk_expr(c, fs, fe);
+    }
+}
+
+/// The direct sub-expressions of `e`, in evaluation order, for every form
+/// (also the ones that only exist before `lower`). A `Block`'s statements
+/// are not included (only its value); closures are other functions.
+pub(crate) fn expr_children(e: &TExpr) -> Vec<&TExpr> {
+    let mut out: Vec<&TExpr> = Vec::new();
+    match &e.kind {
+        TExprKind::Assign(p, v) => {
+            match p {
+                Place::Var(_) => {}
+                Place::Field(o, ..) => out.push(o),
+                Place::Index(a, i) => {
+                    out.push(a);
+                    out.push(i);
+                }
+            }
+            out.push(v);
+        }
+        TExprKind::Field(o, ..)
+        | TExprKind::Neg(o)
+        | TExprKind::Not(o)
+        | TExprKind::IsNull(o)
+        | TExprKind::Coerce(_, o)
+        | TExprKind::UnionTag(o)
+        | TExprKind::UnionIs(o, _)
+        | TExprKind::InstanceOf(o, _)
+        | TExprKind::Await(o)
+        | TExprKind::SignalNew(o)
+        | TExprKind::SignalGet(o)
+        | TExprKind::SignalPeek(o)
+        | TExprKind::ComputedNew(o)
+        | TExprKind::ComputedGet(o)
+        | TExprKind::EffectNew(o) => out.push(o),
+        TExprKind::Index(a, b)
+        | TExprKind::Num2(_, a, b)
+        | TExprKind::Int2(_, a, b)
+        | TExprKind::Cmp(_, _, a, b)
+        | TExprKind::StrCmp(_, a, b)
+        | TExprKind::Concat(a, b)
+        | TExprKind::And(a, b)
+        | TExprKind::Or(a, b)
+        | TExprKind::SignalSet(a, b)
+        | TExprKind::ArrayHof { arr: a, f: b, .. }
+        | TExprKind::ArraySearch { arr: a, value: b, .. }
+        | TExprKind::TimerNew(a, _, b)
+        | TExprKind::DialogCall(_, a, b) => {
+            out.push(a);
+            out.push(b);
+        }
+        TExprKind::Cond(a, b, c) => out.extend([&**a, &**b, &**c]),
+        TExprKind::NetFetchCall(a, b, c, d, f) => out.extend([&**a, &**b, &**c, &**d, &**f]),
+        TExprKind::Call(_, args) | TExprKind::Rt(_, args) | TExprKind::MathOp(_, args) | TExprKind::StructLit(_, args) => {
+            out.extend(args.iter())
+        }
+        TExprKind::CallClosure(c, args) | TExprKind::MethodCall(_, _, c, args) => {
+            out.push(c);
+            out.extend(args.iter());
+        }
+        TExprKind::ArrayLit(items) => out.extend(items.iter().map(|(_, a)| a)),
+        TExprKind::Block(_, v) => out.push(v),
+        TExprKind::Jsx(j) => jsx_exprs(j, &mut out),
+        TExprKind::Num(_)
+        | TExprKind::Bool(_)
+        | TExprKind::Str(_)
+        | TExprKind::Null
+        | TExprKind::Var(_)
+        | TExprKind::Closure(_)
+        | TExprKind::ThunkOf(_)
+        | TExprKind::Navigate(_)
+        | TExprKind::NavigatePush(_)
+        | TExprKind::NavigateBack => {}
+    }
+    out
+}
+
+/// Like `expr_children`, for changing them. JSX gives none.
+pub(crate) fn expr_children_mut(e: &mut TExpr) -> Vec<&mut TExpr> {
+    let mut out: Vec<&mut TExpr> = Vec::new();
+    match &mut e.kind {
+        TExprKind::Assign(p, v) => {
+            match p {
+                Place::Var(_) => {}
+                Place::Field(o, ..) => out.push(o),
+                Place::Index(a, i) => {
+                    out.push(a);
+                    out.push(i);
+                }
+            }
+            out.push(v);
+        }
+        TExprKind::Field(o, ..)
+        | TExprKind::Neg(o)
+        | TExprKind::Not(o)
+        | TExprKind::IsNull(o)
+        | TExprKind::Coerce(_, o)
+        | TExprKind::UnionTag(o)
+        | TExprKind::UnionIs(o, _)
+        | TExprKind::InstanceOf(o, _)
+        | TExprKind::Await(o)
+        | TExprKind::SignalNew(o)
+        | TExprKind::SignalGet(o)
+        | TExprKind::SignalPeek(o)
+        | TExprKind::ComputedNew(o)
+        | TExprKind::ComputedGet(o)
+        | TExprKind::EffectNew(o) => out.push(o),
+        TExprKind::Index(a, b)
+        | TExprKind::Num2(_, a, b)
+        | TExprKind::Int2(_, a, b)
+        | TExprKind::Cmp(_, _, a, b)
+        | TExprKind::StrCmp(_, a, b)
+        | TExprKind::Concat(a, b)
+        | TExprKind::And(a, b)
+        | TExprKind::Or(a, b)
+        | TExprKind::SignalSet(a, b)
+        | TExprKind::ArrayHof { arr: a, f: b, .. }
+        | TExprKind::ArraySearch { arr: a, value: b, .. }
+        | TExprKind::TimerNew(a, _, b)
+        | TExprKind::DialogCall(_, a, b) => {
+            out.push(a);
+            out.push(b);
+        }
+        TExprKind::Cond(a, b, c) => out.extend([&mut **a, &mut **b, &mut **c]),
+        TExprKind::NetFetchCall(a, b, c, d, f) => out.extend([&mut **a, &mut **b, &mut **c, &mut **d, &mut **f]),
+        TExprKind::Call(_, args) | TExprKind::Rt(_, args) | TExprKind::MathOp(_, args) | TExprKind::StructLit(_, args) => {
+            out.extend(args.iter_mut())
+        }
+        TExprKind::CallClosure(c, args) | TExprKind::MethodCall(_, _, c, args) => {
+            out.push(c);
+            out.extend(args.iter_mut());
+        }
+        TExprKind::ArrayLit(items) => out.extend(items.iter_mut().map(|(_, a)| a)),
+        TExprKind::Block(_, v) => out.push(v),
+        TExprKind::Jsx(_) => {}
+        TExprKind::Num(_)
+        | TExprKind::Bool(_)
+        | TExprKind::Str(_)
+        | TExprKind::Null
+        | TExprKind::Var(_)
+        | TExprKind::Closure(_)
+        | TExprKind::ThunkOf(_)
+        | TExprKind::Navigate(_)
+        | TExprKind::NavigatePush(_)
+        | TExprKind::NavigateBack => {}
+    }
+    out
+}
+
+fn jsx_exprs<'a>(j: &'a TJsx, out: &mut Vec<&'a TExpr>) {
+    match j {
+        TJsx::Control { props, children, .. } => {
+            out.extend(props.iter().map(|p| &p.value));
+            match children {
+                TChildren::None => {}
+                TChildren::Text(parts) => out.extend(parts.iter()),
+                TChildren::Nodes(nodes) => {
+                    for n in nodes {
+                        match n {
+                            TChild::Element(j) => jsx_exprs(j, out),
+                            TChild::Expr(e) => out.push(e),
+                        }
+                    }
+                }
+            }
+        }
+        TJsx::Component { props, .. } => out.extend(props.iter()),
     }
 }

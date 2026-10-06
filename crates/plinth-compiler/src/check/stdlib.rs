@@ -444,41 +444,56 @@ impl Checker<'_> {
                 }
                 let message = self.expr_with(&args[0], &Type::String);
                 let message = self.coerce(message, &Type::String);
-                let cb = if let Some(done) = args.get(1) {
-                    self.callback(done, &[], Some(Type::Void)).0
-                } else {
-                    // `done` is optional for `alert` (SPEC.md §8.5): pass a
-                    // no-op closure, so codegen always has a callback to
-                    // register and the runtime never special-cases a
-                    // missing one.
-                    self.noop_closure()
-                };
-                TExpr::new(TExprKind::DialogCall("dialog_alert", Box::new(message), Box::new(cb)), Type::Void, span)
+                match args.get(1) {
+                    Some(done) => {
+                        let cb = self.callback(done, &[], Some(Type::Void)).0;
+                        TExpr::new(TExprKind::DialogCall("dialog_alert", Box::new(message), Box::new(cb)), Type::Void, span)
+                    }
+                    // Without `done`, `alert` returns a `Promise<void>`
+                    // (SPEC.md §4.5) that settles when the user closes it.
+                    None => self.host_promise(Type::Void, span, |_, cb| {
+                        TExpr::new(TExprKind::DialogCall("dialog_alert", Box::new(message), Box::new(cb)), Type::Void, span)
+                    }),
+                }
             }
             StdFn::DialogConfirm => {
-                if args.len() != 2 {
-                    self.err(code::ARG_COUNT, span, "`confirm` takes a message and a done callback");
+                if args.is_empty() || args.len() > 2 {
+                    self.err(code::ARG_COUNT, span, "`confirm` takes a message and an optional done callback");
                     return TExpr::new(TExprKind::Null, Type::Error, span);
                 }
                 let message = self.expr_with(&args[0], &Type::String);
                 let message = self.coerce(message, &Type::String);
-                let (cb, _) = self.callback(&args[1], &[Type::Bool], Some(Type::Void));
-                TExpr::new(TExprKind::DialogCall("dialog_confirm", Box::new(message), Box::new(cb)), Type::Void, span)
+                match args.get(1) {
+                    Some(done) => {
+                        let (cb, _) = self.callback(done, &[Type::Bool], Some(Type::Void));
+                        TExpr::new(TExprKind::DialogCall("dialog_confirm", Box::new(message), Box::new(cb)), Type::Void, span)
+                    }
+                    None => self.host_promise(Type::Bool, span, |_, cb| {
+                        TExpr::new(TExprKind::DialogCall("dialog_confirm", Box::new(message), Box::new(cb)), Type::Void, span)
+                    }),
+                }
             }
             StdFn::DialogPrompt => {
-                if args.len() != 2 {
-                    self.err(code::ARG_COUNT, span, "`prompt` takes a message and a done callback");
+                if args.is_empty() || args.len() > 2 {
+                    self.err(code::ARG_COUNT, span, "`prompt` takes a message and an optional done callback");
                     return TExpr::new(TExprKind::Null, Type::Error, span);
                 }
                 let message = self.expr_with(&args[0], &Type::String);
                 let message = self.coerce(message, &Type::String);
-                let (cb, _) = self.callback(&args[1], &[Type::String.nullable()], Some(Type::Void));
-                TExpr::new(TExprKind::DialogCall("dialog_prompt", Box::new(message), Box::new(cb)), Type::Void, span)
+                match args.get(1) {
+                    Some(done) => {
+                        let (cb, _) = self.callback(done, &[Type::String.nullable()], Some(Type::Void));
+                        TExpr::new(TExprKind::DialogCall("dialog_prompt", Box::new(message), Box::new(cb)), Type::Void, span)
+                    }
+                    None => self.host_promise(Type::String.nullable(), span, |_, cb| {
+                        TExpr::new(TExprKind::DialogCall("dialog_prompt", Box::new(message), Box::new(cb)), Type::Void, span)
+                    }),
+                }
             }
             StdFn::NetFetch => {
                 self.require_net_capability(span);
-                if args.len() != 3 {
-                    self.err(code::ARG_COUNT, span, "`fetch` takes a url, options, and a done callback");
+                if args.len() != 2 && args.len() != 3 {
+                    self.err(code::ARG_COUNT, span, "`fetch` takes a url, options, and an optional done callback");
                     return TExpr::new(TExprKind::Null, Type::Error, span);
                 }
                 let url = self.expr_with(&args[0], &Type::String);
@@ -486,34 +501,14 @@ impl Checker<'_> {
                 let (method, headers, body) = self.net_fetch_options(&args[1]);
 
                 let response_sid = self.response_struct();
-                let (cb, _) = self.callback(&args[2], &[Type::Struct(response_sid)], Some(Type::Void));
-
-                // The wrapper the runtime invokes when the completion
-                // arrives (SPEC.md §8.4): decode the 4 fields the host
-                // stashed (`net_result_*`), build the `Response`, call the
-                // app's `done`.
-                let rt = |name: &'static str, ty: Type| TExpr::new(TExprKind::Rt(name, Vec::new()), ty, span);
-                let resp = TExpr::new(
-                    TExprKind::StructLit(
-                        response_sid,
-                        vec![
-                            rt("net_result_ok", Type::Bool),
-                            rt("net_result_status", Type::Number),
-                            rt("net_result_text", Type::String),
-                            rt("net_result_error", Type::String.nullable()),
-                        ],
-                    ),
-                    Type::Struct(response_sid),
-                    span,
-                );
-                let call = TExpr::new(TExprKind::CallClosure(Box::new(cb), vec![resp]), Type::Void, span);
-                let wrapper = self.synthetic_closure("<net_fetch_done>", vec![TStmt::Return(Some(call))], Type::Void, span);
-
-                TExpr::new(
-                    TExprKind::NetFetchCall(Box::new(url), Box::new(method), Box::new(headers), Box::new(body), Box::new(wrapper)),
-                    Type::Void,
-                    span,
-                )
+                let Some(done) = args.get(2) else {
+                    // Without `done`, `fetch` returns a `Promise<Response>`.
+                    return self.host_promise(Type::Struct(response_sid), span, |c, cb| {
+                        c.net_fetch_call(url, method, headers, body, cb, response_sid, span)
+                    });
+                };
+                let (cb, _) = self.callback(done, &[Type::Struct(response_sid)], Some(Type::Void));
+                self.net_fetch_call(url, method, headers, body, cb, response_sid, span)
             }
             StdFn::HubListApps => {
                 self.require_capability(CAP_HUB_MANAGE, span);
@@ -650,19 +645,54 @@ impl Checker<'_> {
                     StdFn::HubUpdate => ("update", "hub_update", "an app id"),
                     _ => ("install", "hub_install", "an app id"),
                 };
-                if args.len() != 2 {
-                    self.err(code::ARG_COUNT, span, format!("`{name}` takes {what} and a done callback"));
+                if args.is_empty() || args.len() > 2 {
+                    self.err(code::ARG_COUNT, span, format!("`{name}` takes {what} and an optional done callback"));
                     return TExpr::new(TExprKind::Null, Type::Error, span);
                 }
                 let text = self.expr_with(&args[0], &Type::String);
                 let text = self.coerce(text, &Type::String);
-                let (cb, _) = self.callback(&args[1], &[Type::String.nullable()], Some(Type::Void));
+                let Some(done) = args.get(1) else {
+                    // Without `done`, the call returns a `Promise<string | null>`.
+                    return self.host_promise(Type::String.nullable(), span, |_, cb| {
+                        TExpr::new(TExprKind::DialogCall(rt_fn, Box::new(text), Box::new(cb)), Type::Void, span)
+                    });
+                };
+                let (cb, _) = self.callback(done, &[Type::String.nullable()], Some(Type::Void));
                 // The same request/completion shape as `dialog.prompt`
                 // (SPEC.md §8.4): one string argument, then a callback
                 // that gets `string | null`.
                 TExpr::new(TExprKind::DialogCall(rt_fn, Box::new(text), Box::new(cb)), Type::Void, span)
             }
         }
+    }
+
+    /// The `net.fetch` call with a `done` callback `cb` (SPEC.md §8.4):
+    /// the wrapper the runtime invokes when the completion arrives decodes
+    /// the 4 fields the host stashed (`net_result_*`), builds the
+    /// `Response`, and calls `cb`.
+    #[allow(clippy::too_many_arguments)]
+    fn net_fetch_call(&mut self, url: TExpr, method: TExpr, headers: TExpr, body: TExpr, cb: TExpr, response_sid: crate::types::StructId, span: Span) -> TExpr {
+        let rt = |name: &'static str, ty: Type| TExpr::new(TExprKind::Rt(name, Vec::new()), ty, span);
+        let resp = TExpr::new(
+            TExprKind::StructLit(
+                response_sid,
+                vec![
+                    rt("net_result_ok", Type::Bool),
+                    rt("net_result_status", Type::Number),
+                    rt("net_result_text", Type::String),
+                    rt("net_result_error", Type::String.nullable()),
+                ],
+            ),
+            Type::Struct(response_sid),
+            span,
+        );
+        let call = TExpr::new(TExprKind::CallClosure(Box::new(cb), vec![resp]), Type::Void, span);
+        let wrapper = self.synthetic_closure("<net_fetch_done>", vec![TStmt::Return(Some(call))], Type::Void, span);
+        TExpr::new(
+            TExprKind::NetFetchCall(Box::new(url), Box::new(method), Box::new(headers), Box::new(body), Box::new(wrapper)),
+            Type::Void,
+            span,
+        )
     }
 
     /// `fetch`'s `options`: `null`, or an object literal with optional

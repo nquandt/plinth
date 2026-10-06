@@ -202,6 +202,8 @@ pub struct FuncDecl {
     /// Names of `<T, U, …>` type parameters (generic functions, monomorphized
     /// per call site; HANDOFF.md item 3). Empty for an ordinary function.
     pub type_params: Vec<String>,
+    /// `async function` / `async () => …` (SPEC.md §4.5).
+    pub is_async: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -226,7 +228,18 @@ pub enum StmtKind {
     Continue,
     Switch(Expr, Vec<(Option<Expr>, Vec<Stmt>)>),
     Throw(Expr),
+    /// `try { … } catch (e) { … } finally { … }` (SPEC.md §5.6). At least
+    /// one of `catch` and `finally` is present.
+    Try { block: Vec<Stmt>, catch: Option<Catch>, finally: Option<Vec<Stmt>> },
     Empty,
+}
+
+/// The `catch` clause of a `try` statement. `param` is `None` for
+/// `catch { … }` (no binding).
+#[derive(Debug, Clone)]
+pub struct Catch {
+    pub param: Option<(String, Span)>,
+    pub body: Vec<Stmt>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,6 +316,8 @@ pub enum ExprKind {
     /// (`check/expr.rs::as_cast`) decides which, and rejects everything
     /// else with `PL2006`.
     As(Box<Expr>, TypeAnn, Span),
+    /// `await e` (SPEC.md §4.5), only inside an `async` function.
+    Await(Box<Expr>),
 }
 
 #[derive(Debug, Clone)]

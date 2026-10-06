@@ -96,6 +96,34 @@ declare class Set<T> {
   [Symbol.iterator](): Iterator<T>;
 }
 
+/**
+ * The value that `throw` takes and that a `catch` variable gets (SPEC.md
+ * §5.6). `throw "text"` throws `new Error("text")`. Extend it for your own
+ * errors, and narrow a caught error with `instanceof`.
+ */
+declare class Error {
+  constructor(message?: string);
+  name: string;
+  message: string;
+}
+
+/**
+ * The result of an `async` function, or of a host call without a `done`
+ * callback (SPEC.md §4.5). Read the value with `await` inside an `async`
+ * function. `then`, `catch` and `new Promise` are not available in Plinth.
+ */
+interface Promise<T> {
+  then<R = T>(onfulfilled: (value: T) => R): Promise<R>;
+}
+// `tsc` needs these two for `async` functions; Plinth has no `new Promise`.
+interface PromiseLike<T> {
+  then<R = T>(onfulfilled: (value: T) => R): PromiseLike<R>;
+}
+interface PromiseConstructor {
+  readonly prototype: Promise<unknown>;
+}
+declare var Promise: PromiseConstructor;
+
 interface Boolean {}
 interface Function {}
 interface CallableFunction extends Function {}

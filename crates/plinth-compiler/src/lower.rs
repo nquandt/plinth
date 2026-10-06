@@ -240,7 +240,13 @@ fn visit_expr(e: &TExpr, f: &mut dyn FnMut(&TExpr)) {
 
 fn visit_stmt(s: &TStmt, go: &mut dyn FnMut(&TExpr)) {
     match s {
-        TStmt::Let(_, Some(e)) | TStmt::Expr(e) | TStmt::Return(Some(e)) | TStmt::Throw(e) => go(e),
+        TStmt::Let(_, Some(e)) | TStmt::Expr(e) | TStmt::Return(Some(e)) | TStmt::Throw(e) | TStmt::Trap(e) => go(e),
+        TStmt::Try { body, catch, finally } => {
+            let catch_body = catch.iter().flat_map(|(_, b)| b.iter());
+            for x in body.iter().chain(catch_body).chain(finally.iter().flatten()) {
+                visit_stmt(x, go);
+            }
+        }
         TStmt::If(c, a, b) => {
             go(c);
             for x in a.iter().chain(b) {
@@ -366,6 +372,12 @@ impl Cx<'_> {
                 cases: cases.into_iter().map(|(t, b)| (t.map(|t| self.expr(t)), self.stmts(b))).collect(),
             },
             TStmt::Throw(e) => TStmt::Throw(self.expr(e)),
+            TStmt::Trap(e) => TStmt::Trap(self.expr(e)),
+            TStmt::Try { body, catch, finally } => TStmt::Try {
+                body: self.stmts(body),
+                catch: catch.map(|(v, b)| (v, self.stmts(b))),
+                finally: finally.map(|b| self.stmts(b)),
+            },
             TStmt::Block(b) => TStmt::Block(self.stmts(b)),
             s @ (TStmt::Break | TStmt::Continue) => s,
         }
@@ -509,6 +521,7 @@ impl Cx<'_> {
                 TExprKind::MethodCall(sid, name, self.bx(this), args.into_iter().map(|a| self.expr(a)).collect())
             }
             TExprKind::InstanceOf(a, sid) => TExprKind::InstanceOf(self.bx(a), sid),
+            TExprKind::Await(a) => TExprKind::Await(self.bx(a)),
             k @ (TExprKind::Num(_)
             | TExprKind::Bool(_)
             | TExprKind::Str(_)
@@ -744,7 +757,16 @@ fn collect_lets(s: &TStmt, out: &mut Vec<VarId>) {
                 from_expr(e, out);
             }
         }
-        TStmt::Expr(e) | TStmt::Return(Some(e)) | TStmt::Throw(e) => from_expr(e, out),
+        TStmt::Expr(e) | TStmt::Return(Some(e)) | TStmt::Throw(e) | TStmt::Trap(e) => from_expr(e, out),
+        TStmt::Try { body, catch, finally } => {
+            if let Some((v, _)) = catch {
+                out.push(*v);
+            }
+            let catch_body = catch.iter().flat_map(|(_, b)| b.iter());
+            for x in body.iter().chain(catch_body).chain(finally.iter().flatten()) {
+                collect_lets(x, out);
+            }
+        }
         TStmt::If(c, a, b) => {
             from_expr(c, out);
             for x in a.iter().chain(b) {

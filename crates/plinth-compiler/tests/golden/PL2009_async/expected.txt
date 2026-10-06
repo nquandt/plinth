@@ -1,3 +1,4 @@
-app/main.tsx(2,1): error PL2009: async functions and generators come in v1
-  async function f() {}
-  ^^^^^^^^^^^^^^^^^^^^^
+app/main.tsx(3,11): error PL2009: `await` is only allowed in an `async` function
+  const x = await f();
+            ^^^^^^^^^
+  help: mark the function `async`

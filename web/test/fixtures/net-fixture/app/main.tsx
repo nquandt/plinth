@@ -28,6 +28,15 @@ function Home() {
         }}
       />
       <Button
+        label="await"
+        onPress={async () => {
+          // async/await (SPEC.md §4.5): two requests, one after the other.
+          const a = await fetch(`http://127.0.0.1:${PORT}/hello`, null);
+          const b = await fetch(`http://127.0.0.1:${PORT}/echo`, { method: "POST", body: a.text });
+          result.set("awaited:" + b.text);
+        }}
+      />
+      <Button
         label="denied"
         onPress={() => {
           fetch("http://198.51.100.1/x", null, (r) => {

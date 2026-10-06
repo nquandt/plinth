@@ -1,0 +1,4 @@
+app/main.tsx(3,42): error PL2009: `await` inside `do…while` is not supported yet
+  async function g(): Promise<void> { do { await f(); } while (false); }
+                                           ^^^^^^^^^
+  help: use a `while` loop

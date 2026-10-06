@@ -174,6 +174,11 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("hub_unblock_publisher", &[I32], &[]),
     ("hub_check_updates", &[I32, I32, I32], &[]),
     ("hub_update", &[I32, I32, I32], &[]),
+    // -- Errors (SPEC.md §5.6, core 1.10) ------------------------------------
+    ("uncaught", &[I32, I32], &[]),
+    // -- async/await (SPEC.md §4.5, core 1.10) -------------------------------
+    ("set_drain", &[I32, I32], &[]),
+    ("report", &[I32], &[]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -248,13 +253,16 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("hub_unblock_publisher", 9),
     ("hub_check_updates", 9),
     ("hub_update", 9),
+    ("uncaught", 10),
+    ("set_drain", 10),
+    ("report", 10),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).
 pub fn added_in(name: &str) -> u32 {
     ADDED_IN.iter().find(|(n, _)| *n == name).map_or(0, |(_, m)| *m)
 }
-pub const CORE_MINOR: u32 = 9;
+pub const CORE_MINOR: u32 = 10;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;

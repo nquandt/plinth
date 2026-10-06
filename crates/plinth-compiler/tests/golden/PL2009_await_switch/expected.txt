@@ -1,0 +1,4 @@
+app/main.tsx(3,67): error PL2009: `await` inside `switch` is not supported yet
+  async function g(n: number): Promise<void> { switch (n) { case 1: await f(); break; } }
+                                                                    ^^^^^^^^^
+  help: use `if`/`else`

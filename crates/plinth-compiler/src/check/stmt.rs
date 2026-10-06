@@ -267,14 +267,50 @@ impl Checker<'_> {
                 vec![TStmt::Switch { disc: d, eq, cases: out_cases }]
             }
             StmtKind::Throw(e) => {
-                let te = self.expr(e, Some(&Type::String));
-                let te = if te.ty.is_stringish() || te.ty.is_error() {
-                    te
+                let error_ty = self.error_type();
+                let te = self.expr(e, Some(&error_ty));
+                let te = if te.ty.is_stringish() {
+                    // `throw "message"` throws `new Error("message")`.
+                    self.new_error(te)
+                } else if self.is_error_class(&te.ty) {
+                    self.coerce(te, &error_ty)
                 } else {
-                    self.err_help(code::TYPE_MISMATCH, e.span, "`throw` takes a string message", "write `throw \"message\"`");
-                    te
+                    if !te.ty.is_error() {
+                        let msg = format!("`throw` takes an `Error` or a string, not `{}`", self.show(&te.ty));
+                        self.err_help(code::TYPE_MISMATCH, e.span, msg, "write `throw new Error(\"message\")`");
+                    }
+                    TExpr { ty: Type::Error, ..te }
                 };
                 vec![TStmt::Throw(te)]
+            }
+            StmtKind::Try { block, catch, finally } => {
+                self.push_scope();
+                let body = self.block_stmts(block);
+                self.pop_scope();
+                let catch = catch.as_ref().map(|c| {
+                    self.push_scope();
+                    let ty = self.error_type();
+                    // Not reassignable, so `instanceof` narrows it (a
+                    // documented deviation: JS lets you assign to it).
+                    let v = match &c.param {
+                        Some((name, span)) => {
+                            let v = self.new_var(name, ty, false);
+                            self.define(name, *span, Binding::Var(v));
+                            v
+                        }
+                        None => self.temp(ty),
+                    };
+                    let b = self.block_stmts(&c.body);
+                    self.pop_scope();
+                    (v, b)
+                });
+                let finally = finally.as_ref().map(|f| {
+                    self.push_scope();
+                    let b = self.block_stmts(f);
+                    self.pop_scope();
+                    b
+                });
+                vec![TStmt::Try { body, catch, finally }]
             }
         }
     }

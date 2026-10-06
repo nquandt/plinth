@@ -1,0 +1,3 @@
+app/main.tsx(2,53): error PL3001: `await` needs a `Promise`, not `number`
+  async function g(): Promise<void> { const n = await 5; }
+                                                      ^

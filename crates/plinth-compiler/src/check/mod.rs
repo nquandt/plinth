@@ -3,6 +3,7 @@
 //! It checks the modules in dependency order and produces the typed IR
 //! (`tir::Program`). Each rejected feature has a stable code (`diag::code`).
 
+mod asyncfn;
 mod expr;
 mod jsx;
 pub mod stdlib;
@@ -177,6 +178,9 @@ struct FnCx {
     /// The inferred return type so far.
     inferred: Option<Type>,
     reactive: ReactiveCtx,
+    /// The function is `async`: `await` is allowed, and `ret` is the `T`
+    /// of its `Promise<T>` (SPEC.md §4.5).
+    is_async: bool,
 }
 
 struct PendingFunc {
@@ -237,7 +241,20 @@ pub struct Checker<'d> {
     /// Asset paths under `assets/` in the project (without the `assets/`
     /// prefix), for checking `<Image src>` (SPEC.md §6.3, §10.1).
     assets: HashSet<String>,
+    /// The built-in `Error` class (SPEC.md §5.6), a global name in every
+    /// module unless the module declares its own `Error`.
+    pub(crate) error_class: types::StructId,
+    /// `Promise<T>` structs and their helper functions, one per `T`
+    /// (`check/asyncfn.rs`).
+    promises: Vec<asyncfn::PromiseInfo>,
+    /// The app's microtask queue and drain, made with the first promise.
+    async_rt: Option<asyncfn::AsyncRt>,
 }
+
+/// The built-in `Error` class (SPEC.md §5.6). `throw` takes an instance of
+/// it (or of a subclass), and a `catch` variable has its type. Its fields
+/// are `name` and `message`, in this order.
+const ERROR_PRELUDE: &str = "class Error { name: string = \"Error\"; message: string; constructor(message?: string) { this.message = message ?? \"\"; } }";
 
 struct ClassInfo {
     /// `None` only right after a "a class needs a constructor" error.
@@ -271,7 +288,7 @@ pub fn check_ex(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>,
         defaults: vec![None; modules.len()],
         module_scopes: vec![HashMap::new(); modules.len()],
         module: 0,
-        fx: FnCx { func: 0, scopes: Vec::new(), loops: Vec::new(), ret: None, inferred: None, reactive: ReactiveCtx::Plain },
+        fx: FnCx { func: 0, scopes: Vec::new(), loops: Vec::new(), ret: None, inferred: None, reactive: ReactiveCtx::Plain, is_async: false },
         pending: HashMap::new(),
         in_progress: HashSet::new(),
         aliases: vec![Vec::new(); modules.len()],
@@ -290,8 +307,12 @@ pub fn check_ex(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>,
         interface_instantiations: Vec::new(),
         classes: HashMap::new(),
         assets: assets.iter().cloned().collect(),
+        error_class: 0,
+        promises: Vec::new(),
+        async_rt: None,
     };
     c.prog.module_count = modules.len() as u32;
+    c.declare_error_class(modules[main].file);
     for (i, m) in modules.iter().enumerate() {
         c.check_module(i, m, i == main);
     }
@@ -426,7 +447,7 @@ impl Checker<'_> {
         });
         self.prog.module_inits.push(init);
         self.fx =
-            FnCx { func: init, scopes: Vec::new(), loops: Vec::new(), ret: Some(Type::Void), inferred: None, reactive: ReactiveCtx::Plain };
+            FnCx { func: init, scopes: Vec::new(), loops: Vec::new(), ret: Some(Type::Void), inferred: None, reactive: ReactiveCtx::Plain, is_async: false };
 
         // 1. Imports.
         let mut import_index = 0;
@@ -651,7 +672,43 @@ impl Checker<'_> {
                 return Some(b.clone());
             }
         }
-        self.module_scopes[self.module].get(name).cloned()
+        match self.module_scopes[self.module].get(name) {
+            Some(b) => Some(b.clone()),
+            None if name == "Error" => Some(Binding::Type(Type::Struct(self.error_class))),
+            None => None,
+        }
+    }
+
+    /// Declares the built-in `Error` class from `ERROR_PRELUDE` (SPEC.md
+    /// §5.6). Codegen emits its constructor only if the app uses it.
+    fn declare_error_class(&mut self, file: FileId) {
+        let mut diags = Vec::new();
+        let ast = crate::parse::parse(file, ERROR_PRELUDE, false, &mut diags);
+        assert!(diags.is_empty(), "the Error prelude does not parse: {diags:?}");
+        let Some(Item::Class(class)) = ast.items.first() else { unreachable!("the Error prelude is one class") };
+        let id = self.prog.structs.len() as types::StructId;
+        self.prog.structs.push(StructDef { name: "Error".into(), fields: Vec::new() });
+        self.error_class = id;
+        self.prog.error_class = Some(id);
+        self.declare_class(id, class, 0);
+    }
+
+    /// The `Error` type (SPEC.md §5.6).
+    pub(crate) fn error_type(&self) -> Type {
+        Type::Struct(self.error_class)
+    }
+
+    /// `new Error(message)` for a string `message`.
+    pub(crate) fn new_error(&mut self, message: TExpr) -> TExpr {
+        let span = message.span;
+        let ctor = self.classes[&self.error_class].ctor.expect("the Error prelude has a constructor");
+        let arg = self.coerce(message, &Type::String.nullable());
+        TExpr::new(TExprKind::Call(ctor, vec![arg]), self.error_type(), span)
+    }
+
+    /// True if `t` is `Error` or one of its subclasses.
+    pub(crate) fn is_error_class(&self, t: &Type) -> bool {
+        matches!(t, Type::Struct(sid) if self.is_subclass(*sid, self.error_class))
     }
 
     fn narrowed(&self, key: &NarrowKey) -> Option<Type> {
@@ -878,7 +935,17 @@ impl Checker<'_> {
                 }
                 return Type::Set(Box::new(t));
             }
-            "Promise" | "Record" | "Partial" | "Readonly" => {
+            "Promise" => {
+                if !arity(self, 1) {
+                    return Type::Error;
+                }
+                let t = self.resolve_type(&args[0]);
+                if t.is_error() {
+                    return Type::Error;
+                }
+                return self.promise_type(&t);
+            }
+            "Record" | "Partial" | "Readonly" => {
                 self.err(code::ADVANCED_TYPE, span, format!("`{name}` is not supported yet"));
                 return Type::Error;
             }
@@ -1538,7 +1605,7 @@ impl Checker<'_> {
 
         let saved_fx = std::mem::replace(
             &mut self.fx,
-            FnCx { func: fid, scopes: vec![Scope::default()], loops: Vec::new(), ret: Some(Type::Struct(sid)), inferred: None, reactive: ReactiveCtx::Callback },
+            FnCx { func: fid, scopes: vec![Scope::default()], loops: Vec::new(), ret: Some(Type::Struct(sid)), inferred: None, reactive: ReactiveCtx::Callback, is_async: false },
         );
         let mut prologue = Vec::new();
         for (p, v) in ctor_ast.params.iter().zip(&param_vars) {
@@ -1744,7 +1811,9 @@ impl Checker<'_> {
         let Some(p) = self.pending.remove(&fid) else { return };
         self.in_progress.insert(fid);
         let saved_module = std::mem::replace(&mut self.module, p.module);
+        let is_async = p.decl.is_async;
         let declared = (p.decl.ret.is_some()).then(|| self.prog.funcs[fid as usize].ret.clone());
+        let declared = if is_async { declared.map(|d| self.promise_inner_or_err(&d, p.decl.span)) } else { declared };
         // A component body runs one time, so a signal read there is not
         // reactive (PL2020). Components have capitalized names, as JSX needs.
         // Other functions can run inside JSX slots, `computed` or handlers,
@@ -1759,6 +1828,7 @@ impl Checker<'_> {
                 ret: declared.clone(),
                 inferred: None,
                 reactive: if is_component { ReactiveCtx::Plain } else { ReactiveCtx::Callback },
+                is_async,
             },
         );
         let params = self.prog.funcs[fid as usize].params.clone();
@@ -1768,7 +1838,11 @@ impl Checker<'_> {
         }
         let mut body = prologue;
         body.extend(self.func_body(&p.decl.body));
-        let ret = self.finish_ret(declared, p.decl.span, &body);
+        let mut ret = self.finish_ret(declared, p.decl.span, &body);
+        if is_async {
+            body = self.async_body(fid, body, &ret, false, p.decl.span);
+            ret = self.promise_type(&ret);
+        }
         self.prog.funcs[fid as usize].ret = ret;
         self.prog.funcs[fid as usize].body = body;
         self.fx = saved_fx;
@@ -1838,22 +1912,6 @@ impl Checker<'_> {
         ret
     }
 
-    /// A synthetic `() => {}` closure, for a std call whose callback is
-    /// optional (SPEC.md §8.5: `alert`'s `done`).
-    pub(crate) fn noop_closure(&mut self) -> TExpr {
-        let decl = ast::FuncDecl {
-            name: None,
-            params: Vec::new(),
-            ret: None,
-            body: ast::Body::Block(Vec::new()),
-            exported: false,
-            is_default: false,
-            span: Span::default(),
-            type_params: Vec::new(),
-        };
-        self.closure(&decl, None, "<noop>")
-    }
-
     /// Checks an arrow function or function expression. `expected` gives
     /// parameter types for untyped parameters (contextual typing).
     pub(crate) fn closure(&mut self, f: &ast::FuncDecl, expected: Option<&FuncType>, name: &str) -> TExpr {
@@ -1909,6 +1967,13 @@ impl Checker<'_> {
             Some(r) => Some(self.resolve_type(r)),
             None => expected.map(|e| e.ret.clone()).filter(|t| *t == Type::Void || !t.is_error()),
         };
+        // An `async` closure where a `void` function is expected (an event
+        // handler, `forEach`, …) returns nothing: its promise is detached.
+        let detached = f.is_async && f.ret.is_none() && declared == Some(Type::Void);
+        let declared = match declared {
+            Some(d) if f.is_async && !detached => Some(self.promise_inner_or_err(&d, f.span)),
+            d => d,
+        };
         let reactive = if std::mem::take(&mut self.pending_reactive) { ReactiveCtx::Reactive } else { ReactiveCtx::Callback };
         // Set before checking the body (not just after, at the bottom):
         // member-path narrowing (`check/stmt.rs`'s `narrow_path`) looks up
@@ -1916,7 +1981,7 @@ impl Checker<'_> {
         // captured `let`, and it runs while the body below is checked.
         self.prog.funcs[fid as usize].params = param_vars.clone();
         let mut saved =
-            std::mem::replace(&mut self.fx, FnCx { func: fid, scopes: Vec::new(), loops: Vec::new(), ret: declared.clone(), inferred: None, reactive });
+            std::mem::replace(&mut self.fx, FnCx { func: fid, scopes: Vec::new(), loops: Vec::new(), ret: declared.clone(), inferred: None, reactive, is_async: f.is_async });
         // A closure sees the scopes of the enclosing function: move them in
         // for the body, then give them back.
         self.fx.scopes = std::mem::take(&mut saved.scopes);
@@ -1927,10 +1992,14 @@ impl Checker<'_> {
         }
         let mut body = prologue;
         body.extend(self.func_body(&f.body));
-        let ret = self.finish_ret(declared, f.span, &body);
+        let mut ret = self.finish_ret(declared, f.span, &body);
         self.fx.scopes.pop();
         saved.scopes = std::mem::take(&mut self.fx.scopes);
         self.fx = saved;
+        if f.is_async {
+            body = self.async_body(fid, body, &ret, detached, f.span);
+            ret = if detached { Type::Void } else { self.promise_type(&ret) };
+        }
         let def = &mut self.prog.funcs[fid as usize];
         def.params = param_vars;
         def.ret = ret.clone();
@@ -1943,7 +2012,10 @@ impl Checker<'_> {
 /// True if a statement list always ends in `return` or `throw`.
 pub(crate) fn always_exits(stmts: &[TStmt]) -> bool {
     stmts.last().is_some_and(|s| match s {
-        TStmt::Return(_) | TStmt::Throw(_) => true,
+        TStmt::Return(_) | TStmt::Throw(_) | TStmt::Trap(_) => true,
+        TStmt::Try { body, catch, finally } => {
+            (always_exits(body) && catch.as_ref().is_none_or(|(_, c)| always_exits(c))) || finally.as_ref().is_some_and(|f| always_exits(f))
+        }
         TStmt::If(_, a, b) => always_exits(a) && always_exits(b),
         TStmt::Block(b) => always_exits(b),
         TStmt::Switch { disc, cases, .. } => {
@@ -1980,6 +2052,9 @@ fn contains_break(stmts: &[TStmt]) -> bool {
         TStmt::Break => true,
         TStmt::If(_, a, b) => contains_break(a) || contains_break(b),
         TStmt::Block(b) => contains_break(b),
+        TStmt::Try { body, catch, finally } => {
+            contains_break(body) || catch.as_ref().is_some_and(|(_, c)| contains_break(c)) || finally.as_ref().is_some_and(|f| contains_break(f))
+        }
         _ => false,
     })
 }

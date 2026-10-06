@@ -271,11 +271,14 @@ fn std_typings_match() {
             })
             .collect();
         names.sort();
+        // Overloads (the `done` and the `Promise` forms) repeat a name.
+        names.dedup();
         names
     };
     let sorted = |names: &[&str]| {
         let mut v: Vec<String> = names.iter().map(|s| s.to_string()).collect();
         v.sort();
+        v.dedup();
         v
     };
     assert_eq!(exports("ui.d.ts"), sorted(UI_NAMES), "std/ui.d.ts and check::stdlib::UI_NAMES differ");

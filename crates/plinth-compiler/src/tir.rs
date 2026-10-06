@@ -73,6 +73,9 @@ pub struct Program {
     /// Codegen uses this to resolve `MethodCall` and `InstanceOf` against
     /// the whole program's hierarchy, built after every module is checked.
     pub classes: std::collections::HashMap<StructId, ClassDef>,
+    /// The built-in `Error` class (SPEC.md §5.6). Its first two fields are
+    /// `name` and `message`, in every subclass too.
+    pub error_class: Option<StructId>,
 }
 
 /// One class's place in the inheritance hierarchy and its own (not
@@ -118,7 +121,15 @@ pub enum TStmt {
     /// The discriminant and the cases; the case values are already checked
     /// for type, `eq` compares them.
     Switch { disc: TExpr, eq: EqKind, cases: Vec<(Option<TExpr>, Vec<TStmt>)> },
+    /// `throw e` (SPEC.md §5.6): `e` is an `Error` (or a subclass). A
+    /// `catch` can catch it; an uncaught one is reported to the host.
     Throw(TExpr),
+    /// A failed run-time check that the compiler generated (a bad `as`
+    /// cast): the guest traps with the message. No `catch` can catch it.
+    Trap(TExpr),
+    /// `try`/`catch`/`finally` (SPEC.md §5.6). The catch variable gets the
+    /// thrown `Error`.
+    Try { body: Vec<TStmt>, catch: Option<(VarId, Vec<TStmt>)>, finally: Option<Vec<TStmt>> },
     Block(Vec<TStmt>),
 }
 
@@ -288,6 +299,10 @@ pub enum TExprKind {
     Rt(&'static str, Vec<TExpr>),
     /// A Wasm instruction on f64 values.
     MathOp(MathOp, Vec<TExpr>),
+    /// `await p` (SPEC.md §4.5) in an `async` function. The checker
+    /// rewrites the function into continuations (`check/asyncfn.rs`), so no
+    /// later phase sees it.
+    Await(Box<TExpr>),
 
     // -- Reactive and UI forms. `lower` replaces all of these. -------------
     SignalNew(Box<TExpr>),

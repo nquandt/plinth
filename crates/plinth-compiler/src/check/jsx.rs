@@ -715,5 +715,6 @@ fn index_key_fn(span: crate::diag::Span) -> crate::ast::FuncDecl {
         is_default: false,
         span,
         type_params: Vec::new(),
+        is_async: false,
     }
 }

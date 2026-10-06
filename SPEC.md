@@ -180,6 +180,8 @@ The compiler rejects these features, and each one has a clear error message and 
 
 `async` functions compile to state machines that live on the GC heap. A host API call that cannot finish at once returns a request id. The host later sends a `completion` event (§8.4), and the guest scheduler resumes the waiting task. There are no threads in the guest. All guest code runs on one logical thread, between events.
 
+**Status (core 1.10):** `async`/`await` work. The compiler rewrites an `async` function into continuation closures on the GC heap (`docs/language.md`, "Async functions and `await`"). A host call without its `done` callback (`alert`, `confirm`, `prompt`, `fetch`, and the asynchronous `plinth:hub` calls) returns a `Promise`. The promises and the microtask queue are app code; after each event, the runtime calls the app's drain function (`set_drain`) and then flushes the reactive graph. A rejected promise that nothing awaits goes to the host through `error.report`. Not yet: `Promise.all`, async methods, `await` inside `switch`, `do…while` and `try`/`finally`.
+
 ### 4.6 Documented deviations from ECMAScript
 
 - **Number semantics:** `int` arithmetic wraps at 32 bits. `number` behaves as IEEE 754 `f64`.
@@ -274,6 +276,7 @@ The compiler is written in Rust. It is one binary, `plinth`, together with the C
 
 - **v0:** `throw` and uncaught runtime errors (null dereference, out-of-bounds index, OOM) **trap**. The host catches the trap and shows a standard "This app stopped" screen with a report option. It keeps the guest's last committed tree in a read-only state.
 - **v1:** `try`/`catch` through the Wasm exception-handling proposal, after all target runners support it (wasmtime, browsers, the iOS AOT path). Until then, `plinth:core` gives `Result<T, E>` for recoverable errors, and all fallible host APIs return it.
+- **Status (core 1.10):** `throw`, `try`, `catch` and `finally` work, without the Wasm proposal. The compiler generates the exception path: two globals hold a pending exception, and the code tests them after each call that can throw (`docs/language.md`, "Errors and exceptions", gives the reasons). A thrown value is an `Error` or a subclass. Runtime errors (null dereference, out-of-bounds index, OOM, a failed `as` cast) still trap. An exception that no `catch` gets in an event handler or a callback goes to the host through `error.report`, and the app continues. An uncaught exception in the start-up code is reported, and then the app stops.
 
 ---
 

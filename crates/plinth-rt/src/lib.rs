@@ -33,7 +33,7 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 3] = *b"1.9";
+static CORE_VERSION: [u8; 4] = *b"1.10";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;
@@ -143,6 +143,19 @@ pub fn trap(msg: &str) -> ! {
     panic!("{msg}");
 }
 
+/// Reports an uncaught app error to the host (SPEC.md §5.6, core 1.10):
+/// `prefix`, then `"<name>: <message>"`. The guest keeps running.
+pub fn report_error(prefix: &str, name: &str, message: &str) {
+    let mut line = String::from(prefix);
+    line.push_str(name);
+    line.push_str(": ");
+    line.push_str(message);
+    #[cfg(target_arch = "wasm32")]
+    bindings::plinth::app::error::report(&line);
+    #[cfg(not(target_arch = "wasm32"))]
+    eprintln!("{line}");
+}
+
 fn log(msg: &str) {
     #[cfg(target_arch = "wasm32")]
     bindings::plinth::app::dev::log(msg);
@@ -154,6 +167,32 @@ fn commit() {
     let ops = ui::take_ops();
     if !ops.is_empty() {
         bindings::plinth::app::ui::commit(&ops);
+    }
+}
+
+/// The app's microtask drain (SPEC.md §4.5, core 1.10): generated code
+/// that runs the queued `async` continuations, reports the rejections
+/// that nothing awaited, and returns how many continuations ran. Only an
+/// app with `async` code sets it (the queue lives in the app).
+static DRAIN: GlobalCell<(u32, u32)> = GlobalCell::new((0, 0));
+
+/// After an event: runs the queued continuations, then the reactive
+/// flush. A flush can start more continuations (an effect that calls an
+/// `async` function), so repeat until the drain runs none.
+#[inline(never)]
+fn settle() {
+    loop {
+        let (thunk, env) = DRAIN.get();
+        // No observer is active between events, so no `untracked`. The
+        // drain returns the number of continuations that it ran.
+        let ran = thunk != 0 && {
+            call_thunk(thunk, env);
+            matches!(RESULT.take(), Val::I32(n) if n != 0)
+        };
+        reactive::flush();
+        if !ran {
+            break;
+        }
     }
 }
 
@@ -185,7 +224,7 @@ impl bindings::Guest for Rt {
         if let Some(snapshot) = plinth_protocol::init_arg::find(&args, plinth_protocol::init_arg::SNAPSHOT) {
             reactive::sig_restore(snapshot);
         }
-        reactive::flush();
+        settle();
         commit();
         collect_if_needed();
     }
@@ -196,15 +235,15 @@ impl bindings::Guest for Rt {
             match e {
                 plinth_protocol::Event::Ui { handler, value, .. } => {
                     ui::dispatch(handler, &value);
-                    reactive::flush();
+                    settle();
                 }
                 plinth_protocol::Event::Timer { timer } => {
                     host::dispatch_timer(timer);
-                    reactive::flush();
+                    settle();
                 }
                 plinth_protocol::Event::Completion { request, result } => {
                     host::dispatch_completion(request, &result);
-                    reactive::flush();
+                    settle();
                 }
                 #[cfg(feature = "dev")]
                 plinth_protocol::Event::SnapshotRequest => {
@@ -248,6 +287,18 @@ abi! {
     fn __plinth_rt_ret_ref(p: i32) { RESULT.set(if p == 0 { Val::None } else { Val::Ref(ptr(p)) }); }
     fn __plinth_rt_log(s: i32) { log(strings::as_str(ptr(s))); }
     fn __plinth_rt_throw(s: i32) { trap(strings::as_str(ptr(s))); }
+    // -- Errors (SPEC.md §5.6, core 1.10) -------------------------------------
+    fn __plinth_rt_uncaught(name: i32, message: i32) {
+        report_error("Uncaught ", strings::as_str(ptr(name)), strings::as_str(ptr(message)))
+    }
+    // -- async/await (SPEC.md §4.5, core 1.10) --------------------------------
+    fn __plinth_rt_set_drain(thunk: i32, env: i32) { DRAIN.set((thunk as u32, env as u32)) }
+    fn __plinth_rt_report(text: i32) {
+        #[cfg(target_arch = "wasm32")]
+        bindings::plinth::app::error::report(strings::as_str(ptr(text)));
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = text;
+    }
 
     // -- Heap --------------------------------------------------------------------
     fn __plinth_rt_alloc(type_id: i32) -> i32 { gc::alloc_user(type_id as u32) as i32 }

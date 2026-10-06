@@ -1,0 +1,4 @@
+app/main.tsx(2,1): error PL3001: an `async` function returns a `Promise`, not `number`
+  async function g(): number { return 1; }
+  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  help: write the return type as `Promise<T>`

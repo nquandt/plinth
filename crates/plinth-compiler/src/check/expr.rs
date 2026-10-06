@@ -171,6 +171,24 @@ impl Checker<'_> {
             ExprKind::NewInstance(name, args) => self.new_instance(name, args, span),
             ExprKind::InstanceOf(obj, name, name_span) => self.instance_of(obj, name, *name_span, span),
             ExprKind::As(inner, type_ann, cast_span) => self.as_cast(inner, type_ann, *cast_span),
+            ExprKind::Await(inner) => {
+                if !self.fx.is_async {
+                    self.err_help(code::ASYNC, span, "`await` is only allowed in an `async` function", "mark the function `async`");
+                    self.expr(inner, None);
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let te = self.expr(inner, None);
+                match self.promise_of(&te.ty) {
+                    Some(info) => TExpr::new(TExprKind::Await(bx(te)), info.ty.clone(), span),
+                    None => {
+                        if !te.ty.is_error() {
+                            let msg = format!("`await` needs a `Promise`, not `{}`", self.show(&te.ty));
+                            self.err(code::TYPE_MISMATCH, inner.span, msg);
+                        }
+                        TExpr::new(TExprKind::Null, Type::Error, span)
+                    }
+                }
+            }
         }
     }
 
@@ -735,7 +753,7 @@ impl Checker<'_> {
         let matched = cond.unwrap_or_else(|| TExpr::new(TExprKind::Bool(false), Type::Bool, span));
         let not_matched = TExpr::new(TExprKind::Not(bx(matched)), Type::Bool, span);
         let msg = format!("`as` cast failed: the string is not one of {}", lits.join(", "));
-        let fail = TStmt::Throw(TExpr::new(TExprKind::Str(msg), Type::String, span));
+        let fail = TStmt::Trap(TExpr::new(TExprKind::Str(msg), Type::String, span));
         let guard = TStmt::If(not_matched, vec![fail], Vec::new());
         let result = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(v_r)), Type::StrLits(lits.clone()), span);
         TExpr::new(TExprKind::Block(vec![TStmt::Let(v, Some(self.coerce(te, &Type::String))), guard], bx(result)), Type::StrLits(lits), span)
@@ -771,7 +789,7 @@ impl Checker<'_> {
         );
         let not_matched = TExpr::new(TExprKind::Not(bx(eq)), Type::Bool, span);
         let msg = format!("`as` cast failed: the value's tag is not \"{lit}\"");
-        let fail = TStmt::Throw(TExpr::new(TExprKind::Str(msg), Type::String, span));
+        let fail = TStmt::Trap(TExpr::new(TExprKind::Str(msg), Type::String, span));
         let guard = TStmt::If(not_matched, vec![fail], Vec::new());
         let result = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(v_r)), target.clone(), span);
         TExpr::new(TExprKind::Block(vec![TStmt::Let(v, Some(te)), guard], bx(result)), target, span)
