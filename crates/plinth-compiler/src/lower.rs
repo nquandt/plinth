@@ -18,15 +18,44 @@ use crate::types::{FuncType, Repr, Type};
 use plinth_protocol::prop;
 use std::rc::Rc;
 
-pub fn lower(prog: &mut Program) -> FuncId {
+pub fn lower(prog: &mut Program, dev: bool) -> FuncId {
     let n = prog.funcs.len();
     for fid in 0..n as FuncId {
         let body = std::mem::take(&mut prog.funcs[fid as usize].body);
-        let mut cx = Cx { prog, func: fid, loops: Vec::new() };
+        let mut cx = Cx { prog, func: fid, loops: Vec::new(), dev };
         let body = cx.stmts(body);
         prog.funcs[fid as usize].body = body;
     }
     make_main(prog)
+}
+
+/// Hot reload (SPEC.md §13): the wire shape of a module-level signal's
+/// value type, or `None` when the type is not one `sig_register`/
+/// `sig_restore` understand (an array, a struct, a union, ...). Those
+/// signals are simply not registered, so they always start fresh; v1
+/// covers the common scalar cases only (see HANDOFF.md-style note in
+/// `reactive.rs`).
+fn shape_code(ty: &Type) -> Option<u32> {
+    match ty {
+        Type::Number => Some(1),
+        Type::Int => Some(2),
+        Type::Bool => Some(3),
+        Type::String | Type::StrLits(_) => Some(4),
+        Type::Nullable(inner) => shape_code(inner).map(|c| c + 10),
+        _ => None,
+    }
+}
+
+/// A stable 32-bit hash of a module-level signal's key (module index +
+/// declaration name, SPEC.md §13). FNV-1a: small, and the compiler is a
+/// `std` crate, so this has nothing to do with the `plinth-rt` size budget.
+fn fnv1a(s: &str) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in s.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h
 }
 
 fn make_main(prog: &mut Program) -> FuncId {
@@ -248,6 +277,10 @@ struct Cx<'p> {
     prog: &'p mut Program,
     func: FuncId,
     loops: Vec<LoopId>,
+    /// Hot reload (SPEC.md §13): emit `sig_register` after a module-level
+    /// `signal(...)` whose value has a shape `sig_register`/`sig_restore`
+    /// understand.
+    dev: bool,
 }
 
 impl Cx<'_> {
@@ -257,6 +290,24 @@ impl Cx<'_> {
 
     fn stmt(&mut self, s: TStmt) -> TStmt {
         match s {
+            TStmt::Let(v, Some(e)) if self.dev && self.is_registrable_module_signal(v) => {
+                let span = e.span;
+                let lowered = self.expr(e);
+                let module_idx = match self.prog.funcs[self.func as usize].kind {
+                    FuncKind::ModuleInit(m) => m,
+                    _ => 0,
+                };
+                let shape = match &self.prog.vars[v as usize].ty {
+                    Type::Signal(inner) => shape_code(inner).expect("checked by is_registrable_module_signal"),
+                    _ => unreachable!(),
+                };
+                let key = fnv1a(&format!("{module_idx}:{}", self.prog.vars[v as usize].name));
+                let read = TExpr::new(TExprKind::Var(v), self.prog.vars[v as usize].ty.clone(), span);
+                TStmt::Block(vec![
+                    TStmt::Let(v, Some(lowered)),
+                    rt_stmt("sig_register", vec![read, i32c(key as i32), i32c(shape as i32)]),
+                ])
+            }
             TStmt::Let(v, e) => TStmt::Let(v, e.map(|e| self.expr(e))),
             TStmt::Expr(e) => TStmt::Expr(self.expr(e)),
             TStmt::If(c, a, b) => TStmt::If(self.expr(c), self.stmts(a), self.stmts(b)),
@@ -289,6 +340,16 @@ impl Cx<'_> {
 
     fn bx(&mut self, e: Box<TExpr>) -> Box<TExpr> {
         Box::new(self.expr(*e))
+    }
+
+    /// Hot reload (SPEC.md §13): `v` is a `let` at the top level of a
+    /// module (not inside a component, a loop or a closure — `module`
+    /// is only set for those), its initializer is a plain `signal(...)`
+    /// and its value type has a shape `sig_register` understands.
+    fn is_registrable_module_signal(&self, v: VarId) -> bool {
+        matches!(self.prog.funcs[self.func as usize].kind, FuncKind::ModuleInit(_))
+            && self.prog.vars[v as usize].module.is_some()
+            && matches!(&self.prog.vars[v as usize].ty, Type::Signal(inner) if shape_code(inner).is_some())
     }
 
     fn expr(&mut self, e: TExpr) -> TExpr {

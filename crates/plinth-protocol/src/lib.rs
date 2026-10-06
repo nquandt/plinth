@@ -537,6 +537,7 @@ mod tests {
             Op::Move { parent: 1, id: 2, before: 0 },
             Op::Unlisten { id: 2, event: event::PRESS },
             Op::Remove { id: 2 },
+            Op::Snapshot { bytes: vec![1, 2, 3, 0, 255] },
         ];
         let mut w = Writer::new();
         for op in &ops {
@@ -553,6 +554,7 @@ mod tests {
             Event::Timer { timer: 2 },
             Event::Lifecycle { kind: 1 },
             Event::VisibleRows { list: 5, from: 0, to: 20 },
+            Event::SnapshotRequest,
         ];
         let mut w = Writer::new();
         for ev in &events {

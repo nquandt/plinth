@@ -519,6 +519,32 @@ mod tests {
     }
 
     #[test]
+    fn stacks_snapshot_restores_only_surviving_screens() {
+        // Hot reload (SPEC.md §13): the host keeps the navigation stack
+        // across a reload when the screens still exist.
+        let mut t = Tree::new();
+        screen(&mut t, 1, 0);
+        screen(&mut t, 2, 1);
+        commit(&mut t, &[Op::Navigate { kind: nav_kind::MARK_PRIMARY, screen: 0, args: Value::Null }]);
+        commit(&mut t, &[Op::Navigate { kind: nav_kind::PUSH, screen: 1, args: Value::Null }]);
+        assert!(t.can_go_back());
+        let saved = t.stacks_snapshot();
+
+        // The screen reappears with the same index after the reload.
+        let mut reloaded = Tree::new();
+        screen(&mut reloaded, 1, 0);
+        screen(&mut reloaded, 2, 1);
+        reloaded.restore_stacks(saved.clone());
+        assert!(reloaded.can_go_back());
+
+        // A screen that no longer exists after the reload is dropped.
+        let mut shrunk = Tree::new();
+        screen(&mut shrunk, 1, 0);
+        shrunk.restore_stacks(saved);
+        assert!(!shrunk.can_go_back());
+    }
+
+    #[test]
     fn primary_screens_filters_by_mark_primary() {
         let mut t = Tree::new();
         screen(&mut t, 1, 0);
