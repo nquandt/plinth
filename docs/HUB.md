@@ -86,6 +86,8 @@ The Hub has two layers:
 
 `hub.manage` adds a host API module, `plinth:hub`, with calls such as `search(query)`, `appInfo(id)`, `install(id, version)`, `remove(id)`, `launch(id)`, `grants(id)`, `setGrant(id, capability, decision)`, `block(id | publisher)`, `groups()`, `addShortcut(id)`, `cores()`. Ordinary apps cannot import it: the import check of `SPEC.md` §10.4 rejects it unless the package has the Hub signature.
 
+**Exists** (core 1.8, `std/hub.d.ts`, `docs/host-apis.md`): `listApps`, `launch`, `setGrant`, `block`, `unblock`, `listGroups`, `createGroup`, `setGroup`, `remove`, `search` and `install` (asynchronous: a request id now, a `completion` event later), and `lastError`. `listApps` gives each app with its capability label. The host checks the trusted signer when it loads the package. Not yet: `appInfo`, a version for `install`, publisher blocks, `addShortcut`, `cores`.
+
 Reasons for this split:
 - The Hub UI is written one time and runs on every host, like any Plinth app. It is also the largest test of the framework.
 - The privileged part is small and native, so it is easy to audit.
@@ -98,6 +100,8 @@ Reasons for this split:
 - **Web:** each app runs in its own browsing context (an iframe with a separate origin, or a separate tab), so its storage stays separate (§7.6).
 
 Each app instance gets its own capability policy (from the grants) and its own data directory (by app id). Apps cannot see each other.
+
+**Exists (desktop):** `plinth hub ui` (or `plinth hub run <the Hub UI id>`) opens the Hub UI in a window. Each 100 ms, the host takes the launch requests of the Hub UI (`take_hub_launches`) and opens each app in a new window of the same process, on the same engine (`plinth_host_desktop::launch_from_hub`). If the app has a capability with no decision, the consent window opens first, in the same process; the other windows stay usable. A blocked app does not open. Closing the Hub window stops its poll loop and does not close the apps.
 
 ### 4.3 Local stores
 
@@ -149,6 +153,8 @@ A Plinth app link opens the app in the Hub:
 - a direct `.plnt` URL or file (the Hub shows that it does not come from a source).
 
 A link that is not from a source gets a stronger warning on the consent screen (§7.3). The final choice of the app address is open question Q12 in `SPEC.md`.
+
+**Exists:** `plinth hub open <link>` opens `plinth://app/<app id>` (and `plinth://` or `plinth://hub` for the Hub UI). If the app is not in the library, the host installs the latest version from the configured sources first. A version in the link is not used yet. `plinth_hub::os::parse_link` accepts only the characters `A–Z a–z 0–9 . - _ +` in an app id and a version.
 
 ---
 
@@ -309,6 +315,8 @@ From an app page, the user can make a **native export** for the current platform
 
 A shortcut starts the app directly, without the Hub window. The app still runs inside the Hub host, with its grants and its data.
 
+**Exists (Windows):** `plinth hub register-scheme [--exe <path>]` writes the `plinth://` scheme for the current user (`HKEY_CURRENT_USER\Software\Classes\plinth`, no administrator rights). Windows then runs `"<plinth.exe>" hub open "%1"` for a link. `plinth hub unregister-scheme` removes it. `plinth hub shortcut <app id> [--dir <folder>]` writes an Internet Shortcut (`<app name>.url`) to the desktop. It opens `plinth://app/<app id>` with the icon of `plinth.exe`. This is simpler than a `.lnk` file: it needs no COM call, but it needs the scheme. The registry calls go through the `plinth_hub::os::Registry` trait, so the tests use `MemoryRegistry` and do not change the real registry. Not yet: the app icon on the shortcut, Start menu entries, `.plnt` file associations, and the other platforms.
+
 ---
 
 ## 11. Platforms
@@ -382,7 +390,7 @@ No platform SDK is necessary for the Hub path. A developer needs Xcode on a Mac 
 | **H0: local library** | Hub services in the desktop host: library, package cache, grants store, blocks; the consent screen (install-time label) in the desktop host; `plinth hub` CLI commands for testing. **Exists:** crate `plinth-hub` (`PLINTH_HUB_DIR`), `plinth hub add\|list\|run\|remove\|grants\|block\|unblock\|groups\|policy`, policies from grants, the consent window before the first run. Risk-level defaults (§7.2): `None`/`Low` capabilities are granted "by default" at install (`Hub::add_package`), recorded in `grants.json` with `by_default: true`; the consent window and `plinth hub grants <id>` show every declared capability with its risk level and whether the user or the default decided (`Hub::capability_report`); a Low one can still be refused with `plinth hub grants <id> refuse <capability>`. Re-consent on update (§7.3 step 3): each installed version's capabilities are kept in `library.json`; a new version's run asks consent only for the capabilities the previous version did not have (a grant does not depend on the version); if the user cancels, `Hub::runnable_version`/`package` picks the newest version whose capabilities are all decided (or the pinned one), so the previous version runs; `plinth hub update` prints the new capabilities. Global switches (§7.4): `plinth hub policy deny\|allow\|show <capability>`, a hub-wide deny list in `policy.json` that `Hub::policy_for` applies after the per-app grants. | — |
 | **H1: signing** | `plinth publisher init`, signatures in `.plnt`, verification in the host, the capability map (§12.3), reachable-capability analysis. | H0 |
 | **H2: sources** | The source format (§5.1), a static source that a developer can host on any web server, `plinth publish --to <dir>`, the transparency log. | H1 |
-| **H3: Hub UI** | `plinth:hub` (privileged), the Hub UI as a Plinth app, more than one app per host, shortcuts and the URL scheme on Windows. | H0–H2, §12.2 |
+| **H3: Hub UI** | `plinth:hub` (privileged), the Hub UI as a Plinth app, more than one app per host, shortcuts and the URL scheme on Windows. **Exists:** step 1: several apps in one host process (`open_app`, one shared `Runner`), and `plinth:hub` for a package that a trusted Hub key signed (`PLINTH_HUB_TRUSTED_KEYS`). Step 2: the Hub UI app (`examples/hub`, id `dev.plinth.hub`): the library with group tabs and a text filter; for each app, the publisher and signature, the capability label with risk levels, the reason of the app, the grants (view and change), groups, Block/Unblock, Remove and Open; a Discover screen that searches every source and installs (core 1.8: `listGroups`, `createGroup`, `setGroup`, `remove`, `search`, `install`). The host poll loop opens each launch in a new window, with the in-process consent window (§4.2). `plinth hub ui`, `plinth hub open`, the `plinth://` scheme and `.url` shortcuts on Windows (§5.3, §10). Tests: `plinth-compiler` `tests/hub_ui.rs` and `tests/hub_api.rs` (the Hub UI in wasmtime with a fake backend), `plinth-hub` (the backend, sources, links, the scheme in a memory registry), `plinth-registry` `tests/e2e.rs` (search and install from a folder registry), `plinth-host-desktop` `tests/hub_host.rs` (launch planning and the poll loop in gpui's `TestAppContext`). Not yet: the Plinth project Hub key, first-use prompts, updates from the Hub UI, `.lnk` shortcuts with the app icon. | H0–H2, §12.2 |
 | **H4: registry service** | The hosted registry with search, screenshots, reports, domain verification. | H2 |
 | **H5: first-use prompts and network** | Asynchronous calls, `plinth:net`, runtime prompts. | §12.1 |
 | **H6: web Hub** | The web Hub as a PWA, apps in separate origins. | H3, `SPEC.md` M5 |

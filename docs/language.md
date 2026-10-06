@@ -252,6 +252,7 @@ accurate.
 | `plinth:clipboard` | `writeText`, `readText`, `lastError()` | `clipboard.write` / `clipboard.read` |
 | `plinth:dialog` | `alert`, `confirm`, `prompt` (host-owned modal dialogs) | none |
 | `plinth:net` | HTTP/WebSocket | `net:<host pattern>` — **in progress**, needs `async`/`await` |
+| `plinth:hub` | `listApps`, `launch`, `setGrant`, `block`/`unblock`, `listGroups`, `createGroup`, `setGroup`, `remove`, `search`, `install`, `lastError` (the Hub UI only, see [host-apis.md](host-apis.md)) | `hub.manage`, for a package that a trusted Hub key signed |
 
 See [host-apis.md](host-apis.md) for how capabilities, denial, and the
 manifest work together.
