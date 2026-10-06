@@ -4803,6 +4803,7 @@ dependencies = [
  "anyhow",
  "plinth-compiler",
  "plinth-host-desktop",
+ "plinth-hub",
  "plinth-package",
  "plinth-protocol",
  "wasmparser 0.251.0",

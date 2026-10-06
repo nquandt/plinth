@@ -588,7 +588,8 @@ fn hub_command(args: &[&str]) -> Result<ExitCode> {
                     let version = entry.active_version().map(|v| v.version.clone()).unwrap_or_default();
                     let decision = if action == "allow" { plinth_hub::Decision::Allowed } else { plinth_hub::Decision::Refused };
                     hub.set_grant(id, capability, decision, &version)?;
-                    println!("{action}ed {capability} for {id}");
+                    let verb = if action == "allow" { "allowed" } else { "refused" };
+                    println!("{verb} {capability} for {id}");
                 }
                 Some(other) => bail!("unknown `plinth hub grants {other}`; use allow or refuse"),
             }
