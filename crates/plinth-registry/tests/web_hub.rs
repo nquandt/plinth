@@ -115,6 +115,30 @@ fn web_hub_serves_landing_page_index_package_and_core() {
 }
 
 #[test]
+fn the_package_icon_is_copied_and_the_app_list_url_resolves() {
+    let dir = temp_dir("icon");
+    let pkg = plinth_package::Package::read(&compile_counter()).unwrap();
+    let png = b"\x89PNG\r\n\x1a\nnot a real image".to_vec();
+    let mut manifest = pkg.manifest.clone();
+    manifest.id = "com.example.iconic".into();
+    manifest.icon = Some("assets/icon.png".into());
+    let bytes = plinth_package::Package { manifest, component: pkg.component, assets: vec![("assets/icon.png".into(), png.clone())], signature: None }
+        .write()
+        .unwrap();
+    std::fs::write(dir.join("iconic.plnt"), &bytes).unwrap();
+    build(&dir, &Options::default()).unwrap();
+
+    let list: plinth_registry::AppList = serde_json::from_str(&std::fs::read_to_string(dir.join("apps/index.json")).unwrap()).unwrap();
+    // Relative to `apps/index.json` (docs/REGISTRY.md §3).
+    assert_eq!(list.apps[0].icon.as_deref(), Some("com.example.iconic/assets/icon.png"));
+
+    let port = serve::serve_background_with(&dir, 0, ServeOptions { web: true }).unwrap();
+    let icon = get(port, "/apps/com.example.iconic/assets/icon.png");
+    assert_eq!((icon.status, icon.header("Content-Type")), (200, Some("image/png")));
+    assert_eq!(icon.body, png);
+}
+
+#[test]
 fn without_web_the_server_serves_only_the_registry() {
     let dir = temp_dir("plain");
     build(&dir, &Options::default()).unwrap();

@@ -22,7 +22,8 @@ Plinth is a framework for cross-platform apps. Authors write a strict subset of 
 | Host APIs (SPEC §8.5, `docs/host-apis.md`) | `time` (timers, dates, time zone), `store` (kv), `clipboard`, `dialog` (async), `net` (HTTP fetch, per-host capabilities), `hub` (privileged). Async calls use request ids and `completion` events. Denied calls never trap. |
 | Compiler (SPEC §4) | Unions and narrowing (also on member paths), generic functions/interfaces/type aliases, classes with single inheritance and `instanceof`, `int`, `Map`/`Set` (iteration, `forEach`, `keys`/`values`/`entries`), fixed-length tuples, nullable boxing, `JSON.stringify`/`JSON.parse<T>`, fragments, `.map()` JSX children, checked `as` casts, many string and array methods (incl. stable `sort`, `splice`, `fill`, `flat`), dynamic-length `Chart` data. Golden tests for 54 of 55 diagnostics. |
 | Hub (`docs/HUB.md`) | H0 (library, grants, blocks, groups, consent window, risk-level defaults, re-consent on update, global policy), H1 (Ed25519 publisher signing), H3 step 1 (several apps per host, privileged `plinth:hub` for packages signed by a trusted key), H3 step 2 (the Hub UI app `examples/hub`, core 1.8 hub calls incl. async `search`/`install`, the host poll loop that opens launches in new windows, in-process consent, `plinth hub ui|open|shortcut|register-scheme`, `plinth://` links on Windows), H3 step 3 (core 1.9: `appInfo`, `pin`, publisher blocks, async `checkUpdates`/`update`; the Hub UI checks for updates on start, shows a count in the Library and "Update available" on the App screen, updates with re-consent, pins versions, blocks publishers; `.lnk` shortcuts with the app icon and Start menu entries; the `plinthw` launcher with no console window). |
-| Registry (`docs/REGISTRY.md`) | Draft 1: static or dynamic registries, `plinth registry build|serve`, `plinth hub source|search|install|update`. |
+| Registry (`docs/REGISTRY.md`) | Draft 1: static or dynamic registries, `plinth registry build|serve`, `plinth hub source|search|install|update`. The app list has capability `labels` (risk, description, reason) and copied icons. |
+| Web App Hub (`docs/web-hub.md`) | `plinth registry serve <folder> --web` serves a registry, a landing page (`web/hub.html`: list, search, capability label with browser support, Open) and the web host on one origin (web files embedded in the binary). `bash scripts/web-hub-demo.sh` serves the examples on port 8787; `cloudflared tunnel --url http://127.0.0.1:8787` for another device (public URL). |
 | Tooling | Hot reload that keeps signal state, headless screenshots (`plinth-shoot`), GC stress mode, `plinth native` single-file executables, VS Code extension (`editors/vscode`, not published), npm packages (smoke-tested locally, not published). |
 | Web host (`web/`) | Runs the same `.plnt` and core file in a browser: all UI API 1.5 controls, timers, kv, clipboard, dialogs, net. axe-core: 0 violations on 5 apps. |
 | CI | `.github/workflows/ci.yml` runs `scripts/ci-local.sh` on Windows (full) and Linux (no GUI); macOS weekly or by hand. |
@@ -45,9 +46,10 @@ plinth validate <app.plnt>               # signature, declared vs reachable capa
 plinth core list|install|export
 plinth publisher init|show ; plinth sign <app.plnt> ; plinth build --sign
 plinth hub add|list|run|ui|open|remove|grants|block|unblock|block-publisher|policy|groups|source|search|install|update|pin|shortcut|register-scheme
-plinth registry build <folder> [--with-core] ; plinth registry serve <folder>
+plinth registry build <folder> [--with-core] ; plinth registry serve <folder> [--web] [--port N]
+bash scripts/web-hub-demo.sh             # the web App Hub with the examples on http://localhost:8787/
 plinth-shoot <app.plnt> <out-dir>        # PNGs of every screen at compact/regular/wide
-node web/test/run-a11y.mjs               # axe-core in headless Edge (local only; needs the CDN)
+node web/test/run-a11y.mjs               # axe-core in headless Edge, also the web App Hub (local only; needs the CDN; --hub-only)
 ```
 
 Test crates must run **one at a time** on Windows (linker errors LNK1318/LNK1201 otherwise); the script does this. Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`, `PLINTH_HUB_TRUSTED_KEYS`, `PLINTH_BLESS=1` (rewrite diagnostic goldens), `PLINTH_TRACE_RENDER=1` (frame times).
