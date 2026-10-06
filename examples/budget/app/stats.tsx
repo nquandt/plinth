@@ -31,7 +31,7 @@ export default function Stats() {
         />
       </Section>
       <Section title="Navigation">
-        <Button label="Back to transactions" onPress={() => navigate("budget")} />
+        <Button label="Back to transactions" onPress={() => navigate.back()} />
       </Section>
     </Screen>
   );
