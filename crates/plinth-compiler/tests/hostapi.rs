@@ -99,16 +99,15 @@ fn timer_and_kv_round_trip() {
     assert!(commits.is_empty(), "a one-shot timer must not fire twice");
 }
 
-/// `store.kv` calls trap when the capability is not declared (SPEC.md
-/// §8.5: "a denied call returns `error.denied(reason)` and never traps"
-/// for the host; the guest's current lowering turns a denial into a trap,
-/// which is the observable, documented behavior until a catchable error
-/// type exists, see the coordinator report).
+/// `store.kv` calls never trap when the capability is denied by the
+/// runtime policy, even though it was declared at compile time (SPEC.md
+/// §8.5: "a denied call returns `error.denied(reason)` and never traps").
+/// `kv.get` returns `null`, and `kv.lastError()` reports the reason.
 #[test]
-fn kv_without_the_capability_traps() {
+fn kv_denied_by_policy_does_not_trap() {
     let fs = MemFs::default().with(
         "app/main.tsx",
-        "import { app, Screen, Text } from \"plinth:ui\";\nimport { kv } from \"plinth:store\";\nfunction Home() { kv.set(\"a\", \"b\"); return <Screen title=\"Home\"><Text>hi</Text></Screen>; }\nexport default app({ screens: { home: { title: \"Home\", component: Home } } });\n",
+        "import { app, Screen, Text } from \"plinth:ui\";\nimport { kv } from \"plinth:store\";\nfunction Home() {\n  kv.set(\"a\", \"b\");\n  const v = kv.get(\"a\");\n  const err = kv.lastError();\n  return <Screen title=\"Home\"><Text>{(v === null ? \"null\" : v) + \"/\" + (err === null ? \"none\" : err)}</Text></Screen>;\n}\nexport default app({ screens: { home: { title: \"Home\", component: Home } } });\n",
     );
     // Compiled with the capability declared (so it is not a compile
     // error), but run with a policy that denies it.
@@ -121,7 +120,13 @@ fn kv_without_the_capability_traps() {
     let kv = plinth_runner_wasmtime::kv::Kv::in_memory();
     let clipboard: Box<dyn Clipboard> = Box::new(MemoryClipboard::default());
     let mut guest = runner.load_with_policy(&artifact.component, Limits::default(), policy, kv, clipboard).unwrap();
-    assert!(guest.init(&[]).is_err(), "a denied kv.set should trap, not silently succeed");
+    let mut tree = Tree::new();
+    let commits = guest.init(&[]).expect("a denied kv call must not trap");
+    for commit in commits {
+        let errors = tree.apply(&commit).unwrap();
+        assert!(errors.is_empty(), "op errors: {errors:?}");
+    }
+    assert_eq!(text_of(&tree), "null/denied:undeclared");
 }
 
 /// The compiler rejects a `plinth:store` call when `plinth.toml` (here,

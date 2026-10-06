@@ -70,6 +70,7 @@ pub enum StdFn {
     ClearTimer,
     ClipboardWriteText,
     ClipboardReadText,
+    ClipboardLastError,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

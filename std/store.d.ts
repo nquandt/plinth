@@ -10,4 +10,10 @@ export declare const kv: {
   remove(key: string): void;
   /** Lists every key currently set, in no particular order. */
   keys(): string[];
+  /** The reason the last `kv` call was denied (SPEC.md §8.5): one of
+   * `"denied:undeclared"`, `"denied:refused"`, `"denied:unsupported"`, or
+   * `null` if the last call was not denied. Cleared to `null` on the next
+   * successful `kv` call. A denied call never traps: `get` returns `null`,
+   * `set`/`remove` do nothing, and `keys` returns `[]`. */
+  lastError(): string | null;
 };

@@ -99,6 +99,8 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("kv_keys", &[], &[I32]),
     ("clipboard_write_text", &[I32], &[]),
     ("clipboard_read_text", &[], &[I32]),
+    ("kv_last_error", &[], &[I32]),
+    ("clipboard_last_error", &[], &[I32]),
 ];
 
 pub const PREFIX: &str = "__plinth_rt_";
