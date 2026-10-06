@@ -11,6 +11,8 @@
 //! file, then rename it over the target), so a crash mid-write cannot
 //! corrupt a store.
 
+pub mod os;
+
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

@@ -4991,6 +4991,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml 0.8.23",
+ "windows-registry",
 ]
 
 [[package]]
