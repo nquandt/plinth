@@ -31,7 +31,8 @@ fn load_error(app: &[u8]) -> String {
 
 /// Sets the `MAJOR.MINOR` that an app module needs.
 fn needing(mut app: Vec<u8>, version: &str) -> Vec<u8> {
-    let have = split::core_needed();
+    let (major, minor) = split::app_core_version(&app).unwrap();
+    let have = format!("{major}.{minor}");
     assert_eq!(have.len(), version.len(), "keep the length so the section size stays valid");
     let at = app.windows(have.len() + 11).position(|w| w == format!("plinth-core{have}").as_bytes()).unwrap() + 11;
     app[at..at + version.len()].copy_from_slice(version.as_bytes());
@@ -48,8 +49,9 @@ fn the_compiler_and_its_core_agree_on_the_version() {
 fn the_counter_app_module_holds_only_app_code() {
     let art = counter();
     assert!(split::is_app_module(&art.app));
-    assert_eq!(art.runtime, format!("plinth-core/{}", split::core_needed()));
-    assert_eq!(split::app_core_version(&art.app), cores::parse_version(&split::core_needed()));
+    // The counter uses only 1.0 functions, so it runs on every 1.x core.
+    assert_eq!(art.runtime, "plinth-core/1.0");
+    assert_eq!(split::app_core_version(&art.app), Some((1, 0)));
     // SPEC.md §5.5: the runtime is not in the app; the counter is tiny.
     assert!(art.app.len() <= 4 * 1024, "the counter app module is {} bytes", art.app.len());
     // The host's link step gives a component that runs.
@@ -109,4 +111,26 @@ fn install_and_link_through_the_cores_directory() {
     let err = format!("{:#}", cores::link_app(&needing(counter().app, "1.9")).unwrap_err());
     assert!(err.contains("plinth core install"), "{err}");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn an_app_needs_the_lowest_core_that_has_its_imports() {
+    // `JSON.stringify` uses functions that core 1.1 added; the counter does not.
+    let src = r#"import { app, Screen, Text } from "plinth:ui";
+import { JSON } from "plinth:core";
+function Home() {
+  return <Screen title="J"><Text>{JSON.stringify([1, 2])}</Text></Screen>;
+}
+export default app({ screens: { home: { title: "J", component: Home } } });
+"#;
+    let mut files = std::collections::HashMap::new();
+    files.insert("app/main.tsx".to_owned(), src.to_owned());
+    let fs = plinth_compiler::driver::MemFs(files);
+    let (front, art) = plinth_compiler::compile(&fs).unwrap();
+    let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+    let art = art.unwrap_or_else(|| panic!("the JSON app has errors:
+{}", diags.join("
+")));
+    assert_eq!(art.runtime, "plinth-core/1.1");
+    assert_eq!(counter().runtime, "plinth-core/1.0");
 }

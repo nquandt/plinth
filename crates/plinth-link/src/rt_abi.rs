@@ -128,6 +128,17 @@ pub const PREFIX: &str = "__plinth_rt_";
 /// The core version that this compiler targets. An app module declares it
 /// in its `plinth-core` custom section (SPEC.md §10.4, §10.5).
 pub const CORE_MAJOR: u32 = 1;
+
+/// The minor version in which each function after 1.0 was added. An app
+/// needs the highest minor version among the functions that it imports, so
+/// an app that uses only 1.0 functions still runs on a 1.0 core. Add each
+/// new function here with the new `CORE_MINOR`.
+pub const ADDED_IN: &[(&str, u32)] = &[("json_num_str", 1), ("json_quote_str", 1)];
+
+/// The minor version that added `name` (0 for the functions of 1.0).
+pub fn added_in(name: &str) -> u32 {
+    ADDED_IN.iter().find(|(n, _)| *n == name).map_or(0, |(_, m)| *m)
+}
 pub const CORE_MINOR: u32 = 1;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).

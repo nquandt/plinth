@@ -211,6 +211,8 @@ Each module has a hand-written `.d.ts` file in `std/` of this repo. The editor r
 
 In M1, `plinth:core` exports `Math`, `parseNumber`, `toString` and `console`; `plinth:ui` exports the reactive primitives, `app`, `navigate` and the M0 controls.
 
+`JSON.stringify` (core 1.1) is generated for the static type of its argument: `number`, `int`, `boolean`, `string`, nullable types, arrays, objects of known shape (fields in declaration order) and `Map<string, V>`. `NaN` and `Infinity` become `null`, as in JS. `JSON.parse<T>` is not done yet.
+
 M2 adds three modules:
 - `plinth:time`: `now()`, `monotonicNow()`, `setTimeout(f, ms)`, `setInterval(f, ms)`, `clearTimeout(id)` and `clearInterval(id)`. A timer id is a `number`. No capability is necessary.
 - `plinth:store`: `kv.get(key): string | null`, `kv.set(key, value)`, `kv.remove(key)` and `kv.keys(): string[]`. Capability `store.kv`.
@@ -684,6 +686,7 @@ The compiler runs the same load step after each build, so each build tests it.
 A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version is the same file on every host platform. A `.plnt` that needs core 1.3 behaves the same on Windows, macOS, Linux, the web and mobile, because each of these hosts runs the same core 1.3 file.
 
 - A core holds its version in the custom section `plinth-core` (`MAJOR.MINOR`).
+- An app declares the **lowest** core version that has every runtime function that it imports. `rt_abi::ADDED_IN` records the minor version that added each function. Thus a counter app built with core 1.1 still declares 1.0 and runs on a 1.0 core; an app that uses `JSON.stringify` (added in 1.1) declares 1.1.
 - A host keeps more than one core, as a version manager (for example `nvm`) does: the core that it was built with, and the cores in its cores directory (`%LOCALAPPDATA%\plinth\cores\<version>\core.wasm` on Windows, `$XDG_DATA_HOME/plinth/cores/...` on other systems, or `PLINTH_CORES_DIR`).
 - **Selection.** For each app, the host picks the core with the same major version and the highest minor version that is not lower than the app's minor version. If there is no such core, the host tells the user which core to install.
 - **Backward compatibility.** Because a core only adds functions inside its major version, the newest core of a major version runs every older app of that major version. A breaking change makes a new major version, and the old and the new core stay installed side by side.

@@ -68,8 +68,8 @@ pub fn compile_ex(fs: &dyn FileSystem, capabilities: &[String], dev: bool) -> an
     anyhow::ensure!(layout.missing.is_empty(), "the built-in core lacks {:?}; rebuild plinth-rt", layout.missing);
     let app_layout = split::app_layout(extra);
     let code = codegen::generate(&program, &app_layout.layout, main);
-    let runtime = split::runtime_field();
     let app = split::encode_app(&app_layout, &code)?;
+    let runtime = split::runtime_field(&app);
     // Link the app module the same way a host does, so each build checks
     // the load path too.
     let loaded = split::load_app(rt, &layout, &app)?;

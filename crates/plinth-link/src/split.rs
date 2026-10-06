@@ -36,14 +36,18 @@ pub const CORE_SECTION: &str = crate::cores::CORE_SECTION;
 /// The import name of the global that holds the app's first table index.
 pub const TABLE_BASE: &str = "table_base";
 
-/// The core version that this compiler writes, `MAJOR.MINOR`.
+/// The core version that this compiler's own core has, `MAJOR.MINOR`. An
+/// app may need less (`encode_app` writes the lowest version that has every
+/// function the app imports).
 pub fn core_needed() -> String {
     format!("{}.{}", rt_abi::CORE_MAJOR, rt_abi::CORE_MINOR)
 }
 
-/// The value of the manifest field `runtime`: `plinth-core/MAJOR.MINOR`.
-pub fn runtime_field() -> String {
-    format!("plinth-core/{}", core_needed())
+/// The value of the manifest field `runtime` for an app module:
+/// `plinth-core/MAJOR.MINOR`.
+pub fn runtime_field(app: &[u8]) -> String {
+    let (major, minor) = app_core_version(app).unwrap_or((rt_abi::CORE_MAJOR, rt_abi::CORE_MINOR));
+    format!("plinth-core/{major}.{minor}")
 }
 
 /// The id of a runtime build: `plinth-rt/` and the first 16 hex digits of
@@ -256,7 +260,10 @@ pub fn encode_app(al: &AppLayout, app: &AppCode) -> Result<Vec<u8>> {
     }
     module.section(&DataCountSection { count: app.data.len() as u32 });
     module.section(&code).section(&data);
-    module.section(&CustomSection { name: CORE_SECTION.into(), data: core_needed().as_bytes().into() });
+    // The lowest core version that has every imported function.
+    let minor = al.imports.iter().zip(&used).filter(|(_, u)| **u).map(|((name, _), _)| rt_abi::added_in(name)).max().unwrap_or(0);
+    let needs = format!("{}.{minor}", rt_abi::CORE_MAJOR);
+    module.section(&CustomSection { name: CORE_SECTION.into(), data: needs.as_bytes().into() });
     let bytes = module.finish();
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(&bytes)
