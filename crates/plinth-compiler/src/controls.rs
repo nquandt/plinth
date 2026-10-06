@@ -2,7 +2,9 @@
 //! checks them. Keep this table in sync with `std/ui.d.ts`; the test
 //! `std_typings_match` compares them.
 
-use plinth_protocol::{ControlKind, aspect, axis, button_role, button_size, event, prop, text_align, text_style, tone};
+use plinth_protocol::{
+    ControlKind, aspect, axis, button_role, button_size, date_picker_mode, event, prop, text_align, text_style, tone,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PropTy {
@@ -91,6 +93,8 @@ const ALIGNS: &[(&str, u16)] = &[("start", text_align::START), ("center", text_a
 const TONES: &[(&str, u16)] =
     &[("default", tone::DEFAULT), ("muted", tone::MUTED), ("danger", tone::DANGER), ("success", tone::SUCCESS)];
 const ASPECTS: &[(&str, u16)] = &[("square", aspect::SQUARE), ("wide", aspect::WIDE), ("tall", aspect::TALL)];
+const DATE_PICKER_MODES: &[(&str, u16)] =
+    &[("date", date_picker_mode::DATE), ("time", date_picker_mode::TIME), ("datetime", date_picker_mode::DATETIME)];
 
 const fn p(name: &'static str, ty: PropTy, required: bool, target: Target) -> PropSpec {
     PropSpec { name, ty, required, target }
@@ -362,6 +366,17 @@ pub const CONTROLS: &[ControlSpec] = &[
             // Decorative by default (hidden from AccessKit); giving a
             // `label` makes it an accessible, named icon (SPEC.md §6.3).
             p("label", T::Str, false, P(prop::LABEL)),
+        ],
+        children: ChildKind::None,
+    },
+    ControlSpec {
+        name: "DatePicker",
+        kind: ControlKind::DatePicker,
+        props: &[
+            p("label", T::Str, true, P(prop::LABEL)),
+            p("value", T::ValueStr, true, Target::Value),
+            p("mode", T::Enum(DATE_PICKER_MODES), false, P(prop::MODE)),
+            p("onChange", T::CallbackStr, false, Ev(event::CHANGE)),
         ],
         children: ChildKind::None,
     },
