@@ -1,12 +1,26 @@
-# CI for Plinth. Windows runs every test crate and the web host tests.
-# Linux and macOS run `cargo check` for the workspace and the non-GUI test
-# crates; they must pass too. No GUI window opens in CI. See HANDOFF.md.
+# CI for Plinth. Every job runs `scripts/ci-local.sh`, the same script that a
+# developer runs before a push, so CI and local checks cannot drift apart.
+#
+# Cost rules (GitHub bills private-repo minutes at 1x on Linux, 2x on
+# Windows and 10x on macOS):
+# - a newer push to the same branch cancels the run in progress;
+# - changes to documentation only do not start CI;
+# - macOS runs only by hand (workflow_dispatch) and once a week.
 name: CI
 
 on:
   push:
     branches: [main, master]
+    paths-ignore: ["**.md", "docs/**", "LICENSE*"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSE*"]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # Monday 06:00 UTC: the weekly macOS run
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 # gpui-ce is a path dependency checked out as a sibling directory, pinned to
 # a known-good commit (see docs/RELEASING.md for how to update the pin).
@@ -17,192 +31,92 @@ env:
 
 jobs:
   windows:
-    name: Windows (tested)
+    name: Windows (full)
+    if: github.event_name != 'schedule'
     runs-on: windows-latest
     steps:
       - name: Checkout plinth
         uses: actions/checkout@v4
         with:
           path: plinth
-
       - name: Checkout gpui-ce (sibling, pinned commit)
         uses: actions/checkout@v4
         with:
           repository: nquandt/gpui-ce
           ref: ${{ env.GPUI_CE_COMMIT }}
           path: gpui-ce
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: plinth -> target
-
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-
-      # Test crates one at a time: linking several large gpui test binaries
-      # at once fails on Windows (LNK1318/LNK1201). See HANDOFF.md §7.
-      - name: cargo test -p plinth-protocol
-        working-directory: plinth
-        run: cargo test -p plinth-protocol
-      - name: cargo test -p plinth-rt
-        working-directory: plinth
-        run: cargo test -p plinth-rt
-      - name: cargo test -p plinth-ui
-        working-directory: plinth
-        run: cargo test -p plinth-ui
-      - name: cargo test -p plinth-package
-        working-directory: plinth
-        run: cargo test -p plinth-package
-      - name: cargo test -p plinth-compiler
-        working-directory: plinth
-        run: cargo test -p plinth-compiler
-      - name: cargo test -p plinth-runner-wasmtime
-        working-directory: plinth
-        run: cargo test -p plinth-runner-wasmtime
-      - name: cargo test -p plinth-host-desktop
-        working-directory: plinth
-        run: cargo test -p plinth-host-desktop
-      - name: cargo test -p plinth-hub
-        working-directory: plinth
-        run: cargo test -p plinth-hub
-
-      - name: Web host tests (node)
+      - name: scripts/ci-local.sh full
         working-directory: plinth
         shell: bash
-        run: |
-          set -e
-          cargo build -p plinth-cli
-          ./target/debug/plinth core export target/core.wasm
-          for app in counter todo timer notes gallery budget; do ./target/debug/plinth build examples/$app; done
-          ./target/debug/plinth build web/test/fixtures/net-fixture
-          # run-a11y.mjs needs a local Edge and the axe-core CDN; run it by hand.
-          for t in web/test/run-*.mjs; do [ "$t" = web/test/run-a11y.mjs ] || node "$t"; done
-
-      - name: tsc check of every example
-        working-directory: plinth
-        shell: bash
-        run: |
-          set -e
-          for dir in examples/*/; do
-            name=$(basename "$dir")
-            [ -f "$dir/tsconfig.json" ] || continue
-            echo "::group::tsc $name"
-            (cd "$dir" && npx -y -p typescript@7 tsc -p .)
-            echo "::endgroup::"
-          done
+        run: bash scripts/ci-local.sh full
 
   linux:
-    name: Linux (no GUI run)
+    name: Linux (no GUI)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout plinth
         uses: actions/checkout@v4
         with:
           path: plinth
-
       - name: Checkout gpui-ce (sibling, pinned commit)
         uses: actions/checkout@v4
         with:
           repository: nquandt/gpui-ce
           ref: ${{ env.GPUI_CE_COMMIT }}
           path: gpui-ce
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: plinth -> target
-
       # Packages gpui-ce needs to build on Linux (from gpui-ce's own CI).
       - name: Install system packages for gpui-ce
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev libfontconfig-dev
-
-      # The compiler, the cores, the linker and the runner are tested here.
-      # The GUI host builds (cargo check) but no window is opened.
-      - name: cargo check (workspace)
+      - name: scripts/ci-local.sh nogui
         working-directory: plinth
-        run: cargo check --workspace
-
-      - name: cargo test -p plinth-protocol
-        working-directory: plinth
-        run: cargo test -p plinth-protocol
-      - name: cargo test -p plinth-package
-        working-directory: plinth
-        run: cargo test -p plinth-package
-      - name: cargo test -p plinth-compiler
-        working-directory: plinth
-        run: cargo test -p plinth-compiler
-      - name: cargo test -p plinth-rt
-        working-directory: plinth
-        run: cargo test -p plinth-rt
-      - name: cargo test -p plinth-runner-wasmtime
-        working-directory: plinth
-        run: cargo test -p plinth-runner-wasmtime
-      - name: cargo test -p plinth-hub
-        working-directory: plinth
-        run: cargo test -p plinth-hub
+        run: bash scripts/ci-local.sh nogui
 
   macos:
-    name: macOS (no GUI run)
+    name: macOS (no GUI, weekly or by hand)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
       - name: Checkout plinth
         uses: actions/checkout@v4
         with:
           path: plinth
-
       - name: Checkout gpui-ce (sibling, pinned commit)
         uses: actions/checkout@v4
         with:
           repository: nquandt/gpui-ce
           ref: ${{ env.GPUI_CE_COMMIT }}
           path: gpui-ce
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: plinth -> target
-
-      # The compiler, the cores, the linker and the runner are tested here.
-      # The GUI host builds (cargo check) but no window is opened.
-      - name: cargo check (workspace)
+      - name: scripts/ci-local.sh nogui
         working-directory: plinth
-        run: cargo check --workspace
-
-      - name: cargo test -p plinth-protocol
-        working-directory: plinth
-        run: cargo test -p plinth-protocol
-      - name: cargo test -p plinth-package
-        working-directory: plinth
-        run: cargo test -p plinth-package
-      - name: cargo test -p plinth-compiler
-        working-directory: plinth
-        run: cargo test -p plinth-compiler
-      - name: cargo test -p plinth-rt
-        working-directory: plinth
-        run: cargo test -p plinth-rt
-      - name: cargo test -p plinth-runner-wasmtime
-        working-directory: plinth
-        run: cargo test -p plinth-runner-wasmtime
-      - name: cargo test -p plinth-hub
-        working-directory: plinth
-        run: cargo test -p plinth-hub
+        run: bash scripts/ci-local.sh nogui

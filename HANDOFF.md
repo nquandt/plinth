@@ -99,6 +99,8 @@ A host: `cores::link_app(app)` picks the installed core (same major, highest min
 
 ## 8. Working conventions (from the user)
 
+- **Validate locally before every push:** `bash scripts/ci-local.sh full` must pass. CI minutes are limited (the user hit about 90 % of the monthly quota). Batch pushes; never push to see whether CI passes.
+
 - Commit after each tested step; push to `origin master`. No GPG signing; no attribution lines.
 - The user may edit `SPEC.md`; diff it before you change it.
 - Subagents (Sonnet) work well with small, explicit task lists (one or two items), their own worktree, and the rules in a shared file. With long lists they tend to stop after the first item.

@@ -92,3 +92,15 @@ the `license` field in `Cargo.toml`). A `LICENSE` file has not been
 added to the repository yet — that is the project owner's decision to
 make before the first public release. Please do not add one in a
 contribution; flag it to a maintainer instead.
+
+## Before you push
+
+Run the same checks that CI runs, and push only when they pass:
+
+```sh
+bash scripts/ci-local.sh full            # every test crate, tsc of every example, the web host tests
+bash scripts/ci-local.sh full --shoot    # also the headless screenshot tests (needs a GPU)
+```
+
+CI (`.github/workflows/ci.yml`) runs this script, so a green local run means a green CI run, except for platform differences. Batch your commits into few pushes: each push to `master` starts a Windows and a Linux run. macOS runs only once a week or by hand, because its minutes cost ten times more.
+
