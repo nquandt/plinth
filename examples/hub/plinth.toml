@@ -1,0 +1,8 @@
+id = "dev.plinth.hub"
+name = "Plinth Hub"
+version = "0.2.0"
+publisher = "you"
+
+[[capabilities]]
+name = "hub.manage"
+rationale = "Show the apps in your library, open them, and change what each app may do (docs/HUB.md §4.1)."
