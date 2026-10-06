@@ -71,3 +71,10 @@ window. The process stops when you close the last window.
 
 To try **Discover**, add a source first, for example a static registry
 that `plinth registry build` made: `plinth hub source add local <folder>`.
+
+## In a browser
+
+The same package runs in the web App Hub (`docs/web-hub.md`):
+`bash scripts/web-hub-demo.sh` signs it with a throwaway demo key and
+serves it. On the web the library is the registry listing (browse mode),
+and the host opens each app in a sandboxed frame after its consent window.

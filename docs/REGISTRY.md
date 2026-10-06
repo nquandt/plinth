@@ -195,7 +195,7 @@ Running it again is safe: the output for the same input is the same (stable orde
 
 `plinth registry serve <folder> [--port 8080]` serves the folder on `127.0.0.1` for local development. A client can also use the folder path directly as the base URL.
 
-`plinth registry serve <folder> --web` also serves the web App Hub: a browser page that lists the apps and runs them in the web host, on the same origin. Refer to `docs/web-hub.md`; `bash scripts/web-hub-demo.sh` makes and serves a registry of the example apps.
+`plinth registry serve <folder> --web` also serves the web host files, on the same origin: the web App Hub runs the Hub app from the registry (`docs/web-hub.md`). `plinth registry build <folder> --hub-trusted-key <key id>` writes `hub.json` at the registry root: the Hub app id and the keys that the web App Hub trusts as Hub keys. `bash scripts/web-hub-demo.sh` makes and serves a registry of the example apps.
 
 ---
 
