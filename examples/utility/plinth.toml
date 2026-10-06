@@ -6,3 +6,7 @@ publisher = "plinth"
 [[capabilities]]
 name = "clipboard.write"
 rationale = "Copy a text tool's result to the clipboard."
+
+[[capabilities]]
+name = "clipboard.read"
+rationale = "Paste text into the input box."

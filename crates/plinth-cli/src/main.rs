@@ -47,6 +47,8 @@ usage:
   plinth hub install <id>[@version] [--source <name>]
                                    download and add an app to the library
   plinth hub update [<id>]         install newer versions from the app's source
+  plinth hub policy deny|allow <capability> | show
+                                   a hub-wide switch for a capability
   plinth registry build <folder> [--with-core]
                                    generate a static registry from .plnt files
   plinth registry serve <folder> [--port N]
@@ -625,12 +627,17 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                 if !plinth_registry::is_newer(&latest.version, &current) {
                     continue;
                 }
+                let previous_caps: std::collections::HashSet<String> =
+                    entry.active_version().map(|v| v.capabilities.iter().cloned().collect()).unwrap_or_default();
                 let bytes = source.package(&entry.id, &latest.version)?;
                 hub.add_package(&bytes)?;
                 hub.set_registry(&entry.id, &reg.name, &reg.base)?;
                 println!("updated {} to {} (from {})", entry.id, latest.version, reg.name);
-                if !latest.capabilities.is_empty() {
-                    println!("  note: review capabilities before running; `plinth hub grants {}` decides consent per capability", entry.id);
+                let new_caps: Vec<&str> =
+                    latest.capabilities.iter().map(|c| c.name.as_str()).filter(|c| !previous_caps.contains(*c)).collect();
+                if !new_caps.is_empty() {
+                    println!("  new capabilities: {}", new_caps.join(", "));
+                    println!("  note: `plinth hub run {}` will ask for them (medium/high risk only)", entry.id);
                 }
             }
             return Ok(ExitCode::SUCCESS);
@@ -669,8 +676,20 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
             let id = args.get(1).context("usage: plinth hub grants <app id> [allow|refuse <capability>]")?;
             match args.get(2).copied() {
                 None => {
-                    for (capability, grant) in hub.grants(id)? {
-                        println!("{capability}  {:?}  version {}", grant.decision, grant.version_seen);
+                    let entry = hub.get(id)?.with_context(|| format!("{id} is not in the library"))?;
+                    let declared = entry.active_version().map(|v| v.capabilities.clone()).unwrap_or_default();
+                    for status in hub.capability_report(id, &declared)? {
+                        let risk = match status.risk {
+                            plinth_link::capabilities::Risk::None => "none",
+                            plinth_link::capabilities::Risk::Low => "low",
+                            plinth_link::capabilities::Risk::Medium => "medium",
+                            plinth_link::capabilities::Risk::High => "high",
+                        };
+                        let by = if status.by_default { "default" } else { "user" };
+                        match status.decision {
+                            Some(d) => println!("{}  risk={risk}  {:?} by {by}", status.name, d),
+                            None => println!("{}  risk={risk}  not decided", status.name),
+                        }
                     }
                 }
                 Some(action @ ("allow" | "refuse")) => {
@@ -713,6 +732,29 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                 println!("added {id} to {name}");
             }
             Some(other) => bail!("unknown `plinth hub groups {other}`; use create or add"),
+        },
+        Some("policy") => match args.get(1).copied() {
+            Some("deny") => {
+                let capability = args.get(2).context("usage: plinth hub policy deny <capability>")?;
+                hub.policy_deny(capability)?;
+                println!("denied {capability} for all apps");
+            }
+            Some("allow") => {
+                let capability = args.get(2).context("usage: plinth hub policy allow <capability>")?;
+                hub.policy_allow(capability)?;
+                println!("allowed {capability} again");
+            }
+            Some("show") | None => {
+                let denied = hub.policy_denied()?;
+                if denied.is_empty() {
+                    println!("no capability is globally denied");
+                } else {
+                    for capability in denied {
+                        println!("{capability}  denied for all apps");
+                    }
+                }
+            }
+            Some(other) => bail!("unknown `plinth hub policy {other}`; use deny, allow or show"),
         },
         Some(other) => bail!("unknown `plinth hub {other}`; see `plinth --help`"),
     }
