@@ -1,11 +1,7 @@
 // The app state. Screens import these signals and functions.
-import { signal, computed } from "plinth:ui";
-
-export interface Note {
-  id: number;
-  title: string;
-  body: string;
-}
+import { signal, computed, effect } from "plinth:ui";
+import { loadNotes, saveNotes } from "./storage";
+import type { Note } from "./types";
 
 let nextId = 1;
 
@@ -15,11 +11,35 @@ function makeNote(title: string, body: string): Note {
   return note;
 }
 
-export const notes = signal<Note[]>([
-  makeNote("Welcome", "This is a notes app written in Plinth TS."),
-  makeNote("Shopping list", "Milk, eggs, bread, coffee."),
-  makeNote("Idea", "A calculator example app would be a good companion."),
-]);
+function defaultNotes(): Note[] {
+  return [
+    makeNote("Welcome", "This is a notes app written in Plinth TS."),
+    makeNote("Shopping list", "Milk, eggs, bread, coffee."),
+    makeNote("Idea", "A calculator example app would be a good companion."),
+  ];
+}
+
+// Saved notes (SPEC.md §8.5, `store.kv`) take over `nextId` so new notes
+// do not collide with saved ids.
+function startingNotes(): Note[] {
+  const saved = loadNotes();
+  if (saved === null) {
+    return defaultNotes();
+  }
+  for (const n of saved) {
+    if (n.id >= nextId) {
+      nextId = n.id + 1;
+    }
+  }
+  return saved;
+}
+
+export const notes = signal<Note[]>(startingNotes());
+
+// Persists every change. `effect` reruns whenever `notes()` changes.
+effect(() => {
+  saveNotes(notes());
+});
 
 export const query = signal("");
 

@@ -25,10 +25,20 @@ pub struct Artifact {
     pub accent: Option<String>,
 }
 
-/// Compiles a project into an app component. The artifact is `None` when
-/// the front end reports errors.
+/// Compiles a project into an app component, with no declared
+/// capabilities (SPEC.md §11). The artifact is `None` when the front end
+/// reports errors.
 pub fn compile(fs: &dyn FileSystem) -> anyhow::Result<(Frontend, Option<Artifact>)> {
-    let mut front = driver::frontend(fs);
+    compile_with_capabilities(fs, &[])
+}
+
+/// Compiles a project into an app component. `capabilities` are the
+/// capability names declared in the project's `plinth.toml` (SPEC.md
+/// §11); a host API call that needs a capability not in this list is a
+/// compile error. The artifact is `None` when the front end reports
+/// errors.
+pub fn compile_with_capabilities(fs: &dyn FileSystem, capabilities: &[String]) -> anyhow::Result<(Frontend, Option<Artifact>)> {
+    let mut front = driver::frontend_with_capabilities(fs, capabilities);
     let Some(mut program) = front.program.take() else {
         return Ok((front, None));
     };

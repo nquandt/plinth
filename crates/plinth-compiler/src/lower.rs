@@ -187,6 +187,10 @@ fn visit_expr(e: &TExpr, f: &mut dyn FnMut(&TExpr)) {
             // JSX in an expression creates nodes: treat it as dynamic.
             f(&TExpr::new(TExprKind::CallClosure(Box::new(e.clone()), Vec::new()), Type::Void, e.span));
         }
+        TExprKind::TimerNew(ms, _, cb) => {
+            go(ms);
+            go(cb);
+        }
         _ => {}
     }
 }
@@ -318,6 +322,12 @@ impl Cx<'_> {
                 let f = self.expr(*f);
                 let thunk = thunk_of(&f);
                 TExprKind::Rt("effect", vec![thunk, f])
+            }
+            TExprKind::TimerNew(ms, repeat, f) => {
+                let ms = self.expr(*ms);
+                let f = self.expr(*f);
+                let thunk = thunk_of(&f);
+                TExprKind::Rt("set_timer", vec![thunk, f, ms, i32c(repeat as i32)])
             }
             TExprKind::Navigate(name) => {
                 let idx = self.prog.screens.iter().position(|s| s.name == name).unwrap_or(0);

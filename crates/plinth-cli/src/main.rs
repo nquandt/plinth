@@ -33,6 +33,9 @@ const TYPINGS: &[(&str, &str)] = &[
     ("lib.d.ts", include_str!("../../../std/lib.d.ts")),
     ("ui.d.ts", include_str!("../../../std/ui.d.ts")),
     ("core.d.ts", include_str!("../../../std/core.d.ts")),
+    ("time.d.ts", include_str!("../../../std/time.d.ts")),
+    ("store.d.ts", include_str!("../../../std/store.d.ts")),
+    ("clipboard.d.ts", include_str!("../../../std/clipboard.d.ts")),
 ];
 
 fn main() -> ExitCode {
@@ -210,8 +213,9 @@ fn summary(errors: usize, warnings: usize) -> String {
 // -- check ---------------------------------------------------------------------
 
 fn check(dir: &Path, json: bool) -> Result<bool> {
-    ensure_project(dir)?;
-    let front = plinth_compiler::driver::frontend(&DiskFs { root: dir.to_path_buf() });
+    let config = ensure_project(dir)?;
+    let caps: Vec<String> = config.capabilities.iter().map(|c| c.name.clone()).collect();
+    let front = plinth_compiler::driver::frontend_with_capabilities(&DiskFs { root: dir.to_path_buf() }, &caps);
     if json {
         println!("{}", front.sources.to_json(&front.diags));
         return Ok(!front.has_errors());
@@ -275,7 +279,8 @@ struct Built {
 
 fn compile(dir: &Path) -> Result<Option<Built>> {
     let config = ensure_project(dir)?;
-    let (front, artifact) = plinth_compiler::compile(&DiskFs { root: dir.to_path_buf() })?;
+    let caps: Vec<String> = config.capabilities.iter().map(|c| c.name.clone()).collect();
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&DiskFs { root: dir.to_path_buf() }, &caps)?;
     let (e, w) = print_diags(&front);
     match artifact {
         Some(a) => {
@@ -358,8 +363,10 @@ fn dev(dir: &Path) -> Result<ExitCode> {
     });
     let app = plinth_host_desktop::HostApp {
         component: first.component,
-        title: first.config.name,
+        title: first.config.name.clone(),
         accent: first.accent.unwrap_or_else(|| "teal".into()),
+        app_id: first.config.id.clone(),
+        capabilities: first.config.capabilities.iter().map(|c| c.name.clone()).collect(),
     };
     plinth_host_desktop::run(app, Some(rx))?;
     Ok(ExitCode::SUCCESS)

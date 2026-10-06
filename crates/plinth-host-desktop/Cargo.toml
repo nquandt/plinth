@@ -21,6 +21,7 @@ log.workspace = true
 env_logger.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
+arboard = { version = "3", default-features = false }
 
 [dev-dependencies]
 plinth-protocol.workspace = true

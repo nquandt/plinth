@@ -18,9 +18,37 @@ pub const UI_NAMES: &[&str] = &[
     "Tabs", "Sheet", "Dialog", "Menu", "Grid", "Action",
 ];
 pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console"];
+pub const TIME_NAMES: &[&str] = &["now", "monotonicNow", "setTimeout", "setInterval", "clearTimeout", "clearInterval"];
+pub const STORE_NAMES: &[&str] = &["kv"];
+pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText"];
+
+/// The `store.kv` capability (SPEC.md §11), needed by every `plinth:store`
+/// call.
+pub const CAP_STORE_KV: &str = "store.kv";
+/// The `clipboard.write`/`clipboard.read` capabilities, needed by
+/// `plinth:clipboard`'s `writeText`/`readText` respectively.
+pub const CAP_CLIPBOARD_WRITE: &str = "clipboard.write";
+pub const CAP_CLIPBOARD_READ: &str = "clipboard.read";
 
 pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
     match m {
+        StdModule::Time => Some(match name {
+            "now" => Binding::Std(StdFn::TimeNow),
+            "monotonicNow" => Binding::Std(StdFn::TimeMonotonicNow),
+            "setTimeout" => Binding::Std(StdFn::SetTimeout),
+            "setInterval" => Binding::Std(StdFn::SetInterval),
+            "clearTimeout" | "clearInterval" => Binding::Std(StdFn::ClearTimer),
+            _ => return None,
+        }),
+        StdModule::Store => Some(match name {
+            "kv" => Binding::StdObj(StdObj::Kv),
+            _ => return None,
+        }),
+        StdModule::Clipboard => Some(match name {
+            "writeText" => Binding::Std(StdFn::ClipboardWriteText),
+            "readText" => Binding::Std(StdFn::ClipboardReadText),
+            _ => return None,
+        }),
         StdModule::Ui => Some(match name {
             "signal" => Binding::Std(StdFn::Signal),
             "computed" => Binding::Std(StdFn::Computed),
@@ -153,6 +181,53 @@ impl Checker<'_> {
                 let te = self.expr(&args[0], None);
                 self.to_str(te)
             }
+            StdFn::TimeNow => {
+                if !args.is_empty() {
+                    self.err(code::ARG_COUNT, span, "`now` takes no arguments");
+                }
+                TExpr::new(TExprKind::Rt("time_now", Vec::new()), Type::Number, span)
+            }
+            StdFn::TimeMonotonicNow => {
+                if !args.is_empty() {
+                    self.err(code::ARG_COUNT, span, "`monotonicNow` takes no arguments");
+                }
+                TExpr::new(TExprKind::Rt("time_monotonic_now", Vec::new()), Type::Number, span)
+            }
+            StdFn::SetTimeout | StdFn::SetInterval => {
+                let what = if f == StdFn::SetTimeout { "setTimeout" } else { "setInterval" };
+                if args.len() != 2 {
+                    self.err(code::ARG_COUNT, span, format!("`{what}` takes a callback and a delay in milliseconds"));
+                    return TExpr::new(TExprKind::Num(0.0), Type::Number, span);
+                }
+                let (cb, _) = self.callback(&args[0], &[], Some(Type::Void));
+                let ms = self.expr_with(&args[1], &Type::Number);
+                let ms = self.coerce(ms, &Type::Number);
+                TExpr::new(TExprKind::TimerNew(Box::new(ms), f == StdFn::SetInterval, Box::new(cb)), Type::Number, span)
+            }
+            StdFn::ClearTimer => {
+                if !one_arg(self, "clearTimeout/clearInterval") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let id = self.expr_with(&args[0], &Type::Number);
+                let id = self.coerce(id, &Type::Number);
+                TExpr::new(TExprKind::Rt("clear_timer", vec![id]), Type::Void, span)
+            }
+            StdFn::ClipboardWriteText => {
+                self.require_capability(CAP_CLIPBOARD_WRITE, span);
+                if !one_arg(self, "writeText") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let text = self.expr_with(&args[0], &Type::String);
+                let text = self.coerce(text, &Type::String);
+                TExpr::new(TExprKind::Rt("clipboard_write_text", vec![text]), Type::Void, span)
+            }
+            StdFn::ClipboardReadText => {
+                self.require_capability(CAP_CLIPBOARD_READ, span);
+                if !args.is_empty() {
+                    self.err(code::ARG_COUNT, span, "`readText` takes no arguments");
+                }
+                TExpr::new(TExprKind::Rt("clipboard_read_text", Vec::new()), Type::String.nullable(), span)
+            }
         }
     }
 
@@ -242,6 +317,50 @@ impl Checker<'_> {
                 match kind {
                     Ok(op) => TExpr::new(TExprKind::MathOp(op, nums), Type::Number, span),
                     Err(rt) => TExpr::new(TExprKind::Rt(rt, nums), Type::Number, span),
+                }
+            }
+            StdObj::Kv => {
+                self.require_capability(CAP_STORE_KV, span);
+                match prop {
+                    "get" => {
+                        if args.len() != 1 {
+                            self.err(code::ARG_COUNT, span, "`kv.get` takes one argument");
+                            return TExpr::new(TExprKind::Null, Type::Error, span);
+                        }
+                        let key = self.expr_with(&args[0], &Type::String);
+                        let key = self.coerce(key, &Type::String);
+                        TExpr::new(TExprKind::Rt("kv_get", vec![key]), Type::String.nullable(), span)
+                    }
+                    "set" => {
+                        if args.len() != 2 {
+                            self.err(code::ARG_COUNT, span, "`kv.set` takes a key and a value");
+                            return TExpr::new(TExprKind::Null, Type::Error, span);
+                        }
+                        let key = self.expr_with(&args[0], &Type::String);
+                        let key = self.coerce(key, &Type::String);
+                        let value = self.expr_with(&args[1], &Type::String);
+                        let value = self.coerce(value, &Type::String);
+                        TExpr::new(TExprKind::Rt("kv_set", vec![key, value]), Type::Void, span)
+                    }
+                    "remove" => {
+                        if args.len() != 1 {
+                            self.err(code::ARG_COUNT, span, "`kv.remove` takes one argument");
+                            return TExpr::new(TExprKind::Null, Type::Error, span);
+                        }
+                        let key = self.expr_with(&args[0], &Type::String);
+                        let key = self.coerce(key, &Type::String);
+                        TExpr::new(TExprKind::Rt("kv_delete", vec![key]), Type::Void, span)
+                    }
+                    "keys" => {
+                        if !args.is_empty() {
+                            self.err(code::ARG_COUNT, span, "`kv.keys` takes no arguments");
+                        }
+                        TExpr::new(TExprKind::Rt("kv_keys", Vec::new()), Type::Array(Box::new(Type::String)), span)
+                    }
+                    _ => {
+                        self.err(code::NO_PROPERTY, prop_span, format!("`kv.{prop}` does not exist"));
+                        TExpr::new(TExprKind::Null, Type::Error, span)
+                    }
                 }
             }
         }

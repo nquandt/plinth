@@ -21,6 +21,9 @@ use std::rc::Rc;
 pub enum StdModule {
     Ui,
     Core,
+    Time,
+    Store,
+    Clipboard,
 }
 
 impl StdModule {
@@ -28,6 +31,9 @@ impl StdModule {
         match s {
             "plinth:ui" => Some(StdModule::Ui),
             "plinth:core" => Some(StdModule::Core),
+            "plinth:time" => Some(StdModule::Time),
+            "plinth:store" => Some(StdModule::Store),
+            "plinth:clipboard" => Some(StdModule::Clipboard),
             _ => None,
         }
     }
@@ -57,6 +63,13 @@ pub enum StdFn {
     Navigate,
     ParseNumber,
     ToString,
+    TimeNow,
+    TimeMonotonicNow,
+    SetTimeout,
+    SetInterval,
+    ClearTimer,
+    ClipboardWriteText,
+    ClipboardReadText,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +79,8 @@ pub enum StdObj {
     /// `navigate`: callable directly (`navigate("name")`, `Binding::Std`
     /// resolves that call) and also has `.push`/`.back` members (UI API 1.2).
     Navigate,
+    /// `kv` from `plinth:store` (SPEC.md §8.5, capability `store.kv`).
+    Kv,
 }
 
 #[derive(Debug, Clone)]
@@ -123,11 +138,16 @@ pub struct Checker<'d> {
     /// which needs a primary screen; `navigate.push` accepts any screen.
     pub navigations: Vec<(String, Span, bool)>,
     app_seen: bool,
+    /// The capability names declared in `plinth.toml` (SPEC.md §11). A
+    /// host API call that needs a capability not in this set is a compile
+    /// error (`code::CAPABILITY_UNDECLARED`).
+    capabilities: HashSet<String>,
 }
 
 /// Checks all modules. `modules` must be in dependency order (dependencies
-/// first); `main` is the index of `app/main.tsx`.
-pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>) -> Program {
+/// first); `main` is the index of `app/main.tsx`. `capabilities` are the
+/// capability names declared in the project's `plinth.toml`.
+pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>, capabilities: &[String]) -> Program {
     let mut c = Checker {
         prog: Program::default(),
         diags,
@@ -143,6 +163,7 @@ pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>) ->
         anon_structs: HashMap::new(),
         navigations: Vec::new(),
         app_seen: false,
+        capabilities: capabilities.iter().cloned().collect(),
     };
     c.prog.module_count = modules.len() as u32;
     for (i, m) in modules.iter().enumerate() {
@@ -179,6 +200,20 @@ impl Checker<'_> {
 
     fn err_help(&mut self, code: &'static str, span: Span, msg: impl Into<String>, help: impl Into<String>) {
         self.diags.push(Diagnostic::error(code, span, msg).help(help));
+    }
+
+    /// Reports `code::CAPABILITY_UNDECLARED` if `plinth.toml` does not
+    /// declare `capability` (SPEC.md §11). Called at each host API call
+    /// site that needs it.
+    pub(super) fn require_capability(&mut self, capability: &str, span: Span) {
+        if !self.capabilities.contains(capability) {
+            self.err_help(
+                code::CAPABILITY_UNDECLARED,
+                span,
+                format!("this call needs the `{capability}` capability, which `plinth.toml` does not declare"),
+                format!("add `[[capabilities]]` with `name = \"{capability}\"` and a `rationale` to plinth.toml (SPEC.md §11)"),
+            );
+        }
     }
 
     fn show(&self, ty: &Type) -> String {

@@ -20,6 +20,21 @@ use std::time::Instant;
 /// and returns the op buffers that the guest committed while it ran.
 pub trait GuestPort {
     fn dispatch(&mut self, events: &[u8]) -> anyhow::Result<Vec<Vec<u8>>>;
+
+    /// The soonest time a `plinth:time` timer is due, if any is pending
+    /// (SPEC.md §8.5). The default (no timers) suits a guest with no host
+    /// API access.
+    fn next_timer_deadline(&self) -> Option<Instant> {
+        None
+    }
+
+    /// Dispatches a `timer` event for every timer due at or before `now`
+    /// and returns the op buffers the guest committed. The default does
+    /// nothing.
+    fn fire_due_timers(&mut self, now: Instant) -> anyhow::Result<Vec<Vec<u8>>> {
+        let _ = now;
+        Ok(Vec::new())
+    }
 }
 
 /// Host-side state of one `TextField`, `TextArea` or `NumberField`.
@@ -154,6 +169,33 @@ impl PlinthRoot {
             Ok(commits) => {
                 self.apply_commits(commits);
                 log::debug!("event round trip: {:?}", start.elapsed());
+            }
+            Err(e) => {
+                log::error!("the app stopped: {e:#}");
+                self.stopped = Some(format!("{e:#}"));
+            }
+        }
+        self.sync_fields(cx);
+        cx.notify();
+    }
+
+    /// The soonest time the guest has a `plinth:time` timer due, if any.
+    /// A host drives timers by sleeping until this instant (or a shorter,
+    /// fixed interval) and calling `poll_timers`.
+    pub fn next_timer_deadline(&self) -> Option<Instant> {
+        self.guest.next_timer_deadline()
+    }
+
+    /// Dispatches every timer due by now and applies what the guest
+    /// commits (SPEC.md §8.4, §8.5), mirroring `fire` for `ui` events.
+    pub fn poll_timers(&mut self, cx: &mut Context<Self>) {
+        if self.stopped.is_some() {
+            return;
+        }
+        match self.guest.fire_due_timers(Instant::now()) {
+            Ok(commits) if commits.is_empty() => return,
+            Ok(commits) => {
+                self.apply_commits(commits);
             }
             Err(e) => {
                 log::error!("the app stopped: {e:#}");

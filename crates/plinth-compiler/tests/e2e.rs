@@ -8,9 +8,24 @@ use plinth_ui::tree::{Node, Tree};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// The capability names declared in `<example>/plinth.toml`'s
+/// `[[capabilities]]` tables (SPEC.md §11), read with a minimal parse so
+/// this test crate does not need a `plinth-package` dev-dependency.
+fn declared_capabilities(root: &std::path::Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(root.join("plinth.toml")) else { return Vec::new() };
+    let Ok(value) = text.parse::<toml::Value>() else { return Vec::new() };
+    value
+        .get("capabilities")
+        .and_then(|c| c.as_array())
+        .map(|caps| caps.iter().filter_map(|c| c.get("name")?.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default()
+}
+
 fn build(name: &str) -> plinth_compiler::Artifact {
-    let fs = DiskFs { root: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples").join(name) };
-    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples").join(name);
+    let caps = declared_capabilities(&root);
+    let fs = DiskFs { root };
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &caps).expect("compile");
     let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
     artifact.unwrap_or_else(|| panic!("{name} has errors:\n{}", diags.join("\n")))
 }
@@ -51,6 +66,18 @@ impl Harness {
             assert!(errors.is_empty(), "op errors: {errors:?}");
         }
         start.elapsed()
+    }
+
+    /// Fires every timer due by `now` and applies what the guest commits.
+    fn fire_timers(&mut self, now: Instant) {
+        let commits = self.guest.fire_due_timers(now).unwrap();
+        for log in self.guest.take_logs() {
+            eprintln!("guest: {log}");
+        }
+        for commit in commits {
+            let errors = self.tree.apply(&commit).unwrap();
+            assert!(errors.is_empty(), "op errors: {errors:?}");
+        }
     }
 
     fn find(&self, kind: ControlKind, pred: impl Fn(&Node) -> bool) -> Vec<NodeId> {
@@ -373,4 +400,34 @@ fn contacts_push_back_tabs_sheet_and_destructive_action() {
     assert!(!h.tree.can_go_back());
     assert_eq!(h.tree.current_root().unwrap().str_prop(prop::TITLE), Some("Contacts"));
     assert_eq!(h.row_titles(), ["Grace Hopper", "Alan Turing"]);
+}
+
+/// `plinth:time`'s setInterval/clearInterval (SPEC.md §8.5), needing no
+/// capability.
+#[test]
+fn timer_starts_ticks_and_stops() {
+    let art = build("timer");
+    let mut h = Harness::start(&art.component);
+    let heading = h.one(ControlKind::Heading, |_| true);
+    assert_eq!(h.text_of(heading), "0.0s");
+    assert!(h.guest.next_timer_deadline().is_none(), "no timer until Start is pressed");
+
+    h.fire(h.label("Start"), event::PRESS, Value::Null);
+    assert!(h.guest.next_timer_deadline().is_some());
+
+    let t0 = Instant::now();
+    h.fire_timers(t0 + Duration::from_millis(100));
+    assert_eq!(h.text_of(heading), "0.1s");
+    // A `TimerQueue` delivers one firing per poll (even when the poll is
+    // late) and reschedules from its own due time, not from `now`.
+    h.fire_timers(t0 + Duration::from_millis(250));
+    assert_eq!(h.text_of(heading), "0.2s");
+
+    h.fire(h.label("Stop"), event::PRESS, Value::Null);
+    assert!(h.guest.next_timer_deadline().is_none(), "clearInterval cancels the pending timer");
+    h.fire_timers(t0 + Duration::from_secs(5));
+    assert_eq!(h.text_of(heading), "0.2s", "stopped: no more ticks");
+
+    h.fire(h.label("Reset"), event::PRESS, Value::Null);
+    assert_eq!(h.text_of(heading), "0.0s");
 }

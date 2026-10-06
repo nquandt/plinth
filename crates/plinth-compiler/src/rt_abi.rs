@@ -89,6 +89,16 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("mark_primary", &[I32], &[]),
     ("navigate_push", &[I32], &[]),
     ("navigate_back", &[], &[]),
+    ("time_now", &[], &[F64]),
+    ("time_monotonic_now", &[], &[F64]),
+    ("set_timer", &[I32, I32, F64, I32], &[F64]),
+    ("clear_timer", &[F64], &[]),
+    ("kv_get", &[I32], &[I32]),
+    ("kv_set", &[I32, I32], &[]),
+    ("kv_delete", &[I32], &[]),
+    ("kv_keys", &[], &[I32]),
+    ("clipboard_write_text", &[I32], &[]),
+    ("clipboard_read_text", &[], &[I32]),
 ];
 
 pub const PREFIX: &str = "__plinth_rt_";
