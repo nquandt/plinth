@@ -1,6 +1,6 @@
 # Handoff: Plinth
 
-This file gives a new agent what it needs to continue the work. Read it first. Then read `SPEC.md` (the design), `docs/HUB.md` (the app hub), `docs/REGISTRY.md` (registries), and `CONTRIBUTING.md` (commands). `docs/GAPS.md` lists the known language gaps. `docs/VALIDATION.md` is the plan for apps that test Plinth. `docs/STORAGE.md` is the draft storage model (spaces, providers, grants, sync).
+This file gives a new agent what it needs to continue the work. Read it first. Then read `SPEC.md` (the design), `docs/HUB.md` (the app hub), `docs/REGISTRY.md` (registries), and `CONTRIBUTING.md` (commands). `docs/GAPS.md` lists the known language gaps. `docs/VALIDATION.md` is the plan for apps that test Plinth. `docs/STORAGE.md` is the draft storage model (spaces, providers, grants, sync). `docs/UI-ADVANCED.md` is the draft for styled primitives (advanced UI on gpui).
 
 ## 0. Read this first: the push rule
 
