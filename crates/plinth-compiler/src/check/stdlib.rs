@@ -255,13 +255,21 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Rt("clipboard_last_error", Vec::new()), Type::String.nullable(), span)
             }
             StdFn::DialogAlert => {
-                if args.len() != 2 {
-                    self.err(code::ARG_COUNT, span, "`alert` takes a message and a done callback");
+                if args.is_empty() || args.len() > 2 {
+                    self.err(code::ARG_COUNT, span, "`alert` takes a message and an optional done callback");
                     return TExpr::new(TExprKind::Null, Type::Error, span);
                 }
                 let message = self.expr_with(&args[0], &Type::String);
                 let message = self.coerce(message, &Type::String);
-                let (cb, _) = self.callback(&args[1], &[], Some(Type::Void));
+                let cb = if let Some(done) = args.get(1) {
+                    self.callback(done, &[], Some(Type::Void)).0
+                } else {
+                    // `done` is optional for `alert` (SPEC.md §8.5): pass a
+                    // no-op closure, so codegen always has a callback to
+                    // register and the runtime never special-cases a
+                    // missing one.
+                    self.noop_closure()
+                };
                 TExpr::new(TExprKind::DialogCall("dialog_alert", Box::new(message), Box::new(cb)), Type::Void, span)
             }
             StdFn::DialogConfirm => {

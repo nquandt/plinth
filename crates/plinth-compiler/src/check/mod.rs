@@ -1677,6 +1677,22 @@ impl Checker<'_> {
         ret
     }
 
+    /// A synthetic `() => {}` closure, for a std call whose callback is
+    /// optional (SPEC.md §8.5: `alert`'s `done`).
+    pub(crate) fn noop_closure(&mut self) -> TExpr {
+        let decl = ast::FuncDecl {
+            name: None,
+            params: Vec::new(),
+            ret: None,
+            body: ast::Body::Block(Vec::new()),
+            exported: false,
+            is_default: false,
+            span: Span::default(),
+            type_params: Vec::new(),
+        };
+        self.closure(&decl, None, "<noop>")
+    }
+
     /// Checks an arrow function or function expression. `expected` gives
     /// parameter types for untyped parameters (contextual typing).
     pub(crate) fn closure(&mut self, f: &ast::FuncDecl, expected: Option<&FuncType>, name: &str) -> TExpr {

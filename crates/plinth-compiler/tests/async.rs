@@ -121,3 +121,45 @@ fn an_unknown_request_id_is_ignored_not_an_error() {
     answer(&mut guest, &mut tree, id, Value::Bool(true));
     assert_eq!(text(&tree), "gone");
 }
+
+const ALERT_SRC: &str = r#"import { app, Screen, Text, Button } from "plinth:ui";
+import { alert } from "plinth:dialog";
+function Home() {
+  return <Screen title="Home">
+    <Text>hi</Text>
+    <Button label="hi" onPress={() => alert("Hi!")} />
+  </Screen>;
+}
+export default app({ screens: { home: { title: "Home", component: Home } } });
+"#;
+
+/// `alert`'s `done` is optional (SPEC.md §8.5): calling it with just a
+/// message compiles and opens a request like the two-argument form.
+#[test]
+fn alert_with_no_done_callback_still_opens_a_request() {
+    let fs = MemFs::default().with("app/main.tsx", ALERT_SRC);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        let errors = tree.apply(&commit).unwrap();
+        assert!(errors.is_empty(), "op errors: {errors:?}");
+    }
+    let button = find(&tree, ControlKind::Button, |_| true);
+    press(&mut guest, &mut tree, button);
+
+    let pending = guest.pending_dialogs().to_vec();
+    assert_eq!(pending.len(), 1, "exactly one dialog request should be open");
+    assert_eq!(pending[0].kind, plinth_runner_wasmtime::DialogKind::Alert);
+    assert_eq!(pending[0].message, "Hi!");
+    let id = pending[0].id;
+
+    // Answering with no `done` must not trap: the no-op closure just runs.
+    answer(&mut guest, &mut tree, id, Value::Null);
+    assert!(guest.pending_dialogs().is_empty());
+}

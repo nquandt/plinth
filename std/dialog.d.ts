@@ -4,8 +4,8 @@
 // (SPEC.md §8.4).
 
 /** Shows `message` with an OK button. Calls `done` once the user
- * dismisses it. */
-export declare function alert(message: string, done: () => void): void;
+ * dismisses it, if given. */
+export declare function alert(message: string, done?: () => void): void;
 
 /** Shows `message` with OK and Cancel. Calls `done` with `true` if the
  * user chose OK, `false` for Cancel. */
