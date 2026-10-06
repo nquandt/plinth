@@ -163,7 +163,9 @@ export class DomRenderer {
     const nav = el("nav", "pl-nav");
     for (const p of this.tree.primaryScreens) {
       const btn = el("button", "pl-nav-item");
-      btn.textContent = `Screen ${p.screen}`;
+      // The nav shows each screen's title, as the desktop shell does.
+      const root = this.tree.nodes.get(this.tree.roots.get(p.screen));
+      btn.textContent = root?.props.get(Prop.title) ?? `Screen ${p.screen}`;
       btn.disabled = p.screen === this.tree.currentScreen;
       btn.addEventListener("click", () => {
         this.tree.currentScreen = p.screen;

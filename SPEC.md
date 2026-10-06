@@ -828,6 +828,8 @@ Each milestone has exit criteria. Work in this order. Windows is the first platf
 - `plinth-runner-web`, `jco` glue, and the `gpui_web` host.
 - **Exit:** the same `.plnt` runs in Chrome, Firefox, and Safari. The single-file `app.html` works without threads.
 
+- **Status (2026-10-05): spike.** `web/` loads an unchanged `.plnt` and the same core file that the desktop uses. It instantiates the core, then the app module with the core's exports, `memory`, `table` (the core exports it with `--export-table`) and `table_base`, without a link step (the side-module model of §18.3). A JavaScript port of the protocol and a DOM renderer show the M0 controls and the primary-screen navigation. Node tests run the counter and todo packages. Not done: timer events, `store` and `clipboard` (they answer `denied(unsupported)`), the UI API 1.2 controls, and gpui-ce's web backend.
+
 ### M6: Mobile hosts
 - This milestone depends on Q1. It adds the AOT path for iOS and wasmtime for Android.
 - **Exit:** `examples/notes` runs on a physical device of each platform.
