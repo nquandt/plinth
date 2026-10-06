@@ -381,6 +381,9 @@ UI API 1.2 adds the controls `Checkbox`, `TextArea`, `Slider`, `NumberField`, `P
 - `Sheet` and `Dialog` bind `open` both ways. When the user closes one (backdrop, close button, Escape), the host sets `open` to false and `Sheet` sends `close`.
 - `Grid` uses the keyed reconciler of `List`. The runtime sets the column count from the width class (2, 3 or 4).
 - `Progress` without `value` is indeterminate.
+- `Menu` and the toolbar overflow open an anchored popover above the content. It closes on an outside click, on Escape, and after an action runs. Its AccessKit roles are `menu` and `menu item`.
+- `Slider` also follows pointer drag on its track, snapped to `step`.
+- Every control has an AccessKit role, name and state. Interactive controls take keyboard focus (Tab) and activation (Enter or Space; arrows for `Slider`).
 
 ### 6.4 Layout rules (runtime-owned)
 
