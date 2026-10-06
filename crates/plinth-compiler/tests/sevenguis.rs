@@ -332,3 +332,70 @@ fn timer_elapses_to_the_duration_and_resets() {
     h.fire_timers(t);
     assert!(h.texts().contains(&"0.1 s".to_string()), "{:?}", h.texts());
 }
+
+#[test]
+fn crud_filter_create_update_delete() {
+    let art = build("crud");
+    let mut h = Harness::start(&art.component);
+    assert_eq!(h.row_titles(), ["Emil, Hans", "Mustermann, Max", "Tisch, Roman"]);
+    // No selection: Update and Delete are disabled.
+    assert!(h.disabled("Update") && h.disabled("Delete"));
+
+    // Filter by surname prefix (case-insensitive).
+    let filter = h.field("Filter prefix");
+    h.type_text(filter, "m");
+    assert_eq!(h.row_titles(), ["Mustermann, Max"]);
+    h.type_text(filter, "x");
+    assert!(h.row_titles().is_empty());
+    assert_eq!(h.find(ControlKind::Empty, |_| true).len(), 1);
+    h.type_text(filter, "");
+    assert_eq!(h.row_titles().len(), 3);
+
+    // Select a row: its name goes into the fields, and the row shows
+    // "Selected" (there is no `selected` prop on `Row`, docs/GAPS.md).
+    let row = h.rows()[1];
+    h.fire(row, event::PRESS, Value::Null);
+    let (name, surname) = (h.field("Name"), h.field("Surname"));
+    assert_eq!((h.value(name).as_str(), h.value(surname).as_str()), ("Max", "Mustermann"));
+    let marks: Vec<String> =
+        h.rows().into_iter().map(|r| h.node(r).str_prop(prop::TRAILING).unwrap_or_default().to_owned()).collect();
+    assert_eq!(marks, ["", "Selected", ""]);
+    assert!(!h.disabled("Update") && !h.disabled("Delete"));
+
+    // Update the selected entry.
+    h.type_text(name, "Maxi");
+    h.press("Update");
+    assert_eq!(h.row_titles(), ["Emil, Hans", "Mustermann, Maxi", "Tisch, Roman"]);
+
+    // A filter that hides the selected entry also disables Update and
+    // Delete; clearing the filter shows the selection again.
+    h.type_text(filter, "t");
+    assert_eq!(h.row_titles(), ["Tisch, Roman"]);
+    assert!(h.disabled("Update") && h.disabled("Delete"));
+    h.type_text(filter, "");
+    assert!(!h.disabled("Delete"));
+
+    // Create a new entry: it is added at the end and selected.
+    h.type_text(name, "Ada");
+    h.type_text(surname, "Lovelace");
+    h.press("Create");
+    assert_eq!(h.row_titles(), ["Emil, Hans", "Mustermann, Maxi", "Tisch, Roman", "Lovelace, Ada"]);
+    let checked: Vec<String> = h
+        .rows()
+        .into_iter()
+        .filter(|r| h.node(*r).str_prop(prop::TRAILING) == Some("Selected"))
+        .map(|r| h.node(r).str_prop(prop::TITLE).unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(checked, ["Lovelace, Ada"]);
+
+    // Delete the selected entry.
+    h.press("Delete");
+    assert_eq!(h.row_titles(), ["Emil, Hans", "Mustermann, Maxi", "Tisch, Roman"]);
+    assert!(h.disabled("Update") && h.disabled("Delete"));
+
+    // Select and delete the first entry.
+    let first = h.rows()[0];
+    h.fire(first, event::PRESS, Value::Null);
+    h.press("Delete");
+    assert_eq!(h.row_titles(), ["Mustermann, Maxi", "Tisch, Roman"]);
+}

@@ -209,9 +209,38 @@ async function timer() {
   assert.equal(progress.props.get(Prop.value), 0);
 }
 
+async function crud() {
+  const h = await Harness.start("crud");
+  assert.deepEqual(h.rowTitles(), ["Emil, Hans", "Mustermann, Max", "Tisch, Roman"]);
+  assert.ok(h.disabled("Update") && h.disabled("Delete"));
+
+  const filter = h.field("Filter prefix");
+  h.type(filter, "M");
+  assert.deepEqual(h.rowTitles(), ["Mustermann, Max"]);
+  h.type(filter, "");
+
+  h.send(h.find(ControlKind.row)[2], Event.press, null);
+  assert.equal(value(h.field("Name")), "Roman");
+  assert.equal(value(h.field("Surname")), "Tisch");
+  assert.deepEqual(
+    h.find(ControlKind.row).map((r) => r.props.get(Prop.trailing) ?? ""),
+    ["", "", "Selected"],
+  );
+  h.type(h.field("Name"), "Romy");
+  h.press("Update");
+  assert.deepEqual(h.rowTitles(), ["Emil, Hans", "Mustermann, Max", "Tisch, Romy"]);
+
+  h.type(h.field("Name"), "Ada");
+  h.type(h.field("Surname"), "Lovelace");
+  h.press("Create");
+  assert.deepEqual(h.rowTitles(), ["Emil, Hans", "Mustermann, Max", "Tisch, Romy", "Lovelace, Ada"]);
+  h.press("Delete");
+  assert.deepEqual(h.rowTitles(), ["Emil, Hans", "Mustermann, Max", "Tisch, Romy"]);
+  assert.ok(h.disabled("Update") && h.disabled("Delete"));
+}
 
 async function main() {
-  for (const [name, test] of Object.entries({ counter, temperature, flightBooker, timer })) {
+  for (const [name, test] of Object.entries({ counter, temperature, flightBooker, timer, crud })) {
     await test();
     console.log(`run-7guis.mjs: ${name} ok`);
   }
