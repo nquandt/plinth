@@ -735,7 +735,7 @@ impl Checker<'_> {
         let matched = cond.unwrap_or_else(|| TExpr::new(TExprKind::Bool(false), Type::Bool, span));
         let not_matched = TExpr::new(TExprKind::Not(bx(matched)), Type::Bool, span);
         let msg = format!("`as` cast failed: the string is not one of {}", lits.join(", "));
-        let fail = TStmt::Throw(TExpr::new(TExprKind::Str(msg), Type::String, span));
+        let fail = TStmt::Trap(TExpr::new(TExprKind::Str(msg), Type::String, span));
         let guard = TStmt::If(not_matched, vec![fail], Vec::new());
         let result = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(v_r)), Type::StrLits(lits.clone()), span);
         TExpr::new(TExprKind::Block(vec![TStmt::Let(v, Some(self.coerce(te, &Type::String))), guard], bx(result)), Type::StrLits(lits), span)
@@ -771,7 +771,7 @@ impl Checker<'_> {
         );
         let not_matched = TExpr::new(TExprKind::Not(bx(eq)), Type::Bool, span);
         let msg = format!("`as` cast failed: the value's tag is not \"{lit}\"");
-        let fail = TStmt::Throw(TExpr::new(TExprKind::Str(msg), Type::String, span));
+        let fail = TStmt::Trap(TExpr::new(TExprKind::Str(msg), Type::String, span));
         let guard = TStmt::If(not_matched, vec![fail], Vec::new());
         let result = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(v_r)), target.clone(), span);
         TExpr::new(TExprKind::Block(vec![TStmt::Let(v, Some(te)), guard], bx(result)), target, span)

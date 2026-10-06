@@ -118,6 +118,9 @@ struct HostState {
     commits: Vec<Vec<u8>>,
     /// Messages from `dev.log`, kept for tests and the dev tools.
     logs: Vec<String>,
+    /// Uncaught app errors from `error.report` (SPEC.md §5.6). The app
+    /// keeps running after each one.
+    errors: Vec<String>,
     limits: StoreLimits,
     policy: Policy,
     kv: Kv,
@@ -155,7 +158,12 @@ impl bindings::plinth::app::dev::Host for HostState {
     }
 }
 
-impl bindings::plinth::app::error::Host for HostState {}
+impl bindings::plinth::app::error::Host for HostState {
+    fn report(&mut self, message: String) {
+        log::error!(target: "plinth::app", "{message}");
+        self.errors.push(message);
+    }
+}
 
 impl bindings::plinth::app::time::Host for HostState {
     fn now(&mut self) -> u64 {
@@ -475,6 +483,7 @@ impl Runner {
         let state = HostState {
             commits: Vec::new(),
             logs: Vec::new(),
+            errors: Vec::new(),
             limits: StoreLimitsBuilder::new().memory_size(limits.memory_bytes).instances(4).build(),
             policy,
             kv,
@@ -532,6 +541,12 @@ impl Guest {
     /// Returns the `dev.log` messages since the last call.
     pub fn take_logs(&mut self) -> Vec<String> {
         std::mem::take(&mut self.store.data_mut().logs)
+    }
+
+    /// Returns the uncaught errors that the guest reported (`error.report`,
+    /// SPEC.md §5.6) since the last call. The guest is still running.
+    pub fn take_errors(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.store.data_mut().errors)
     }
 
     /// Calls `init` and returns the op buffers that the guest committed.

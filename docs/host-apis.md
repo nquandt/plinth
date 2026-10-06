@@ -127,6 +127,15 @@ refuses every other package that declares it, before the package runs.
 `plinth:dialog`. The web host answers every `plinth:hub` call with
 "unsupported" (the web Hub is phase H6).
 
+## Uncaught errors
+
+An exception that the app does not catch (SPEC.md §5.6) does not stop
+the app. The guest sends the text, for example `Uncaught Error: no
+network`, to the host through `error.report` (core 1.9; no capability).
+The desktop runner logs it as an error and keeps it for tests
+(`Guest::take_errors`). The web host calls `reportError`, which is
+`console.error` by default. The app continues with the next event.
+
 ## Declaring a capability
 
 Add a `[[capabilities]]` block to `plinth.toml` for each capability you

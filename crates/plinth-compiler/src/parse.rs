@@ -778,13 +778,42 @@ impl Cx<'_> {
             }
             S::ThrowStatement(t) => StmtKind::Throw(self.expr(&t.argument)?),
             S::TryStatement(t) => {
-                self.err_help(
-                    code::TRY,
-                    t.span,
-                    "`try`/`catch` comes in v1",
-                    "return a `Result` for recoverable errors; `throw` stops the app",
-                );
-                return None;
+                let block = self.block(&t.block.body);
+                let catch = match &t.handler {
+                    None => None,
+                    Some(h) => {
+                        let param = match &h.param {
+                            None => None,
+                            Some(p) => {
+                                if let Some(ann) = &p.type_annotation
+                                    && !matches!(ann.type_annotation, o::TSType::TSUnknownKeyword(_))
+                                {
+                                    self.err_help(
+                                        code::TRY,
+                                        ann.span,
+                                        "a `catch` variable can only have the type `unknown`",
+                                        "remove the type; the variable is an `Error`, narrow it with `instanceof`",
+                                    );
+                                }
+                                match &p.pattern {
+                                    o::BindingPattern::BindingIdentifier(id) => Some((id.name.to_string(), self.span(id.span))),
+                                    _ => {
+                                        self.err_help(
+                                            code::TRY,
+                                            p.span,
+                                            "a `catch` variable cannot be a pattern",
+                                            "write `catch (e)` and read `e.message`",
+                                        );
+                                        None
+                                    }
+                                }
+                            }
+                        };
+                        Some(Catch { param, body: self.block(&h.body.body) })
+                    }
+                };
+                let finally = t.finalizer.as_ref().map(|f| self.block(&f.body));
+                StmtKind::Try { block, catch, finally }
             }
             S::LabeledStatement(l) => {
                 self.err(code::LABEL, l.span, "labels are not supported");

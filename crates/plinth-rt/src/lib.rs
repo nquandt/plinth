@@ -33,7 +33,7 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 3] = *b"1.8";
+static CORE_VERSION: [u8; 3] = *b"1.9";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;
@@ -143,6 +143,19 @@ pub fn trap(msg: &str) -> ! {
     panic!("{msg}");
 }
 
+/// Reports an uncaught app error to the host (SPEC.md §5.6, core 1.9):
+/// `prefix`, then `"<name>: <message>"`. The guest keeps running.
+pub fn report_error(prefix: &str, name: &str, message: &str) {
+    let mut line = String::from(prefix);
+    line.push_str(name);
+    line.push_str(": ");
+    line.push_str(message);
+    #[cfg(target_arch = "wasm32")]
+    bindings::plinth::app::error::report(&line);
+    #[cfg(not(target_arch = "wasm32"))]
+    eprintln!("{line}");
+}
+
 fn log(msg: &str) {
     #[cfg(target_arch = "wasm32")]
     bindings::plinth::app::dev::log(msg);
@@ -248,6 +261,10 @@ abi! {
     fn __plinth_rt_ret_ref(p: i32) { RESULT.set(if p == 0 { Val::None } else { Val::Ref(ptr(p)) }); }
     fn __plinth_rt_log(s: i32) { log(strings::as_str(ptr(s))); }
     fn __plinth_rt_throw(s: i32) { trap(strings::as_str(ptr(s))); }
+    // -- Errors (SPEC.md §5.6, core 1.9) -------------------------------------
+    fn __plinth_rt_uncaught(name: i32, message: i32) {
+        report_error("Uncaught ", strings::as_str(ptr(name)), strings::as_str(ptr(message)))
+    }
 
     // -- Heap --------------------------------------------------------------------
     fn __plinth_rt_alloc(type_id: i32) -> i32 { gc::alloc_user(type_id as u32) as i32 }

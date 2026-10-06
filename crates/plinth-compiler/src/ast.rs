@@ -226,7 +226,18 @@ pub enum StmtKind {
     Continue,
     Switch(Expr, Vec<(Option<Expr>, Vec<Stmt>)>),
     Throw(Expr),
+    /// `try { … } catch (e) { … } finally { … }` (SPEC.md §5.6). At least
+    /// one of `catch` and `finally` is present.
+    Try { block: Vec<Stmt>, catch: Option<Catch>, finally: Option<Vec<Stmt>> },
     Empty,
+}
+
+/// The `catch` clause of a `try` statement. `param` is `None` for
+/// `catch { … }` (no binding).
+#[derive(Debug, Clone)]
+pub struct Catch {
+    pub param: Option<(String, Span)>,
+    pub body: Vec<Stmt>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -96,6 +96,17 @@ declare class Set<T> {
   [Symbol.iterator](): Iterator<T>;
 }
 
+/**
+ * The value that `throw` takes and that a `catch` variable gets (SPEC.md
+ * §5.6). `throw "text"` throws `new Error("text")`. Extend it for your own
+ * errors, and narrow a caught error with `instanceof`.
+ */
+declare class Error {
+  constructor(message?: string);
+  name: string;
+  message: string;
+}
+
 interface Boolean {}
 interface Function {}
 interface CallableFunction extends Function {}

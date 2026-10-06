@@ -21,10 +21,10 @@ small local change), per the dogfooding task's scope.
 
 ## Larger items (not started, out of scope here)
 
-- `async`/`await` and `try`/`catch`: neither app needed them (no host calls
-  that return a promise in the current API surface), but any future host
-  API that is naturally asynchronous (beyond the existing `plinth:dialog`
-  callback style) will want them.
+- `async`/`await`: neither app needed it (no host calls that return a
+  promise in the current API surface), but any future host API that is
+  naturally asynchronous (beyond the existing `plinth:dialog` callback
+  style) will want it. `try`/`catch` is done (see "Fixed in this pass").
 - Regular expressions: not needed by either app; the text-tools screen used
   manual character scans instead of `RegExp` (which `lib.d.ts` declares as
   an empty, unusable interface).
@@ -315,6 +315,29 @@ small local change), per the dogfooding task's scope.
   (`DatePicker` for transaction dates, `dateParts` for the "by month"
   breakdown in `stats.tsx`; grouping now uses a `Map` and `for…of`, see
   "Map and Set iteration types for `tsc`" below).
+
+- **`try`/`catch`/`finally`/`throw` (HANDOFF.md §9 item 4, SPEC.md
+  §5.6, core 1.9).** `throw` takes an `Error` (a built-in class with
+  `name` and `message`, declared in `std/lib.d.ts` and built by the
+  checker from a small prelude, `ERROR_PRELUDE` in `check/mod.rs`) or a
+  subclass; `throw "text"` throws `new Error("text")`. A `catch`
+  variable is an `Error` (narrow with `instanceof`); `catch (e:
+  unknown)` and `catch` without a variable also work, other annotations
+  and patterns are `PL2010`. The compiler generates the exception path
+  instead of using the Wasm exception-handling proposal: a flag and a
+  value in two app globals, a test after each call that a may-throw
+  analysis (`codegen.rs::find_throwers`) marks, a branch to the
+  innermost handler block, and `finally` blocks inlined on every exit
+  (`return`, `break`, `continue`, the exception path). Each thunk (where
+  the runtime calls app code) reports a pending exception through the
+  new `error.report` WIT function (runtime function `uncaught`, core
+  1.9) and clears it, so an uncaught exception in an event handler does
+  not stop the app. An uncaught exception in the start-up code is
+  reported and then traps. Runtime traps stay traps: the `as` cast
+  checks now use a separate `TStmt::Trap`. An app with no `throw` has
+  no extra code and keeps its old core version. The reasons are in
+  `docs/language.md` ("Errors and exceptions"). Tests:
+  `crates/plinth-compiler/tests/errors.rs`.
 
 ## Found later
 

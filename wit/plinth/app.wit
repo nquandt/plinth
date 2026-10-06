@@ -34,6 +34,13 @@ interface error {
   variant host-error {
     denied(denied-reason),
   }
+
+  /// Reports an error that the app did not catch (core 1.9, SPEC.md §5.6):
+  /// a `throw` that no `catch` handled in an event handler, a callback or
+  /// a rejected promise that nothing awaited. The app keeps running; the
+  /// host shows or logs the message. `message` is for example
+  /// `"Uncaught Error: no network"`.
+  report: func(message: string);
 }
 
 /// Clocks and timers (SPEC.md §8.5; capability: none, always available).

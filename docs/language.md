@@ -36,9 +36,10 @@ large enough to write real apps; see the examples in `examples/`.
 **Status (current).** Implemented: `int`; `T | null` everywhere except
 signals; discriminated unions with narrowing; generic functions,
 interfaces, and type aliases; `Map`/`Set`; classes with single
-inheritance and `instanceof`; `JSON.stringify`/`JSON.parse<T>`. **Not
+inheritance and `instanceof`; `JSON.stringify`/`JSON.parse<T>`;
+`try`/`catch`/`finally`/`throw` (see "Errors and exceptions"). **Not
 yet:** static members, getters/setters, generic classes,
-`async`/`await`, `try`/`catch`.
+`async`/`await`.
 
 ## Supported syntax
 
@@ -109,8 +110,100 @@ yet:** static members, getters/setters, generic classes,
   types the checker cannot relate this way, is still rejected with
   `PL2006`.
 
-Planned for a later compiler version: `async`/`await`, `Promise.all`,
-`try`/`catch`/`throw`.
+Planned for a later compiler version: `async`/`await`, `Promise.all`.
+
+## Errors and exceptions
+
+Plinth has `throw`, `try`, `catch` and `finally` (SPEC.md §5.6).
+
+```ts
+class NotFound extends Error {
+  id: string;
+  constructor(id: string) {
+    super(`no item ${id}`);
+    this.name = "NotFound";
+    this.id = id;
+  }
+}
+
+try {
+  load(id);
+} catch (e) {
+  if (e instanceof NotFound) {
+    status.set(`missing: ${e.id}`);
+  } else {
+    status.set(e.message);
+  }
+} finally {
+  busy.set(false);
+}
+```
+
+Rules:
+
+- `throw` takes an `Error` or an instance of a subclass of `Error`.
+  `Error` is a built-in class with the fields `name` and `message`
+  (`std/lib.d.ts`). `throw "text"` throws `new Error("text")`. Other
+  values are the error `PL3001`.
+- A `catch` variable has the type `Error`. Narrow it with `instanceof`.
+  You can write `catch (e)`, `catch (e: unknown)` (the `tsc` form) or
+  `catch` with no variable. Another type annotation, or a pattern, is
+  the error `PL2010`. You cannot assign to the variable.
+- `finally` runs when the `try` or `catch` block completes, returns,
+  throws, or leaves a loop with `break` or `continue`. An exception in a
+  `finally` block replaces the exception that was pending.
+- An exception goes through function calls, closure calls, method calls
+  and array callbacks (`map`, `forEach`, …).
+- **Runtime traps are not exceptions.** A read outside an array, a
+  failed `as` cast, a `null` used as a number, and out-of-memory stop
+  the app. No `catch` gets them.
+- **Uncaught exceptions.** An exception that no `catch` gets in an event
+  handler, a timer, a host-call callback, an effect, a `computed` or a
+  render slot goes to the host through `error.report` (core 1.9), for
+  example `Uncaught NotFound: no item 7`. The app keeps running. The
+  signal changes before the `throw` stay. A `computed` or a slot that
+  throws gives the zero value of its type. An uncaught exception in the
+  start-up code (the top level of a module, or a screen component) is
+  also reported, but then the app stops, because it has no complete UI.
+
+**Why generated code, not the Wasm exception-handling proposal.** The
+compiler does not use the Wasm `try`/`catch` instructions. It generates
+the exception path:
+
+1. Two globals hold the pending exception: a flag and the `Error`.
+2. `throw` sets them and branches to the innermost `catch` block of the
+   function, or returns from the function.
+3. After each call of a function that can throw, the caller tests the
+   flag and continues the exception path. A may-throw analysis finds
+   these functions. A closure call is tested only when some closure in
+   the program can throw.
+4. A thunk (where the runtime calls app code) is the outer boundary. It
+   reports a pending exception and clears it.
+
+We chose this because:
+
+- **It runs on every target now.** SPEC.md §9.2 requires the iOS
+  ahead-of-time path (`wasm2c`, WAMR AOT) in addition to wasmtime and
+  browsers. These runners do not support the same version of the
+  exception-handling proposal (the older `try`/`catch` form or the newer
+  `try_table`/`exnref` form), and some AOT tools support neither. The
+  generated code uses only Wasm 1.0 instructions.
+- **It costs nothing when nothing throws.** An app with no `throw` gets
+  no tests and no globals, and it does not import the core 1.9 function
+  `uncaught`. An app with a `throw` pays one `global.get` and one `br_if`
+  after each call that can throw.
+- **It fits the runtime.** The garbage collector runs only between
+  events (SPEC.md §5.4), so an exception never needs to unwind a shadow
+  stack. The thunk boundary gives one place to report an uncaught
+  exception without a trap.
+- **It is the base for `async`.** A continuation of an `async` function
+  must catch every exception and reject its promise. The same mechanism
+  does that.
+
+The cost: a call that can throw is a little larger and slower than with
+native exceptions. When every target runner supports one version of the
+proposal, a later compiler can change to it without a change to the
+language.
 
 ## Rejected features, and why
 
@@ -218,10 +311,12 @@ Rules:
   There is no `==`.
 - **Property order.** Object literal fields keep their declared order.
   Iterating over an object's keys is not supported; use a `Map`.
-- **Errors.** `throw` and uncaught runtime errors (null dereference,
-  out-of-bounds index, out-of-memory) trap today; the host shows a
-  "this app stopped" screen. `try`/`catch` is planned, pending the Wasm
-  exception-handling proposal landing in every target runner.
+- **Errors.** `throw` takes only an `Error` (or a subclass); a thrown
+  string becomes an `Error`. A `catch` variable is an `Error`, not
+  `unknown`, and you cannot assign to it. Runtime errors (null
+  dereference, out-of-bounds index, a failed `as` cast, out-of-memory)
+  are traps, not exceptions: no `catch` gets them, and the host shows a
+  "this app stopped" screen. See "Errors and exceptions".
 - **`for (let i = ...)`** uses one binding for the whole loop — closures
   made inside the body see its final value, matching old-style `var`
   behavior rather than per-iteration `let`. `for…of` loop variables, and
@@ -274,7 +369,7 @@ Codes are grouped by range:
 | Range | Meaning |
 |---|---|
 | `PL1000`–`PL1007` | Modules and the closed world (SPEC.md §4.1): parse errors, the import graph (bare imports, missing modules, cycles), unknown std modules, a missing `app/main.tsx`, and undeclared capabilities (SPEC.md §11). |
-| `PL2000`–`PL2024` | Rejected language features (SPEC.md §4.4): TypeScript/JavaScript syntax Plinth does not support yet or ever — `any`, classes (restricted subset), `this`, non-null assertions, type assertions, `for…in`, `delete`, `async`, `try`/`catch`, computed member access, advanced types, namespaces, `var`, user generics, getters/setters, labels, regular expressions, `BigInt`, non-reactive signal reads, unbound methods, and the class `extends`/`super`/`override` rules. |
+| `PL2000`–`PL2024` | Rejected language features (SPEC.md §4.4): TypeScript/JavaScript syntax Plinth does not support yet or ever — `any`, classes (restricted subset), `this`, non-null assertions, type assertions, `for…in`, `delete`, `async`, a typed or destructured `catch` variable, computed member access, advanced types, namespaces, `var`, user generics, getters/setters, labels, regular expressions, `BigInt`, non-reactive signal reads, unbound methods, and the class `extends`/`super`/`override` rules. |
 | `PL3000`–`PL3013` | Types (SPEC.md §4, §4.3): the structural type checker — mismatches, unknown names/types, missing properties or fields, uncallable values, wrong argument counts, uninferable types, assigning to `const`, nullability, duplicate definitions, and missing `return`s. (`PL3011`, struct layout, is reserved but not emitted by any check today.) |
 | `PL4000`–`PL4009` | JSX and the UI API (SPEC.md §6, §7.2): unknown controls, props, and children; missing required props; bad two-way bindings; the `app({...})` config; `navigate` targets; and image assets (missing, or an empty `alt`). |
 

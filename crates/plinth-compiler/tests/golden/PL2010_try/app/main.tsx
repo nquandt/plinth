@@ -1,3 +1,3 @@
 import { app, Screen, Text, Action, Checkbox, Image, signal, computed, effect, navigate } from "plinth:ui";
-function Home() { try { } catch { } return <Screen title="Home" />; }
+function Home() { try { } catch (e: string) { } return <Screen title="Home" />; }
 export default app({ screens: { home: { title: "Home", component: Home } } });

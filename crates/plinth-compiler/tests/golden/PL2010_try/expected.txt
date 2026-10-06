@@ -1,4 +1,4 @@
-app/main.tsx(2,19): error PL2010: `try`/`catch` comes in v1
-  function Home() { try { } catch { } return <Screen title="Home" />; }
-                    ^^^^^^^^^^^^^^^^^
-  help: return a `Result` for recoverable errors; `throw` stops the app
+app/main.tsx(2,35): error PL2010: a `catch` variable can only have the type `unknown`
+  function Home() { try { } catch (e: string) { } return <Screen title="Home" />; }
+                                    ^^^^^^^^
+  help: remove the type; the variable is an `Error`, narrow it with `instanceof`

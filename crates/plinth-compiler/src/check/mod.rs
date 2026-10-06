@@ -231,7 +231,15 @@ pub struct Checker<'d> {
     /// Asset paths under `assets/` in the project (without the `assets/`
     /// prefix), for checking `<Image src>` (SPEC.md §6.3, §10.1).
     assets: HashSet<String>,
+    /// The built-in `Error` class (SPEC.md §5.6), a global name in every
+    /// module unless the module declares its own `Error`.
+    pub(crate) error_class: types::StructId,
 }
+
+/// The built-in `Error` class (SPEC.md §5.6). `throw` takes an instance of
+/// it (or of a subclass), and a `catch` variable has its type. Its fields
+/// are `name` and `message`, in this order.
+const ERROR_PRELUDE: &str = "class Error { name: string = \"Error\"; message: string; constructor(message?: string) { this.message = message ?? \"\"; } }";
 
 struct ClassInfo {
     /// `None` only right after a "a class needs a constructor" error.
@@ -284,8 +292,10 @@ pub fn check_ex(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>,
         interface_instantiations: Vec::new(),
         classes: HashMap::new(),
         assets: assets.iter().cloned().collect(),
+        error_class: 0,
     };
     c.prog.module_count = modules.len() as u32;
+    c.declare_error_class(modules[main].file);
     for (i, m) in modules.iter().enumerate() {
         c.check_module(i, m, i == main);
     }
@@ -645,7 +655,43 @@ impl Checker<'_> {
                 return Some(b.clone());
             }
         }
-        self.module_scopes[self.module].get(name).cloned()
+        match self.module_scopes[self.module].get(name) {
+            Some(b) => Some(b.clone()),
+            None if name == "Error" => Some(Binding::Type(Type::Struct(self.error_class))),
+            None => None,
+        }
+    }
+
+    /// Declares the built-in `Error` class from `ERROR_PRELUDE` (SPEC.md
+    /// §5.6). Codegen emits its constructor only if the app uses it.
+    fn declare_error_class(&mut self, file: FileId) {
+        let mut diags = Vec::new();
+        let ast = crate::parse::parse(file, ERROR_PRELUDE, false, &mut diags);
+        assert!(diags.is_empty(), "the Error prelude does not parse: {diags:?}");
+        let Some(Item::Class(class)) = ast.items.first() else { unreachable!("the Error prelude is one class") };
+        let id = self.prog.structs.len() as types::StructId;
+        self.prog.structs.push(StructDef { name: "Error".into(), fields: Vec::new() });
+        self.error_class = id;
+        self.prog.error_class = Some(id);
+        self.declare_class(id, class, 0);
+    }
+
+    /// The `Error` type (SPEC.md §5.6).
+    pub(crate) fn error_type(&self) -> Type {
+        Type::Struct(self.error_class)
+    }
+
+    /// `new Error(message)` for a string `message`.
+    pub(crate) fn new_error(&mut self, message: TExpr) -> TExpr {
+        let span = message.span;
+        let ctor = self.classes[&self.error_class].ctor.expect("the Error prelude has a constructor");
+        let arg = self.coerce(message, &Type::String.nullable());
+        TExpr::new(TExprKind::Call(ctor, vec![arg]), self.error_type(), span)
+    }
+
+    /// True if `t` is `Error` or one of its subclasses.
+    pub(crate) fn is_error_class(&self, t: &Type) -> bool {
+        matches!(t, Type::Struct(sid) if self.is_subclass(*sid, self.error_class))
     }
 
     fn narrowed(&self, key: &NarrowKey) -> Option<Type> {
@@ -1937,7 +1983,10 @@ impl Checker<'_> {
 /// True if a statement list always ends in `return` or `throw`.
 pub(crate) fn always_exits(stmts: &[TStmt]) -> bool {
     stmts.last().is_some_and(|s| match s {
-        TStmt::Return(_) | TStmt::Throw(_) => true,
+        TStmt::Return(_) | TStmt::Throw(_) | TStmt::Trap(_) => true,
+        TStmt::Try { body, catch, finally } => {
+            (always_exits(body) && catch.as_ref().is_none_or(|(_, c)| always_exits(c))) || finally.as_ref().is_some_and(|f| always_exits(f))
+        }
         TStmt::If(_, a, b) => always_exits(a) && always_exits(b),
         TStmt::Block(b) => always_exits(b),
         TStmt::Switch { disc, cases, .. } => {
@@ -1974,6 +2023,9 @@ fn contains_break(stmts: &[TStmt]) -> bool {
         TStmt::Break => true,
         TStmt::If(_, a, b) => contains_break(a) || contains_break(b),
         TStmt::Block(b) => contains_break(b),
+        TStmt::Try { body, catch, finally } => {
+            contains_break(body) || catch.as_ref().is_some_and(|(_, c)| contains_break(c)) || finally.as_ref().is_some_and(|f| contains_break(f))
+        }
         _ => false,
     })
 }

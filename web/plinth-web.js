@@ -193,7 +193,16 @@ function defaultAskDialog(kind, message) {
 function hostImports(
   getExports,
   onCommit,
-  { log = (s) => console.log(s), scheduleTimerEvent, cancelTimerEvent, kvStore, capabilities = new Set(), askDialog, completeRequest } = {},
+  {
+    log = (s) => console.log(s),
+    reportError = (s) => console.error(s),
+    scheduleTimerEvent,
+    cancelTimerEvent,
+    kvStore,
+    capabilities = new Set(),
+    askDialog,
+    completeRequest,
+  } = {},
 ) {
   // plinth:dialog (core 1.3, SPEC.md §8.5): each call returns a request id at
   // once; the answer arrives later as a `completion` event.
@@ -355,6 +364,13 @@ function hostImports(
     "plinth:app/dev@1.0.0": {
       log(ptr, len) {
         log(readString(ptr, len));
+      },
+    },
+    // Core 1.9 (SPEC.md §5.6): an error the app did not catch. The app
+    // keeps running; `reportError` defaults to `console.error`.
+    "plinth:app/error@1.0.0": {
+      report(ptr, len) {
+        reportError(readString(ptr, len));
       },
     },
     "plinth:app/time@1.0.0": {
