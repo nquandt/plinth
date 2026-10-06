@@ -1280,11 +1280,231 @@ impl Checker<'_> {
             // `O(n^2)` is accepted here since Plinth arrays are form-sized
             // state, not bulk data (SPEC.md §4.2).
             "sort" => self.array_sort(o, elem, args, span),
+            // `splice`/`fill`/`flat`: generated code over the existing array
+            // ops (`arr_slice`, `arr_extend`, push/pop, index loops), like
+            // `reduce` and `sort`. No new runtime function.
+            "splice" => self.array_splice(o, elem, args, span),
+            "fill" => self.array_fill(o, elem, args, span),
+            "flat" => self.array_flat(o, elem, args, span),
             _ => {
                 self.err(code::NO_PROPERTY, prop_span, format!("arrays have no method `{prop}` in Plinth TS"));
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
         }
+    }
+
+    fn num_lit(&self, v: f64, span: Span) -> TExpr {
+        TExpr::new(TExprKind::Num(v), Type::Number, span)
+    }
+
+    /// A `number` as the `i32` an array runtime function takes (saturating
+    /// truncation; `NaN` becomes 0).
+    fn num_to_i32(&self, e: TExpr, span: Span) -> TExpr {
+        TExpr::new(TExprKind::Coerce(Coercion::NumToI32, bx(e)), Type::Bool, span)
+    }
+
+    /// `x` truncated toward zero (JS `ToIntegerOrInfinity`, saturated to the
+    /// `i32` range, which is wider than any array).
+    fn num_trunc(&self, e: TExpr, span: Span) -> TExpr {
+        let i = self.num_to_i32(e, span);
+        TExpr::new(TExprKind::Coerce(Coercion::I32ToNum, bx(i)), Type::Number, span)
+    }
+
+    /// The JS relative index rule (`slice`, `fill`): `x` truncated; a
+    /// negative value counts back from `len`; the result is clamped to
+    /// `[0, len]`. `len` must be a plain variable read.
+    fn rel_index(&mut self, x: TExpr, len: TExpr, span: Span) -> TExpr {
+        let x_v = self.temp(Type::Number);
+        let x_r = TExpr::new(TExprKind::Var(x_v), Type::Number, span);
+        let lt0 = |a: TExpr| TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(a), bx(TExpr::new(TExprKind::Num(0.0), Type::Number, span))), Type::Bool, span);
+        let from_end = TExpr::new(TExprKind::Num2(NumOp::Add, bx(len.clone()), bx(x_r.clone())), Type::Number, span);
+        let neg = TExpr::new(TExprKind::Cond(bx(lt0(from_end.clone())), bx(self.num_lit(0.0, span)), bx(from_end)), Type::Number, span);
+        let gt_len = TExpr::new(TExprKind::Cmp(CmpOp::Gt, EqKind::F64, bx(x_r.clone()), bx(len.clone())), Type::Bool, span);
+        let pos = TExpr::new(TExprKind::Cond(bx(gt_len), bx(len), bx(x_r.clone())), Type::Number, span);
+        let cond = TExpr::new(TExprKind::Cond(bx(lt0(x_r)), bx(neg), bx(pos)), Type::Number, span);
+        let init = self.num_trunc(x, span);
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(x_v, Some(init))], bx(cond)), Type::Number, span)
+    }
+
+    /// `arr.splice(start, deleteCount?, ...items)`: removes `deleteCount`
+    /// elements at `start` (JS relative index), inserts `items` there, and
+    /// returns the removed elements. Generated as: `tail = arr.slice(start)`;
+    /// `removed = tail.slice(0, d)`; `rest = tail.slice(d)`; pop `arr` down
+    /// to `start`; push `items`; append `rest`.
+    fn array_splice(&mut self, o: TExpr, elem: Type, args: &[Expr], span: Span) -> TExpr {
+        if args.is_empty() {
+            self.err_help(code::ARG_COUNT, span, "`splice` needs a start index", "`arr.splice(start, deleteCount?, ...items)`");
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        let arr_ty = Type::Array(Box::new(elem.clone()));
+        let var = |v: VarId, ty: &Type| TExpr::new(TExprKind::Var(v), ty.clone(), span);
+        let mut stmts = Vec::new();
+
+        // Evaluate the receiver and every argument once, in source order.
+        let arr_v = self.temp(arr_ty.clone());
+        stmts.push(TStmt::Let(arr_v, Some(o)));
+        let start = self.num_arg(args, 0, 0.0, span);
+        let start_v = self.temp(Type::Number);
+        stmts.push(TStmt::Let(start_v, Some(start)));
+        let dc_v = if args.len() >= 2 {
+            let dc = self.num_arg(args, 1, 0.0, span);
+            let dc_v = self.temp(Type::Number);
+            stmts.push(TStmt::Let(dc_v, Some(dc)));
+            Some(dc_v)
+        } else {
+            None
+        };
+        let mut items = Vec::new();
+        for a in args.iter().skip(2) {
+            let te = self.expr_with(a, &elem);
+            let te = self.coerce(te, &elem);
+            let v = self.temp(elem.clone());
+            stmts.push(TStmt::Let(v, Some(te)));
+            items.push(v);
+        }
+
+        let arr_r = var(arr_v, &arr_ty);
+        let max = || TExpr::new(TExprKind::Num(i32::MAX as f64), Type::Number, span);
+        let tail_v = self.temp(arr_ty.clone());
+        let tail_r = var(tail_v, &arr_ty);
+        let tail = TExpr::new(
+            TExprKind::Rt("arr_slice", vec![arr_r.clone(), self.num_to_i32(var(start_v, &Type::Number), span), self.num_to_i32(max(), span)]),
+            arr_ty.clone(),
+            span,
+        );
+        stmts.push(TStmt::Let(tail_v, Some(tail)));
+        // `s = arr.length - tail.length` is the resolved start index.
+        let s_v = self.temp(Type::Number);
+        let s_init = TExpr::new(
+            TExprKind::Num2(NumOp::Sub, bx(self.arr_len_of(arr_r.clone(), span)), bx(self.arr_len_of(tail_r.clone(), span))),
+            Type::Number,
+            span,
+        );
+        stmts.push(TStmt::Let(s_v, Some(s_init)));
+        // `d`: the delete count, truncated, at least 0 (`slice` clamps the
+        // top). No count means "to the end".
+        let d_v = self.temp(Type::Number);
+        let d_init = match dc_v {
+            Some(dc_v) => {
+                let t = self.num_trunc(var(dc_v, &Type::Number), span);
+                let t_v = self.temp(Type::Number);
+                let t_r = var(t_v, &Type::Number);
+                let lt0 = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(t_r.clone()), bx(self.num_lit(0.0, span))), Type::Bool, span);
+                let c = TExpr::new(TExprKind::Cond(bx(lt0), bx(self.num_lit(0.0, span)), bx(t_r)), Type::Number, span);
+                TExpr::new(TExprKind::Block(vec![TStmt::Let(t_v, Some(t))], bx(c)), Type::Number, span)
+            }
+            None => self.arr_len_of(tail_r.clone(), span),
+        };
+        stmts.push(TStmt::Let(d_v, Some(d_init)));
+        let d_i32 = || TExpr::new(TExprKind::Coerce(Coercion::NumToI32, bx(TExpr::new(TExprKind::Var(d_v), Type::Number, span))), Type::Bool, span);
+        let removed_v = self.temp(arr_ty.clone());
+        let removed = TExpr::new(TExprKind::Rt("arr_slice", vec![tail_r.clone(), self.num_to_i32(self.num_lit(0.0, span), span), d_i32()]), arr_ty.clone(), span);
+        stmts.push(TStmt::Let(removed_v, Some(removed)));
+        let rest_v = self.temp(arr_ty.clone());
+        let rest = TExpr::new(TExprKind::Rt("arr_slice", vec![tail_r, d_i32(), self.num_to_i32(max(), span)]), arr_ty.clone(), span);
+        stmts.push(TStmt::Let(rest_v, Some(rest)));
+
+        // `while (arr.length > s) arr.pop();`
+        let cond = TExpr::new(
+            TExprKind::Cmp(CmpOp::Gt, EqKind::F64, bx(self.arr_len_of(arr_r.clone(), span)), bx(var(s_v, &Type::Number))),
+            Type::Bool,
+            span,
+        );
+        let id = self.prog.new_loop();
+        let pop = self.arr_pop_discard(arr_r.clone(), span);
+        stmts.push(TStmt::Loop { id, cond: Some(cond), test_after: false, update: None, body: vec![pop] });
+        for v in items {
+            stmts.push(self.arr_push_discard(arr_r.clone(), var(v, &elem), span));
+        }
+        stmts.push(TStmt::Expr(TExpr::new(TExprKind::Rt("arr_extend", vec![arr_r, var(rest_v, &arr_ty)]), Type::Void, span)));
+        TExpr::new(TExprKind::Block(stmts, bx(var(removed_v, &arr_ty))), arr_ty, span)
+    }
+
+    /// `arr.fill(value, start?, end?)`: in place, returns the same array.
+    /// `start` and `end` use the JS relative index rule.
+    fn array_fill(&mut self, o: TExpr, elem: Type, args: &[Expr], span: Span) -> TExpr {
+        if args.is_empty() || args.len() > 3 {
+            self.err_help(code::ARG_COUNT, span, "`fill` takes a value and an optional start and end", "`arr.fill(value, start?, end?)`");
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        let arr_ty = Type::Array(Box::new(elem.clone()));
+        let var = |v: VarId, ty: &Type| TExpr::new(TExprKind::Var(v), ty.clone(), span);
+        let mut stmts = Vec::new();
+        let arr_v = self.temp(arr_ty.clone());
+        stmts.push(TStmt::Let(arr_v, Some(o)));
+        let arr_r = var(arr_v, &arr_ty);
+        let value = self.expr_with(&args[0], &elem);
+        let value = self.coerce(value, &elem);
+        let value_v = self.temp(elem.clone());
+        stmts.push(TStmt::Let(value_v, Some(value)));
+        let len_v = self.temp(Type::Number);
+        stmts.push(TStmt::Let(len_v, Some(self.arr_len_of(arr_r.clone(), span))));
+        let len_r = var(len_v, &Type::Number);
+        let i_v = self.temp(Type::Number);
+        let i_r = var(i_v, &Type::Number);
+        let start = self.num_arg(args, 1, 0.0, span);
+        let start = self.rel_index(start, len_r.clone(), span);
+        stmts.push(TStmt::Let(i_v, Some(start)));
+        let end_v = self.temp(Type::Number);
+        let end = if args.len() >= 3 {
+            let e = self.num_arg(args, 2, 0.0, span);
+            self.rel_index(e, len_r.clone(), span)
+        } else {
+            len_r
+        };
+        stmts.push(TStmt::Let(end_v, Some(end)));
+
+        let set = self.arr_set_at(arr_r.clone(), i_r.clone(), var(value_v, &elem), span);
+        let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(var(end_v, &Type::Number))), Type::Bool, span);
+        let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r), bx(self.num_lit(1.0, span))), Type::Number, span);
+        let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
+        let id = self.prog.new_loop();
+        stmts.push(TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![set] });
+        TExpr::new(TExprKind::Block(stmts, bx(arr_r)), arr_ty, span)
+    }
+
+    /// `arr.flat()`: one level. On a `T[][]` it appends every inner array to
+    /// a new `T[]`; on any other array it returns a copy (as JS does). A
+    /// depth other than a literal `1` is not supported.
+    fn array_flat(&mut self, o: TExpr, elem: Type, args: &[Expr], span: Span) -> TExpr {
+        if args.len() > 1 {
+            self.err(code::ARG_COUNT, span, "`flat` takes at most one depth");
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        if let Some(a) = args.first()
+            && !matches!(a.kind, ExprKind::Num(n) if n == 1.0)
+        {
+            self.err_help(code::UNSUPPORTED, a.span, "`flat` flattens one level only", "remove the depth, or call `flat()` again for each level");
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        let inner = match &elem {
+            Type::Array(inner) => (**inner).clone(),
+            _ => return self.arr_copy_of(o, span),
+        };
+        let arr_ty = Type::Array(Box::new(elem.clone()));
+        let res_ty = Type::Array(Box::new(inner));
+        let var = |v: VarId, ty: &Type| TExpr::new(TExprKind::Var(v), ty.clone(), span);
+        let arr_v = self.temp(arr_ty.clone());
+        let arr_r = var(arr_v, &arr_ty);
+        let res_v = self.temp(res_ty.clone());
+        let res_r = var(res_v, &res_ty);
+        let len_v = self.temp(Type::Number);
+        let i_v = self.temp(Type::Number);
+        let i_r = var(i_v, &Type::Number);
+        let sub = self.arr_get_at(arr_r.clone(), i_r.clone(), elem.clone(), span);
+        let extend = TStmt::Expr(TExpr::new(TExprKind::Rt("arr_extend", vec![res_r.clone(), sub]), Type::Void, span));
+        let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(var(len_v, &Type::Number))), Type::Bool, span);
+        let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r), bx(self.num_lit(1.0, span))), Type::Number, span);
+        let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
+        let id = self.prog.new_loop();
+        let stmts = vec![
+            TStmt::Let(arr_v, Some(o)),
+            TStmt::Let(res_v, Some(TExpr::new(TExprKind::ArrayLit(Vec::new()), res_ty.clone(), span))),
+            TStmt::Let(len_v, Some(self.arr_len_of(arr_r, span))),
+            TStmt::Let(i_v, Some(self.num_lit(0.0, span))),
+            TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![extend] },
+        ];
+        TExpr::new(TExprKind::Block(stmts, bx(res_r)), res_ty, span)
     }
 
     /// `arr.sort(compare?)`. In place, returns the same array (JS

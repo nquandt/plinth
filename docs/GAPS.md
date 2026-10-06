@@ -32,9 +32,9 @@ small local change), per the dogfooding task's scope.
   fixed in gap batch 3 item 2; see "Fixed in this pass"). `entries()` as a
   plain array is still not possible: no tuple/array-of-pairs type exists to
   return it as (the `for…of ([k, v] of m)` form still works).
-- `Array` methods beyond the common set (gap batch 3 item 3 added
-  `concat`/`reduce`; `sort` fixed in this pass, see "Fixed in this pass"):
-  `splice`, `fill` and `flat` are still not implemented.
+- `Array` methods beyond the common set: done. `concat`/`reduce` (gap
+  batch 3 item 3), `sort`, and `splice`/`fill`/`flat` are in "Fixed in this
+  pass".
 
 ## Fixed in this pass
 
@@ -233,6 +233,21 @@ small local change), per the dogfooding task's scope.
   `splice`, `fill` and `flat` are still not implemented — see "Larger
   items"; `Map.entries()` as a plain array is also still not implemented
   — see "Larger items" above.
+
+- **Array `splice`, `fill`, `flat` (HANDOFF.md §9 item 4).** The checker
+  generates each one from array operations that exist (`arr_slice`,
+  `arr_extend`, push, pop and index loops) in `check/expr.rs`
+  (`array_splice`, `array_fill`, `array_flat`). There is no new runtime
+  function and `CORE_MINOR` does not change. `splice(start, deleteCount?,
+  ...items)` follows the JS rules: a negative start counts from the end, the
+  count is clamped, and the call returns the removed elements. The call
+  evaluates all arguments before it changes the array. `fill(value, start?,
+  end?)` changes the array in place and returns it; `start` and `end` use the
+  same relative index rule as `slice`. `flat()` flattens one level: a `T[][]`
+  becomes a new `T[]`; on another array it returns a copy. A depth other
+  than a literal `1` is `PL2000`. `std/lib.d.ts` has the three signatures
+  (`flat` has a `this: U[][]` overload, so `tsc` gives the correct type).
+  Tests: `crates/plinth-compiler/tests/collections.rs`.
 
 - #5 (fixed): `plinth:time` gained date/time support: `timezoneOffset`
   (a new host function, `plinth:app@1.0.0`'s `time` interface, core

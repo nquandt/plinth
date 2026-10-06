@@ -22,6 +22,11 @@ interface Array<T> {
   concat(...items: T[][]): T[];
   reduce<U>(f: (acc: U, value: T, index: number) => U, initial: U): U;
   sort(compare?: (a: T, b: T) => number): T[];
+  splice(start: number, deleteCount?: number, ...items: T[]): T[];
+  fill(value: T, start?: number, end?: number): T[];
+  /** One level only: `depth` can only be 1. */
+  flat<U>(this: U[][], depth?: 1): U[];
+  flat(depth?: 1): T[];
   [Symbol.iterator](): Iterator<T>;
 }
 
