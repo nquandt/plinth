@@ -836,3 +836,54 @@ fn generic_type_alias_wrong_type_argument_count() {
     let main = with_app("type Pair<A, B> = { first: A; second: B };\nconst a: Pair<number> = { first: 1, second: 2 };");
     assert_eq!(codes(&main), ["PL3006"]);
 }
+
+// -- Generic interfaces, monomorphized (HANDOFF.md item 1, interface case) --
+
+#[test]
+fn generic_interface_in_annotation_and_generic_function() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Box<T> { value: T }
+function wrap<T>(v: T): Box<T> {
+  return { value: v };
+}
+function Home() {
+  const b: Box<number> = { value: 1 };
+  const w = wrap("hi");
+  return <Screen title="Home"><Text>{b.value + "-" + w.value}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "1-hi");
+}
+
+#[test]
+fn generic_interface_array_and_nested() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Box<T> { value: T }
+function Home() {
+  const boxes: Box<number>[] = [{ value: 1 }, { value: 2 }];
+  const nested: Box<Box<string>> = { value: { value: "hi" } };
+  return <Screen title="Home"><Text>{boxes[0].value + boxes[1].value + "-" + nested.value.value}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "3-hi");
+}
+
+#[test]
+fn generic_interface_wrong_type_argument_count() {
+    let main = with_app("interface Pair<A, B> { first: A; second: B }\nconst a: Pair<number> = { first: 1, second: 2 };");
+    assert_eq!(codes(&main), ["PL3006"]);
+}
+
+#[test]
+fn distinct_generic_interface_instantiations_are_distinct_types() {
+    let main = with_app(
+        "interface Box<T> { value: T }\nconst a: Box<number> = { value: 1 };\nconst b: Box<string> = a;",
+    );
+    assert_eq!(codes(&main)[0], "PL3001");
+}

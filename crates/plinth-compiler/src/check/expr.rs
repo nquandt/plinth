@@ -266,7 +266,7 @@ impl Checker<'_> {
                 self.err_help(code::UNSUPPORTED, span, format!("`{name}` is a control"), format!("write `<{name} ... />`"));
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
-            Some(Binding::Type(_)) | Some(Binding::Alias(..)) | Some(Binding::Enum(_)) => {
+            Some(Binding::Type(_)) | Some(Binding::Alias(..)) | Some(Binding::Interface(..)) | Some(Binding::Enum(_)) => {
                 self.err(code::UNKNOWN_NAME, span, format!("`{name}` is a type, not a value"));
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }

@@ -92,6 +92,9 @@ pub enum Binding {
     Type(Type),
     /// A type alias that is not resolved yet: `(module, alias index)`.
     Alias(usize, usize),
+    /// A generic interface template, not monomorphized yet:
+    /// `(module, interface index)`.
+    Interface(usize, usize),
     Enum(types::EnumId),
     Control(ControlKind),
     Std(StdFn),
@@ -152,6 +155,10 @@ pub struct Checker<'d> {
     in_progress: HashSet<FuncId>,
     aliases: Vec<Vec<ast::TypeAlias>>,
     resolving_alias: HashSet<(usize, usize)>,
+    /// Generic interface templates, not monomorphized until a type
+    /// annotation instantiates them with type arguments.
+    interfaces: Vec<Vec<ast::Interface>>,
+    resolving_interface: HashSet<(usize, usize)>,
     anon_structs: HashMap<String, types::StructId>,
     /// The screen names that `navigate` and `navigate.push` refer to,
     /// checked after the app. The `bool` is `true` for `navigate(name)`,
@@ -178,6 +185,9 @@ pub struct Checker<'d> {
     /// `(module, alias index, type arguments) -> resolved type`. Linear for
     /// the same reason as `instantiations`.
     alias_instantiations: Vec<(usize, usize, Vec<Type>, Type)>,
+    /// Instantiations of generic interfaces so far:
+    /// `(module, interface index, type arguments) -> monomorphized struct`.
+    interface_instantiations: Vec<(usize, usize, Vec<Type>, types::StructId)>,
 }
 
 struct GenericTemplate {
@@ -201,6 +211,8 @@ pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>, ca
         in_progress: HashSet::new(),
         aliases: vec![Vec::new(); modules.len()],
         resolving_alias: HashSet::new(),
+        interfaces: vec![Vec::new(); modules.len()],
+        resolving_interface: HashSet::new(),
         anon_structs: HashMap::new(),
         navigations: Vec::new(),
         app_seen: false,
@@ -210,6 +222,7 @@ pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>, ca
         generic_bindings: HashMap::new(),
         instantiations: Vec::new(),
         alias_instantiations: Vec::new(),
+        interface_instantiations: Vec::new(),
     };
     c.prog.module_count = modules.len() as u32;
     for (i, m) in modules.iter().enumerate() {
@@ -299,7 +312,7 @@ impl Checker<'_> {
         for item in &src.ast.items {
             match item {
                 Item::Enum(e) => self.declare_enum(e),
-                Item::Interface(i) => {
+                Item::Interface(i) if i.type_params.is_empty() => {
                     let id = self.prog.structs.len() as types::StructId;
                     self.prog.structs.push(StructDef { name: i.name.clone(), fields: Vec::new() });
                     self.define(&i.name, i.span, Binding::Type(Type::Struct(id)));
@@ -307,6 +320,14 @@ impl Checker<'_> {
                         self.exports[m].insert(i.name.clone(), Binding::Type(Type::Struct(id)));
                     }
                     interfaces.push((id, i));
+                }
+                Item::Interface(i) => {
+                    let idx = self.interfaces[m].len();
+                    self.interfaces[m].push(i.clone());
+                    self.define(&i.name, i.span, Binding::Interface(m, idx));
+                    if i.exported {
+                        self.exports[m].insert(i.name.clone(), Binding::Interface(m, idx));
+                    }
                 }
                 Item::TypeAlias(a) => {
                     let idx = self.aliases[m].len();
@@ -702,6 +723,7 @@ impl Checker<'_> {
                 t
             }
             Some(Binding::Alias(m, idx)) => self.resolve_alias(m, idx, args, span),
+            Some(Binding::Interface(m, idx)) => self.resolve_interface(m, idx, args, span),
             Some(Binding::Enum(e)) => Type::Enum(e),
             _ => {
                 self.err(code::UNKNOWN_TYPE, span, format!("unknown type `{name}`"));
@@ -757,6 +779,49 @@ impl Checker<'_> {
         self.module = saved;
         self.resolving_alias.remove(&(m, idx));
         t
+    }
+
+    /// Monomorphizes a generic interface for one set of type arguments,
+    /// reusing an earlier instantiation with the same arguments (like
+    /// `resolve_alias`, but each distinct instantiation is its own nominal
+    /// struct, not a structurally-deduped anonymous one).
+    fn resolve_interface(&mut self, m: usize, idx: usize, args: &[TypeAnn], span: Span) -> Type {
+        let type_params = self.interfaces[m][idx].type_params.clone();
+        if args.len() != type_params.len() {
+            self.err(code::ARG_COUNT, span, format!("`{}` takes {} type argument(s)", self.interfaces[m][idx].name, type_params.len()));
+            return Type::Error;
+        }
+        // Type arguments resolve in the *caller's* scope, before switching
+        // to the interface's own module/bindings.
+        let bound: Vec<Type> = args.iter().map(|a| self.resolve_type(a)).collect();
+        if bound.iter().any(Type::is_error) {
+            return Type::Error;
+        }
+        if let Some((_, _, _, id)) = self.interface_instantiations.iter().find(|(im, ii, b, _)| *im == m && *ii == idx && *b == bound) {
+            return Type::Struct(*id);
+        }
+        if !self.resolving_interface.insert((m, idx)) {
+            self.err(code::ADVANCED_TYPE, span, "recursive generic interfaces are not supported");
+            return Type::Error;
+        }
+        let name = format!("{}<{}>", self.interfaces[m][idx].name, bound.iter().map(|t| self.show(t)).collect::<Vec<_>>().join(", "));
+        let id = self.prog.structs.len() as types::StructId;
+        self.prog.structs.push(StructDef { name, fields: Vec::new() });
+        let saved_bindings = std::mem::take(&mut self.generic_bindings);
+        for (n, t) in type_params.iter().zip(&bound) {
+            self.generic_bindings.insert(n.clone(), t.clone());
+        }
+        let field_anns = self.interfaces[m][idx].fields.clone();
+        let saved_module = std::mem::replace(&mut self.module, m);
+        let saved_scopes = std::mem::take(&mut self.fx.scopes);
+        let fields = self.fields(&field_anns);
+        self.fx.scopes = saved_scopes;
+        self.module = saved_module;
+        self.prog.structs[id as usize].fields = fields;
+        self.generic_bindings = saved_bindings;
+        self.resolving_interface.remove(&(m, idx));
+        self.interface_instantiations.push((m, idx, bound, id));
+        Type::Struct(id)
     }
 
     /// A `Map` key or `Set` element type (SPEC.md §4.2).
