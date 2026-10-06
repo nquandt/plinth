@@ -67,6 +67,9 @@ pub fn describe(capability: &str, app_rationale: &str) -> String {
 struct ConsentView {
     app_name: String,
     publisher: String,
+    /// `Some(key id)` when the package's signature checked out
+    /// (`docs/HUB.md` §6.1, phase H1); `None` for an unsigned package.
+    signed: Option<String>,
     items: Vec<Item>,
     result: Rc<Cell<Option<Outcome>>>,
 }
@@ -89,12 +92,13 @@ impl ConsentView {
 impl Render for ConsentView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Tokens::new(window.appearance(), "teal");
-        // Publishers are not signed yet (docs/HUB.md §6, phase H1), so the
-        // manifest's publisher name is only a claim.
-        let publisher_label = if self.publisher.trim().is_empty() {
-            "Unverified publisher".to_owned()
-        } else {
-            format!("{} (unverified publisher)", self.publisher.trim())
+        // A signed package shows its checked publisher name; an unsigned
+        // one shows the manifest's claim as unverified (`docs/HUB.md`
+        // §6.1, §6.2, phase H1).
+        let publisher_label = match &self.signed {
+            Some(key) => format!("Signed by {} ({key})", self.publisher.trim()),
+            None if self.publisher.trim().is_empty() => "Unverified publisher".to_owned(),
+            None => format!("{} (unverified publisher)", self.publisher.trim()),
         };
 
         let mut list = div().flex().flex_col().gap_3().w_full();
@@ -200,7 +204,7 @@ actions!(plinth_consent, [ConsentQuit]);
 /// returns the user's per-capability decisions, or `None` if they
 /// cancelled. Blocks until the window closes: it runs its own gpui
 /// application loop, so call it before opening the app's own window.
-pub fn show(app_name: &str, publisher: &str, capabilities: &[(String, String)]) -> Option<Vec<(String, bool)>> {
+pub fn show(app_name: &str, publisher: &str, signed: Option<&str>, capabilities: &[(String, String)]) -> Option<Vec<(String, bool)>> {
     if capabilities.is_empty() {
         return Some(Vec::new());
     }
@@ -214,6 +218,7 @@ pub fn show(app_name: &str, publisher: &str, capabilities: &[(String, String)]) 
     let result = Rc::new(Cell::new(None));
     let app_name = app_name.to_owned();
     let publisher = publisher.to_owned();
+    let signed = signed.map(|s| s.to_owned());
     let out = result.clone();
 
     gpui_platform::application().run(move |cx: &mut App| {
@@ -230,7 +235,7 @@ pub fn show(app_name: &str, publisher: &str, capabilities: &[(String, String)]) 
             .window_bounds(Some(WindowBounds::Windowed(bounds)))
             .titlebar(Some(gpui::TitlebarOptions { title: Some("Allow this app?".into()), ..Default::default() }));
         cx.open_window(options, move |_, cx| {
-            cx.new(|_| ConsentView { app_name: app_name.clone(), publisher: publisher.clone(), items, result: out.clone() })
+            cx.new(|_| ConsentView { app_name: app_name.clone(), publisher: publisher.clone(), signed: signed.clone(), items, result: out.clone() })
         })
         .expect("open the consent window");
         cx.activate(true);

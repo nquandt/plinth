@@ -18,3 +18,5 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 plinth-compiler = { workspace = true }
 plinth-hub = { workspace = true }
 toml = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand_core = { workspace = true }

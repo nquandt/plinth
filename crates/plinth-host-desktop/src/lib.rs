@@ -319,6 +319,9 @@ pub fn run_from_hub(hub: &plinth_hub::Hub, app_id: &str) -> Result<()> {
         pkg
     } else {
         let publisher = pkg.manifest.publisher.clone();
+        // A bad signature is refused outright (`docs/HUB.md` §6.1); an
+        // unsigned package shows "unverified publisher" as before.
+        let signer = plinth_package::signature::verify(&pkg).context("the package signature does not check out")?;
         let with_reasons: Vec<(String, String)> = pending
             .iter()
             .map(|c| {
@@ -326,7 +329,7 @@ pub fn run_from_hub(hub: &plinth_hub::Hub, app_id: &str) -> Result<()> {
                 (c.clone(), why)
             })
             .collect();
-        match consent::show(&pkg.manifest.name, &publisher, &with_reasons) {
+        match consent::show(&pkg.manifest.name, &publisher, signer.as_ref().map(|s| s.key.as_str()), &with_reasons) {
             Some(decisions) => {
                 for (capability, allowed) in decisions {
                     let decision = if allowed { plinth_hub::Decision::Allowed } else { plinth_hub::Decision::Refused };

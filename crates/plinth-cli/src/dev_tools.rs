@@ -53,6 +53,10 @@ pub fn validate_file(path: &Path) -> Result<()> {
         if pkg.manifest.ui_api.split('.').next() != plinth_protocol::UI_API_VERSION.split('.').next() {
             bail!("the package needs UI API {}, but this host has {}", pkg.manifest.ui_api, plinth_protocol::UI_API_VERSION);
         }
+        match plinth_package::signature::verify(&pkg)? {
+            Some(signer) => println!("signed by {} ({})", signer.publisher, signer.key),
+            None => println!("unsigned"),
+        }
         validate_entry(&pkg.component, &pkg.manifest.capabilities)
     } else {
         validate_entry(&bytes, &[])

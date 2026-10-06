@@ -18,6 +18,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Cursor, Read, Write};
 
+pub mod publisher;
+pub mod signature;
+
 pub const PROFILE: &str = "plinth/1";
 pub const EXTENSION: &str = "plnt";
 /// The runtime version that this build of the tools targets.
@@ -131,6 +134,10 @@ pub struct Package {
     pub manifest: Manifest,
     pub component: Vec<u8>,
     pub assets: Vec<(String, Vec<u8>)>,
+    /// The raw bytes of `signature.json`, if the package carries one
+    /// (`docs/HUB.md` §6.1, `signature` module). `None` for an unsigned
+    /// package.
+    pub signature: Option<Vec<u8>>,
 }
 
 impl Package {
@@ -151,6 +158,10 @@ impl Package {
             }
             zip.start_file(path.as_str(), opts)?;
             zip.write_all(bytes)?;
+        }
+        if let Some(sig) = &self.signature {
+            zip.start_file("signature.json", opts)?;
+            zip.write_all(sig)?;
         }
         Ok(zip.finish()?.into_inner())
     }
@@ -210,8 +221,10 @@ impl Package {
         if hex(&Sha256::digest(&component)) != manifest.digest {
             bail!("the digest of `{}` does not match the manifest", manifest.entry);
         }
+        let sig_pos = files.iter().position(|(n, _)| n == "signature.json");
+        let signature = sig_pos.map(|i| files.remove(i).1);
         let assets = files.into_iter().filter(|(n, _)| n.starts_with("assets/")).collect();
-        Ok(Package { manifest, component, assets })
+        Ok(Package { manifest, component, assets, signature })
     }
 }
 
@@ -317,6 +330,7 @@ mod tests {
             manifest: config().manifest("1.0", "plinth-rt/test", Some("teal".into()), &wasm),
             component: wasm.clone(),
             assets: vec![("assets/a.txt".into(), b"hi".to_vec())],
+            signature: None,
         };
         let bytes = pkg.write().unwrap();
         assert!(is_package(&bytes));
@@ -332,7 +346,8 @@ mod tests {
             assert!(check_path(p).is_err(), "{p}");
         }
         let wasm = b"abc".to_vec();
-        let mut pkg = Package { manifest: config().manifest("1.0", "plinth-rt/test", None, &wasm), component: wasm, assets: Vec::new() };
+        let mut pkg =
+            Package { manifest: config().manifest("1.0", "plinth-rt/test", None, &wasm), component: wasm, assets: Vec::new(), signature: None };
         pkg.component = b"tampered".to_vec();
         assert!(Package::read(&pkg.write().unwrap()).is_err());
     }

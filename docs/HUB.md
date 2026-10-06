@@ -156,10 +156,17 @@ A link that is not from a source gets a stronger warning on the consent screen (
 
 ### 6.1 Publisher keys and signatures
 
-- A publisher creates a key pair with `plinth publisher init` (Ed25519). The private key stays with the publisher; a hardware key or an OS key store is supported later.
-- `plinth publish` signs the package: `signature.json` in the `.plnt` holds the publisher key id and a signature over the digest of each other entry (`SPEC.md` §10.1).
-- The registry co-signs each version that passes its checks (§8). The Hub shows "Signed by <publisher>, checked by <source>".
-- The app id belongs to the first publisher key that publishes it in a source. A later version must have the same key, or a key that the old key has signed (key rotation).
+- A publisher creates a key pair with `plinth publisher init [--name <publisher>]` (Ed25519, `ed25519-dalek`). The key lives outside any project (`%APPDATA%\plinth\publisher` on Windows, `$XDG_CONFIG_HOME/plinth/publisher` elsewhere, or `PLINTH_PUBLISHER_DIR`): `key.ed25519` (the 32-byte seed) and `publisher.toml` (the name). A hardware key or an OS key store is supported later. `plinth publisher show` prints the name and the public key id, `ed25519:<base64url of the 32-byte public key, no padding>`.
+- `plinth build --sign` (or `plinth sign <file.plnt>` for an already-built package) signs it: `signature.json` in the `.plnt` holds
+  ```json
+  { "schema": "plinth.signature/1", "publisher": "<name>", "key": "ed25519:…", "digests": { "<entry path>": "<sha256 hex>", "…": "…" }, "signature": "<base64>" }
+  ```
+  `digests` covers every package entry except `signature.json` itself (the entry module under its manifest path, and every asset). The signature is the Ed25519 signature, base64 (standard alphabet), over the canonical JSON (object keys sorted, no whitespace) of `{schema, publisher, key, digests}`. The manifest's `publisher` must equal the signature's `publisher`, checked both when signing and when verifying.
+- `plinth_package::signature::verify(&Package) -> Result<Option<Signer>>` checks a package: `Ok(None)` for an unsigned package (no `signature.json`), `Ok(Some(Signer))` for one that checks out, `Err` for one that claims to be signed but is not (tampered bytes, wrong publisher name, bad digests, a signature that does not verify). A caller refuses an `Err` package outright — it is treated as corrupt, never as merely unsigned. `plinth validate` prints "signed by `<publisher>` (`<key id>`)" or "unsigned".
+- The Hub (`plinth-hub`) records the signer's key id on each installed `VersionEntry` (`None` for unsigned). `Hub::add_package` refuses a package whose signature does not check out, a package from a blocked publisher key (`plinth hub block-publisher <key id>`, §7.4), and a new version signed by a different key than the previously installed version's. No rotation statement is implemented yet — a key change needs a new app id; this is called out below as future work. An unsigned package is still accepted (draft-1 packages and registries without signatures keep working).
+- The static-registry generator (`docs/REGISTRY.md` §10) copies the signer key into each version entry (`"signer": "ed25519:…"`, omitted if unsigned) and applies the same same-key rule across versions of one app.
+- The registry co-signs each version that passes its checks (§8, a later phase). The Hub shows "Signed by <publisher> (<key id>), checked by <source>".
+- The app id belongs to the first publisher key that publishes it in a source. A later version must have the same key, or (future work) a key that the old key has signed (key rotation: `rotated_from: {previous_key, statement_signature}`, where the old key signs the new key id — not implemented in H1).
 
 ### 6.2 Verification levels
 

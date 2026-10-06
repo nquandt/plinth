@@ -108,7 +108,8 @@ The client reads the **service index** at:
       ],
       "reachable": ["store.kv"],
       "published": "2026-10-06T12:00:00Z",
-      "yanked": null
+      "yanked": null,
+      "signer": "ed25519:9f2c…"
     }
   ]
 }
@@ -120,6 +121,7 @@ The client reads the **service index** at:
 - `core` is the core version that the app needs (`SPEC.md` §10.5); `ui-api` is the UI API version.
 - `capabilities` come from the manifest; `reachable` comes from the analysis of the app module (`docs/HUB.md` §7.1). The generator computes both. A client must not trust them without a check: it computes them again from the package after the download.
 - `yanked`: `null`, or a reason text. A yanked version is not installed for new users; an installed copy keeps working, and the Hub shows the reason (`docs/HUB.md` §6.4).
+- `signer` (phase H1, `docs/HUB.md` §6.1): the publisher key id from the package's `signature.json`, omitted for an unsigned package. The generator (`plinth registry build`) verifies the signature before adding a version — a package whose signature does not check out is refused, not merely recorded as unsigned — and refuses a new version whose signer differs from the previous version's (key rotation is future work). A draft-1 registry with no `signer` field anywhere still works: an absent field means "unsigned", the same as before this field existed.
 
 ---
 
@@ -204,7 +206,8 @@ The Hub caches the service index and the app documents and uses HTTP caching hea
 ## 10. Security (draft 1)
 
 - Packages are verified by digest. A registry cannot change a package without detection after a client saw its digest.
-- Draft 1 has **no signatures**. The client trusts the registry for the mapping from app id to digest. Phase H1/H2 of `docs/HUB.md` adds publisher signatures and a registry signature over the indexes, and the transparency log (§6.3 there).
+- Draft 1 had **no signatures**; phase H1 (`docs/HUB.md` §6.1) adds the optional `signer` field (§4) and package-level Ed25519 signatures (`signature.json` in the `.plnt`, `SPEC.md` §10.1). The client trusts the registry for the mapping from app id to digest; it does not yet trust the registry for the mapping from app id to publisher key — that needs a registry signature over the indexes and the transparency log (§6.3 of `docs/HUB.md`), still future work (H2).
+- A signed package's signature is checked independently of the registry, by the client (`plinth_package::signature::verify`) and by the generator before it adds a version. A registry that serves a package whose signature does not check out is caught by this, not by trusting the registry.
 - `http://` is allowed only for `localhost` and `127.0.0.1`.
 - A client limits the size of each JSON document and each package.
 

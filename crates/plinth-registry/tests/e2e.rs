@@ -29,7 +29,7 @@ fn compile_counter(id: &str, version: &str) -> Vec<u8> {
     let cfg =
         plinth_package::ProjectConfig::parse(&format!("id = \"{id}\"\nname = \"Counter\"\nversion = \"{version}\"\npublisher = \"me\"\n")).unwrap();
     let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
-    plinth_package::Package { manifest, component, assets: Vec::new() }.write().unwrap()
+    plinth_package::Package { manifest, component, assets: Vec::new(), signature: None }.write().unwrap()
 }
 
 fn compile_notes(id: &str, version: &str) -> Vec<u8> {
@@ -46,7 +46,7 @@ fn compile_notes(id: &str, version: &str) -> Vec<u8> {
     ))
     .unwrap();
     let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
-    plinth_package::Package { manifest, component, assets: Vec::new() }.write().unwrap()
+    plinth_package::Package { manifest, component, assets: Vec::new(), signature: None }.write().unwrap()
 }
 
 /// Runs the full flow (search, install, publish a new version, update)
