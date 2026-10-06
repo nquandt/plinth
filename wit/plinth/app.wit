@@ -89,12 +89,29 @@ interface clipboard {
   read-text: func() -> result<option<string>, host-error>;
 }
 
+/// Host-owned modal dialogs (SPEC.md §8.5; capability: none, this is UI,
+/// not data access). Every call returns at once with a request id; the
+/// user's answer arrives later through a `completion` event (SPEC.md
+/// §8.4), decoded as the `result` the doc comment below describes.
+interface dialog {
+  /// Shows a message with an OK button. The completion `result` is
+  /// `null`.
+  alert: func(message: string) -> u32;
+  /// Shows a message with OK and Cancel. The completion `result` is a
+  /// `bool` (`true` for OK).
+  confirm: func(message: string) -> u32;
+  /// Shows a message with a text field, OK and Cancel. The completion
+  /// `result` is the entered text, or `null` if the user canceled.
+  prompt: func(message: string) -> u32;
+}
+
 world app {
   import ui;
   import dev;
   import time;
   import store;
   import clipboard;
+  import dialog;
 
   /// Builds the initial tree.
   export init: func(args: list<u8>);
