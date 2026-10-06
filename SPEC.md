@@ -575,7 +575,7 @@ trait WasmRunner {
 | Windows, macOS, Linux | `wasmtime` + Cranelift | Cache compiled code on disk per artifact digest. |
 | Android | `wasmtime` + Cranelift | Android permits JIT. |
 | iOS | AOT: `wasm2c` (or WAMR AOT) → C → linked into the IPA | iOS does not permit JIT. Thus each iOS build includes its app as native code. The hub serves iOS apps as built IPAs or through an approved container app. *(Open question Q3.)* |
-| Web | browser `WebAssembly` | The `gpui_web` host module and the app module run as two Wasm instances on one page. The connection uses `jco` glue that the build creates. |
+| Web | browser `WebAssembly` | The core module and the app module run as two Wasm instances on one page (the side-module model of §18.3). A JavaScript host (`web/`) renders the tree as DOM elements (M5). |
 
 **Fuel and limits:** each runner enforces a time limit for each event (wasmtime epoch interruption on desktop) and a memory cap. If a handler is too slow, the host interrupts it and shows the standard "app is not responding" UI.
 
@@ -614,7 +614,7 @@ Each platform crate gives the implementations. A missing implementation returns 
 | Windows | Win32 + DirectX (`gpui_windows`) | wasmtime | Available in the fork |
 | macOS | Metal (`gpui_macos` / `gpui_apple`) or wgpu | wasmtime | Available in the fork |
 | Linux | Wayland / X11 (`gpui_linux`) + wgpu | wasmtime | Available in the fork |
-| Web | `gpui_web` (WebGPU / WebGL) | browser | Available in the fork. Threads need COOP/COEP headers. `single_threaded_web()` exists. |
+| Web | DOM (semantic HTML), not `gpui_web` (M5) | browser | `web/`. A canvas is used only for `<Canvas>`. |
 | iOS | — | AOT | **No backend in `C:\repos\gpui-ce`.** It needs the mobile fork (Q1). |
 | Android | — | wasmtime | **No backend in `C:\repos\gpui-ce`.** It needs the mobile fork (Q1). |
 
@@ -847,10 +847,17 @@ Each milestone has exit criteria. Work in this order. Windows is the first platf
 - **Exit:** one `.plnt` runs the same on all three desktop OSes. The single-file exports start with a double-click.
 
 ### M5: Web host
-- `plinth-runner-web`, `jco` glue, and the `gpui_web` host.
+- `plinth-runner-web` (the `web/` folder) and a DOM renderer.
+- **Decision (2026-10-06): the web host renders the semantic tree as DOM elements (semantic HTML). It does not use `gpui_web` (a canvas with WebGPU or WebGL).** The reasons are:
+  - Accessibility. The browser gives HTML elements to screen readers and other assistive technology. A canvas has no elements, and the host must then make a second, hidden tree.
+  - Text input. A native `<input>` or `<textarea>` gives IME composition, autofill, spell check, and the native caret and selection. A canvas must do all of these again.
+  - Size. The DOM renderer is a small JavaScript file. The `gpui_web` module is a large Wasm file that each user must download.
+  - Browser functions. Find in page, page translation, text selection, zoom and reader tools work on DOM text. They do not work on pixels in a canvas.
+- The DOM renderer keeps one DOM element for each tree node. It applies each op to that element. It does not make the page again after each commit. Thus the focus, the caret, the text selection and the hover state stay.
+- A canvas is used only for the `<Canvas>` control (§6.3), when that control exists.
 - **Exit:** the same `.plnt` runs in Chrome, Firefox, and Safari. The single-file `app.html` works without threads.
 
-- **Status (2026-10-05): early web host.** `web/` loads an unchanged `.plnt` and the same core file that the desktop uses. It instantiates the core, then the app module with the core's exports, `memory`, `table` (the core exports it with `--export-table`) and `table_base`, without a link step (the side-module model of §18.3). A JavaScript port of the protocol and a DOM renderer show all UI API 1.2 controls, the primary-screen navigation, stack navigation with a back button, and screen actions. Timers fire `timer` events. `store.kv` uses `localStorage` with the key prefix `plinth:<app id>:`, and only when the manifest declares the capability. `clipboard` keeps a cached value, because the browser Clipboard API is asynchronous. Node tests run the counter, todo, timer and notes packages. Not done: the width classes of §6.1 (CSS media queries stand in for them), icons and images, accessibility checks, the selected state of the segmented `Picker`, dark styles for native inputs, and gpui-ce's web backend.
+- **Status (2026-10-05): early web host.** `web/` loads an unchanged `.plnt` and the same core file that the desktop uses. It instantiates the core, then the app module with the core's exports, `memory`, `table` (the core exports it with `--export-table`) and `table_base`, without a link step (the side-module model of §18.3). A JavaScript port of the protocol and a DOM renderer show all UI API 1.2 controls, the primary-screen navigation, stack navigation with a back button, and screen actions. Timers fire `timer` events. `store.kv` uses `localStorage` with the key prefix `plinth:<app id>:`, and only when the manifest declares the capability. `clipboard` keeps a cached value, because the browser Clipboard API is asynchronous. Node tests run the counter, todo, timer and notes packages. Not done: the width classes of §6.1 (CSS media queries stand in for them), icons and images, accessibility checks, the selected state of the segmented `Picker`, dark styles for native inputs. (The 2026-10-06 decision above removes gpui-ce's web backend from this milestone.)
 
 ### M6: Mobile hosts
 - This milestone depends on Q1. It adds the AOT path for iOS and wasmtime for Android.
@@ -875,7 +882,7 @@ Each milestone has exit criteria. Work in this order. Windows is the first platf
 | `gpui-ce` has no mobile backends in the checked fork | High for M6 | Find the mobile fork (Q1). Keep all mobile-specific code behind the runner and host API adapters. |
 | The semantic UI is too limited for some apps | Medium | `<Canvas>` escape hatch. Grow the UI API through minor versions, driven by real apps. |
 | No JIT on iOS changes distribution | Medium | The AOT build is part of the iOS packaging. Decide the hub model for iOS early (Q3). |
-| Two instances of `gpui_web` and app Wasm on the web, and COOP/COEP | Low/Medium | Single-thread mode by default for the single-file export. |
+| The web host and the desktop host show the same tree differently | Low/Medium | The web host uses the DOM, not `gpui_web` (M5). Tests check each host. The UI API keeps intent props, so each host can use its own native controls. |
 
 ---
 
