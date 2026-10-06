@@ -1,0 +1,4 @@
+id = "dev.plinth.examples.7guis.temperature"
+name = "7GUIs Temperature Converter"
+version = "0.1.0"
+publisher = "plinth"

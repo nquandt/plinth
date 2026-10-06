@@ -134,12 +134,35 @@ async function counter() {
   assert.equal(String(heading.text), "2");
 }
 
+async function temperature() {
+  const h = await Harness.start("temperature");
+  const c = h.field("Celsius");
+  const f = h.field("Fahrenheit");
+  let ops = h.type(c, "100");
+  assert.equal(value(f), "212");
+  assert.ok(setsValue(ops, f));
+  assert.ok(!setsValue(ops, c), "the typed field got its own value back");
+  h.type(f, "32");
+  assert.equal(value(c), "0");
+  h.type(f, "98.6");
+  assert.equal(value(c), "37");
+
+  // Invalid text stays, shows an error, and does not change the other field.
+  ops = h.type(c, "37a");
+  assert.equal(value(c), "37a");
+  assert.equal(value(f), "98.6");
+  assert.equal(error(c), "Not a number");
+  assert.ok(!setsValue(ops, c) && !setsValue(ops, f));
+  h.type(f, "50");
+  assert.equal(value(c), "10");
+  assert.equal(error(c), "");
+}
 
 
 
 
 async function main() {
-  for (const [name, test] of Object.entries({ counter })) {
+  for (const [name, test] of Object.entries({ counter, temperature })) {
     await test();
     console.log(`run-7guis.mjs: ${name} ok`);
   }

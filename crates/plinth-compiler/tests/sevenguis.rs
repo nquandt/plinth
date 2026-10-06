@@ -174,3 +174,48 @@ fn counter_counts() {
     }
     assert_eq!(h.heading(), "3");
 }
+
+#[test]
+fn temperature_converts_both_ways_and_keeps_invalid_input() {
+    let art = build("temperature");
+    let mut h = Harness::start(&art.component);
+    let c = h.field("Celsius");
+    let f = h.field("Fahrenheit");
+    assert_eq!((h.value(c), h.value(f)), (String::new(), String::new()));
+
+    // Celsius to Fahrenheit. The guest sets the other field, and does not
+    // send back the text that the user typed (no loop, no caret jump).
+    let ops = h.type_text(c, "100");
+    assert_eq!(h.value(f), "212");
+    assert!(sets_value(&ops, f));
+    assert!(!sets_value(&ops, c), "the typed field got its own value back");
+    h.type_text(c, "-40");
+    assert_eq!(h.value(f), "-40");
+    h.type_text(c, "37.5");
+    assert_eq!(h.value(f), "99.5");
+
+    // Fahrenheit to Celsius.
+    h.type_text(f, "32");
+    assert_eq!(h.value(c), "0");
+    h.type_text(f, "98.6");
+    assert_eq!(h.value(c), "37");
+    assert_eq!(h.error(c), "");
+    assert_eq!(h.error(f), "");
+
+    // Text that is not a number stays, shows an error, and does not change
+    // the other field.
+    let ops = h.type_text(c, "37a");
+    assert_eq!(h.value(c), "37a");
+    assert_eq!(h.value(f), "98.6");
+    assert_eq!(h.error(c), "Not a number");
+    assert!(!sets_value(&ops, c) && !sets_value(&ops, f));
+    // An empty field is not an error and changes nothing.
+    h.type_text(c, "");
+    assert_eq!((h.value(c).as_str(), h.value(f).as_str(), h.error(c).as_str()), ("", "98.6", ""));
+
+    // A valid number in the other field replaces the invalid text.
+    h.type_text(c, "abc");
+    h.type_text(f, "50");
+    assert_eq!(h.value(c), "10");
+    assert_eq!(h.error(c), "");
+}
