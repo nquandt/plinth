@@ -294,6 +294,12 @@ pub enum ExprKind {
     NewInstance(String, Vec<Expr>),
     /// `x instanceof C` (SPEC.md §4.2 v1): `(value, class name, name span)`.
     InstanceOf(Box<Expr>, String, Span),
+    /// `expr as T` (dogfooding gap #6): only a safe, checked narrowing is
+    /// allowed — `string`/a wider literal union to a narrower literal
+    /// union, or a discriminated union to one of its members. The checker
+    /// (`check/expr.rs::as_cast`) decides which, and rejects everything
+    /// else with `PL2006`.
+    As(Box<Expr>, TypeAnn, Span),
 }
 
 #[derive(Debug, Clone)]

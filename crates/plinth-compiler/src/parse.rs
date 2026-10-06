@@ -1090,12 +1090,22 @@ impl Cx<'_> {
             E::FunctionExpression(f) => ExprKind::Func(Box::new(self.function(f)?)),
             E::JSXElement(j) => ExprKind::Jsx(Box::new(self.jsx(j)?)),
             E::JSXFragment(f) => {
-                self.err_help(code::BAD_CHILD, f.span, "fragments are not supported", "use a <Section> or <Group>");
+                self.err_help(
+                    code::BAD_CHILD,
+                    f.span,
+                    "a fragment cannot be used here",
+                    "fragments (`<>...</>`) are only allowed as JSX children, not as a component's return value or a standalone expression; wrap the elements in a <Section> or <Group> instead",
+                );
                 return None;
             }
             E::TSAsExpression(a) => {
-                self.err_help(code::TYPE_ASSERTION, a.span, "`as` casts are not allowed", "annotate the variable type instead");
-                return None;
+                // Parsing always succeeds; the checker (`as_cast` in
+                // `check/expr.rs`) decides whether this particular cast is
+                // a safe, checked narrowing and rejects it with PL2006
+                // otherwise, since only there are both sides' types known.
+                let inner = self.expr(&a.expression)?;
+                let ty = self.ty(&a.type_annotation)?;
+                ExprKind::As(Box::new(inner), ty, self.span(a.span))
             }
             E::TSSatisfiesExpression(s) => return self.expr(&s.expression),
             E::TSTypeAssertion(a) => {
@@ -1314,22 +1324,31 @@ impl Cx<'_> {
             }
         }
         let mut children = Vec::new();
-        for c in &j.children {
+        self.jsx_children_into(&j.children, &mut children)?;
+        Some(JsxElement { name, name_span: self.span(open.span), attrs, children, span: self.span(j.span) })
+    }
+
+    // A JSX fragment (`<>...</>`) creates no node of its own: when it
+    // appears as a child, its children are flattened straight into the
+    // parent's child list. This is the only place fragments are allowed;
+    // as a component's return value they are still rejected in `expr()`
+    // (lowering has no caller-side parent to splice into there).
+    fn jsx_children_into(&mut self, kids: &oxc_allocator::Vec<o::JSXChild>, out: &mut Vec<JsxChild>) -> Option<()> {
+        for c in kids {
             match c {
                 o::JSXChild::Text(t) => {
                     if let Some(text) = jsx_text(&t.value) {
-                        children.push(JsxChild::Text(text, self.span(t.span)));
+                        out.push(JsxChild::Text(text, self.span(t.span)));
                     }
                 }
-                o::JSXChild::Element(e) => children.push(JsxChild::Element(self.jsx(e)?)),
+                o::JSXChild::Element(e) => out.push(JsxChild::Element(self.jsx(e)?)),
                 o::JSXChild::ExpressionContainer(ec) => {
                     if let Some(e) = ec.expression.as_expression() {
-                        children.push(JsxChild::Expr(self.expr(e)?));
+                        out.push(JsxChild::Expr(self.expr(e)?));
                     }
                 }
                 o::JSXChild::Fragment(f) => {
-                    self.err(code::BAD_CHILD, f.span, "fragments are not supported");
-                    return None;
+                    self.jsx_children_into(&f.children, out)?;
                 }
                 o::JSXChild::Spread(s) => {
                     self.err(code::BAD_CHILD, s.span, "spread children are not supported");
@@ -1337,7 +1356,7 @@ impl Cx<'_> {
                 }
             }
         }
-        Some(JsxElement { name, name_span: self.span(open.span), attrs, children, span: self.span(j.span) })
+        Some(())
     }
 }
 

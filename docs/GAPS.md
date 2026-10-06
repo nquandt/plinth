@@ -71,6 +71,99 @@ small local change), per the dogfooding task's scope.
   `CORE_MINOR`/`CORE_VERSION` bumped to 1.4. Tests: a new "Strings" section
   in `crates/plinth-compiler/tests/lang.rs` (includes a non-ASCII
   `split("")` case and a non-ASCII `charAt` case).
+- #3 (fixed): JSX fragments (`<>...</>`) are now allowed directly in a
+  JSX child position. `parse.rs`'s `jsx()` now builds the child list
+  through a new `jsx_children_into` helper that recurses into
+  `JSXChild::Fragment` and splices its children straight into the
+  parent's list; no node is created and no new AST/IR concept is
+  needed. This flattening happens at parse time, so it only applies to
+  a fragment that is itself a direct JSX child; a fragment nested
+  inside a dynamic expression (a ternary branch, a `.map()` callback,
+  …) is not flattened (that would need a child slot that holds more
+  than one element at run time, which is out of scope here) and still
+  gets the diagnostic, as does a fragment used as a component's return
+  value or any other standalone expression (no caller-side parent to
+  splice into). Documented in `docs/language.md` ("Supported syntax").
+  Tests: `fragment_as_jsx_child_splices_its_children`,
+  `fragment_as_component_return_value_is_rejected`,
+  `fragment_inside_a_ternary_branch_is_still_rejected` in
+  `crates/plinth-compiler/tests/lang.rs`. No example app used a
+  fragment workaround precisely matching this shape, so no app changes
+  were needed for this item.
+- #6 (fixed): `expr as T` is now allowed for two safe, checked
+  narrowings, each compiled into its own run-time check that `throw`s
+  (traps) on a mismatch, since Plinth has no `any` escape hatch to
+  fall back on the way TypeScript's compile-time-only `as` can: (1)
+  `string` (or a wider literal union) to a narrower string literal
+  union, reusing the same literal-membership check already built for
+  `JSON.parse<T>()` (`json_decode_str_lits` in `check/expr.rs`; a
+  `Type::StrLits` is a plain run-time `string`, so the check is a
+  chain of `===` comparisons, no interned-id decoding needed); and (2)
+  a discriminated union to one of its members, checked by comparing
+  the union's existing discriminant tag (`TExprKind::UnionTag`, the
+  same mechanism `.tag` property reads use) against the target
+  member's literal. Both reuse the existing `throw`/`trap` path
+  (`TStmt::Throw` → the `__plinth_rt_throw` ABI function, already in
+  core 1.0), so **no new runtime function was needed** and
+  `CORE_MINOR` did not change. `number as int` is explicitly rejected
+  with a PL2006 pointing at `int(x)`, since there is nothing to check
+  that would make it safe. Casts between unrelated types still get
+  PL2006. Implementation: a new `ExprKind::As` (parsed in `parse.rs`,
+  previously `as` was rejected at parse time before the checker ever
+  saw it) and `Checker::as_cast`/`cast_str_to_lits`/
+  `cast_union_to_member` in `check/expr.rs`. Documented in
+  `docs/language.md` ("Supported syntax"). Tests:
+  `string_as_literal_union_narrows_and_runs`,
+  `string_as_literal_union_traps_on_a_bad_value`,
+  `union_as_member_narrows_and_runs`, `union_as_wrong_member_traps`,
+  `number_as_int_is_rejected`, `as_cast_between_unrelated_types_is_rejected`
+  in `crates/plinth-compiler/tests/lang.rs`. Removed the workaround in
+  `examples/budget`: `Category` (`app/types.ts`) is a real string
+  literal union again instead of a plain `string` alias, and
+  `app/transactions.tsx` narrows the `Picker`'s `string` signal value
+  with `draftCategory() as Category` / `editCategory() as Category`
+  before calling `addTransaction`/`updateTransaction`; `app/stats.tsx`
+  now takes `Category` instead of `string`. Verified with
+  `npx -y -p typescript@7 tsc -p .` (clean) and
+  `cargo test -p plinth-compiler --test apps`.
+- #2 (fixed): `{arr.map(x => <Row .../>)}` (optionally preceded by
+  `.filter(...)`) is now allowed as a JSX child. The checker
+  (`check/jsx.rs::map_child`, called from `children()`'s
+  `ChildKind::Nodes` case before the generic "an array of elements is
+  not a child" diagnostic) recognizes this exact shape — a `.map` call
+  whose single argument is an inline arrow/function — and desugars it
+  to a `<List>` control built directly in TIR: `items` is the `.map`
+  receiver (already a plain array; `.filter` needs no special-casing
+  since it already returns one), `row` is the user's arrow
+  type-checked exactly like a literal `<List>`'s `row` prop, and `key`
+  is a synthetic `(item, index) => index` closure keyed by array
+  position, built as a tiny AST `FuncDecl` (`index_key_fn`) so it goes
+  through the normal closure-checking path and infers its parameter
+  types from the offered `FuncType` like a user arrow would. Because
+  the desugared control's props (`PropTarget::ListItems/ListKey/
+  ListRow`) are exactly what a literal `<List>` produces, `lower.rs`
+  needed no changes at all: it is the same keyed reconciler, run
+  through the same runtime `list`/`run_list` path, with **no new
+  runtime function**. A named function reference (`arr.map(row)`), or
+  anything that is not a literal arrow/function, is unaffected and
+  still rejected with `PL4004`, since the task scoped this to "an
+  array expression with an arrow function returning JSX". Documented
+  in `docs/language.md` ("Supported syntax"), including why a literal
+  `<List>` is still the better choice when a hand-written `key` should
+  track identity across a reorder rather than by position. Tests in
+  `crates/plinth-compiler/tests/lang.rs`:
+  `map_as_jsx_child_renders_all_items`,
+  `filter_then_map_as_jsx_child_is_allowed`,
+  `map_as_jsx_child_updates_on_add_remove_and_reorder` (push/reverse/
+  pop via `signal.set`, checking no op errors after each), 
+  `map_as_jsx_child_survives_gc_stress` (same, with
+  `plinth_protocol::init_arg::GC_STRESS` on), and
+  `map_with_a_named_function_reference_is_still_rejected`. Removed the
+  workaround in `examples/budget/app/stats.tsx`: the `<List items={categories}
+  key={(c) => c} row={...} />` wrapper around `<Progress>` rows is now
+  a plain `{categories.map((c) => <Progress .../>)}`. Verified with
+  `npx -y -p typescript@7 tsc -p .` (clean) and
+  `cargo test -p plinth-compiler --test apps`.
 
 ## Found later
 

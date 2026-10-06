@@ -50,11 +50,47 @@ yet:** static members, getters/setters, generic classes,
 - Object literals, array literals, destructuring, spread into arrays and
   objects of a known shape.
 - `interface`, `type` aliases, string literal unions, `enum`.
-- JSX with Plinth control tags only (see [ui.md](ui.md)).
+- JSX with Plinth control tags only (see [ui.md](ui.md)). A fragment
+  (`<>...</>`) is allowed directly in a JSX child position — it
+  creates no node of its own; the parser splices its children straight
+  into the parent's child list at compile time
+  (`<Section><>{a}{b}</></Section>` is valid, and is exactly the same
+  tree as `<Section>{a}{b}</Section>`). This flattening is purely
+  syntactic, so a fragment **inside a dynamic expression** (one branch
+  of a ternary, a `.map()` callback, …) is not supported — that child
+  slot can only ever hold a single element at run time today — and
+  neither is a fragment as a component's return value or any other
+  standalone expression, because lowering has no caller-side parent to
+  splice its children into there. For a conditional block with more
+  than one sibling, wrap the elements in a `<Section>` or `<Group>` and
+  put the condition inside it instead of around it.
+- `{arr.map(x => <Row .../>)}` as a JSX child (optionally after a
+  `.filter(...)`, since `filter` already returns a plain array): the
+  checker desugars it to the same keyed `List` the reconciler uses for
+  a literal `<List items key row>`, keyed by position (array index),
+  with no node of its own for the `.map` itself. Only this exact shape
+  is recognized — a `.map` call whose argument is an inline
+  arrow/function expression that returns an element. A named function
+  reference (`arr.map(row)`) or any other array-producing expression
+  as a JSX child is still rejected (`PL4004`); use a literal `<List
+  items={...} key={...} row={...} />` for those, since a hand-written
+  `key` lets the reconciler track identity across a reorder instead of
+  by position.
 - `import`/`export` within the closed world (see below).
 - Classes, single inheritance, `instanceof`, general union narrowing,
   generic functions and interfaces (all implemented; see "Status"
   above).
+- `expr as T`, but only for a checked, safe narrowing: `string` (or a
+  wider string literal union) to a narrower string literal union, or a
+  discriminated union to one of its members. Each accepted cast carries
+  its own run-time check and `throw`s (traps) if the value turns out
+  not to match — Plinth has no `any` escape hatch to fall back on, so
+  an `as` that TypeScript treats as a compile-time-only annotation must
+  still be safe at run time here. `number as int` is deliberately not
+  one of these: there is nothing to check that would make it safe, so
+  it is rejected; use `int(x)` (it truncates). Any other cast, between
+  types the checker cannot relate this way, is still rejected with
+  `PL2006`.
 
 Planned for a later compiler version: `async`/`await`, `Promise.all`,
 `try`/`catch`/`throw`.
