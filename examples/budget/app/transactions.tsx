@@ -8,6 +8,7 @@ import {
   TextField,
   NumberField,
   Picker,
+  DatePicker,
   Button,
   Text,
   List,
@@ -28,7 +29,13 @@ import {
   deleteTransaction,
   selectTransaction,
 } from "./model";
+import { formatDate, now } from "plinth:time";
 import type { Category } from "./types";
+
+function today(): string {
+  return formatDate(now(), "YYYY-MM-DD", false);
+}
+
 function amountTrailing(amount: number): string {
   return amount >= 0 ? `+${amount.toFixed(2)}` : amount.toFixed(2);
 }
@@ -41,7 +48,7 @@ export default function Transactions() {
   const addOpen = signal(false);
   const editOpen = signal(false);
 
-  const draftDate = signal("");
+  const draftDate = signal(today());
   const draftAmount = signal(0);
   const draftCategory = signal<string>("Groceries");
   const draftNote = signal("");
@@ -52,7 +59,7 @@ export default function Transactions() {
   const editNote = signal("");
 
   const openAdd = () => {
-    draftDate.set("");
+    draftDate.set(today());
     draftAmount.set(0);
     draftCategory.set("Groceries");
     draftNote.set("");
@@ -126,7 +133,7 @@ export default function Transactions() {
       </Section>
 
       <Sheet open={addOpen} title="Add transaction" onClose={() => addOpen.set(false)}>
-        <TextField label="Date" placeholder="2026-10-05" value={draftDate} />
+        <DatePicker label="Date" value={draftDate} />
         <NumberField label="Amount" value={draftAmount} step={0.01} />
         <Picker label="Category" value={draftCategory} options={["Groceries", "Rent", "Transport", "Fun", "Salary", "Other"]} />
         <TextField label="Note" placeholder="Optional" value={draftNote} />
@@ -134,7 +141,7 @@ export default function Transactions() {
       </Sheet>
 
       <Sheet open={editOpen} title="Edit transaction" onClose={() => editOpen.set(false)}>
-        <TextField label="Date" value={editDate} />
+        <DatePicker label="Date" value={editDate} />
         <NumberField label="Amount" value={editAmount} step={0.01} />
         <Picker label="Category" value={editCategory} options={["Groceries", "Rent", "Transport", "Fun", "Salary", "Other"]} />
         <TextField label="Note" value={editNote} />

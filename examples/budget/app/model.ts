@@ -1,6 +1,7 @@
 // The app state. Screens import these signals and functions.
 import { signal, computed, effect } from "plinth:ui";
 import { Math } from "plinth:core";
+import { parseDate, dateParts } from "plinth:time";
 import { loadTransactions, saveTransactions } from "./storage";
 import { categories } from "./types";
 import type { Category, Transaction } from "./types";
@@ -111,6 +112,48 @@ export const maxCategoryMagnitude = computed(() => {
   }
   return max;
 });
+
+/** `"YYYY-MM"` for a transaction's `date` (parsed with `plinth:time`'s
+ * `parseDate`/`dateParts`, docs/GAPS.md gap #5), used to group by month.
+ * An unparseable date (should not happen; `DatePicker` always stores an
+ * ISO date) groups under `"Unknown"` rather than failing. */
+function monthKey(date: string): string {
+  const ms = parseDate(date);
+  if (ms === null) {
+    return "Unknown";
+  }
+  const p = dateParts(ms, true);
+  const month = p.month < 10 ? `0${p.month}` : `${p.month}`;
+  return `${p.year}-${month}`;
+}
+
+export interface MonthTotal {
+  month: string;
+  total: number;
+}
+
+/** Net total per month, in the order months first appear among
+ * `transactions()`. A plain array, not a `Map`: `Map` has no `.keys()`/
+ * for…of in `std/lib.d.ts` (`tsc` needs it declared there, which the
+ * host's special-cased `for…of` over `Map` is not), so this groups with
+ * a linear `find`, the same pattern `totalsByCategory` would use without
+ * the fixed `categories` list. */
+export const monthlyTotals = computed(() => {
+  const result: MonthTotal[] = [];
+  for (const t of transactions()) {
+    const key = monthKey(t.date);
+    const existing = result.find((r) => r.month === key);
+    if (existing === null) {
+      result.push({ month: key, total: t.amount });
+    } else {
+      existing.total += t.amount;
+    }
+  }
+  return result;
+});
+
+/** `monthlyTotals()` as `"YYYY-MM: total"` lines, ready to render. */
+export const monthlyTotalLines = computed(() => monthlyTotals().map((m) => `${m.month}: ${m.total.toFixed(2)}`));
 
 export const selected = signal<number | null>(null);
 

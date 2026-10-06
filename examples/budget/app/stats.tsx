@@ -1,6 +1,6 @@
 import { Screen, Section, Text, Progress, Button, navigate } from "plinth:ui";
 import { Math } from "plinth:core";
-import { totalsByCategory, maxCategoryMagnitude, income, spending, balance } from "./model";
+import { totalsByCategory, maxCategoryMagnitude, monthlyTotalLines, income, spending, balance } from "./model";
 import { categories } from "./types";
 import type { Category } from "./types";
 
@@ -26,6 +26,9 @@ export default function Stats() {
       </Section>
       <Section title="By category">
         {categories.map((c) => <Progress label={categoryLabel(c)} value={progressFor(c)} />)}
+      </Section>
+      <Section title="By month">
+        {monthlyTotalLines().map((line) => <Text>{line}</Text>)}
       </Section>
       <Section title="Navigation">
         <Button label="Back to transactions" onPress={() => navigate.back()} />
