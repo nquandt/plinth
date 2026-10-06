@@ -160,6 +160,10 @@ impl GuestPort for WasmGuest {
         print_logs(&mut self.guest);
         r
     }
+
+    fn poll_net_results(&mut self) -> Vec<(u32, plinth_protocol::Value)> {
+        self.guest.poll_net_results()
+    }
 }
 
 fn print_logs(guest: &mut Guest) {
