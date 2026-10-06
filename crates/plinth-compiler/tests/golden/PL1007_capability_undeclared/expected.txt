@@ -1,0 +1,4 @@
+app/main.tsx(3,1): error PL1007: this call needs the `clipboard.write` capability, which `plinth.toml` does not declare
+  writeText("hi");
+  ^^^^^^^^^^^^^^^
+  help: add `[[capabilities]]` with `name = "clipboard.write"` and a `rationale` to plinth.toml (SPEC.md §11)

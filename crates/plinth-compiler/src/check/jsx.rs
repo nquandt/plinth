@@ -395,7 +395,12 @@ impl Checker<'_> {
             self.err(code::UNKNOWN_CONTROL, el.name_span, msg);
         }
         if !el.children.is_empty() {
-            self.err(code::BAD_CHILD, el.span, "children of user components are not supported yet");
+            self.err_help(
+                code::BAD_CHILD,
+                el.span,
+                "children of user components are not supported yet",
+                format!("pass the content as a prop to `{}` instead", el.name),
+            );
         }
         let props = match ft.params.as_slice() {
             [] => {

@@ -1,0 +1,4 @@
+app/main.tsx(2,44): error PL2002: loose equality is not allowed
+  function Home() { const n: number = 1; if (n == 1) {} return <Screen title="Home" />; }
+                                             ^^^^^^
+  help: use `===`

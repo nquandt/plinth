@@ -1,0 +1,5 @@
+import { app, Screen, Text, Action, Checkbox, Image, signal, computed, effect, navigate } from "plinth:ui";
+interface P { x: number; y: number; }
+const p: P = { x: 1 };
+function Home() { return <Screen title="Home" />; }
+export default app({ screens: { home: { title: "Home", component: Home } } });

@@ -1,0 +1,3 @@
+app/main.tsx(2,8): error PL3003: unknown type `Bogus`
+  let x: Bogus;
+         ^^^^^

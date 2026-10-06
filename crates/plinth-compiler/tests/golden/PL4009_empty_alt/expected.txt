@@ -1,0 +1,4 @@
+app/main.tsx(2,49): error PL4009: `alt` must not be empty
+  function Home() { return <Image src="a.png" alt="" />; }
+                                                  ^^
+  help: describe the image for people using a screen reader

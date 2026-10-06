@@ -1,0 +1,4 @@
+app/main.tsx(2,1): error PL2014: `var` is not allowed
+  var x = 1;
+  ^^^^^^^^^^
+  help: use `let` or `const`

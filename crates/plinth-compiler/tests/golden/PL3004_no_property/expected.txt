@@ -1,0 +1,3 @@
+app/main.tsx(2,52): error PL3004: `number` has no property `bogus`
+  function Home() { const n: number = 1; const y = n.bogus; return <Screen title="Home" />; }
+                                                     ^^^^^

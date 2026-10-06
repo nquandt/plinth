@@ -1,0 +1,3 @@
+app/main.tsx(2,46): error PL2011: computed property names are not supported
+  function Home() { const k = "x"; const o = { [k]: 1 }; return <Screen title="Home" />; }
+                                               ^^^^^^

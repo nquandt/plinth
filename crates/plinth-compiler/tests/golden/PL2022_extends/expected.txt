@@ -1,0 +1,4 @@
+app/main.tsx(3,17): error PL2022: `NotAClass` is not a fully declared class yet
+  class B extends NotAClass {}
+                  ^^^^^^^^^
+  help: a base class must be declared before its subclass; this also catches a cycle

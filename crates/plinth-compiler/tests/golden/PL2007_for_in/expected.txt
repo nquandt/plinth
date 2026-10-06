@@ -1,0 +1,4 @@
+app/main.tsx(2,19): error PL2007: `for…in` is not supported
+  function Home() { for (const k in {}) {} return <Screen title="Home" />; }
+                    ^^^^^^^^^^^^^^^^^^^^^^
+  help: use a Map and `for…of`

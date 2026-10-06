@@ -1,0 +1,4 @@
+app/main.tsx(4,11): error PL3010: the value may be null (type `Box | null`)
+  const y = b.v;
+            ^
+  help: check for null first, or use `?.`

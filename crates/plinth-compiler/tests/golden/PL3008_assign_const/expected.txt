@@ -1,0 +1,4 @@
+app/main.tsx(2,32): error PL3008: cannot assign to `x`; it is a `const`
+  function Home() { const x = 1; x = 2; return <Screen title="Home" />; }
+                                 ^
+  help: declare it with `let`

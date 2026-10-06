@@ -1,0 +1,4 @@
+app/main.tsx(1,1): error PL1006: app/main.tsx must `export default app({...})`
+  import { app, Screen, Text, Action, Checkbox, Image, signal, computed, effect, navigate } from "plinth:ui";
+  ^
+  help: see `plinth new` for a starting point

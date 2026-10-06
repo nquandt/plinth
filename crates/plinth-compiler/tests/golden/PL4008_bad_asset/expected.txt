@@ -1,0 +1,4 @@
+app/main.tsx(2,37): error PL4008: there is no asset `missing.png`
+  function Home() { return <Image src="missing.png" alt="x" />; }
+                                      ^^^^^^^^^^^^^
+  help: the project has no files under assets/

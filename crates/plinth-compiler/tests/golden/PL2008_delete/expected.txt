@@ -1,0 +1,4 @@
+app/main.tsx(2,54): error PL2008: `delete` is not allowed
+  function Home() { const o: { x: number } = { x: 1 }; delete o.x; return <Screen title="Home" />; }
+                                                       ^^^^^^^^^^
+  help: use a Map and `map.delete(key)`

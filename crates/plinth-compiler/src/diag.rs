@@ -80,6 +80,9 @@ pub mod code {
     pub const ASSIGN_CONST: &str = "PL3008";
     pub const MISSING_FIELD: &str = "PL3009";
     pub const NULLABLE: &str = "PL3010";
+    /// Reserved for a struct-layout error; no check emits it today (there
+    /// is no golden test for it — see `tests/golden.rs`). Kept stable in
+    /// case a future layout check needs it.
     pub const STRUCT_LAYOUT: &str = "PL3011";
     pub const MISSING_RETURN: &str = "PL3012";
     pub const DUPLICATE: &str = "PL3013";

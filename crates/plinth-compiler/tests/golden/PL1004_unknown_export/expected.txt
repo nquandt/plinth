@@ -1,0 +1,3 @@
+app/main.tsx(1,8): error PL1004: Plinth modules have no default export
+  import Foo from "plinth:ui";
+         ^^^

@@ -1,0 +1,3 @@
+app/main.tsx(2,15): error PL2000: rest parameters are not supported
+  function rest(...xs: number[]) {}
+                ^^^^^^^^^^^^^^^

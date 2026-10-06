@@ -1,0 +1,4 @@
+app/main.tsx(2,23): error PL3007: the type of `null` alone is unknown
+  function Home() { let x = null; return <Screen title="Home" />; }
+                        ^^^^^^^^
+  help: add a type: `let x: T | null = null`

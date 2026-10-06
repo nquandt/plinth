@@ -1,0 +1,9 @@
+app/main.tsx(2,13): error PL2003: static members are not supported yet
+  class Foo { static x: number = 1; }
+              ^^^^^^^^^^^^^^^^^^^^^
+  help: use a top-level `let` instead
+
+app/main.tsx(3,1): error PL2014: `var` is not allowed
+  var x = 1;
+  ^^^^^^^^^^
+  help: use `let` or `const`

@@ -1,0 +1,3 @@
+app/main.tsx(2,37): error PL3001: type `string` is not assignable to `number`
+  function Home() { const n: number = "s"; return <Screen title="Home" />; }
+                                      ^^^

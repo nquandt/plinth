@@ -1,0 +1,3 @@
+app/main.tsx(2,26): error PL4003: `<Image>` needs the prop `alt`
+  function Home() { return <Image src="a.png" />; }
+                           ^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,4 @@
+app/main.tsx(2,26): error PL4001: unknown control `<Bogus>`
+  function Home() { return <Bogus />; }
+                           ^^^^^^^^^
+  help: the controls are: Screen, Section, Group, Text, Heading, Button, TextField, Toggle, List, Row, Empty, Checkbox, TextArea, Slider, NumberField, Picker, Progress, Badge, Tabs, Sheet, Dialog, Menu, Grid, Action, Image, Icon

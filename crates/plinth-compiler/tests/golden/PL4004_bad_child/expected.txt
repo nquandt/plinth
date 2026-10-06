@@ -1,0 +1,4 @@
+app/main.tsx(3,26): error PL4004: children of user components are not supported yet
+  function Home() { return <Home2>child</Home2>; }
+                           ^^^^^^^^^^^^^^^^^^^^
+  help: pass the content as a prop to `Home2` instead

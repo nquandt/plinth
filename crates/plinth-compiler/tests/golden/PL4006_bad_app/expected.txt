@@ -1,0 +1,3 @@
+app/main.tsx(3,20): error PL4006: the app needs at least one screen
+  export default app({ screens: {} });
+                     ^^^^^^^^^^^^^^^
