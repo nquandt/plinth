@@ -61,6 +61,7 @@ async function main() {
     const getHandler = findHandler(tree, 1 /* Event.press */, "get");
     const postHandler = findHandler(tree, 1, "post");
     const deniedHandler = findHandler(tree, 1, "denied");
+    const awaitHandler = findHandler(tree, 1, "await");
     assert.ok(getHandler !== undefined && postHandler !== undefined && deniedHandler !== undefined, "missing button handlers");
 
     app.onEvent({ kind: "ui", handler: getHandler, event: 1, value: null });
@@ -69,10 +70,13 @@ async function main() {
     app.onEvent({ kind: "ui", handler: postHandler, event: 1, value: null });
     await waitFor(() => tree.text.get(tree.resultId) === "true:echo:hi");
 
+    app.onEvent({ kind: "ui", handler: awaitHandler, event: 1, value: null });
+    await waitFor(() => tree.text.get(tree.resultId) === "awaited:echo:hello world");
+
     app.onEvent({ kind: "ui", handler: deniedHandler, event: 1, value: null });
     await waitFor(() => tree.text.get(tree.resultId) === "false:denied:undeclared");
 
-    console.log("run-net.mjs: ok (GET, POST and a denied undeclared host all completed)");
+    console.log("run-net.mjs: ok (GET, POST, two awaited fetches and a denied undeclared host all completed)");
   } finally {
     server.close();
   }

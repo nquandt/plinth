@@ -325,7 +325,12 @@ impl Cx<'_> {
                     }
                     let f = &m.value;
                     if f.r#async || f.generator {
-                        self.err(code::ASYNC, m.span, "async methods and generators come in v1");
+                        self.err_help(
+                            code::ASYNC,
+                            m.span,
+                            "async methods and generators are not supported yet",
+                            "use a top-level `async function` that takes the object as a parameter",
+                        );
                         continue;
                     }
                     let Some(body) = &f.body else {
@@ -362,6 +367,7 @@ impl Cx<'_> {
                         is_default: false,
                         span: self.span(m.span),
                         type_params: Vec::new(),
+                        is_async: false,
                     });
                 }
                 o::ClassElement::AccessorProperty(a) => {
@@ -853,8 +859,8 @@ impl Cx<'_> {
     }
 
     fn function(&mut self, f: &o::Function) -> Option<FuncDecl> {
-        if f.r#async || f.generator {
-            self.err(code::ASYNC, f.span, "async functions and generators come in v1");
+        if f.generator {
+            self.err(code::ASYNC, f.span, "generators are not supported");
             return None;
         }
         let mut type_params = Vec::new();
@@ -892,6 +898,7 @@ impl Cx<'_> {
             is_default: false,
             span: self.span(f.span),
             type_params,
+            is_async: f.r#async,
         })
     }
 
@@ -1111,10 +1118,6 @@ impl Cx<'_> {
                 target: Box::new(self.simple_target(&u.argument)?),
             },
             E::ArrowFunctionExpression(a) => {
-                if a.r#async {
-                    self.err(code::ASYNC, a.span, "async functions come in v1");
-                    return None;
-                }
                 if a.type_parameters.is_some() {
                     self.err(code::GENERIC_USER, a.span, "generic functions come in v1");
                     return None;
@@ -1138,6 +1141,7 @@ impl Cx<'_> {
                     is_default: false,
                     span,
                     type_params: Vec::new(),
+                    is_async: a.r#async,
                 }))
             }
             E::FunctionExpression(f) => ExprKind::Func(Box::new(self.function(f)?)),
@@ -1214,10 +1218,7 @@ impl Cx<'_> {
                     ExprKind::NewInstance(name, args)
                 }
             }
-            E::AwaitExpression(a) => {
-                self.err(code::ASYNC, a.span, "`await` comes in v1");
-                return None;
-            }
+            E::AwaitExpression(a) => ExprKind::Await(Box::new(self.expr(&a.argument)?)),
             E::RegExpLiteral(r) => {
                 self.err(code::REGEX, r.span, "regular expressions are not supported");
                 return None;

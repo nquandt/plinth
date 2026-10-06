@@ -202,6 +202,8 @@ pub struct FuncDecl {
     /// Names of `<T, U, …>` type parameters (generic functions, monomorphized
     /// per call site; HANDOFF.md item 3). Empty for an ordinary function.
     pub type_params: Vec<String>,
+    /// `async function` / `async () => …` (SPEC.md §4.5).
+    pub is_async: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -314,6 +316,8 @@ pub enum ExprKind {
     /// (`check/expr.rs::as_cast`) decides which, and rejects everything
     /// else with `PL2006`.
     As(Box<Expr>, TypeAnn, Span),
+    /// `await e` (SPEC.md §4.5), only inside an `async` function.
+    Await(Box<Expr>),
 }
 
 #[derive(Debug, Clone)]

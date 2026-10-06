@@ -176,6 +176,9 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("hub_update", &[I32, I32, I32], &[]),
     // -- Errors (SPEC.md §5.6, core 1.10) ------------------------------------
     ("uncaught", &[I32, I32], &[]),
+    // -- async/await (SPEC.md §4.5, core 1.10) -------------------------------
+    ("set_drain", &[I32, I32], &[]),
+    ("report", &[I32], &[]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -251,6 +254,8 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("hub_check_updates", 9),
     ("hub_update", 9),
     ("uncaught", 10),
+    ("set_drain", 10),
+    ("report", 10),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).

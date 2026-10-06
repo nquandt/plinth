@@ -1,0 +1,3 @@
+app/main.tsx(2,1): error PL2009: generators are not supported
+  function* g() {}
+  ^^^^^^^^^^^^^^^^

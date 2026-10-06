@@ -1,6 +1,7 @@
 // `plinth:dialog`: host-owned modal dialogs (SPEC.md §8.5). No capability
-// is needed. Each call returns at once; the answer reaches `done` later,
-// through a `completion` event the host sends once the user responds.
+// is needed. Each call returns at once with a `Promise`; the answer comes
+// later, through a `completion` event the host sends once the user
+// responds. An `async` handler waits for it with `await` (SPEC.md §4.5).
 import { app, signal, Screen, Section, Heading, Text, Button } from "plinth:ui";
 import { alert, confirm, prompt } from "plinth:dialog";
 
@@ -9,24 +10,33 @@ function Dialogs() {
   const name = signal<string | null>(null);
 
   const showAlert = () => {
-    // `done` is optional: nothing runs after the user dismisses this one.
+    // Nothing runs after the user dismisses this one, so no `await`.
     alert("This is an alert.");
   };
 
-  const showConfirm = () => {
-    confirm("Reset the count?", (ok) => {
-      if (ok) {
-        count.set(0);
-      }
-    });
+  const showConfirm = async () => {
+    if (await confirm("Reset the count?")) {
+      count.set(0);
+    }
   };
 
-  const showPrompt = () => {
-    prompt("Your name?", (value) => {
-      if (value !== null) {
-        name.set(value);
-      }
-    });
+  const showPrompt = async () => {
+    const value = await prompt("Your name?");
+    if (value !== null) {
+      name.set(value);
+    }
+  };
+
+  // Three dialogs, one after the other.
+  const greet = async () => {
+    const value = await prompt("Who do you want to greet?");
+    if (value === null || value === "") {
+      return;
+    }
+    if (await confirm(`Greet ${value}?`)) {
+      await alert(`Hello, ${value}!`);
+      name.set(value);
+    }
   };
 
   return (
@@ -42,6 +52,7 @@ function Dialogs() {
         <Button label="Alert" onPress={showAlert} />
         <Button label="Confirm" onPress={showConfirm} />
         <Button label="Prompt" onPress={showPrompt} />
+        <Button label="Greet" onPress={greet} />
       </Section>
     </Screen>
   );

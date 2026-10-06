@@ -1,0 +1,4 @@
+app/main.tsx(2,28): error PL3001: `throw` takes an `Error` or a string, not `number`
+  function g(): void { throw 42; }
+                             ^^
+  help: write `throw new Error("message")`

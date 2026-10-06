@@ -50,11 +50,15 @@ export declare function remove(id: string): void;
  * errors: string[] }` (one error for each source that failed), or `null`
  * if denied. Core 1.8. */
 export declare function search(query: string, done: (json: string | null) => void): void;
+/** Without `done`: a `Promise` of the same value, for `await` (SPEC.md §4.5). */
+export declare function search(query: string): Promise<string | null>;
 
 /** Installs the latest version of app `id` from the first configured source
  * that lists it, off the UI thread. `done` gets `null` on success, or the
  * error text (`"denied:<reason>"` if denied). Core 1.8. */
 export declare function install(id: string, done: (error: string | null) => void): void;
+/** Without `done`: a `Promise` of the same value, for `await` (SPEC.md §4.5). */
+export declare function install(id: string): Promise<string | null>;
 
 /** The reason the last `plinth:hub` call was denied, one of
  * `"denied:undeclared"`, `"denied:refused"`, `"denied:unsupported"`, or
@@ -92,6 +96,8 @@ export declare function unblockPublisher(key: string): void;
  * pinned: string }>, errors: string[] }`, or `null` if denied. The host
  * keeps the result, so `listApps` and `appInfo` show it too. Core 1.9. */
 export declare function checkUpdates(id: string, done: (json: string | null) => void): void;
+/** Without `done`: a `Promise` of the same value, for `await` (SPEC.md §4.5). */
+export declare function checkUpdates(id: string): Promise<string | null>;
 
 /** Installs the newest version of library app `id` from its source, off
  * the UI thread. The new version runs after the user decides its new
@@ -99,3 +105,5 @@ export declare function checkUpdates(id: string, done: (json: string | null) => 
  * success (also when `id` is up to date), or the error text
  * (`"denied:<reason>"` if denied). Core 1.9. */
 export declare function update(id: string, done: (error: string | null) => void): void;
+/** Without `done`: a `Promise` of the same value, for `await` (SPEC.md §4.5). */
+export declare function update(id: string): Promise<string | null>;

@@ -1,0 +1,4 @@
+app/main.tsx(2,37): error PL2010: a `catch` variable cannot be a pattern
+  function g(): void { try { } catch ({ message }) { } }
+                                      ^^^^^^^^^^^
+  help: write `catch (e)` and read `e.message`

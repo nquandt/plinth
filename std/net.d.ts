@@ -30,3 +30,5 @@ export type FetchOptions = {
 /** Requests `url` and calls `done` with the result once it completes
  * (SPEC.md §8.4). Never throws. */
 export declare function fetch(url: string, options: FetchOptions | null, done: (response: Response) => void): void;
+/** Without `done`: a `Promise` of the response, for `await` (SPEC.md §4.5). Never rejects. */
+export declare function fetch(url: string, options: FetchOptions | null): Promise<Response>;

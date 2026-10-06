@@ -171,6 +171,24 @@ impl Checker<'_> {
             ExprKind::NewInstance(name, args) => self.new_instance(name, args, span),
             ExprKind::InstanceOf(obj, name, name_span) => self.instance_of(obj, name, *name_span, span),
             ExprKind::As(inner, type_ann, cast_span) => self.as_cast(inner, type_ann, *cast_span),
+            ExprKind::Await(inner) => {
+                if !self.fx.is_async {
+                    self.err_help(code::ASYNC, span, "`await` is only allowed in an `async` function", "mark the function `async`");
+                    self.expr(inner, None);
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let te = self.expr(inner, None);
+                match self.promise_of(&te.ty) {
+                    Some(info) => TExpr::new(TExprKind::Await(bx(te)), info.ty.clone(), span),
+                    None => {
+                        if !te.ty.is_error() {
+                            let msg = format!("`await` needs a `Promise`, not `{}`", self.show(&te.ty));
+                            self.err(code::TYPE_MISMATCH, inner.span, msg);
+                        }
+                        TExpr::new(TExprKind::Null, Type::Error, span)
+                    }
+                }
+            }
         }
     }
 

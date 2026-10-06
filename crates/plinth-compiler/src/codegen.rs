@@ -35,7 +35,11 @@ struct UserType {
 }
 
 struct StructLayout {
-    type_id: u32,
+    /// The GC type id, given on first use (`sid_type`), so a struct that
+    /// the program never makes or tests costs no type-table entry.
+    type_id: Option<u32>,
+    size: u32,
+    refs: Vec<u32>,
     offsets: Vec<(u32, Repr)>,
 }
 
@@ -280,11 +284,22 @@ impl<'p> Codegen<'p> {
         FIRST_USER_TYPE + self.user_types.len() as u32 - 1
     }
 
+    /// The GC type id of struct `sid`.
+    fn sid_type(&mut self, sid: StructId) -> u32 {
+        if let Some(t) = self.structs[sid as usize].type_id {
+            return t;
+        }
+        let (size, refs) = (self.structs[sid as usize].size, self.structs[sid as usize].refs.clone());
+        let t = self.user_type(size, refs);
+        self.structs[sid as usize].type_id = Some(t);
+        t
+    }
+
     /// The GC type id a union member has at runtime, to narrow via the
     /// header's `type_id` (`UnionIs`).
-    fn type_id_of(&self, member: &Type) -> u32 {
+    fn type_id_of(&mut self, member: &Type) -> u32 {
         match member {
-            Type::Struct(sid) => self.structs[*sid as usize].type_id,
+            Type::Struct(sid) => self.sid_type(*sid),
             Type::String | Type::StrLits(_) => crate::rt_abi::T_STRING,
             other => panic!("a union member of type `{other:?}` has no runtime tag yet"),
         }
@@ -349,7 +364,7 @@ impl<'p> Codegen<'p> {
         raw.into_iter()
             .map(|(d, fid)| {
                 let idx = self.func_ref(fid);
-                (self.structs[d as usize].type_id, idx)
+                (self.sid_type(d), idx)
             })
             .collect()
     }
@@ -368,8 +383,7 @@ impl<'p> Codegen<'p> {
             let reprs: Vec<Repr> = s.fields.iter().map(|f| f.ty.repr()).collect();
             let (offsets, size) = lay_out(&reprs, HEADER);
             let refs = offsets.iter().zip(&reprs).filter(|(_, r)| **r == Repr::Ref).map(|(o, _)| *o).collect();
-            let type_id = self.user_type(size, refs);
-            self.structs.push(StructLayout { type_id, offsets: offsets.into_iter().zip(reprs).collect() });
+            self.structs.push(StructLayout { type_id: None, size, refs, offsets: offsets.into_iter().zip(reprs).collect() });
         }
     }
 
@@ -536,20 +550,24 @@ impl<'p> Codegen<'p> {
         for f in &self.prog.funcs {
             let mut fa = Facts { throws: false, calls: Vec::new(), closure_calls: false, methods: Vec::new() };
             let mut throws = false;
-            walk_stmts(
+            // Code inside a `try` with a `catch` cannot let an exception
+            // out ("covered"), so it does not make the function throw.
+            walk_covered(
                 &f.body,
-                &mut |s| {
-                    if matches!(s, TStmt::Throw(_)) {
+                false,
+                &mut |s, covered| {
+                    if !covered && matches!(s, TStmt::Throw(_)) {
                         throws = true;
                     }
                 },
-                &mut |e| match &e.kind {
-                    TExprKind::Call(fid, _) => fa.calls.push(*fid),
-                    TExprKind::CallClosure(..) | TExprKind::ArrayHof { .. } => fa.closure_calls = true,
-                    TExprKind::MethodCall(_, name, ..) => fa.methods.push(name.clone()),
+                &mut |e, covered| match &e.kind {
                     TExprKind::Closure(fid) => {
                         closure_fids.insert(*fid);
                     }
+                    _ if covered => {}
+                    TExprKind::Call(fid, _) => fa.calls.push(*fid),
+                    TExprKind::CallClosure(..) | TExprKind::ArrayHof { .. } => fa.closure_calls = true,
+                    TExprKind::MethodCall(_, name, ..) => fa.methods.push(name.clone()),
                     _ => {}
                 },
             );
@@ -1634,7 +1652,7 @@ impl FnGen {
             }
             TExprKind::StructLit(sid, values) => {
                 let t = self.local(ValType::I32);
-                let layout_type = g.structs[*sid as usize].type_id;
+                let layout_type = g.sid_type(*sid);
                 self.emit(I::I32Const(layout_type as i32));
                 self.rt(g, "alloc");
                 self.emit(I::LocalSet(t));
@@ -1733,7 +1751,7 @@ impl FnGen {
                 }
             }
             TExprKind::InstanceOf(o, sid) => {
-                let ids: Vec<u32> = g.class_descendants(*sid).iter().map(|s| g.structs[*s as usize].type_id).collect();
+                let ids: Vec<u32> = g.class_descendants(*sid).iter().map(|s| g.sid_type(*s)).collect();
                 self.expr(g, o);
                 self.emit(load(0, Repr::I32));
                 let th = self.tmp(Repr::I32);
@@ -2184,19 +2202,83 @@ pub(crate) fn walk_stmt(s: &TStmt, fs: &mut dyn FnMut(&TStmt), fe: &mut dyn FnMu
     }
 }
 
+/// Like `walk_stmts`, with a flag that is true inside the body of a `try`
+/// that has a `catch`.
+fn walk_covered(stmts: &[TStmt], covered: bool, fs: &mut dyn FnMut(&TStmt, bool), fe: &mut dyn FnMut(&TExpr, bool)) {
+    for s in stmts {
+        if let TStmt::Try { body, catch: Some((_, c)), finally } = s {
+            walk_covered(body, true, fs, fe);
+            walk_covered(c, covered, fs, fe);
+            if let Some(f) = finally {
+                walk_covered(f, covered, fs, fe);
+            }
+            continue;
+        }
+        fs(s, covered);
+        let (exprs, lists) = stmt_parts(s);
+        for e in exprs {
+            walk_expr(e, &mut |s| fs(s, covered), &mut |e| fe(e, covered));
+        }
+        for l in lists {
+            walk_covered(l, covered, fs, fe);
+        }
+    }
+}
+
+/// The direct expressions and statement lists of a statement.
+pub(crate) fn stmt_parts(s: &TStmt) -> (Vec<&TExpr>, Vec<&[TStmt]>) {
+    match s {
+        TStmt::Let(_, e) => (e.iter().collect(), Vec::new()),
+        TStmt::Expr(e) | TStmt::Throw(e) | TStmt::Trap(e) | TStmt::Return(Some(e)) => (vec![e], Vec::new()),
+        TStmt::If(c, a, b) => (vec![c], vec![a, b]),
+        TStmt::Loop { cond, update, body, .. } => (cond.iter().chain(update.iter()).collect(), vec![body]),
+        TStmt::ForOf { arr, body, .. } => (vec![arr], vec![body]),
+        TStmt::Switch { disc, cases, .. } => {
+            let mut es = vec![disc];
+            es.extend(cases.iter().filter_map(|(t, _)| t.as_ref()));
+            (es, cases.iter().map(|(_, b)| b.as_slice()).collect())
+        }
+        TStmt::Try { body, catch, finally } => {
+            let mut ls: Vec<&[TStmt]> = vec![body];
+            if let Some((_, c)) = catch {
+                ls.push(c);
+            }
+            if let Some(f) = finally {
+                ls.push(f);
+            }
+            (Vec::new(), ls)
+        }
+        TStmt::Block(b) => (Vec::new(), vec![b]),
+        TStmt::Return(None) | TStmt::Break | TStmt::Continue => (Vec::new(), Vec::new()),
+    }
+}
+
 pub(crate) fn walk_expr(e: &TExpr, fs: &mut dyn FnMut(&TStmt), fe: &mut dyn FnMut(&TExpr)) {
     fe(e);
+    if let TExprKind::Block(stmts, _) = &e.kind {
+        walk_stmts(stmts, fs, fe);
+    }
+    for c in expr_children(e) {
+        walk_expr(c, fs, fe);
+    }
+}
+
+/// The direct sub-expressions of `e`, in evaluation order, for every form
+/// (also the ones that only exist before `lower`). A `Block`'s statements
+/// are not included (only its value); closures are other functions.
+pub(crate) fn expr_children(e: &TExpr) -> Vec<&TExpr> {
+    let mut out: Vec<&TExpr> = Vec::new();
     match &e.kind {
         TExprKind::Assign(p, v) => {
             match p {
                 Place::Var(_) => {}
-                Place::Field(o, ..) => walk_expr(o, fs, fe),
+                Place::Field(o, ..) => out.push(o),
                 Place::Index(a, i) => {
-                    walk_expr(a, fs, fe);
-                    walk_expr(i, fs, fe);
+                    out.push(a);
+                    out.push(i);
                 }
             }
-            walk_expr(v, fs, fe);
+            out.push(v);
         }
         TExprKind::Field(o, ..)
         | TExprKind::Neg(o)
@@ -2206,7 +2288,13 @@ pub(crate) fn walk_expr(e: &TExpr, fs: &mut dyn FnMut(&TStmt), fe: &mut dyn FnMu
         | TExprKind::UnionTag(o)
         | TExprKind::UnionIs(o, _)
         | TExprKind::InstanceOf(o, _)
-        | TExprKind::Await(o) => walk_expr(o, fs, fe),
+        | TExprKind::Await(o)
+        | TExprKind::SignalNew(o)
+        | TExprKind::SignalGet(o)
+        | TExprKind::SignalPeek(o)
+        | TExprKind::ComputedNew(o)
+        | TExprKind::ComputedGet(o)
+        | TExprKind::EffectNew(o) => out.push(o),
         TExprKind::Index(a, b)
         | TExprKind::Num2(_, a, b)
         | TExprKind::Int2(_, a, b)
@@ -2215,36 +2303,129 @@ pub(crate) fn walk_expr(e: &TExpr, fs: &mut dyn FnMut(&TStmt), fe: &mut dyn FnMu
         | TExprKind::Concat(a, b)
         | TExprKind::And(a, b)
         | TExprKind::Or(a, b)
+        | TExprKind::SignalSet(a, b)
         | TExprKind::ArrayHof { arr: a, f: b, .. }
-        | TExprKind::ArraySearch { arr: a, value: b, .. } => {
-            walk_expr(a, fs, fe);
-            walk_expr(b, fs, fe);
+        | TExprKind::ArraySearch { arr: a, value: b, .. }
+        | TExprKind::TimerNew(a, _, b)
+        | TExprKind::DialogCall(_, a, b) => {
+            out.push(a);
+            out.push(b);
         }
-        TExprKind::Cond(a, b, c) => {
-            walk_expr(a, fs, fe);
-            walk_expr(b, fs, fe);
-            walk_expr(c, fs, fe);
-        }
+        TExprKind::Cond(a, b, c) => out.extend([&**a, &**b, &**c]),
+        TExprKind::NetFetchCall(a, b, c, d, f) => out.extend([&**a, &**b, &**c, &**d, &**f]),
         TExprKind::Call(_, args) | TExprKind::Rt(_, args) | TExprKind::MathOp(_, args) | TExprKind::StructLit(_, args) => {
-            for a in args {
-                walk_expr(a, fs, fe);
-            }
+            out.extend(args.iter())
         }
         TExprKind::CallClosure(c, args) | TExprKind::MethodCall(_, _, c, args) => {
-            walk_expr(c, fs, fe);
-            for a in args {
-                walk_expr(a, fs, fe);
+            out.push(c);
+            out.extend(args.iter());
+        }
+        TExprKind::ArrayLit(items) => out.extend(items.iter().map(|(_, a)| a)),
+        TExprKind::Block(_, v) => out.push(v),
+        TExprKind::Jsx(j) => jsx_exprs(j, &mut out),
+        TExprKind::Num(_)
+        | TExprKind::Bool(_)
+        | TExprKind::Str(_)
+        | TExprKind::Null
+        | TExprKind::Var(_)
+        | TExprKind::Closure(_)
+        | TExprKind::ThunkOf(_)
+        | TExprKind::Navigate(_)
+        | TExprKind::NavigatePush(_)
+        | TExprKind::NavigateBack => {}
+    }
+    out
+}
+
+/// Like `expr_children`, for changing them. JSX gives none.
+pub(crate) fn expr_children_mut(e: &mut TExpr) -> Vec<&mut TExpr> {
+    let mut out: Vec<&mut TExpr> = Vec::new();
+    match &mut e.kind {
+        TExprKind::Assign(p, v) => {
+            match p {
+                Place::Var(_) => {}
+                Place::Field(o, ..) => out.push(o),
+                Place::Index(a, i) => {
+                    out.push(a);
+                    out.push(i);
+                }
+            }
+            out.push(v);
+        }
+        TExprKind::Field(o, ..)
+        | TExprKind::Neg(o)
+        | TExprKind::Not(o)
+        | TExprKind::IsNull(o)
+        | TExprKind::Coerce(_, o)
+        | TExprKind::UnionTag(o)
+        | TExprKind::UnionIs(o, _)
+        | TExprKind::InstanceOf(o, _)
+        | TExprKind::Await(o)
+        | TExprKind::SignalNew(o)
+        | TExprKind::SignalGet(o)
+        | TExprKind::SignalPeek(o)
+        | TExprKind::ComputedNew(o)
+        | TExprKind::ComputedGet(o)
+        | TExprKind::EffectNew(o) => out.push(o),
+        TExprKind::Index(a, b)
+        | TExprKind::Num2(_, a, b)
+        | TExprKind::Int2(_, a, b)
+        | TExprKind::Cmp(_, _, a, b)
+        | TExprKind::StrCmp(_, a, b)
+        | TExprKind::Concat(a, b)
+        | TExprKind::And(a, b)
+        | TExprKind::Or(a, b)
+        | TExprKind::SignalSet(a, b)
+        | TExprKind::ArrayHof { arr: a, f: b, .. }
+        | TExprKind::ArraySearch { arr: a, value: b, .. }
+        | TExprKind::TimerNew(a, _, b)
+        | TExprKind::DialogCall(_, a, b) => {
+            out.push(a);
+            out.push(b);
+        }
+        TExprKind::Cond(a, b, c) => out.extend([&mut **a, &mut **b, &mut **c]),
+        TExprKind::NetFetchCall(a, b, c, d, f) => out.extend([&mut **a, &mut **b, &mut **c, &mut **d, &mut **f]),
+        TExprKind::Call(_, args) | TExprKind::Rt(_, args) | TExprKind::MathOp(_, args) | TExprKind::StructLit(_, args) => {
+            out.extend(args.iter_mut())
+        }
+        TExprKind::CallClosure(c, args) | TExprKind::MethodCall(_, _, c, args) => {
+            out.push(c);
+            out.extend(args.iter_mut());
+        }
+        TExprKind::ArrayLit(items) => out.extend(items.iter_mut().map(|(_, a)| a)),
+        TExprKind::Block(_, v) => out.push(v),
+        TExprKind::Jsx(_) => {}
+        TExprKind::Num(_)
+        | TExprKind::Bool(_)
+        | TExprKind::Str(_)
+        | TExprKind::Null
+        | TExprKind::Var(_)
+        | TExprKind::Closure(_)
+        | TExprKind::ThunkOf(_)
+        | TExprKind::Navigate(_)
+        | TExprKind::NavigatePush(_)
+        | TExprKind::NavigateBack => {}
+    }
+    out
+}
+
+fn jsx_exprs<'a>(j: &'a TJsx, out: &mut Vec<&'a TExpr>) {
+    match j {
+        TJsx::Control { props, children, .. } => {
+            out.extend(props.iter().map(|p| &p.value));
+            match children {
+                TChildren::None => {}
+                TChildren::Text(parts) => out.extend(parts.iter()),
+                TChildren::Nodes(nodes) => {
+                    for n in nodes {
+                        match n {
+                            TChild::Element(j) => jsx_exprs(j, out),
+                            TChild::Expr(e) => out.push(e),
+                        }
+                    }
+                }
             }
         }
-        TExprKind::ArrayLit(items) => {
-            for (_, a) in items {
-                walk_expr(a, fs, fe);
-            }
-        }
-        TExprKind::Block(stmts, v) => {
-            walk_stmts(stmts, fs, fe);
-            walk_expr(v, fs, fe);
-        }
-        _ => {}
+        TJsx::Component { props, .. } => out.extend(props.iter()),
     }
 }
