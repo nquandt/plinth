@@ -292,7 +292,7 @@ fn settings_gallery_checkbox_and_text_area() {
     h.tree.set_local_prop(checkbox, prop::VALUE, Value::Bool(false));
     h.fire(checkbox, event::CHANGE, Value::Bool(false));
     assert!(!h.tree.get(checkbox).unwrap().bool_prop(prop::VALUE));
-    let note = h.one(ControlKind::Text, |_| true);
+    let note = h.one(ControlKind::Text, |n| n.text.as_deref() == Some("Emails are off."));
     assert_eq!(h.text_of(note), "Emails are off.");
 
     // The text area is a two-way `value` binding, like TextField.

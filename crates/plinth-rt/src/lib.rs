@@ -320,7 +320,7 @@ abi! {
     fn __plinth_rt_arr_push_i32(a: i32, v: i32) -> i32 { arrays::push_i32(ptr(a), v) as i32 }
     fn __plinth_rt_arr_pop_f64(a: i32) -> f64 { arrays::pop_f64(ptr(a)) }
     fn __plinth_rt_arr_pop_i32(a: i32) -> i32 { arrays::pop_i32(ptr(a)) }
-    fn __plinth_rt_arr_slice(a: i32, start: i32, end: i32) -> i32 { arrays::slice(ptr(a), start.max(0) as u32, end.max(0) as u32) as i32 }
+    fn __plinth_rt_arr_slice(a: i32, start: i32, end: i32) -> i32 { arrays::slice(ptr(a), start, end) as i32 }
     fn __plinth_rt_arr_extend(dst: i32, src: i32) { arrays::extend(ptr(dst), ptr(src)) }
     fn __plinth_rt_arr_reverse(a: i32) { arrays::reverse(ptr(a)) }
     fn __plinth_rt_arr_join(a: i32, sep: i32) -> i32 {

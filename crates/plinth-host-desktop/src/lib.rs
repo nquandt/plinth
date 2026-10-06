@@ -189,7 +189,7 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
             .open_window(options, move |_, cx| {
                 cx.new(move |cx| match init {
                     Ok(commits) => PlinthRoot::new(port, commits, accent, cx),
-                    Err(e) => PlinthRoot::stopped(port, e, accent),
+                    Err(e) => PlinthRoot::stopped(port, e, accent, cx),
                 })
             })
             .expect("open the window");
