@@ -2,14 +2,16 @@
 // (`hub-host.js`) against a registry that `plinth registry serve --web`
 // serves, and the Hub app (`examples/hub`) itself on top of it, with no DOM.
 //
-// - The server: the redirect to the bootstrap page, `hub-config.json` with
-//   the trusted keys from PLINTH_HUB_TRUSTED_KEYS.
-// - search, install (digest and signature checks), listApps/appInfo with
-//   the fields of the desktop `HubService`, risk-level defaults, consent,
-//   the refused capabilities, groups, pins, blocks, publisher blocks,
-//   remove, and the state after a reload from the store.
-// - checkUpdates and update with a new capability: re-consent; until then
-//   the previous version runs.
+// - The registry: the static `hub.json` that `plinth registry build
+//   --hub-trusted-key` writes, served as a plain file.
+// - Browse mode: the library is the registry listing (without the Hub app
+//   itself). listApps/appInfo have the fields of the desktop `HubService`;
+//   risk-level defaults, consent, the refused capabilities, groups, pins,
+//   blocks, publisher blocks, remove (hides) and install (shows again),
+//   search, the package checks at launch (digest), and the state after a
+//   reload from the store.
+// - checkUpdates and update when the registry gets a version with a new
+//   capability: re-consent; until then the previous version runs.
 // - The Hub app runs with `hub.manage` from the host: its library shows the
 //   installed apps, and its Open button asks the host to launch the app.
 //   Without the host, or with `hub.manage` refused, its calls are denied.
@@ -112,15 +114,15 @@ async function main() {
     }
     execFileSync(exe, ["sign", path.join(reg, "hub.plnt")], { env, stdio: "ignore" });
     copyFileSync(path.join(reg, "hub.plnt"), path.join(dir, "hub.plnt"));
-    execFileSync(exe, ["registry", "build", reg, "--with-core"], { stdio: "ignore" });
-    server = await startServer(reg, { ...process.env, PLINTH_HUB_TRUSTED_KEYS: key });
+    execFileSync(exe, ["registry", "build", reg, "--with-core", "--hub-trusted-key", key], { stdio: "ignore" });
+    server = await startServer(reg, process.env);
     const { base } = server;
 
-    // The server: the bootstrap page and the trusted keys.
+    // The server: the bootstrap page, and hub.json as a plain registry file.
     const landing = await fetch(base, { redirect: "manual" });
     assert.equal(landing.status, 302);
     assert.equal(landing.headers.get("location"), "/web/hub.html");
-    const config = await (await fetch(new URL("/web/hub-config.json", base))).json();
+    const config = await (await fetch(new URL("hub.json", base))).json();
     assert.deepEqual(config.trustedKeys, [key]);
     assert.equal(config.hub, "dev.plinth.hub");
 
@@ -140,19 +142,16 @@ async function main() {
     assert.equal(isNewer("0.10.0", "0.9.1"), true);
     assert.equal(isNewer("1.0.0", "1.0.0"), false);
 
-    // The host: search and install.
+    // Browse mode: the library is the registry listing, without the Hub app.
     const persist = memoryPersist();
     const launches = [];
-    let host = await new HubHost({ persist, onLaunch: (id) => launches.push(id) }).load();
-    host.addSource("local", base);
+    const options = { persist, sources: [["local", base]], hide: ["dev.plinth.hub"], onLaunch: (id) => launches.push(id) };
+    let host = await new HubHost(options).load();
+    const ids = () => JSON.parse(host.listAppsJson()).map((a) => a.id);
+    assert.deepEqual(ids(), ["dev.plinth.examples.counter", "dev.plinth.examples.notes", "dev.plinth.examples.utility"]);
     const found = JSON.parse(await host.search("not"));
-    assert.deepEqual(found.errors, []);
-    assert.deepEqual(found.hits, [{ id: "dev.plinth.examples.notes", name: "Notes", version: "0.1.0", description: "", source: "local" }]);
-    for (const id of ["dev.plinth.examples.counter", "dev.plinth.examples.notes", "dev.plinth.examples.utility"]) assert.equal(await host.install(id), id);
-    await assert.rejects(host.install("com.example.none"), /no configured source lists com\.example\.none/);
+    assert.deepEqual(found, { hits: [{ id: "dev.plinth.examples.notes", name: "Notes", version: "0.1.0", description: "", source: "local" }], errors: [] });
 
-    const apps = JSON.parse(host.listAppsJson());
-    assert.deepEqual(apps.map((a) => a.id), ["dev.plinth.examples.counter", "dev.plinth.examples.notes", "dev.plinth.examples.utility"]);
     const notes = JSON.parse(host.appInfoJson("dev.plinth.examples.notes"));
     // The fields of `HubService::app_json` (crates/plinth-hub/src/lib.rs).
     assert.deepEqual(Object.keys(notes).sort(), [
@@ -174,11 +173,12 @@ async function main() {
     assert.equal(notes.publisher, "plinth");
     assert.equal(notes.source, "local");
     assert.equal(notes.signer, "");
+    assert.equal(notes.version, "0.1.0");
     assert.deepEqual(notes.capabilities, [
       { name: "store.kv", risk: "low", description: "save data on this device", rationale: "Save your notes on this device.", decided: true, allowed: true, byDefault: true },
     ]);
     assert.deepEqual(notes.versions, [{ version: "0.1.0", signer: "", capabilities: ["store.kv"] }]);
-    assert.throws(() => host.appInfoJson("com.example.none"), /not in the library/);
+    assert.throws(() => host.appInfoJson("dev.plinth.hub"), /not in the library/, "the Hub app is not in its own library");
 
     // Consent: clipboard.read (medium) needs a decision, clipboard.write (low) does not.
     const utilityId = "dev.plinth.examples.utility";
@@ -194,73 +194,86 @@ async function main() {
     assert.deepEqual(host.refusedFor(utilityId, utilityV.capabilities).sort(), ["clipboard.read", "clipboard.write"]);
     assert.deepEqual(host.refusedFor("x", ["hub.manage"]), ["hub.manage"], "a launched app never gets hub.manage");
 
-    // Groups, pins, blocks, remove, launch.
+    // Groups, pins, blocks, remove and install, launch.
+    const counterId = "dev.plinth.examples.counter";
     host.createGroup("Work");
     assert.throws(() => host.createGroup("  "), /needs a name/);
-    host.setGroup("dev.plinth.examples.counter", "Work", true);
-    host.setGroup("dev.plinth.examples.counter", "Play", true);
+    host.setGroup(counterId, "Work", true);
+    host.setGroup(counterId, "Play", true);
     assert.deepEqual(JSON.parse(host.listGroupsJson()), ["Work", "Play"]);
-    assert.deepEqual(JSON.parse(host.appInfoJson("dev.plinth.examples.counter")).groups, ["Work", "Play"]);
-    host.setGroup("dev.plinth.examples.counter", "Play", false);
-    assert.throws(() => host.pin("dev.plinth.examples.counter", "9.9.9"), /no version 9\.9\.9/);
-    host.pin("dev.plinth.examples.counter", "0.1.0");
-    assert.equal(JSON.parse(host.appInfoJson("dev.plinth.examples.counter")).pinned, "0.1.0");
-    host.pin("dev.plinth.examples.counter", "");
-    host.block("dev.plinth.examples.counter");
-    assert.equal(host.isBlocked("dev.plinth.examples.counter"), true);
-    assert.equal(JSON.parse(host.appInfoJson("dev.plinth.examples.counter")).blocked, true);
-    host.unblock("dev.plinth.examples.counter");
+    assert.deepEqual(JSON.parse(host.appInfoJson(counterId)).groups, ["Work", "Play"]);
+    host.setGroup(counterId, "Play", false);
+    assert.throws(() => host.pin(counterId, "9.9.9"), /no version 9\.9\.9/);
+    host.pin(counterId, "0.1.0");
+    assert.equal(JSON.parse(host.appInfoJson(counterId)).pinned, "0.1.0");
+    host.pin(counterId, "");
+    host.block(counterId);
+    assert.equal(host.isBlocked(counterId), true);
+    assert.equal(JSON.parse(host.appInfoJson(counterId)).blocked, true);
+    host.unblock(counterId);
     assert.throws(() => host.blockPublisher(""), /no publisher key/);
     host.blockPublisher(key);
     assert.equal(host.isPublisherBlocked(key), true);
     host.unblockPublisher(key);
-    host.remove("dev.plinth.examples.counter");
-    assert.throws(() => host.remove("dev.plinth.examples.counter"), /not in the library/);
+    host.remove(counterId);
+    assert.deepEqual(ids(), ["dev.plinth.examples.notes", "dev.plinth.examples.utility"], "remove hides the app in this browser");
+    assert.throws(() => host.remove(counterId), /not in the library/);
+    await assert.rejects(host.install("com.example.none"), /no configured source lists com\.example\.none/);
     host.launch("dev.plinth.examples.notes");
     await waitFor(() => launches.length === 1, "launch");
     assert.deepEqual(launches, ["dev.plinth.examples.notes"]);
 
-    // The state comes back from the store; package files are checked again.
+    // The state comes back from the store.
     await host.flush();
-    host = await new HubHost({ persist, onLaunch: (id) => launches.push(id) }).load();
-    assert.deepEqual(JSON.parse(host.listAppsJson()).map((a) => a.id), ["dev.plinth.examples.notes", "dev.plinth.examples.utility"]);
+    host = await new HubHost(options).load();
+    assert.deepEqual(ids(), ["dev.plinth.examples.notes", "dev.plinth.examples.utility"]);
     assert.deepEqual(JSON.parse(host.listGroupsJson()), ["Work", "Play"]);
-    assert.ok((await host.packageBytes(host.runnableVersion("dev.plinth.examples.notes"))).length > 0);
+    assert.equal(host.grants(utilityId)["clipboard.read"].decision, "refused");
+    assert.equal(await host.install(counterId), counterId);
+    assert.deepEqual(JSON.parse(host.appInfoJson(counterId)).groups, ["Work"], "a removed app keeps its state");
 
-    // Update: notes 0.2.0 adds clipboard.read (medium).
+    // The package is checked when the app opens.
+    const notesV = host.runnableVersion("dev.plinth.examples.notes");
+    assert.ok((await host.packageBytes("dev.plinth.examples.notes", notesV)).length > 0);
+
+    // Update: the registry gets notes 0.2.0, which adds clipboard.read (medium).
     const notes2 = path.join(dir, "notes2");
     cpSync(path.join(root, "examples/notes"), notes2, { recursive: true, filter: (p) => !p.includes(`${path.sep}dist`) && !p.includes(".plinth") });
     const toml = readFileSync(path.join(notes2, "plinth.toml"), "utf8").replace('version = "0.1.0"', 'version = "0.2.0"');
     writeFileSync(path.join(notes2, "plinth.toml"), `${toml}\n[[capabilities]]\nname = "clipboard.read"\nrationale = "Paste into a note."\n`);
     execFileSync(exe, ["build", notes2], { stdio: "ignore" });
     copyFileSync(path.join(notes2, "dist", "notes.plnt"), path.join(reg, "notes-0.2.0.plnt"));
-    execFileSync(exe, ["registry", "build", reg, "--with-core"], { stdio: "ignore" });
+    execFileSync(exe, ["registry", "build", reg, "--with-core", "--hub-trusted-key", key], { stdio: "ignore" });
     const check = JSON.parse(await host.checkUpdates(""));
     assert.deepEqual(check, {
       updates: [{ id: "dev.plinth.examples.notes", name: "Notes", current: "0.1.0", version: "0.2.0", source: "local", newCapabilities: ["clipboard.read"], pinned: "" }],
       errors: [],
     });
-    assert.equal(JSON.parse(host.appInfoJson("dev.plinth.examples.notes")).update, "0.2.0");
+    let info = JSON.parse(host.appInfoJson("dev.plinth.examples.notes"));
+    assert.deepEqual([info.version, info.update, info.updateCapabilities], ["0.1.0", "0.2.0", ["clipboard.read"]], "the known version stays until update");
     assert.equal(await host.update("dev.plinth.examples.notes"), "0.2.0");
     assert.equal(await host.update("dev.plinth.examples.notes"), "", "up to date");
-    const after = JSON.parse(host.appInfoJson("dev.plinth.examples.notes"));
-    assert.equal(after.update, "");
-    assert.deepEqual(after.versions.map((v) => v.version), ["0.2.0", "0.1.0"]);
+    info = JSON.parse(host.appInfoJson("dev.plinth.examples.notes"));
+    assert.equal(info.update, "");
+    assert.deepEqual(info.versions.map((v) => v.version), ["0.2.0", "0.1.0"]);
     // Until the user decides clipboard.read, the previous version runs.
     assert.equal(host.runnableVersion("dev.plinth.examples.notes").version, "0.1.0");
-    const newest = host.newestInstalled("dev.plinth.examples.notes");
+    const newest = host.activeVersion(host.get("dev.plinth.examples.notes"));
+    assert.equal(newest.version, "0.2.0");
     assert.deepEqual(host.needsConsent("dev.plinth.examples.notes", newest.capabilities), ["clipboard.read"]);
     host.recordConsent("dev.plinth.examples.notes", newest.version, { "clipboard.read": true });
     assert.equal(host.runnableVersion("dev.plinth.examples.notes").version, "0.2.0");
+    host.pin("dev.plinth.examples.notes", "0.1.0");
+    assert.equal(host.runnableVersion("dev.plinth.examples.notes").version, "0.1.0", "a pin wins");
+    host.pin("dev.plinth.examples.notes", "");
 
-    // A changed package in the registry is refused (digest).
-    const counterDoc = JSON.parse(readFileSync(path.join(reg, "apps", "dev.plinth.examples.counter", "index.json"), "utf8"));
+    // A changed package in the registry does not open (digest).
+    const counterDoc = JSON.parse(readFileSync(path.join(reg, "apps", counterId, "index.json"), "utf8"));
     const counterPkg = path.join(reg, "packages", `${counterDoc.versions[0].sha256}.plnt`);
     const bytes = readFileSync(counterPkg);
     bytes[bytes.length - 30] ^= 1;
     writeFileSync(counterPkg, bytes);
-    await assert.rejects(host.install("dev.plinth.examples.counter"), /does not match the registry digest/);
-    assert.equal(host.get("dev.plinth.examples.counter"), null);
+    await assert.rejects(host.packageBytes(counterId, host.runnableVersion(counterId)), /does not match the registry digest/);
 
     // The Hub app on this host.
     const coreBytes = new Uint8Array(readFileSync(path.join(root, "target/core.wasm")));
@@ -278,7 +291,7 @@ async function main() {
     const refused = await runApp(coreBytes, hubPlnt, { hub: host, refused: new Set(["hub.manage"]) });
     await waitFor(() => /refused/i.test(refused.allText()), "hub.manage refused");
 
-    console.log("run-hub-host.mjs: ok (server config, registry client, search/install/consent/groups/pins/blocks/updates, the Hub app on the web host)");
+    console.log("run-hub-host.mjs: ok (hub.json, browse-mode library, consent, groups/pins/blocks, updates, package checks, the Hub app on the web host)");
   } finally {
     server?.child.kill();
     rmSync(dir, { recursive: true, force: true });

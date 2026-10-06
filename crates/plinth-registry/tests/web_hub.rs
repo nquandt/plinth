@@ -61,10 +61,10 @@ fn web_hub_serves_landing_page_index_package_and_core() {
     let dir = temp_dir("serve");
     let bytes = compile_counter();
     std::fs::write(dir.join("counter.plnt"), &bytes).unwrap();
-    build(&dir, &Options { with_core: true }).unwrap();
+    build(&dir, &Options { with_core: true, ..Default::default() }).unwrap();
     let digest = plinth_registry::hex_digest(&bytes);
 
-    let port = serve::serve_background_with(&dir, 0, ServeOptions { web: true, trusted_keys: vec!["ed25519:test".into()] }).unwrap();
+    let port = serve::serve_background_with(&dir, 0, ServeOptions { web: true }).unwrap();
 
     let root = get(port, "/");
     assert_eq!(root.status, 302);
@@ -74,11 +74,11 @@ fn web_hub_serves_landing_page_index_package_and_core() {
     assert_eq!(page.status, 200);
     assert_eq!(page.header("Content-Type"), Some("text/html; charset=utf-8"));
     assert_eq!(page.header("Cache-Control"), Some("no-cache"));
-    assert!(String::from_utf8_lossy(&page.body).contains("hub.js"));
+    assert!(String::from_utf8_lossy(&page.body).contains("hub-shell.js"));
 
     for (path, ty) in [
-        ("/web/hub.js", "text/javascript; charset=utf-8"),
-        ("/web/hub-logic.js", "text/javascript; charset=utf-8"),
+        ("/web/hub-shell.js", "text/javascript; charset=utf-8"),
+        ("/web/hub-host.js", "text/javascript; charset=utf-8"),
         ("/web/plinth-web.js", "text/javascript; charset=utf-8"),
         ("/web/index.html", "text/html; charset=utf-8"),
         ("/web/style.css", "text/css; charset=utf-8"),
@@ -98,13 +98,6 @@ fn web_hub_serves_landing_page_index_package_and_core() {
     assert_eq!(module.header("Access-Control-Allow-Origin"), Some("*"));
     assert_eq!(module.header("Content-Security-Policy"), None);
     assert_eq!(get(port, "/plinth-registry.json").header("Access-Control-Allow-Origin"), None, "registry files keep the default");
-
-    // The trusted Hub keys for the page (`PLINTH_HUB_TRUSTED_KEYS`).
-    let config = get(port, "/web/hub-config.json");
-    assert_eq!((config.status, config.header("Content-Type")), (200, Some("application/json")));
-    let config: serde_json::Value = serde_json::from_slice(&config.body).unwrap();
-    assert_eq!(config["trustedKeys"], serde_json::json!(["ed25519:test"]));
-    assert_eq!(config["hub"], "dev.plinth.hub");
 
     let index = get(port, "/plinth-registry.json");
     assert_eq!((index.status, index.header("Content-Type")), (200, Some("application/json")));
@@ -150,7 +143,7 @@ fn the_package_icon_is_copied_and_the_app_list_url_resolves() {
     // Relative to `apps/index.json` (docs/REGISTRY.md §3).
     assert_eq!(list.apps[0].icon.as_deref(), Some("com.example.iconic/assets/icon.png"));
 
-    let port = serve::serve_background_with(&dir, 0, ServeOptions { web: true, trusted_keys: vec!["ed25519:test".into()] }).unwrap();
+    let port = serve::serve_background_with(&dir, 0, ServeOptions { web: true }).unwrap();
     let icon = get(port, "/apps/com.example.iconic/assets/icon.png");
     assert_eq!((icon.status, icon.header("Content-Type")), (200, Some("image/png")));
     assert_eq!(icon.body, png);
@@ -182,4 +175,26 @@ fn every_embedded_web_file_is_a_file_of_web() {
             }
         }
     }
+}
+
+#[test]
+fn build_writes_the_static_web_hub_config() {
+    let dir = temp_dir("hubjson");
+    std::fs::write(dir.join("counter.plnt"), compile_counter()).unwrap();
+    build(&dir, &Options::default()).unwrap();
+    assert!(!dir.join("hub.json").exists(), "no trusted key, no hub.json");
+    let options = Options { with_core: false, hub_trusted_keys: vec!["ed25519:one".into(), "ed25519:two".into()] };
+    build(&dir, &options).unwrap();
+    let text = std::fs::read_to_string(dir.join("hub.json")).unwrap();
+    let config: plinth_registry::build::WebHubConfig = serde_json::from_str(&text).unwrap();
+    assert_eq!(config.hub, "dev.plinth.hub");
+    assert_eq!(config.trusted_keys, vec!["ed25519:one", "ed25519:two"]);
+    // Served as a plain file of the registry folder: the server has no Hub logic.
+    let port = serve::serve_background_with(&dir, 0, ServeOptions { web: true }).unwrap();
+    let served = get(port, "/hub.json");
+    assert_eq!((served.status, served.header("Content-Type")), (200, Some("application/json")));
+    assert_eq!(served.body, text.as_bytes());
+    // The same input gives the same file.
+    build(&dir, &options).unwrap();
+    assert_eq!(std::fs::read_to_string(dir.join("hub.json")).unwrap(), text);
 }

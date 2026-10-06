@@ -4,8 +4,11 @@
 use anyhow::{Context as _, Result};
 use std::path::Path;
 
-pub fn build(folder: &Path, with_core: bool) -> Result<()> {
-    let report = plinth_registry::build::build(folder, &plinth_registry::build::Options { with_core })?;
+pub fn build(folder: &Path, with_core: bool, hub_trusted_keys: Vec<String>) -> Result<()> {
+    let report = plinth_registry::build::build(folder, &plinth_registry::build::Options { with_core, hub_trusted_keys: hub_trusted_keys.clone() })?;
+    if !hub_trusted_keys.is_empty() {
+        println!("  wrote hub.json (trusted Hub keys: {})", hub_trusted_keys.join(", "));
+    }
     println!("built the registry at {}", folder.display());
     for (id, version) in &report.added {
         println!("  added {id}@{version}");
@@ -26,18 +29,6 @@ pub fn serve(folder: &Path, port: u16, web: bool) -> Result<()> {
     if web {
         println!("web App Hub: http://{addr}/ (Ctrl+C to stop)");
     }
-    // The Hub keys that the web App Hub trusts: the same variable as the
-    // desktop host (`docs/HUB.md` §4.1), comma-separated key ids.
-    let trusted_keys: Vec<String> = std::env::var("PLINTH_HUB_TRUSTED_KEYS")
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|k| !k.is_empty())
-        .map(str::to_owned)
-        .collect();
-    if web && !trusted_keys.is_empty() {
-        println!("trusted Hub keys: {}", trusted_keys.join(", "));
-    }
-    let options = plinth_registry::serve::Options { web, trusted_keys };
+    let options = plinth_registry::serve::Options { web };
     plinth_registry::serve::accept_loop_with(listener, folder, options).with_context(|| format!("serve {}", folder.display()))
 }

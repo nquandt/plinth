@@ -63,7 +63,7 @@ usage:
                                    run one installed version, or the newest again
   plinth hub policy deny|allow <capability> | show
                                    a hub-wide switch for a capability
-  plinth registry build <folder> [--with-core]
+  plinth registry build <folder> [--with-core] [--hub-trusted-key <key id>]
                                    generate a static registry from .plnt files
   plinth registry serve <folder> [--port N] [--web]
                                    serve a static registry on 127.0.0.1;
@@ -977,8 +977,17 @@ fn resolve_source(hub: &plinth_hub::Hub, _id: &str, flag: Option<&str>) -> Resul
 fn registry_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
     match args.first().copied() {
         Some("build") => {
-            let folder = args.get(1).context("usage: plinth registry build <folder> [--with-core]")?;
-            registry_cmd::build(Path::new(folder), raw.iter().any(|a| *a == "--with-core"))?;
+            let folder = args.get(1).context("usage: plinth registry build <folder> [--with-core] [--hub-trusted-key <key id>]")?;
+            // `--hub-trusted-key <id>` (more than one, or comma-separated):
+            // writes hub.json for the web App Hub (docs/web-hub.md).
+            let mut keys = Vec::new();
+            for (i, a) in raw.iter().enumerate() {
+                if *a == "--hub-trusted-key" {
+                    let v = raw.get(i + 1).context("--hub-trusted-key needs a key id (ed25519:…)")?;
+                    keys.extend(v.split(',').map(str::trim).filter(|k| !k.is_empty()).map(str::to_owned));
+                }
+            }
+            registry_cmd::build(Path::new(folder), raw.iter().any(|a| *a == "--with-core"), keys)?;
             Ok(ExitCode::SUCCESS)
         }
         Some("serve") => {

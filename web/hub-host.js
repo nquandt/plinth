@@ -1,23 +1,28 @@
 // The `plinth:hub` backend of the web host (docs/web-hub.md, docs/HUB.md
-// §4.1, §12.2): the library, grants, blocks, groups, pins, sources and
-// updates of the Hub, for the Hub app (`examples/hub`) that runs in the
-// browser. It is the web twin of `HubService` in `crates/plinth-hub`: the
-// JSON of `listApps`, `appInfo`, `search` and `checkUpdates` has the same
-// fields, and the rules (risk-level defaults, re-consent on update,
-// signer checks, publisher blocks) are the same.
+// §4.1, §12.2, SPEC.md §18 browse mode), for the Hub app (`examples/hub`)
+// in the browser. It is the web twin of `HubService` in `crates/plinth-hub`:
+// `listApps`, `appInfo`, `search` and `checkUpdates` give JSON with the
+// same fields, and the rules (risk-level defaults, consent, re-consent when
+// a version adds capabilities, blocks, pins) are the same.
 //
-// `plinth:hub` calls are synchronous in the app. Thus the host keeps the
-// whole state in memory and writes it to `persist` (IndexedDB in the
-// browser, `indexedDbPersist`) after each change, in order. Package files
-// are kept by digest in the same store. Network calls (`search`,
-// `install`, `checkUpdates`, `update`) are async and use `fetch` against
-// registries (`registry-client.js`); each package is checked
-// (`hub-integrity.js`) before it is added.
+// Browse mode: the library IS the registry listing. Each app of the
+// registries (`sources`) is in the library; nothing is installed. The
+// browser keeps only the user's state: grants, blocks, pins, groups, the
+// apps that the user removed (hidden in this browser), and for each app
+// the version that the user accepted ("known"). When the registry has a
+// newer version, `checkUpdates` reports it; `update` accepts it. A package
+// is downloaded and checked (digest, manifest, signature) each time the app
+// opens (`packageBytes`).
+//
+// `plinth:hub` calls are synchronous in the app. Thus `refresh()` reads
+// the registries (the app list and each app document) before the Hub app
+// starts and again on `checkUpdates`; the state is in memory and goes to
+// `persist` (IndexedDB in the browser) after each change, in order.
 //
 // No DOM code: `test/run-hub-host.mjs` runs it in Node.
 
-import { loadRegistry, loadAppDocument, latestVersion, searchApps, pickCore, packageUrl, fetchBytes } from "./registry-client.js";
-import { checkPackage, sha256Hex } from "./hub-integrity.js";
+import { loadRegistry, loadAppDocument, searchApps, packageUrl, fetchBytes } from "./registry-client.js";
+import { checkPackage } from "./hub-integrity.js";
 
 /**
  * The capability map (`crates/plinth-link/src/capabilities.rs`): risk level
@@ -40,7 +45,7 @@ export function descriptionOf(name) {
   return Object.hasOwn(CAPABILITIES, name) ? CAPABILITIES[name].description : "";
 }
 
-/** None and Low are granted at install, with no question (docs/HUB.md §7.2). */
+/** None and Low are granted with no question (docs/HUB.md §7.2). */
 export function isLowRisk(name) {
   const r = riskOf(name);
   return r === "none" || r === "low";
@@ -59,8 +64,22 @@ export function isNewer(a, b) {
   return false;
 }
 
+function byVersionDesc(a, b) {
+  return isNewer(a.version, b.version) ? -1 : isNewer(b.version, a.version) ? 1 : 0;
+}
+
 function emptyState() {
-  return { schema: "plinth.web-hub-state/1", apps: {}, groups: [], grants: {}, blocks: { apps: [], publishers: [] }, updates: {}, sources: {} };
+  return {
+    schema: "plinth.web-hub-state/2",
+    known: {},
+    removed: [],
+    pinned: {},
+    groups: [],
+    appGroups: {},
+    grants: {},
+    blocks: { apps: [], publishers: [] },
+    updates: {},
+  };
 }
 
 function message(err) {
@@ -71,7 +90,6 @@ function message(err) {
 
 /** A store in memory (tests, and a fallback when IndexedDB is not there). */
 export function memoryPersist() {
-  const files = new Map();
   let state = null;
   return {
     async load() {
@@ -80,16 +98,10 @@ export function memoryPersist() {
     async save(value) {
       state = JSON.stringify(value);
     },
-    async getPackage(digest) {
-      return files.get(digest) ?? null;
-    },
-    async putPackage(digest, bytes) {
-      files.set(digest, bytes.slice());
-    },
   };
 }
 
-/** The browser store: one IndexedDB database with the state and the package files. */
+/** The browser store: the state in one IndexedDB database. */
 export async function indexedDbPersist(name = "plinth-web-hub") {
   const db = await new Promise((resolve, reject) => {
     const req = indexedDB.open(name, 1);
@@ -112,13 +124,6 @@ export async function indexedDbPersist(name = "plinth-web-hub") {
     async save(value) {
       await run("readwrite", (s) => s.put(value, "state"));
     },
-    async getPackage(digest) {
-      const v = await run("readonly", (s) => s.get(`package:${digest}`));
-      return v ? new Uint8Array(v) : null;
-    },
-    async putPackage(digest, bytes) {
-      await run("readwrite", (s) => s.put(bytes.slice().buffer, `package:${digest}`));
-    },
   };
 }
 
@@ -127,22 +132,30 @@ export async function indexedDbPersist(name = "plinth-web-hub") {
 export class HubHost {
   /**
    * `persist`: `memoryPersist()` or `indexedDbPersist()`.
+   * `sources`: `[[name, base URL]]`, the registries (the shell gives the one
+   * that serves the page).
    * `onLaunch(id)`: the shell opens the app (`launch` returns at once).
-   * `fetchImpl`: `fetch` (tests can count requests).
+   * `hide`: app ids that are not in the library (the Hub app itself).
    */
-  constructor({ persist = memoryPersist(), onLaunch = () => {}, fetchImpl = globalThis.fetch, now = () => Math.floor(Date.now() / 1000) } = {}) {
+  constructor({ persist = memoryPersist(), sources = [], hide = [], onLaunch = () => {}, fetchImpl = globalThis.fetch, now = () => Math.floor(Date.now() / 1000) } = {}) {
     this.persist = persist;
+    this.sourceList = sources;
+    this.hide = new Set(hide);
     this.onLaunch = onLaunch;
     this.fetchImpl = (...args) => fetchImpl(...args);
     this.now = now;
     this.state = emptyState();
+    /** id -> `{ id, name, publisher, source, registry, versions }` (newest first), from the registries. */
+    this.catalog = new Map();
+    this.sourceErrors = [];
     this.saving = Promise.resolve();
   }
 
-  /** Reads the stored state. Call it one time, before the Hub app starts. */
+  /** Reads the stored state and the registries. Call it before the Hub app starts. */
   async load() {
     const stored = await this.persist.load();
-    this.state = { ...emptyState(), ...(stored ?? {}) };
+    this.state = { ...emptyState(), ...(stored?.schema === emptyState().schema ? stored : {}) };
+    await this.refresh();
     return this;
   }
 
@@ -158,28 +171,77 @@ export class HubHost {
     return this.saving;
   }
 
-  // -- Sources (docs/REGISTRY.md §9) ------------------------------------------
-
-  /** Adds a source (or changes its base). The shell adds the registry that serves the page. */
-  addSource(name, base) {
-    if (this.state.sources[name] === base) return;
-    this.state.sources[name] = base;
-    this.save();
+  sources() {
+    return [...this.sourceList].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   }
 
-  sources() {
-    return Object.entries(this.state.sources).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  /**
+   * Reads the app list and the app documents of every source. The first
+   * source that lists an id gives it. An app seen for the first time gets
+   * its newest version as "known" and its None/Low grants by default.
+   */
+  async refresh() {
+    const catalog = new Map();
+    const errors = [];
+    for (const [name, base] of this.sources()) {
+      try {
+        const registry = await loadRegistry(base, this.fetchImpl);
+        for (const summary of registry.apps) {
+          if (catalog.has(summary.id) || this.hide.has(summary.id)) continue;
+          const doc = await loadAppDocument(registry, summary.id, this.fetchImpl);
+          const versions = (doc.versions ?? [])
+            .filter((v) => !v.yanked)
+            .map((v) => ({
+              version: v.version,
+              sha256: v.sha256,
+              core: v.core ?? null,
+              signer: v.signer ?? "",
+              capabilities: (v.capabilities ?? []).map((c) => c.name),
+              rationales: Object.fromEntries((v.capabilities ?? []).map((c) => [c.name, c.rationale ?? ""])),
+            }))
+            .sort(byVersionDesc);
+          if (versions.length === 0) continue;
+          catalog.set(summary.id, { id: summary.id, name: doc.name ?? summary.name, publisher: doc.publisher ?? summary.publisher ?? "", source: name, registry, versions });
+        }
+      } catch (err) {
+        errors.push(`${name}: ${message(err)}`);
+      }
+    }
+    this.catalog = catalog;
+    this.sourceErrors = errors;
+    let changed = false;
+    for (const entry of catalog.values()) {
+      if (this.state.known[entry.id] && entry.versions.some((v) => v.version === this.state.known[entry.id])) continue;
+      if (this.state.known[entry.id]) {
+        // The known version is gone (withdrawn): accept the newest one that
+        // is not newer, else the oldest.
+        const older = entry.versions.find((v) => !isNewer(v.version, this.state.known[entry.id]));
+        this.state.known[entry.id] = (older ?? entry.versions.at(-1)).version;
+      } else {
+        this.state.known[entry.id] = entry.versions[0].version;
+      }
+      this.grantLowRisk(entry.id, this.knownVersion(entry));
+      changed = true;
+    }
+    if (changed) this.save();
+    return errors;
+  }
+
+  grantLowRisk(id, version) {
+    const grants = this.grants(id);
+    for (const cap of version.capabilities) if (!grants[cap] && isLowRisk(cap)) this.setGrantInner(id, cap, true, version.version, true);
   }
 
   // -- The library -----------------------------------------------------------
 
-  /** The library entries, sorted by id (as `Hub::list`). */
+  /** The library: every registry app that the user did not remove, sorted by id (as `Hub::list`). */
   list() {
-    return Object.values(this.state.apps).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return [...this.catalog.values()].filter((e) => !this.state.removed.includes(e.id)).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   }
 
   get(id) {
-    return Object.hasOwn(this.state.apps, id) ? this.state.apps[id] : null;
+    const entry = this.catalog.get(id);
+    return entry && !this.state.removed.includes(id) ? entry : null;
   }
 
   mustGet(id) {
@@ -188,22 +250,28 @@ export class HubHost {
     return entry;
   }
 
-  activeVersion(entry) {
-    if (entry.pinned) {
-      const v = entry.versions.find((x) => x.version === entry.pinned);
-      if (v) return v;
-    }
-    return entry.versions.at(-1) ?? null;
+  knownVersion(entry) {
+    return entry.versions.find((v) => v.version === this.state.known[entry.id]) ?? entry.versions[0];
   }
 
-  newestInstalled(id) {
-    const entry = this.get(id);
-    if (!entry || entry.versions.length === 0) return null;
-    return entry.versions.reduce((best, v) => (isNewer(v.version, best.version) ? v : best));
+  /** The versions that count as installed: the known one and the older ones (newest first). */
+  installedVersions(entry) {
+    const known = this.knownVersion(entry).version;
+    return entry.versions.filter((v) => !isNewer(v.version, known));
+  }
+
+  /** The version that `appInfo` shows and a launch opens first: the pinned one, else the known one. */
+  activeVersion(entry) {
+    const pinned = this.state.pinned[entry.id];
+    return (pinned && entry.versions.find((v) => v.version === pinned)) || this.knownVersion(entry);
   }
 
   grants(id) {
     return this.state.grants[id] ?? {};
+  }
+
+  groupsOf(id) {
+    return this.state.appGroups[id] ?? [];
   }
 
   isAppBlocked(id) {
@@ -215,9 +283,9 @@ export class HubHost {
   }
 
   isPublisherOfBlocked(id) {
-    const entry = this.get(id);
+    const entry = this.catalog.get(id);
     if (!entry || this.state.blocks.publishers.length === 0) return false;
-    return entry.versions.some((v) => v.signer && this.isPublisherBlocked(v.signer));
+    return this.installedVersions(entry).some((v) => v.signer && this.isPublisherBlocked(v.signer));
   }
 
   /** Whether `id` must not run: the app or the publisher of one of its versions is blocked. */
@@ -235,19 +303,13 @@ export class HubHost {
     return declared.filter((c) => !grants[c] && !isLowRisk(c));
   }
 
-  /** The version to run: the pinned one, else the newest one whose capabilities are all decided, else the newest (`Hub::runnable_version`). */
+  /** The version to run: the pinned one, else the newest installed one whose capabilities are all decided, else the known one (`Hub::runnable_version`). */
   runnableVersion(id) {
     const entry = this.mustGet(id);
-    if (entry.pinned) {
-      const v = entry.versions.find((x) => x.version === entry.pinned);
-      if (v) return v;
-    }
-    for (const v of [...entry.versions].reverse()) {
-      if (this.needsConsent(id, v.capabilities).length === 0) return v;
-    }
-    const last = entry.versions.at(-1);
-    if (!last) throw new Error(`${id} has no versions`);
-    return last;
+    const pinned = this.state.pinned[id];
+    const pin = pinned && entry.versions.find((v) => v.version === pinned);
+    if (pin) return pin;
+    return this.installedVersions(entry).find((v) => this.needsConsent(id, v.capabilities).length === 0) ?? this.knownVersion(entry);
   }
 
   /**
@@ -276,78 +338,36 @@ export class HubHost {
     this.save();
   }
 
-  /** The bytes of an installed version, checked against its digest again. */
-  async packageBytes(version) {
-    const bytes = await this.persist.getPackage(version.digest);
-    if (!bytes) throw new Error(`the package of version ${version.version} is not in this browser any more`);
-    if ((await sha256Hex(bytes)) !== version.digest) throw new Error(`the stored package of version ${version.version} changed`);
-    return bytes;
-  }
-
   /**
-   * Checks and adds a package from a registry (`Hub::add_package`): the
-   * digest, the manifest and the signature (`checkPackage`), a core that
-   * can run it, the blocks, and the signer of the previous version. Grants
-   * the None/Low capabilities by default. Returns the app id.
+   * Downloads `version` of `id` and checks it against the registry (digest,
+   * manifest, signature; `checkPackage`). Returns the package bytes.
    */
-  async addPackage(bytes, registryVersion, appId, registry) {
-    const { manifest, signature } = await checkPackage(bytes, registryVersion, appId);
-    if (!pickCore(registry.cores, registryVersion.core)) {
-      throw new Error(`the source has no runtime core ${registryVersion.core ?? ""} that can run ${manifest.id}`);
-    }
-    if (this.isBlocked(manifest.id)) throw new Error(`${manifest.id} is blocked`);
-    const signer = signature.key;
-    if (signer && this.isPublisherBlocked(signer)) throw new Error(`publisher ${signature.publisher} (${signer}) is blocked`);
-    const digest = registryVersion.sha256.toLowerCase();
-    await this.persist.putPackage(digest, bytes);
-    const entry =
-      this.get(manifest.id) ??
-      (this.state.apps[manifest.id] = { id: manifest.id, name: manifest.name, versions: [], pinned: null, groups: [], added: this.now(), source: "file", registry: null });
-    const previous = entry.versions.at(-1);
-    if (previous?.signer && signer && previous.signer !== signer) {
-      throw new Error(`${manifest.id} is signed by a different key (${signer}) than the installed version (${previous.signer}); key rotation is not supported yet`);
-    }
-    entry.name = manifest.name || entry.name;
-    const declared = manifest.capabilities.map((c) => c.name);
-    if (!entry.versions.some((v) => v.version === manifest.version)) {
-      entry.versions.push({
-        version: manifest.version,
-        digest,
-        capabilities: declared,
-        signer,
-        // Kept so that `appInfo` needs no package read: the manifest's
-        // publisher and reasons, and the core that the version needs.
-        publisher: manifest.publisher,
-        rationales: Object.fromEntries(manifest.capabilities.map((c) => [c.name, c.rationale])),
-        core: registryVersion.core ?? null,
-      });
-    }
-    const grants = this.grants(manifest.id);
-    for (const cap of declared) if (!grants[cap] && isLowRisk(cap)) this.setGrantInner(manifest.id, cap, true, manifest.version, true);
-    this.save();
-    return manifest.id;
+  async packageBytes(id, version) {
+    const entry = this.mustGet(id);
+    const bytes = await fetchBytes(packageUrl(entry.registry, version.sha256), this.fetchImpl);
+    const { signature } = await checkPackage(bytes, { ...version, signer: version.signer || undefined }, id);
+    if (signature.key && this.isPublisherBlocked(signature.key)) throw new Error(`publisher ${signature.publisher} (${signature.key}) is blocked`);
+    return bytes;
   }
 
   // -- `plinth:hub`: synchronous calls ----------------------------------------
   // Each one throws an Error on failure; `plinth-web.js` answers "denied".
 
-  /** One library app as the JSON object of `listApps`/`appInfo` (`HubService::app_json`), or null with no versions. */
+  /** One library app as the JSON object of `listApps`/`appInfo` (`HubService::app_json`). */
   appJson(entry) {
     const active = this.activeVersion(entry);
-    if (!active) return null;
     const grants = this.grants(entry.id);
     const update = this.state.updates[entry.id] ?? null;
-    const versions = [...entry.versions].sort((a, b) => (isNewer(a.version, b.version) ? -1 : isNewer(b.version, a.version) ? 1 : 0));
     return {
       id: entry.id,
       name: entry.name,
       version: active.version,
-      publisher: active.publisher ?? "",
-      signer: active.signer ?? "",
-      source: entry.registry?.name ?? "",
+      publisher: entry.publisher,
+      signer: active.signer,
+      source: entry.source,
       blocked: this.isAppBlocked(entry.id),
       publisherBlocked: this.isPublisherOfBlocked(entry.id),
-      groups: entry.groups,
+      groups: this.groupsOf(entry.id),
       capabilities: active.capabilities.map((name) => ({
         name,
         risk: riskOf(name),
@@ -357,21 +377,19 @@ export class HubHost {
         allowed: grants[name]?.decision === "allowed",
         byDefault: Boolean(grants[name]?.byDefault),
       })),
-      pinned: entry.pinned ?? "",
-      versions: versions.map((v) => ({ version: v.version, signer: v.signer ?? "", capabilities: v.capabilities })),
+      pinned: this.state.pinned[entry.id] ?? "",
+      versions: this.installedVersions(entry).map((v) => ({ version: v.version, signer: v.signer, capabilities: v.capabilities })),
       update: update?.version ?? "",
       updateCapabilities: update?.newCapabilities ?? [],
     };
   }
 
   listAppsJson() {
-    return JSON.stringify(this.list().map((e) => this.appJson(e)).filter(Boolean));
+    return JSON.stringify(this.list().map((e) => this.appJson(e)));
   }
 
   appInfoJson(id) {
-    const app = this.appJson(this.mustGet(id));
-    if (!app) throw new Error(`${id} has no versions`);
-    return JSON.stringify(app);
+    return JSON.stringify(this.appJson(this.mustGet(id)));
   }
 
   launch(id) {
@@ -381,7 +399,7 @@ export class HubHost {
 
   setGrant(id, capability, allowed) {
     const entry = this.mustGet(id);
-    this.setGrantInner(id, capability, allowed, this.activeVersion(entry)?.version ?? "", false);
+    this.setGrantInner(id, capability, allowed, this.activeVersion(entry).version, false);
     this.save();
   }
 
@@ -407,28 +425,29 @@ export class HubHost {
   }
 
   setGroup(id, group, member) {
-    const entry = this.mustGet(id);
+    this.mustGet(id);
+    const groups = this.groupsOf(id).filter((g) => g !== group);
     if (member) {
       if (!this.state.groups.includes(group)) this.state.groups.push(group);
-      if (!entry.groups.includes(group)) entry.groups.push(group);
-    } else {
-      entry.groups = entry.groups.filter((g) => g !== group);
+      groups.push(group);
     }
+    this.state.appGroups[id] = groups;
     this.save();
   }
 
-  /** Removes the app from the library. Its data, grants and package files stay (as `Hub::remove`). */
+  /** Hides the app in this browser. Its data and grants stay (as `Hub::remove`); `install` shows it again. */
   remove(id) {
     this.mustGet(id);
-    delete this.state.apps[id];
+    this.state.removed.push(id);
     delete this.state.updates[id];
     this.save();
   }
 
   pin(id, version) {
     const entry = this.mustGet(id);
-    if (version && !entry.versions.some((v) => v.version === version)) throw new Error(`${id} has no version ${version}`);
-    entry.pinned = version || null;
+    if (version && !this.installedVersions(entry).some((v) => v.version === version)) throw new Error(`${id} has no version ${version}`);
+    if (version) this.state.pinned[id] = version;
+    else delete this.state.pinned[id];
     this.save();
   }
 
@@ -464,67 +483,35 @@ export class HubHost {
     return JSON.stringify({ hits, errors });
   }
 
-  /** The latest version of `id` in the registry at `base`, or null (`SourceClient::latest_version`). */
-  async latestFrom(base, id) {
-    const registry = await loadRegistry(base, this.fetchImpl);
-    const summary = registry.apps.find((a) => a.id.toLowerCase() === id.toLowerCase());
-    if (!summary) return null;
-    const version = latestVersion(await loadAppDocument(registry, summary.id, this.fetchImpl));
-    return version ? { registry, id: summary.id, version } : null;
-  }
-
-  async download(found) {
-    const bytes = await fetchBytes(packageUrl(found.registry, found.version.sha256), this.fetchImpl);
-    return this.addPackage(bytes, found.version, found.id, found.registry);
-  }
-
-  /** Installs the latest version of `id` from the first source that lists it (`install_from_sources`). */
+  /**
+   * In browse mode every registry app is in the library already: `install`
+   * shows an app that the user removed, and reads the registries again for
+   * an app that is new there. Returns the app id.
+   */
   async install(id) {
-    const errors = [];
-    for (const [name, base] of this.sources()) {
-      let found;
-      try {
-        found = await this.latestFrom(base, id);
-      } catch (err) {
-        errors.push(`${name}: ${message(err)}`);
-        continue;
-      }
-      if (!found) continue;
-      const added = await this.download(found);
-      this.mustGet(added).registry = { name, base };
-      this.mustGet(added).source = "registry";
-      this.save();
-      return added;
+    if (!this.catalog.has(id)) await this.refresh();
+    if (!this.catalog.has(id)) {
+      throw new Error(this.sourceErrors.length ? `no configured source could give ${id} (${this.sourceErrors.join("; ")})` : `no configured source lists ${id}`);
     }
-    throw new Error(errors.length ? `no configured source could give ${id} (${errors.join("; ")})` : `no configured source lists ${id}`);
+    if (this.isBlocked(id)) throw new Error(`${id} is blocked`);
+    this.state.removed = this.state.removed.filter((r) => r !== id);
+    this.save();
+    return id;
   }
 
   /** `{ updates: [{ id, name, current, version, source, newCapabilities, pinned }], errors }` as JSON (`check_updates`). */
   async checkUpdates(only = "") {
-    const updates = [];
-    const errors = [];
     if (only) this.mustGet(only);
+    const errors = await this.refresh();
+    const updates = [];
     for (const entry of this.list()) {
       if (only && only !== entry.id) continue;
-      if (!entry.registry) {
-        delete this.state.updates[entry.id];
-        continue;
-      }
-      const newest = this.newestInstalled(entry.id);
-      const current = newest?.version ?? "";
-      let latest;
-      try {
-        latest = await this.latestFrom(entry.registry.base, entry.id);
-      } catch (err) {
-        errors.push(`${entry.id}: ${message(err)}`);
-        continue;
-      }
-      if (latest && isNewer(latest.version.version, current)) {
-        const old = newest?.capabilities ?? [];
-        const caps = (latest.version.capabilities ?? []).map((c) => c.name);
-        const found = { version: latest.version.version, source: entry.registry.name, newCapabilities: caps.filter((c) => !old.includes(c)) };
+      const known = this.knownVersion(entry);
+      const newest = entry.versions[0];
+      if (isNewer(newest.version, known.version)) {
+        const found = { version: newest.version, source: entry.source, newCapabilities: newest.capabilities.filter((c) => !known.capabilities.includes(c)) };
         this.state.updates[entry.id] = found;
-        updates.push({ id: entry.id, name: entry.name, current, version: found.version, source: found.source, newCapabilities: found.newCapabilities, pinned: entry.pinned ?? "" });
+        updates.push({ id: entry.id, name: entry.name, current: known.version, version: found.version, source: found.source, newCapabilities: found.newCapabilities, pinned: this.state.pinned[entry.id] ?? "" });
       } else {
         delete this.state.updates[entry.id];
       }
@@ -533,22 +520,30 @@ export class HubHost {
     return JSON.stringify({ updates, errors });
   }
 
-  /** Installs the newest version of `id` from its source (`apply_update`). Returns the new version, or "" if it is up to date. */
+  /**
+   * Accepts the newest registry version of `id` (`apply_update`). Returns
+   * the new version, or "" if it is up to date. Its new Medium/High
+   * capabilities are asked for when it opens; until then the previous
+   * version runs (`runnableVersion`).
+   */
   async update(id) {
-    const entry = this.mustGet(id);
-    if (!entry.registry) throw new Error(`${id} was added from a file; it has no source to update from`);
-    const current = this.newestInstalled(id)?.version ?? "";
-    const latest = await this.latestFrom(entry.registry.base, id);
-    if (!latest) throw new Error(`the source ${entry.registry.name} no longer lists ${id}`);
-    if (!isNewer(latest.version.version, current)) {
-      delete this.state.updates[id];
+    this.mustGet(id);
+    await this.refresh();
+    const entry = this.get(id);
+    if (!entry) throw new Error(`the source no longer lists ${id}`);
+    const known = this.knownVersion(entry);
+    const newest = entry.versions[0];
+    delete this.state.updates[id];
+    if (!isNewer(newest.version, known.version)) {
       this.save();
       return "";
     }
-    const added = await this.download(latest);
-    if (added !== id) throw new Error(`source ${entry.registry.name} gave a package for ${added}, not ${id}`);
-    delete this.state.updates[id];
+    if (known.signer && newest.signer && known.signer !== newest.signer) {
+      throw new Error(`${id} ${newest.version} is signed by a different key (${newest.signer}) than ${known.version} (${known.signer}); key rotation is not supported yet`);
+    }
+    this.state.known[id] = newest.version;
+    this.grantLowRisk(id, newest);
     this.save();
-    return latest.version.version;
+    return newest.version;
   }
 }
