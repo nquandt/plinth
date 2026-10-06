@@ -120,6 +120,8 @@ All stores are per user and live in the Hub data directory (for example `%LOCALA
 
 ### 5.1 Sources
 
+> The exact format of a source is `docs/REGISTRY.md` (a NuGet-style service index at `<base>/plinth-registry.json`; static folders work).
+
 A **source** is an HTTPS endpoint that serves:
 
 - `index.json`: the apps that it lists, each with the app id, the publisher key, the versions (version, package digest, size, core version, UI API version, capabilities), the name, the description, the icon, screenshots, and categories. The source signs the index with its source key.
