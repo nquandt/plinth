@@ -1,8 +1,8 @@
-//! App modules hold only the app code; a host links them into its own
-//! runtime and rejects modules that reach past the runtime (SPEC.md §10.1).
+//! App modules hold only the app code; a host links them into an installed
+//! core and rejects modules that reach past the core (SPEC.md §10.4, §10.5).
 
 use plinth_compiler::driver::DiskFs;
-use plinth_compiler::{link, split};
+use plinth_compiler::{cores, link, split};
 use std::path::PathBuf;
 use wasm_encoder::{CustomSection, EntityType, ImportSection, Module, TypeSection};
 
@@ -11,8 +11,7 @@ fn counter() -> plinth_compiler::Artifact {
     plinth_compiler::compile(&fs).unwrap().1.expect("counter compiles")
 }
 
-/// A module with one function import and the runtime section of this
-/// runtime.
+/// A module with one function import that needs this compiler's core.
 fn module_importing(module: &str, name: &str) -> Vec<u8> {
     let mut types = TypeSection::new();
     types.ty().function([], []);
@@ -20,8 +19,7 @@ fn module_importing(module: &str, name: &str) -> Vec<u8> {
     imports.import(module, name, EntityType::Function(0));
     let mut m = Module::new();
     m.section(&types).section(&imports);
-    let id = split::abi_id();
-    m.section(&CustomSection { name: split::ABI_SECTION.into(), data: id.as_bytes().into() });
+    m.section(&CustomSection { name: split::CORE_SECTION.into(), data: split::core_needed().as_bytes().into() });
     m.finish()
 }
 
@@ -31,12 +29,27 @@ fn load_error(app: &[u8]) -> String {
     format!("{:#}", split::load_app(rt, &layout, app).err().expect("the load must fail"))
 }
 
+/// Sets the `MAJOR.MINOR` that an app module needs.
+fn needing(mut app: Vec<u8>, version: &str) -> Vec<u8> {
+    let have = split::core_needed();
+    assert_eq!(have.len(), version.len(), "keep the length so the section size stays valid");
+    let at = app.windows(have.len() + 11).position(|w| w == format!("plinth-core{have}").as_bytes()).unwrap() + 11;
+    app[at..at + version.len()].copy_from_slice(version.as_bytes());
+    app
+}
+
+#[test]
+fn the_compiler_and_its_core_agree_on_the_version() {
+    assert_eq!(cores::core_version(link::runtime()), cores::parse_version(&split::core_needed()));
+    assert!(link::layout(link::runtime()).unwrap().missing.is_empty());
+}
+
 #[test]
 fn the_counter_app_module_holds_only_app_code() {
     let art = counter();
     assert!(split::is_app_module(&art.app));
-    assert_eq!(split::app_abi_id(&art.app).as_deref(), Some(art.runtime.as_str()));
-    assert_eq!(art.runtime, "plinth-abi/1");
+    assert_eq!(art.runtime, format!("plinth-core/{}", split::core_needed()));
+    assert_eq!(split::app_core_version(&art.app), cores::parse_version(&split::core_needed()));
     // SPEC.md §5.5: the runtime is not in the app; the counter is tiny.
     assert!(art.app.len() <= 4 * 1024, "the counter app module is {} bytes", art.app.len());
     // The host's link step gives a component that runs.
@@ -45,21 +58,16 @@ fn the_counter_app_module_holds_only_app_code() {
 }
 
 #[test]
-fn a_module_for_another_abi_major_is_rejected() {
-    let mut app = counter().app;
-    let id = split::abi_id();
-    let pos = app.windows(id.len()).position(|w| w == id.as_bytes()).unwrap();
-    app[pos + id.len() - 1] = b'9';
-    assert!(load_error(&app).contains("needs the runtime ABI `plinth-abi/9`"));
+fn a_newer_minor_or_another_major_is_rejected_by_this_core() {
+    assert!(load_error(&needing(counter().app, "1.9")).contains("needs core 1.9, but this core is 1.0"));
+    assert!(load_error(&needing(counter().app, "2.0")).contains("needs core 2.0"));
 }
 
 #[test]
 fn the_app_module_does_not_depend_on_the_runtime_build() {
-    // The app has no runtime build id and no runtime table size in it: a
-    // runtime with a different table (another build of the same ABI) links
-    // it at its own table end.
+    // The app has no runtime table size in it: a core with a different
+    // table (another build) links it at its own table end.
     let art = counter();
-    assert!(!art.app.windows(10).any(|w| w == b"plinth-rt/"));
     let rt = link::runtime();
     let mut layout = link::layout(rt).unwrap();
     let code = split::load_app(rt, &layout, &art.app).unwrap();
@@ -69,9 +77,36 @@ fn the_app_module_does_not_depend_on_the_runtime_build() {
 }
 
 #[test]
-fn imports_outside_the_runtime_are_rejected() {
+fn imports_outside_the_core_are_rejected() {
     assert!(load_error(&module_importing("env", "abort")).contains("only `plinth-rt` is allowed"));
-    assert!(load_error(&module_importing("plinth-rt", "secret")).contains("this runtime does not have"));
-    // A runtime function with the wrong type.
+    assert!(load_error(&module_importing("plinth-rt", "secret")).contains("this core does not have"));
+    // A core function with the wrong type.
     assert!(load_error(&module_importing("plinth-rt", "alloc")).contains("wrong type"));
+}
+
+#[test]
+fn cores_are_selected_by_major_and_the_highest_usable_minor() {
+    let core = |major, minor| cores::Core { version: (major, minor), bytes: Vec::new(), path: None };
+    let installed = vec![core(1, 0), core(1, 2), core(1, 5), core(2, 0)];
+    assert_eq!(cores::select(&installed, (1, 1)).map(|c| c.version), Some((1, 5)));
+    assert_eq!(cores::select(&installed, (1, 5)).map(|c| c.version), Some((1, 5)));
+    assert_eq!(cores::select(&installed, (2, 0)).map(|c| c.version), Some((2, 0)));
+    assert!(cores::select(&installed, (1, 6)).is_none());
+    assert!(cores::select(&installed, (3, 0)).is_none());
+}
+
+#[test]
+fn install_and_link_through_the_cores_directory() {
+    let dir = std::env::temp_dir().join(format!("plinth-cores-{}", std::process::id()));
+    // SAFETY: this test is the only one in this binary that reads the variable.
+    unsafe { std::env::set_var("PLINTH_CORES_DIR", &dir) };
+    let path = cores::install(link::runtime()).unwrap();
+    assert!(path.ends_with("1.0/core.wasm") || path.ends_with("1.0\\core.wasm"));
+    // Installing the same core again is fine; other contents are not.
+    cores::install(link::runtime()).unwrap();
+    assert!(cores::install(b"\0asm\x01\0\0\0").is_err());
+    assert!(cores::link_app(&counter().app).is_ok());
+    let err = format!("{:#}", cores::link_app(&needing(counter().app, "1.9")).unwrap_err());
+    assert!(err.contains("plinth core install"), "{err}");
+    std::fs::remove_dir_all(&dir).unwrap();
 }

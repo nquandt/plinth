@@ -27,6 +27,9 @@ usage:
                                    make one executable: this host and the app
   plinth validate <app.plnt | app.wasm>
                                    check a package and its Wasm imports
+  plinth core list                 show the installed runtime cores
+  plinth core install <core.wasm>  install a runtime core
+  plinth core export <file>        write the built-in core to a file
 
 The project directory defaults to the current directory.";
 
@@ -99,6 +102,31 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
                 bail!("this plinth can make `{}` executables only; run `plinth native` on {t}", std::env::consts::OS);
             }
             Ok(if native(Path::new(input), out)? { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+        }
+        Some("core") => {
+            use plinth_compiler::cores;
+            match positional.get(1).copied() {
+                Some("list") | None => {
+                    println!("cores directory: {}", cores::cores_dir().display());
+                    for c in cores::installed() {
+                        let at = c.path.map(|p| p.display().to_string()).unwrap_or_else(|| "built in".into());
+                        println!("  {}.{}  {} KiB  {at}", c.version.0, c.version.1, c.bytes.len().div_ceil(1024));
+                    }
+                }
+                Some("install") => {
+                    let file = positional.get(2).context("usage: plinth core install <core.wasm>")?;
+                    let path = cores::install(&std::fs::read(file).with_context(|| format!("read {file}"))?)?;
+                    println!("installed {}", path.display());
+                }
+                Some("export") => {
+                    let file = positional.get(2).context("usage: plinth core export <file>")?;
+                    std::fs::write(file, plinth_compiler::link::runtime()).with_context(|| format!("write {file}"))?;
+                    let (major, minor) = cores::core_version(plinth_compiler::link::runtime()).unwrap_or_default();
+                    println!("wrote core {major}.{minor} to {file}");
+                }
+                Some(other) => bail!("unknown `plinth core {other}`; use list, install or export"),
+            }
+            Ok(ExitCode::SUCCESS)
         }
         Some("validate") => {
             let file = positional.get(1).context("usage: plinth validate <file>")?;

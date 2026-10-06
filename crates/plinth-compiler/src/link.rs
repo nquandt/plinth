@@ -13,7 +13,7 @@
 //!   A stub keeps its index, so the append rule still holds.
 
 use crate::rt_abi;
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, bail};
 use std::collections::HashMap;
 use std::ops::Range;
 use wasm_encoder::{
@@ -37,6 +37,13 @@ pub struct Layout {
     /// For an app module (SPEC.md §10.4): the imported global that holds the
     /// first table index of the app. Table indices are then relative to it.
     pub table_base_global: Option<u32>,
+    /// Every `__plinth_rt_*` export of the core: name without the prefix →
+    /// `(function index, params, results)`. An app links against these, so
+    /// an older core can run apps that use only what it has.
+    pub exports: HashMap<String, (u32, Vec<ValType>, Vec<ValType>)>,
+    /// The `rt_abi` functions that this core lacks or has with another
+    /// type. The compiler needs none missing in its own core.
+    pub missing: Vec<&'static str>,
 }
 
 impl Layout {
@@ -140,17 +147,23 @@ pub fn layout(rt: &[u8]) -> Result<Layout> {
     if tables != 1 {
         bail!("plinth-rt must have exactly one table, found {tables}");
     }
-    let mut rt_funcs = HashMap::new();
-    for &(name, params, results) in rt_abi::FUNCTIONS {
-        let full = format!("{}{name}", rt_abi::PREFIX);
-        let idx = *exports.get(&full).ok_or_else(|| anyhow!("plinth-rt does not export `{full}`"))?;
+    let mut abi_exports: HashMap<String, (u32, Vec<ValType>, Vec<ValType>)> = HashMap::new();
+    for (full, &idx) in &exports {
+        let Some(name) = full.strip_prefix(rt_abi::PREFIX) else { continue };
         let ty = &types[func_types[idx as usize] as usize];
-        let same = ty.params().iter().map(val_type).eq(params.iter().copied())
-            && ty.results().iter().map(val_type).eq(results.iter().copied());
-        if !same {
-            bail!("`{full}` has the type {ty:?} in plinth-rt, but the compiler expects {params:?} -> {results:?}");
+        let params: Vec<ValType> = ty.params().iter().map(val_type).collect();
+        let results: Vec<ValType> = ty.results().iter().map(val_type).collect();
+        abi_exports.insert(name.to_owned(), (idx, params, results));
+    }
+    let mut rt_funcs = HashMap::new();
+    let mut missing = Vec::new();
+    for &(name, params, results) in rt_abi::FUNCTIONS {
+        match abi_exports.get(name) {
+            Some((idx, p, r)) if p.as_slice() == params && r.as_slice() == results => {
+                rt_funcs.insert(name, *idx);
+            }
+            _ => missing.push(name),
         }
-        rt_funcs.insert(name, idx);
     }
     Ok(Layout {
         type_count: types.len() as u32,
@@ -161,6 +174,8 @@ pub fn layout(rt: &[u8]) -> Result<Layout> {
         rt_start,
         rt_funcs,
         table_base_global: None,
+        exports: abi_exports,
+        missing,
     })
 }
 

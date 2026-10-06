@@ -618,7 +618,7 @@ The loader rejects path traversal, absolute paths, symlinks, duplicate entries, 
 
 ### 10.2 Manifest
 
-`runtime` names the runtime ABI that the app needs, for example `plinth-abi/1` (§10.4).
+`runtime` names the core version that the app needs, for example `plinth-core/1.0` (§10.5).
 
 ```toml
 id        = "com.example.notes"
@@ -626,7 +626,7 @@ name      = "Notes"
 version   = "1.2.0"
 publisher = "example"
 ui-api    = "1.0"
-runtime   = "plinth-abi/1"
+runtime   = "plinth-core/1.0"
 entry     = "app.wasm"
 accent    = "teal"
 icon      = "assets/icon.png"
@@ -664,13 +664,24 @@ The stub finds its payload through a footer: the magic bytes `PLNTH\0`, the offs
 
 - `app.wasm` is a core Wasm module. It imports from the module `plinth-rt`: the runtime functions that it calls (the names in `rt_abi`, without the `__plinth_rt_` prefix), the immutable `i32` global `table_base`, `memory` and `table`. It has no exports, no own memory or table, and only passive data.
 - **No dependency on one runtime build.** The app uses runtime functions only by name and type. Its table indices are relative to `table_base`, and its one element segment starts at `table_base`. It contains no runtime index, size or build id.
-- **ABI version.** The custom section `plinth-abi` holds the ABI id, for example `plinth-abi/1`. The manifest field `runtime` has the same value.
-- **Compatibility rule.** Inside one ABI major version, the runtime only adds functions and constants. It never removes a function, changes its type or its behavior, or changes the object layout (`HEADER`, `STR_BYTES`, the built-in type ids). A breaking change makes a new major version, and a host can carry one runtime for each major version that it supports. An app that imports a function that an older host does not have fails to load with a clear message.
-- **Load.** The host checks the ABI id and each import (name and type), remaps the app indices into the index spaces of its runtime, replaces `global.get table_base` with its own table size, and uses the append linker (§5.1 step 8) to make one module. Then it runs that module. The link takes some milliseconds. A host can cache the result by the digest of the app.
+- **Core version.** The custom section `plinth-core` holds the core version that the app needs, `MAJOR.MINOR` (for example `1.0`). The manifest field `runtime` is `plinth-core/1.0`. §10.5 tells how a host picks a core.
+- **Compatibility rule.** Inside one major version, a core only adds functions and constants, and each addition increments the minor version. A core never removes a function, changes its type or its behavior, or changes the object layout (`HEADER`, `STR_BYTES`, the built-in type ids). A breaking change makes a new major version.
+- **Load.** The host picks a core (§10.5), checks each import against the exports of that core (name and type), remaps the app indices into the index spaces of its runtime, replaces `global.get table_base` with its own table size, and uses the append linker (§5.1 step 8) to make one module. Then it runs that module. The link takes some milliseconds. A host can cache the result by the digest of the app.
 - **Security.** The app can reach only the runtime functions. All host APIs go through the runtime and the capability policy (§11).
 - **Sizes (2026-10-05).** The counter app module is about 1.8 KB and its package is 2 KiB. The todo app module is about 5 KB.
 
 The compiler runs the same load step after each build, so each build tests it.
+
+### 10.5 Runtime cores and versions
+
+A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version is the same file on every host platform. A `.plnt` that needs core 1.3 behaves the same on Windows, macOS, Linux, the web and mobile, because each of these hosts runs the same core 1.3 file.
+
+- A core holds its version in the custom section `plinth-core` (`MAJOR.MINOR`).
+- A host keeps more than one core, as a version manager (for example `nvm`) does: the core that it was built with, and the cores in its cores directory (`%LOCALAPPDATA%\plinth\cores\<version>\core.wasm` on Windows, `$XDG_DATA_HOME/plinth/cores/...` on other systems, or `PLINTH_CORES_DIR`).
+- **Selection.** For each app, the host picks the core with the same major version and the highest minor version that is not lower than the app's minor version. If there is no such core, the host tells the user which core to install.
+- **Backward compatibility.** Because a core only adds functions inside its major version, the newest core of a major version runs every older app of that major version. A breaking change makes a new major version, and the old and the new core stay installed side by side.
+- **The native part of a host** (the renderer and the host APIs) must also support the WIT world that a core imports (`plinth:app@1.0.0`). A new core major version that needs a new WIT world also needs a host that supports it.
+- **Commands:** `plinth core list`, `plinth core install <core.wasm>`, `plinth core export <file>`. Later, the hub and npm distribute cores.
 
 ---
 

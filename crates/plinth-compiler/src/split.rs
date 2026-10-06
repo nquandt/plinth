@@ -9,11 +9,11 @@
 //! module and remaps its indices into the index spaces of the runtime, and
 //! the append linker (`link::link`) makes one module from the two.
 //!
-//! An app module does not depend on one runtime build. It names the ABI
-//! major version (`rt_abi::ABI_MAJOR`) in the custom section `plinth-abi`,
-//! it imports runtime functions by name and type, and its table indices are
-//! relative to the imported global `table_base`. Thus a `.plnt` is built one
-//! time and runs on every host whose runtime implements that ABI version.
+//! An app module does not depend on one runtime build. It names the core
+//! version that it needs in the custom section `plinth-core`, it imports
+//! runtime functions by name and type, and its table indices are relative to
+//! the imported global `table_base`. Thus a `.plnt` is built one time and
+//! runs on every host that has a core of that major version (`cores`).
 
 use crate::link::{AppCode, Layout};
 use crate::rt_abi;
@@ -30,15 +30,20 @@ use wasmparser::{BinaryReader, Parser, Payload, TypeRef};
 
 /// The import module name of the runtime.
 pub const RT_MODULE: &str = "plinth-rt";
-/// The custom section that names the ABI version of an app module.
-pub const ABI_SECTION: &str = "plinth-abi";
+/// The custom section that names the core version of an app module. It
+/// has the same name as the section that holds a core's own version.
+pub const CORE_SECTION: &str = crate::cores::CORE_SECTION;
 /// The import name of the global that holds the app's first table index.
 pub const TABLE_BASE: &str = "table_base";
 
-/// The ABI id that this compiler writes: `plinth-abi/<major>`. The manifest
-/// field `runtime` has the same value.
-pub fn abi_id() -> String {
-    format!("plinth-abi/{}", rt_abi::ABI_MAJOR)
+/// The core version that this compiler writes, `MAJOR.MINOR`.
+pub fn core_needed() -> String {
+    format!("{}.{}", rt_abi::CORE_MAJOR, rt_abi::CORE_MINOR)
+}
+
+/// The value of the manifest field `runtime`: `plinth-core/MAJOR.MINOR`.
+pub fn runtime_field() -> String {
+    format!("plinth-core/{}", core_needed())
 }
 
 /// The id of a runtime build: `plinth-rt/` and the first 16 hex digits of
@@ -85,6 +90,8 @@ pub fn app_layout() -> AppLayout {
         rt_start: None,
         rt_funcs,
         table_base_global: Some(0),
+        exports: HashMap::new(),
+        missing: Vec::new(),
     };
     AppLayout { layout, import_types, imports }
 }
@@ -247,7 +254,7 @@ pub fn encode_app(al: &AppLayout, app: &AppCode) -> Result<Vec<u8>> {
     }
     module.section(&DataCountSection { count: app.data.len() as u32 });
     module.section(&code).section(&data);
-    module.section(&CustomSection { name: ABI_SECTION.into(), data: abi_id().as_bytes().into() });
+    module.section(&CustomSection { name: CORE_SECTION.into(), data: core_needed().as_bytes().into() });
     let bytes = module.finish();
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(&bytes)
@@ -255,16 +262,9 @@ pub fn encode_app(al: &AppLayout, app: &AppCode) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Returns the ABI id that an app module names, if it has one.
-pub fn app_abi_id(app: &[u8]) -> Option<String> {
-    for payload in Parser::new(0).parse_all(app) {
-        if let Ok(Payload::CustomSection(c)) = payload
-            && c.name() == ABI_SECTION
-        {
-            return std::str::from_utf8(c.data()).ok().map(str::to_owned);
-        }
-    }
-    None
+/// Returns the core version that an app module needs, if it names one.
+pub fn app_core_version(app: &[u8]) -> Option<crate::cores::Version> {
+    crate::cores::core_version(app)
 }
 
 /// True when `bytes` is a core module (an app module), not a component.
@@ -275,20 +275,23 @@ pub fn is_app_module(bytes: &[u8]) -> bool {
 /// Checks an app module against the runtime `rt` and remaps it into the
 /// runtime's index spaces, for `link::link`.
 ///
-/// The app must name the ABI major version of this runtime. It may import
-/// only runtime functions (with the types in `rt_abi`), `table_base`, and
-/// the memory and the table of `plinth-rt`. It must not define a memory or
-/// a table, export anything, or have active data. Its one element segment
-/// must start at `table_base`.
+/// The app must need the major version of the core `rt`, and a minor
+/// version that is not higher. It may import only functions that the core
+/// exports (same name and type), `table_base`, and the memory and the table
+/// of `plinth-rt`. It must not define a memory or a table, export anything,
+/// or have active data. Its one element segment must start at `table_base`.
 pub fn load_app(rt: &[u8], rt_layout: &Layout, app: &[u8]) -> Result<AppCode> {
-    let _ = rt;
     ensure!(is_app_module(app), "app.wasm is not a core Wasm module");
-    let want = abi_id();
-    match app_abi_id(app) {
-        Some(id) if id == want => {}
-        Some(id) => bail!("the app needs the runtime ABI `{id}`, but this host has `{want}`"),
-        None => bail!("app.wasm does not name its runtime ABI (no `{ABI_SECTION}` section)"),
-    }
+    let need = app_core_version(app).with_context(|| format!("app.wasm does not name its core (no `{CORE_SECTION}` section)"))?;
+    let have = crate::cores::core_version(rt).context("the runtime has no core version")?;
+    ensure!(
+        need.0 == have.0 && need.1 <= have.1,
+        "the app needs core {}.{}, but this core is {}.{}",
+        need.0,
+        need.1,
+        have.0,
+        have.1
+    );
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(app)
         .context("app.wasm is not valid")?;
@@ -321,14 +324,14 @@ pub fn load_app(rt: &[u8], rt_layout: &Layout, app: &[u8]) -> Result<AppCode> {
                     ensure!(imp.module == RT_MODULE, "app.wasm imports from `{}`; only `{RT_MODULE}` is allowed", imp.module);
                     match imp.ty {
                         TypeRef::Func(t) => {
-                            let (_, params, results) = rt_abi::FUNCTIONS.iter().find(|(n, _, _)| *n == imp.name).with_context(|| {
-                                format!("app.wasm imports `{}`, which this runtime does not have; a newer host may run it", imp.name)
+                            let (idx, params, results) = rt_layout.exports.get(imp.name).with_context(|| {
+                                format!("app.wasm imports `{}`, which this core does not have; a newer core may run it", imp.name)
                             })?;
                             let ty = types.get(t as usize).context("bad import type")?;
                             let same = ty.params().iter().map(val_type).eq(params.iter().copied())
                                 && ty.results().iter().map(val_type).eq(results.iter().copied());
                             ensure!(same, "app.wasm imports `{}` with a wrong type", imp.name);
-                            funcs.push(rt_layout.rt(imp.name));
+                            funcs.push(*idx);
                         }
                         TypeRef::Global(g) if imp.name == TABLE_BASE && !g.mutable && g.content_type == wasmparser::ValType::I32 => {}
                         TypeRef::Memory(_) if imp.name == "memory" => {}

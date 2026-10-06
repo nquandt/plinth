@@ -55,11 +55,11 @@ impl HostApp {
     }
 }
 
-/// Links an app module into the runtime of this host. A component passes
-/// through unchanged.
+/// Links an app module into the installed core that it needs (SPEC.md
+/// §10.5). A component passes through unchanged.
 fn with_runtime(entry: Vec<u8>) -> Result<Vec<u8>> {
-    use plinth_compiler::{link, split};
-    if split::is_app_module(&entry) { split::link_app(link::runtime(), &entry) } else { Ok(entry) }
+    use plinth_compiler::{cores, split};
+    if split::is_app_module(&entry) { cores::link_app(&entry) } else { Ok(entry) }
 }
 
 /// A `Clipboard` backed by the real system clipboard (`arboard`), used

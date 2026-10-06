@@ -25,6 +25,16 @@
 
 extern crate alloc;
 
+/// The core version, `MAJOR.MINOR` (SPEC.md §10.4). A host reads it from the
+/// custom section `plinth-core` and picks a core for each app by it. Inside
+/// one major version a core only adds functions; each addition increments
+/// the minor version. Keep it equal to `CORE_MAJOR`/`CORE_MINOR` in the
+/// compiler's `rt_abi.rs` (a compiler test checks it).
+#[cfg(target_arch = "wasm32")]
+#[used]
+#[unsafe(link_section = "plinth-core")]
+static CORE_VERSION: [u8; 3] = *b"1.0";
+
 #[cfg(target_arch = "wasm32")]
 mod allocator;
 pub mod arrays;

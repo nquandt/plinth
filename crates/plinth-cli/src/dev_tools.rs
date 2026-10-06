@@ -61,9 +61,9 @@ pub fn validate_file(path: &Path) -> Result<()> {
 /// An app module must link into this runtime (SPEC.md §10.1); a component
 /// must import only the plinth:app world.
 fn validate_entry(bytes: &[u8]) -> Result<()> {
-    use plinth_compiler::{link, split};
+    use plinth_compiler::{cores, split};
     if split::is_app_module(bytes) {
-        let component = split::link_app(link::runtime(), bytes)?;
+        let component = cores::link_app(bytes)?;
         validate_component(&component)
     } else {
         validate_component(bytes)
