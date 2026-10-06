@@ -7,7 +7,9 @@
 // This file is DOM-only: it does not touch wasm directly. `app.onCommit`
 // (from plinth-web.js) feeds it ops; it calls `app.onEvent(...)` back.
 
-import { ControlKind, Prop, Event } from "./ui-api.js";
+import { ControlKind, Prop, Event, EnumAspect } from "./ui-api.js";
+
+const ASPECT_RATIO = { [EnumAspect.square]: "1 / 1", [EnumAspect.wide]: "16 / 9", [EnumAspect.tall]: "3 / 4" };
 
 const kindName = Object.fromEntries(Object.entries(ControlKind).map(([k, v]) => [v, k]));
 
@@ -145,13 +147,32 @@ function el(tag, className, attrs) {
   return e;
 }
 
+/** Guesses a MIME type from an asset's file extension, for a blob URL. */
+function assetMimeType(name) {
+  const ext = name.split(".").pop()?.toLowerCase();
+  const types = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", svg: "image/svg+xml", gif: "image/gif" };
+  return types[ext] ?? "application/octet-stream";
+}
+
 /** Renders `tree` into `container`, re-rendering on every `tree.onChange`. */
 export class DomRenderer {
-  constructor(tree, container, app) {
+  /** `assets` is a `Map<path, Uint8Array>` from `readPlnt` (SPEC.md §10.1, `<Image>`). */
+  constructor(tree, container, app, assets = new Map()) {
     this.tree = tree;
     this.container = container;
     this.app = app;
+    this.assets = assets;
+    this.assetUrls = new Map(); // path -> blob: URL, built lazily and kept for the page's life
     tree.onChange = () => this.render();
+  }
+
+  assetUrl(path) {
+    if (this.assetUrls.has(path)) return this.assetUrls.get(path);
+    const bytes = this.assets.get(path);
+    if (!bytes) return null;
+    const url = URL.createObjectURL(new Blob([bytes], { type: assetMimeType(path) }));
+    this.assetUrls.set(path, url);
+    return url;
   }
 
   send(handler, eventCode, value) {
@@ -235,6 +256,8 @@ export class DomRenderer {
         return this.renderGrid(n);
       case "action":
         return this.renderActionStandalone(n);
+      case "image":
+        return this.renderImage(n);
       default:
         return this.renderChildren(n, el("div", `pl-${kname}`));
     }
@@ -532,6 +555,28 @@ export class DomRenderer {
     const b = el("span", "pl-badge");
     b.textContent = n.props.get(Prop.label) ?? n.props.get(Prop.title) ?? "";
     return b;
+  }
+
+  /** `<Image>` (SPEC.md §6.3, §10.1): an asset from the package. Sized by
+   * `aspect`, not pixels. A missing asset falls back to a placeholder box
+   * with the `alt` text, so a broken image never breaks accessibility. */
+  renderImage(n) {
+    const src = n.props.get(Prop.src) ?? "";
+    const alt = n.props.get(Prop.alt) ?? "";
+    const aspectProp = n.props.get(Prop.aspect);
+    const ratio = ASPECT_RATIO[aspectProp?.enum ?? EnumAspect.square] ?? ASPECT_RATIO[EnumAspect.square];
+    const url = this.assetUrl(src);
+    const wrap = el("div", "pl-image", { style: `aspect-ratio: ${ratio}` });
+    if (url) {
+      const img = el("img", "pl-image-img", { alt, src: url });
+      wrap.appendChild(img);
+    } else {
+      wrap.classList.add("pl-image-placeholder");
+      wrap.setAttribute("role", "img");
+      wrap.setAttribute("aria-label", alt);
+      wrap.appendChild(el("span", "pl-image-placeholder-text")).appendChild(text(alt));
+    }
+    return wrap;
   }
 
   /** `Tabs.items` arrive joined with U+001F; `value` is the selected item's text. */

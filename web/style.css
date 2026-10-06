@@ -281,6 +281,28 @@ body {
   padding: 2px 8px;
   font-size: 0.8rem;
 }
+.pl-image {
+  width: 100%;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.pl-image-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.pl-image-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--pl-surface-alt, #eee);
+  border: 1px solid var(--pl-border, #ccc);
+  color: var(--pl-text-muted, #666);
+  font-size: 0.8rem;
+  text-align: center;
+  padding: 8px;
+}
 .pl-tabs {
   display: flex;
   gap: 4px;
