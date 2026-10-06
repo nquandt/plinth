@@ -60,6 +60,54 @@ node scripts/npm-pack.mjs
 This writes tarballs to `target/npm/`. Install one in a scratch directory
 with `npm install /path/to/plinth-cli-*.tgz` to check it runs.
 
+## Local npm smoke test
+
+This is the full end-to-end flow a new user goes through, checked locally
+before a release. It needs a release build and the tarballs:
+
+```sh
+cargo build --release -p plinth-cli
+node scripts/npm-pack.mjs
+```
+
+Then, in a scratch directory under `target/` (outside the repo's own
+`node_modules`):
+
+```sh
+mkdir target/npm-smoke && cd target/npm-smoke
+cp ../npm/*.tgz .
+```
+
+**Gotcha:** `npx <tarball>` alone runs nothing useful on Windows; use
+`npx --package=<tarball> <bin-name>`. `create-plinth`'s first run also has
+no `@plinth/cli` installed yet to find the `plinth` binary, and it is not
+on the npm registry during a local smoke test, so point it at the release
+binary directly with `PLINTH_BINARY`:
+
+```sh
+PLINTH_BINARY=../../release/plinth.exe npx --yes --package=./create-plinth-0.1.0.tgz create-plinth my-app
+cd my-app
+npm install ../plinth-cli-0.1.0.tgz ../plinth-cli-win32-x64-0.1.0.tgz
+npm run check
+npm run build
+```
+
+(On Windows, `PLINTH_BINARY` can also be set with PowerShell's
+`$env:PLINTH_BINARY = "..."` before the `npx` line, or inline for bash as
+shown.) `npm install` adds `node_modules/.bin/plinth{,.cmd,.ps1}`, wired
+through `@plinth/cli`'s `bin/plinth.js` shim to the platform package's
+binary; `npm run check` and `npm run build` then call that shim with no
+further setup. The project's typings live at `.plinth/types` (written by
+`plinth new` and refreshed by `plinth check`/`build`); `tsconfig.json`
+points `plinth:*` there, so `npx -p typescript@7 tsc -p .` also works with
+no changes.
+
+This flow was last verified on Windows against version 0.1.0 with no
+shim, script, or typings-path changes needed: `create-plinth` scaffolds a
+working project, `npm install` resolves the two tarballs, and `npm run
+check` / `npm run build` both succeed against the generated two-screen
+template.
+
 ## Updating the gpui-ce pin
 
 CI checks out `gpui-ce` next to `plinth` at a pinned commit (see
