@@ -351,6 +351,77 @@ impl bindings::plinth::app::hub::Host for HostState {
         }
         id
     }
+
+    fn app_info(&mut self, id: String) -> Result<String, HostError> {
+        require(&self.policy, capability::HUB_MANAGE)?;
+        match &self.hub {
+            Some(hub) => hub.app_info_json(&id).map_err(|_| HostError::Denied(WitDeniedReason::Unsupported)),
+            None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
+        }
+    }
+
+    fn pin(&mut self, id: String, version: String) -> Result<(), HostError> {
+        require(&self.policy, capability::HUB_MANAGE)?;
+        match &mut self.hub {
+            Some(hub) => hub.pin(&id, &version).map_err(|_| HostError::Denied(WitDeniedReason::Unsupported)),
+            None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
+        }
+    }
+
+    fn block_publisher(&mut self, key: String) -> Result<(), HostError> {
+        require(&self.policy, capability::HUB_MANAGE)?;
+        match &mut self.hub {
+            Some(hub) => hub.block_publisher(&key).map_err(|_| HostError::Denied(WitDeniedReason::Unsupported)),
+            None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
+        }
+    }
+
+    fn unblock_publisher(&mut self, key: String) -> Result<(), HostError> {
+        require(&self.policy, capability::HUB_MANAGE)?;
+        match &mut self.hub {
+            Some(hub) => hub.unblock_publisher(&key).map_err(|_| HostError::Denied(WitDeniedReason::Unsupported)),
+            None => Err(HostError::Denied(WitDeniedReason::Unsupported)),
+        }
+    }
+
+    fn check_updates(&mut self, app: String) -> u32 {
+        let id = self.requests.open();
+        match self.hub_job(|hub| hub.check_updates(&app)) {
+            // Denied: the completion result is null, as for `search`.
+            Err(_) => self.net_results.lock().unwrap().push((id, plinth_protocol::Value::Null)),
+            Ok(job) => {
+                let tx = self.net_results.clone();
+                std::thread::spawn(move || {
+                    let result = match job() {
+                        Ok(json) => plinth_protocol::Value::Str(json),
+                        // A failed check still answers with JSON, so the
+                        // app can tell "denied" (null) from "failed".
+                        Err(e) => plinth_protocol::Value::Str(serde_json::json!({ "updates": [], "errors": [e] }).to_string()),
+                    };
+                    tx.lock().unwrap().push((id, result));
+                });
+            }
+        }
+        id
+    }
+
+    fn update(&mut self, app: String) -> u32 {
+        let id = self.requests.open();
+        match self.hub_job(|hub| hub.update(&app)) {
+            Err(reason) => self.net_results.lock().unwrap().push((id, plinth_protocol::Value::Str(denied_text(reason).to_owned()))),
+            Ok(job) => {
+                let tx = self.net_results.clone();
+                std::thread::spawn(move || {
+                    let result = match job() {
+                        Ok(_) => plinth_protocol::Value::Null,
+                        Err(e) => plinth_protocol::Value::Str(e),
+                    };
+                    tx.lock().unwrap().push((id, result));
+                });
+            }
+        }
+        id
+    }
 }
 
 impl HostState {

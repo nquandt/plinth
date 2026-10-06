@@ -317,7 +317,7 @@ small local change), per the dogfooding task's scope.
   "Map and Set iteration types for `tsc`" below).
 
 - **`try`/`catch`/`finally`/`throw` (HANDOFF.md §9 item 4, SPEC.md
-  §5.6, core 1.9).** `throw` takes an `Error` (a built-in class with
+  §5.6, core 1.10).** `throw` takes an `Error` (a built-in class with
   `name` and `message`, declared in `std/lib.d.ts` and built by the
   checker from a small prelude, `ERROR_PRELUDE` in `check/mod.rs`) or a
   subclass; `throw "text"` throws `new Error("text")`. A `catch`
@@ -331,7 +331,7 @@ small local change), per the dogfooding task's scope.
   (`return`, `break`, `continue`, the exception path). Each thunk (where
   the runtime calls app code) reports a pending exception through the
   new `error.report` WIT function (runtime function `uncaught`, core
-  1.9) and clears it, so an uncaught exception in an event handler does
+  1.10) and clears it, so an uncaught exception in an event handler does
   not stop the app. An uncaught exception in the start-up code is
   reported and then traps. Runtime traps stay traps: the `as` cast
   checks now use a separate `TStmt::Trap`. An app with no `throw` has

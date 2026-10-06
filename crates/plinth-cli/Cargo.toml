@@ -9,6 +9,12 @@ license.workspace = true
 name = "plinth"
 path = "src/main.rs"
 
+# `plinthw`: runs `plinth` with no console window, for shortcuts and
+# plinth:// links on Windows (`docs/HUB.md` §10).
+[[bin]]
+name = "plinthw"
+path = "src/plinthw.rs"
+
 [dependencies]
 plinth-compiler.workspace = true
 plinth-package.workspace = true

@@ -82,6 +82,40 @@ fn a_blocked_app_does_not_launch() {
     assert!(plan_launch(&hub, "com.example.missing").is_err());
 }
 
+/// `docs/HUB.md` §7.4: an app whose publisher key is blocked does not
+/// launch, also when it was installed before the block.
+#[test]
+fn an_app_of_a_blocked_publisher_does_not_launch() {
+    let hub = temp_hub();
+    let identity = plinth_package::publisher::PublisherIdentity {
+        name: "me".to_owned(),
+        signing_key: ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng),
+    };
+    let mut pkg = plinth_package::Package::read(&package("com.example.signed", "0.1.0", &[])).unwrap();
+    pkg.signature = Some(plinth_package::signature::sign(&pkg, &identity).unwrap());
+    hub.add_package(&pkg.write().unwrap()).unwrap();
+    assert!(matches!(plan_launch(&hub, "com.example.signed").unwrap(), LaunchPlan::Ready(_)));
+    hub.block_publisher(&identity.key_id()).unwrap();
+    let err = plan_launch(&hub, "com.example.signed").err().expect("blocked");
+    assert!(format!("{err:#}").contains("blocked"), "{err:#}");
+    hub.unblock_publisher(&identity.key_id()).unwrap();
+    assert!(matches!(plan_launch(&hub, "com.example.signed").unwrap(), LaunchPlan::Ready(_)));
+}
+
+/// `docs/HUB.md` §9.2: a pin makes the host open the pinned version.
+#[test]
+fn a_pinned_version_is_the_one_that_launches() {
+    let hub = temp_hub();
+    hub.add_package(&package("com.example.counter", "0.1.0", &[])).unwrap();
+    hub.add_package(&package("com.example.counter", "0.2.0", &[("clipboard.read", "paste")])).unwrap();
+    // The newest version declares a Medium capability: consent first.
+    let LaunchPlan::NeedsConsent { version, .. } = plan_launch(&hub, "com.example.counter").unwrap() else { panic!("consent first") };
+    assert_eq!(version, "0.2.0");
+    hub.pin("com.example.counter", Some("0.1.0".into())).unwrap();
+    let LaunchPlan::Ready(prepared) = plan_launch(&hub, "com.example.counter").unwrap() else { panic!("0.1.0 needs no consent") };
+    assert!(prepared.app.capabilities.is_empty());
+}
+
 /// A stand-in for the Hub UI: it asks the host to launch two apps when it
 /// starts, one ready and one that needs consent.
 const LAUNCHER: &str = r#"

@@ -159,7 +159,7 @@ Rules:
   the app. No `catch` gets them.
 - **Uncaught exceptions.** An exception that no `catch` gets in an event
   handler, a timer, a host-call callback, an effect, a `computed` or a
-  render slot goes to the host through `error.report` (core 1.9), for
+  render slot goes to the host through `error.report` (core 1.10), for
   example `Uncaught NotFound: no item 7`. The app keeps running. The
   signal changes before the `throw` stay. A `computed` or a slot that
   throws gives the zero value of its type. An uncaught exception in the
@@ -189,7 +189,7 @@ We chose this because:
   `try_table`/`exnref` form), and some AOT tools support neither. The
   generated code uses only Wasm 1.0 instructions.
 - **It costs nothing when nothing throws.** An app with no `throw` gets
-  no tests and no globals, and it does not import the core 1.9 function
+  no tests and no globals, and it does not import the core 1.10 function
   `uncaught`. An app with a `throw` pays one `global.get` and one `br_if`
   after each call that can throw.
 - **It fits the runtime.** The garbage collector runs only between
@@ -348,7 +348,7 @@ accurate.
 | `plinth:clipboard` | `writeText`, `readText`, `lastError()` | `clipboard.write` / `clipboard.read` |
 | `plinth:dialog` | `alert`, `confirm`, `prompt` (host-owned modal dialogs) | none |
 | `plinth:net` | HTTP/WebSocket | `net:<host pattern>` — **in progress**, needs `async`/`await` |
-| `plinth:hub` | `listApps`, `launch`, `setGrant`, `block`/`unblock`, `listGroups`, `createGroup`, `setGroup`, `remove`, `search`, `install`, `lastError` (the Hub UI only, see [host-apis.md](host-apis.md)) | `hub.manage`, for a package that a trusted Hub key signed |
+| `plinth:hub` | `listApps`, `appInfo`, `launch`, `setGrant`, `block`/`unblock`, `blockPublisher`/`unblockPublisher`, `pin`, `listGroups`, `createGroup`, `setGroup`, `remove`, `search`, `install`, `checkUpdates`, `update`, `lastError` (the Hub UI only, see [host-apis.md](host-apis.md)) | `hub.manage`, for a package that a trusted Hub key signed |
 
 See [host-apis.md](host-apis.md) for how capabilities, denial, and the
 manifest work together.

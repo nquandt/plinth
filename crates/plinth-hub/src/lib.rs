@@ -124,6 +124,32 @@ pub struct RegistrySource {
     pub base: String,
 }
 
+/// A newer version of a library app that a source lists (`docs/HUB.md`
+/// §9.2), as the last update check found it. Stored in `updates.json`, so
+/// the Hub UI can show "Update available" without a new check.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AvailableUpdate {
+    pub version: String,
+    /// The name of the source that lists it.
+    pub source: String,
+    /// The capabilities of the new version that the newest installed
+    /// version does not declare (`docs/HUB.md` §7.3 step 3).
+    #[serde(default)]
+    pub new_capabilities: Vec<String>,
+}
+
+/// `MAJOR.MINOR.PATCH` as a comparable tuple; a part that does not parse
+/// counts as 0 (the same rule as `plinth_registry::is_newer`).
+fn semver_key(v: &str) -> (u64, u64, u64) {
+    let mut it = v.split(['.', '-', '+']).map(|p| p.parse::<u64>().unwrap_or(0));
+    (it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0))
+}
+
+/// True if version `a` is newer than version `b` (semver order).
+pub fn is_newer(a: &str, b: &str) -> bool {
+    semver_key(a) > semver_key(b)
+}
+
 /// The registry sources known to this Hub (`hub source add/list/remove`),
 /// stored in `sources.json`: name -> base URL/path.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -368,7 +394,8 @@ impl Hub {
         if lib.apps.remove(id).is_none() {
             bail!("{id} is not in the library");
         }
-        self.save_library(&lib)
+        self.save_library(&lib)?;
+        self.set_available_update(id, None)
     }
 
     /// The package bytes for the app's active version (`docs/HUB.md`
@@ -377,6 +404,58 @@ impl Hub {
         let version = self.runnable_version(id)?;
         let path = self.packages_dir().join(format!("{}.plnt", version.digest));
         std::fs::read(&path).with_context(|| format!("read {}", path.display()))
+    }
+
+    /// The newest installed version of `id` by semver (not necessarily the
+    /// active one: a pin can hold an older version).
+    pub fn newest_installed(&self, id: &str) -> Result<Option<VersionEntry>> {
+        let Some(entry) = self.get(id)? else { return Ok(None) };
+        Ok(entry.versions.iter().max_by(|a, b| semver_key(&a.version).cmp(&semver_key(&b.version))).cloned())
+    }
+
+    // -- Available updates (`docs/HUB.md` §9.2) --------------------------
+
+    fn updates_path(&self) -> PathBuf {
+        self.dir.join("updates.json")
+    }
+
+    /// The updates that the last check found, by app id (`updates.json`).
+    pub fn available_updates(&self) -> Result<BTreeMap<String, AvailableUpdate>> {
+        read_json(&self.updates_path())
+    }
+
+    /// The update that the last check found for `id`, if any.
+    pub fn available_update(&self, id: &str) -> Result<Option<AvailableUpdate>> {
+        Ok(self.available_updates()?.remove(id))
+    }
+
+    /// Records (`Some`) or clears (`None`) the available update of `id`.
+    pub fn set_available_update(&self, id: &str, update: Option<AvailableUpdate>) -> Result<()> {
+        let mut store = self.available_updates()?;
+        let changed = match update {
+            Some(u) => store.insert(id.to_owned(), u.clone()).as_ref() != Some(&u),
+            None => store.remove(id).is_some(),
+        };
+        if changed { write_json(&self.updates_path(), &store) } else { Ok(()) }
+    }
+
+    /// Writes the icon of `id` (the manifest's `icon`, a PNG in the
+    /// package) as `icons/<id>.ico` in the Hub directory, for a shortcut
+    /// (`docs/HUB.md` §10). `Ok(None)` when the app has no icon, or when its
+    /// icon is not a PNG image.
+    pub fn write_app_icon(&self, id: &str) -> Result<Option<PathBuf>> {
+        let bytes = self.package(id)?;
+        let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("read the package for {id}"))?;
+        let Some(icon) = &pkg.manifest.icon else { return Ok(None) };
+        let icon = icon.trim_start_matches("./");
+        let Some((_, png)) = pkg.assets.iter().find(|(path, _)| path == icon) else { return Ok(None) };
+        let Some(ico) = os::png_to_ico(png) else { return Ok(None) };
+        if !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+')) {
+            bail!("`{id}` is not a valid app id");
+        }
+        let path = self.dir.join("icons").join(format!("{id}.ico"));
+        write_atomic(&path, &ico)?;
+        Ok(Some(path))
     }
 
     /// Pins `id` to `version`, or unpins it (`version: None` runs latest).
@@ -452,16 +531,31 @@ impl Hub {
         read_json(&self.blocks_path())
     }
 
+    /// Whether `id` must not run: the app is blocked, or the key that signed
+    /// one of its installed versions is a blocked publisher (`docs/HUB.md`
+    /// §7.4: "block a publisher: all its apps and future apps").
     pub fn is_blocked(&self, id: &str) -> Result<bool> {
-        let blocks = self.blocks_store()?;
-        if blocks.apps.iter().any(|a| a == id) {
+        if self.is_app_blocked(id)? {
             return Ok(true);
         }
-        // Publisher blocks need the manifest's publisher; checked by the
-        // caller with `is_publisher_blocked` once it has the manifest (no
-        // signed publisher ids exist until H1, so this list is usually
-        // empty today).
-        Ok(false)
+        self.is_publisher_of_blocked(id)
+    }
+
+    /// Whether `id` itself is on the block list (not its publisher).
+    pub fn is_app_blocked(&self, id: &str) -> Result<bool> {
+        Ok(self.blocks_store()?.apps.iter().any(|a| a == id))
+    }
+
+    /// Whether a key that signed an installed version of `id` is a blocked
+    /// publisher. `false` for an app that is not in the library or that is
+    /// unsigned.
+    pub fn is_publisher_of_blocked(&self, id: &str) -> Result<bool> {
+        let blocks = self.blocks_store()?;
+        if blocks.publishers.is_empty() {
+            return Ok(false);
+        }
+        let Some(entry) = self.get(id)? else { return Ok(false) };
+        Ok(entry.versions.iter().filter_map(|v| v.signer.as_deref()).any(|key| blocks.publishers.iter().any(|p| p == key)))
     }
 
     pub fn is_publisher_blocked(&self, publisher: &str) -> Result<bool> {
@@ -739,6 +833,128 @@ pub trait SourceClient: Send + Sync {
     /// The package bytes of the latest version of `id`, or `None` if the
     /// source does not list `id`.
     fn latest_package(&self, base: &str, id: &str) -> Result<Option<Vec<u8>>>;
+    /// The latest version of `id` that the source lists, with the names of
+    /// its capabilities, or `None` if the source does not list `id`
+    /// (`docs/HUB.md` §9.2). The default says that this client cannot
+    /// check for updates.
+    fn latest_version(&self, base: &str, id: &str) -> Result<Option<SourceVersion>> {
+        let _ = (base, id);
+        bail!("this source client cannot check for updates")
+    }
+    /// The package bytes of `version` of `id`.
+    fn package(&self, base: &str, id: &str, version: &str) -> Result<Vec<u8>> {
+        let _ = (base, id, version);
+        bail!("this source client cannot download a given version")
+    }
+}
+
+/// One version of an app as a source lists it (`docs/REGISTRY.md` §4).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceVersion {
+    pub version: String,
+    pub capabilities: Vec<String>,
+}
+
+/// Checks the source of each library app (or of `only`) for a newer
+/// version than the newest installed one (`docs/HUB.md` §9.2), and records
+/// the result in `updates.json`. An app from a file (no source) has no
+/// updates. A source that fails adds one line to `errors`. The result is
+/// the JSON text that `wit/plinth/app.wit`'s `hub.check-updates`
+/// describes: `{ "updates": [{ id, name, current, version, source,
+/// newCapabilities, pinned }], "errors": [string] }`.
+pub fn check_updates(hub: &Hub, client: &dyn SourceClient, only: Option<&str>) -> Result<String> {
+    let mut updates = Vec::new();
+    let mut errors = Vec::new();
+    for entry in hub.list()? {
+        if only.is_some_and(|o| o != entry.id) {
+            continue;
+        }
+        let Some(reg) = &entry.registry else {
+            hub.set_available_update(&entry.id, None)?;
+            continue;
+        };
+        let newest = hub.newest_installed(&entry.id)?;
+        let current = newest.as_ref().map(|v| v.version.clone()).unwrap_or_default();
+        let latest = match client.latest_version(&reg.base, &entry.id) {
+            Ok(latest) => latest,
+            Err(e) => {
+                errors.push(format!("{}: {e:#}", entry.id));
+                continue;
+            }
+        };
+        let found = latest.filter(|l| is_newer(&l.version, &current)).map(|l| {
+            let old: Vec<String> = newest.as_ref().map(|v| v.capabilities.clone()).unwrap_or_default();
+            AvailableUpdate {
+                new_capabilities: l.capabilities.iter().filter(|c| !old.contains(c)).cloned().collect(),
+                version: l.version,
+                source: reg.name.clone(),
+            }
+        });
+        if let Some(u) = &found {
+            updates.push(serde_json::json!({
+                "id": entry.id,
+                "name": entry.name,
+                "current": current,
+                "version": u.version,
+                "source": u.source,
+                "newCapabilities": u.new_capabilities,
+                "pinned": entry.pinned.clone().unwrap_or_default(),
+            }));
+        }
+        hub.set_available_update(&entry.id, found)?;
+    }
+    if let Some(only) = only
+        && hub.get(only)?.is_none()
+    {
+        bail!("{only} is not in the library");
+    }
+    Ok(serde_json::to_string(&serde_json::json!({ "updates": updates, "errors": errors }))?)
+}
+
+/// What `apply_update` did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Updated {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    pub source: String,
+    /// The capabilities that the new version adds. The Hub asks for the
+    /// Medium and High ones before the new version runs (`docs/HUB.md`
+    /// §7.3 step 3); until then the previous version runs.
+    pub new_capabilities: Vec<String>,
+}
+
+/// Installs the latest version of library app `id` from its own source
+/// (`docs/HUB.md` §9.2, `docs/REGISTRY.md` §9). `Ok(None)` when it is up to
+/// date. The new version runs only after the user decides its new Medium
+/// and High capabilities (`Hub::runnable_version`); a pin stays.
+pub fn apply_update(hub: &Hub, client: &dyn SourceClient, id: &str) -> Result<Option<Updated>> {
+    let entry = hub.get(id)?.with_context(|| format!("{id} is not in the library"))?;
+    let reg = entry.registry.clone().with_context(|| format!("{id} was added from a file; it has no source to update from"))?;
+    let newest = hub.newest_installed(id)?;
+    let current = newest.as_ref().map(|v| v.version.clone()).unwrap_or_default();
+    let Some(latest) = client.latest_version(&reg.base, id)? else {
+        bail!("the source {} no longer lists {id}", reg.name);
+    };
+    if !is_newer(&latest.version, &current) {
+        hub.set_available_update(id, None)?;
+        return Ok(None);
+    }
+    let bytes = client.package(&reg.base, id, &latest.version)?;
+    let pkg = plinth_package::Package::read(&bytes).context("the source gave a package that is not valid")?;
+    if pkg.manifest.version != latest.version {
+        bail!("source {} gave version {} of {id}, not {}", reg.name, pkg.manifest.version, latest.version);
+    }
+    let added = hub.add_package(&bytes)?;
+    if added != id {
+        bail!("source {} gave a package for {added}, not {id}", reg.name);
+    }
+    hub.set_registry(id, &reg.name, &reg.base)?;
+    hub.set_available_update(id, None)?;
+    let old: Vec<String> = newest.map(|v| v.capabilities).unwrap_or_default();
+    let new_version = hub.get(id)?.and_then(|e| e.versions.into_iter().find(|v| v.version == latest.version));
+    let new_capabilities = new_version.map(|v| v.capabilities).unwrap_or_default().into_iter().filter(|c| !old.contains(c)).collect();
+    Ok(Some(Updated { id: id.to_owned(), from: current, to: latest.version, source: reg.name, new_capabilities }))
 }
 
 /// Searches every configured source of `hub` (`docs/HUB.md` §5.2). A
@@ -805,14 +1021,17 @@ fn risk_word(risk: plinth_link::capabilities::Risk) -> &'static str {
     }
 }
 
-impl plinth_runner_wasmtime::hub::HubBackend for HubService {
-    fn list_apps_json(&self) -> Result<String, String> {
-        let entries = self.hub.list().map_err(|e| e.to_string())?;
-        let mut apps = Vec::new();
-        for entry in entries {
-            let Some(active) = entry.active_version() else { continue };
-            let report = self.hub.capability_report(&entry.id, &active.capabilities).map_err(|e| e.to_string())?;
-            let blocked = self.hub.is_blocked(&entry.id).unwrap_or(false);
+impl HubService {
+    /// One library app as the JSON object of `hub.list-apps` and
+    /// `hub.app-info` (`wit/plinth/app.wit`), or `None` if it has no
+    /// versions.
+    fn app_json(&self, entry: &LibraryEntry) -> Result<Option<serde_json::Value>, String> {
+        let Some(active) = entry.active_version() else { return Ok(None) };
+        let report = self.hub.capability_report(&entry.id, &active.capabilities).map_err(|e| e.to_string())?;
+        let blocked = self.hub.is_app_blocked(&entry.id).unwrap_or(false);
+        let publisher_blocked = self.hub.is_publisher_of_blocked(&entry.id).unwrap_or(false);
+        let update = self.hub.available_update(&entry.id).ok().flatten();
+        let json = {
             // The manifest gives the publisher name and each capability's
             // reason (`docs/HUB.md` §7.2). A package that cannot be read
             // still lists, without them.
@@ -842,7 +1061,14 @@ impl plinth_runner_wasmtime::hub::HubBackend for HubService {
                     })
                 })
                 .collect();
-            apps.push(serde_json::json!({
+            // Newest first, so a version list reads like a change log.
+            let mut versions: Vec<&VersionEntry> = entry.versions.iter().collect();
+            versions.sort_by(|a, b| semver_key(&b.version).cmp(&semver_key(&a.version)));
+            let versions: Vec<serde_json::Value> = versions
+                .into_iter()
+                .map(|v| serde_json::json!({ "version": v.version, "signer": v.signer.clone().unwrap_or_default(), "capabilities": v.capabilities }))
+                .collect();
+            serde_json::json!({
                 "id": entry.id,
                 "name": entry.name,
                 "version": active.version,
@@ -850,11 +1076,78 @@ impl plinth_runner_wasmtime::hub::HubBackend for HubService {
                 "signer": active.signer.clone().unwrap_or_default(),
                 "source": entry.registry.as_ref().map(|r| r.name.clone()).unwrap_or_default(),
                 "blocked": blocked,
+                "publisherBlocked": publisher_blocked,
                 "groups": entry.groups,
                 "capabilities": capabilities,
-            }));
+                "pinned": entry.pinned.clone().unwrap_or_default(),
+                "versions": versions,
+                "update": update.as_ref().map(|u| u.version.clone()).unwrap_or_default(),
+                "updateCapabilities": update.map(|u| u.new_capabilities).unwrap_or_default(),
+            })
+        };
+        Ok(Some(json))
+    }
+}
+
+impl plinth_runner_wasmtime::hub::HubBackend for HubService {
+    fn list_apps_json(&self) -> Result<String, String> {
+        let entries = self.hub.list().map_err(|e| e.to_string())?;
+        let mut apps = Vec::new();
+        for entry in &entries {
+            if let Some(app) = self.app_json(entry)? {
+                apps.push(app);
+            }
         }
         serde_json::to_string(&apps).map_err(|e| e.to_string())
+    }
+
+    fn app_info_json(&self, id: &str) -> Result<String, String> {
+        let entry = self.hub.get(id).map_err(|e| e.to_string())?.ok_or_else(|| format!("{id} is not in the library"))?;
+        let app = self.app_json(&entry)?.ok_or_else(|| format!("{id} has no versions"))?;
+        serde_json::to_string(&app).map_err(|e| e.to_string())
+    }
+
+    fn pin(&mut self, id: &str, version: &str) -> Result<(), String> {
+        let version = (!version.is_empty()).then(|| version.to_owned());
+        self.hub.pin(id, version).map_err(|e| e.to_string())
+    }
+
+    fn block_publisher(&mut self, key: &str) -> Result<(), String> {
+        if key.trim().is_empty() {
+            return Err("an unsigned app has no publisher key to block".to_owned());
+        }
+        self.hub.block_publisher(key.trim()).map_err(|e| e.to_string())
+    }
+
+    fn unblock_publisher(&mut self, key: &str) -> Result<(), String> {
+        self.hub.unblock_publisher(key.trim()).map_err(|e| e.to_string())
+    }
+
+    fn check_updates(&self, id: &str) -> plinth_runner_wasmtime::hub::HubJob {
+        let hub = self.hub.clone();
+        let client = self.sources.clone();
+        let id = id.to_owned();
+        Box::new(move || match client {
+            Some(client) => {
+                let only = (!id.is_empty()).then_some(id.as_str());
+                check_updates(&hub, client.as_ref(), only).map_err(|e| format!("{e:#}"))
+            }
+            None => Ok(r#"{"updates":[],"errors":["this host cannot read sources"]}"#.to_owned()),
+        })
+    }
+
+    fn update(&self, id: &str) -> plinth_runner_wasmtime::hub::HubJob {
+        let hub = self.hub.clone();
+        let client = self.sources.clone();
+        let id = id.to_owned();
+        Box::new(move || match client {
+            Some(client) => match apply_update(&hub, client.as_ref(), &id) {
+                Ok(Some(updated)) => Ok(updated.to),
+                Ok(None) => Ok(String::new()),
+                Err(e) => Err(format!("{e:#}")),
+            },
+            None => Err("this host cannot read sources".to_owned()),
+        })
     }
 
     fn launch(&mut self, id: &str) {
@@ -1264,12 +1557,46 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// A fake source client: `good` lists one app; `bad` always fails.
+    /// A fake source client: `good` lists `com.example.notes` with the
+    /// versions in `packages` (the last one is the latest); `bad` always
+    /// fails.
     struct FakeSources {
         package: Vec<u8>,
+        /// (version, capabilities, package bytes), oldest first.
+        packages: std::sync::Mutex<Vec<(String, Vec<String>, Vec<u8>)>>,
+    }
+
+    impl FakeSources {
+        fn new(package: Vec<u8>) -> Self {
+            let pkg = plinth_package::Package::read(&package).unwrap();
+            let caps = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
+            Self { packages: std::sync::Mutex::new(vec![(pkg.manifest.version.clone(), caps, package.clone())]), package }
+        }
+
+        fn publish(&self, package: Vec<u8>) {
+            let pkg = plinth_package::Package::read(&package).unwrap();
+            let caps = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
+            self.packages.lock().unwrap().push((pkg.manifest.version.clone(), caps, package));
+        }
     }
 
     impl SourceClient for FakeSources {
+        fn latest_version(&self, base: &str, id: &str) -> Result<Option<SourceVersion>> {
+            if base == "bad" {
+                bail!("cannot reach the source");
+            }
+            if id != "com.example.notes" {
+                return Ok(None);
+            }
+            let packages = self.packages.lock().unwrap();
+            Ok(packages.last().map(|(version, capabilities, _)| SourceVersion { version: version.clone(), capabilities: capabilities.clone() }))
+        }
+
+        fn package(&self, _base: &str, _id: &str, version: &str) -> Result<Vec<u8>> {
+            let packages = self.packages.lock().unwrap();
+            packages.iter().find(|p| p.0 == version).map(|p| p.2.clone()).with_context(|| format!("no version {version}"))
+        }
+
         fn search(&self, base: &str, query: &str) -> Result<Vec<SearchHit>> {
             if base == "bad" {
                 bail!("cannot reach the source");
@@ -1295,7 +1622,7 @@ mod tests {
         let (hub, dir) = temp_hub();
         hub.source_add("a-broken", "bad").unwrap();
         hub.source_add("main", "good").unwrap();
-        let client = std::sync::Arc::new(FakeSources { package: fake_package("com.example.notes", "0.1.0") });
+        let client = std::sync::Arc::new(FakeSources::new(fake_package("com.example.notes", "0.1.0")));
         let svc = HubService::with_sources(hub.clone(), client);
 
         let result: serde_json::Value = serde_json::from_str(&(svc.search("note"))().unwrap()).unwrap();
@@ -1316,5 +1643,128 @@ mod tests {
         let result: serde_json::Value = serde_json::from_str(&(plain.search("x"))().unwrap()).unwrap();
         assert_eq!(result["errors"][0], "this host cannot read sources");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `docs/HUB.md` §9.2, §7.3 step 3: the Hub finds a newer version in the
+    /// app's source, shows it in `list-apps`, installs it, and runs it only
+    /// after the user decides its new Medium capability. A pin holds the
+    /// older version.
+    #[test]
+    fn check_and_apply_updates_with_reconsent_and_pins() {
+        use plinth_runner_wasmtime::hub::HubBackend;
+        let (hub, dir) = temp_hub();
+        hub.source_add("main", "good").unwrap();
+        let v1 = fake_package_with_capabilities("com.example.notes", "0.1.0", &[("store.kv", "save notes")]);
+        let client = std::sync::Arc::new(FakeSources::new(v1));
+        let mut svc = HubService::with_sources(hub.clone(), client.clone());
+        (svc.install("com.example.notes"))().unwrap();
+        // An app from a file has no source: never an update.
+        hub.add_package(&fake_package("com.example.local", "1.0.0")).unwrap();
+
+        // Up to date.
+        let result: serde_json::Value = serde_json::from_str(&(svc.check_updates(""))().unwrap()).unwrap();
+        assert_eq!(result["updates"], serde_json::json!([]));
+
+        // The source publishes 0.2.0, which adds clipboard.read (Medium).
+        client.publish(fake_package_with_capabilities(
+            "com.example.notes",
+            "0.2.0",
+            &[("store.kv", "save notes"), ("clipboard.read", "paste")],
+        ));
+        let result: serde_json::Value = serde_json::from_str(&(svc.check_updates(""))().unwrap()).unwrap();
+        assert_eq!(result["updates"][0]["id"], "com.example.notes");
+        assert_eq!(result["updates"][0]["current"], "0.1.0");
+        assert_eq!(result["updates"][0]["version"], "0.2.0");
+        assert_eq!(result["updates"][0]["newCapabilities"], serde_json::json!(["clipboard.read"]));
+        assert_eq!(result["updates"].as_array().unwrap().len(), 1);
+        let info: serde_json::Value = serde_json::from_str(&svc.app_info_json("com.example.notes").unwrap()).unwrap();
+        assert_eq!(info["update"], "0.2.0");
+        assert_eq!(info["updateCapabilities"], serde_json::json!(["clipboard.read"]));
+        assert!(svc.app_info_json("com.example.missing").is_err());
+        // Only one app: a check for an unknown id is an error.
+        assert!((svc.check_updates("com.example.missing"))().is_err());
+
+        // Apply: 0.2.0 is installed, but 0.1.0 runs until clipboard.read is decided.
+        assert_eq!((svc.update("com.example.notes"))().unwrap(), "0.2.0");
+        assert_eq!(hub.available_update("com.example.notes").unwrap(), None);
+        assert_eq!(hub.runnable_version("com.example.notes").unwrap().version, "0.1.0");
+        assert_eq!(hub.needs_consent("com.example.notes", &["store.kv".into(), "clipboard.read".into()]).unwrap(), vec!["clipboard.read"]);
+        let info: serde_json::Value = serde_json::from_str(&svc.app_info_json("com.example.notes").unwrap()).unwrap();
+        assert_eq!(info["version"], "0.2.0");
+        assert_eq!(info["update"], "");
+        assert_eq!(info["versions"][0]["version"], "0.2.0");
+        assert_eq!(info["versions"][1]["version"], "0.1.0");
+        let clip = info["capabilities"].as_array().unwrap().iter().find(|c| c["name"] == "clipboard.read").unwrap().clone();
+        assert_eq!(clip["decided"], false);
+        svc.set_grant("com.example.notes", "clipboard.read", true).unwrap();
+        assert_eq!(hub.runnable_version("com.example.notes").unwrap().version, "0.2.0");
+        // A second update finds nothing.
+        assert_eq!((svc.update("com.example.notes"))().unwrap(), "");
+        assert!((svc.update("com.example.local"))().unwrap_err().contains("added from a file"));
+
+        // Pin and unpin.
+        svc.pin("com.example.notes", "0.1.0").unwrap();
+        assert_eq!(hub.runnable_version("com.example.notes").unwrap().version, "0.1.0");
+        let info: serde_json::Value = serde_json::from_str(&svc.app_info_json("com.example.notes").unwrap()).unwrap();
+        assert_eq!(info["pinned"], "0.1.0");
+        assert_eq!(info["version"], "0.1.0");
+        assert!(svc.pin("com.example.notes", "9.9.9").is_err());
+        svc.pin("com.example.notes", "").unwrap();
+        assert_eq!(hub.runnable_version("com.example.notes").unwrap().version, "0.2.0");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `docs/HUB.md` §7.4: a publisher block stops every installed app of
+    /// that key, and `list-apps` tells it apart from an app block.
+    #[test]
+    fn publisher_block_through_the_service() {
+        use plinth_runner_wasmtime::hub::HubBackend;
+        let (hub, dir) = temp_hub();
+        let acme = fake_identity("Acme");
+        let id = hub.add_package(&fake_signed_package("com.example.notes", "0.1.0", &acme)).unwrap();
+        let mut svc = HubService::new(hub.clone());
+        assert!(svc.block_publisher("").is_err());
+        svc.block_publisher(&acme.key_id()).unwrap();
+        assert!(hub.is_blocked(&id).unwrap());
+        assert!(!hub.is_app_blocked(&id).unwrap());
+        let info: serde_json::Value = serde_json::from_str(&svc.app_info_json(&id).unwrap()).unwrap();
+        assert_eq!(info["blocked"], false);
+        assert_eq!(info["publisherBlocked"], true);
+        // A new version of the same publisher cannot be added either.
+        assert!(hub.add_package(&fake_signed_package("com.example.notes", "0.2.0", &acme)).is_err());
+        svc.unblock_publisher(&acme.key_id()).unwrap();
+        assert!(!hub.is_blocked(&id).unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `docs/HUB.md` §10: the app icon becomes `icons/<id>.ico` in the Hub
+    /// directory, for a `.lnk` shortcut.
+    #[test]
+    fn writes_the_app_icon_as_an_ico_file() {
+        let (hub, dir) = temp_hub();
+        let mut pkg = plinth_package::Package::read(&fake_package("com.example.notes", "0.1.0")).unwrap();
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend_from_slice(&64u32.to_be_bytes());
+        png.extend_from_slice(&64u32.to_be_bytes());
+        png.extend_from_slice(&[8, 6, 0, 0, 0]);
+        pkg.manifest.icon = Some("assets/icon.png".into());
+        pkg.assets.push(("assets/icon.png".into(), png.clone()));
+        let id = hub.add_package(&pkg.write().unwrap()).unwrap();
+        let path = hub.write_app_icon(&id).unwrap().unwrap();
+        assert_eq!(path, dir.join("icons").join("com.example.notes.ico"));
+        let ico = std::fs::read(&path).unwrap();
+        assert_eq!(&ico[22..], &png[..]);
+        // No icon: no file.
+        let other = hub.add_package(&fake_package("com.example.plain", "0.1.0")).unwrap();
+        assert_eq!(hub.write_app_icon(&other).unwrap(), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn versions_compare_as_semver() {
+        assert!(is_newer("0.10.0", "0.9.0"));
+        assert!(is_newer("1.0.0", "0.99.99"));
+        assert!(!is_newer("1.0.0", "1.0.0"));
+        assert!(is_newer("1.0.1", ""));
     }
 }

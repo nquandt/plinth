@@ -171,4 +171,14 @@ fn hub_service_searches_and_installs_with_hub_sources() {
     let entry = hub.get("com.example.notes").unwrap().unwrap();
     assert_eq!(entry.registry.unwrap().name, "local");
     assert!((svc.install("com.example.nothing"))().is_err());
+
+    // Updates (`docs/HUB.md` §9.2): a new version in the folder registry.
+    let result: serde_json::Value = serde_json::from_str(&(svc.check_updates(""))().unwrap()).unwrap();
+    assert_eq!(result["updates"], serde_json::json!([]), "{result}");
+    std::fs::write(reg_dir.join("notes2.plnt"), compile_notes("com.example.notes", "0.2.0")).unwrap();
+    build(&reg_dir, &Options::default()).unwrap();
+    let result: serde_json::Value = serde_json::from_str(&(svc.check_updates("com.example.notes"))().unwrap()).unwrap();
+    assert_eq!(result["updates"][0]["version"], "0.2.0", "{result}");
+    assert_eq!((svc.update("com.example.notes"))().unwrap(), "0.2.0");
+    assert_eq!(hub.get("com.example.notes").unwrap().unwrap().active_version().unwrap().version, "0.2.0");
 }

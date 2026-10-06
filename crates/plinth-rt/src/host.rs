@@ -607,3 +607,73 @@ pub fn hub_install(callable: Callable, id: i32) {
         register_request(request, callable);
     }
 }
+
+// -- plinth:hub, core 1.9 (`docs/HUB.md` §4.1, §7.4, §9.2) --------------------
+
+/// `hub.appInfo(id)`: one library app as a JSON object, or `null` when
+/// denied or when `id` is not in the library.
+pub fn hub_app_info(id: i32) -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = strings::as_str(id as u32);
+        return match hub_outcome(host::hub::app_info(id)) {
+            Some(json) => strings::from_str(&json) as i32,
+            None => 0,
+        };
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = id;
+        0
+    }
+}
+
+/// `hub.pin(id, version)`. A no-op when denied.
+pub fn hub_pin(id: i32, version: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = strings::as_str(id as u32);
+        let version = strings::as_str(version as u32);
+        hub_outcome(host::hub::pin(id, version));
+    }
+}
+
+/// `hub.blockPublisher(key)`. A no-op when denied.
+pub fn hub_block_publisher(key: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let key = strings::as_str(key as u32);
+        hub_outcome(host::hub::block_publisher(key));
+    }
+}
+
+/// `hub.unblockPublisher(key)`. A no-op when denied.
+pub fn hub_unblock_publisher(key: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let key = strings::as_str(key as u32);
+        hub_outcome(host::hub::unblock_publisher(key));
+    }
+}
+
+/// `hub.checkUpdates(id, done)`: the host checks the sources on a worker
+/// thread; `done` gets the JSON result text, or `null` when denied.
+pub fn hub_check_updates(callable: Callable, id: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = strings::as_str(id as u32);
+        let request = host::hub::check_updates(id);
+        register_request(request, callable);
+    }
+}
+
+/// `hub.update(id, done)`: the host installs the newest version on a
+/// worker thread; `done` gets `null` on success, or the error text.
+pub fn hub_update(callable: Callable, id: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = strings::as_str(id as u32);
+        let request = host::hub::update(id);
+        register_request(request, callable);
+    }
+}

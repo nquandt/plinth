@@ -42,8 +42,8 @@ usage:
   plinth hub open <plinth://app/<id>>  open an app link (installs from sources if needed)
   plinth hub register-scheme [--exe <path>] | unregister-scheme
                                    register plinth:// links for this user (Windows)
-  plinth hub shortcut <app id> [--dir <folder>]
-                                   write a desktop shortcut that opens the app
+  plinth hub shortcut <app id> [--start-menu] [--dir <folder>] [--url]
+                                   write a shortcut (.lnk, app icon) that opens the app
   plinth hub remove <app id>       remove an app from the library
   plinth hub grants <app id> [allow|refuse <capability>]
                                    show or set a grant
@@ -59,6 +59,8 @@ usage:
   plinth hub install <id>[@version] [--source <name>]
                                    download and add an app to the library
   plinth hub update [<id>]         install newer versions from the app's source
+  plinth hub pin <app id> <version> | --latest
+                                   run one installed version, or the newest again
   plinth hub policy deny|allow <capability> | show
                                    a hub-wide switch for a capability
   plinth registry build <folder> [--with-core]
@@ -678,9 +680,10 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
         Some("register-scheme") => {
             // `docs/HUB.md` §10: Windows runs `plinth hub open <link>` for a
             // plinth:// link. Per user (HKEY_CURRENT_USER), no administrator.
+            // `plinthw` (next to this program) runs it with no console window.
             let exe = match raw.iter().position(|a| *a == "--exe").and_then(|i| raw.get(i + 1)) {
                 Some(exe) => PathBuf::from(exe),
-                None => std::env::current_exe()?,
+                None => plinth_hub::os::gui_launcher(&std::env::current_exe()?),
             };
             register_scheme(&exe)?;
             println!("registered plinth:// links to run {} hub open", exe.display());
@@ -714,14 +717,33 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some("shortcut") => {
-            let id = args.get(1).context("usage: plinth hub shortcut <app id> [--dir <folder>]")?;
+            // `docs/HUB.md` §10: a `.lnk` with the app icon on the desktop or
+            // in the Start menu; `--url` writes the older Internet Shortcut.
+            let id = args.get(1).context("usage: plinth hub shortcut <app id> [--start-menu] [--dir <folder>] [--url]")?;
             let entry = hub.get(id)?.with_context(|| format!("{id} is not in the library"))?;
             let dir = match raw.iter().position(|a| *a == "--dir").and_then(|i| raw.get(i + 1)) {
                 Some(dir) => PathBuf::from(dir),
+                None if raw.contains(&"--start-menu") => {
+                    plinth_hub::os::start_menu_dir().context("no Start menu folder on this platform; use --dir <folder>")?
+                }
                 None => plinth_hub::os::desktop_dir().context("no desktop folder on this platform; use --dir <folder>")?,
             };
-            let path = plinth_hub::os::write_shortcut(&dir, id, &entry.name, &std::env::current_exe()?)?;
-            println!("wrote {} (it opens plinth://app/{id}; run `plinth hub register-scheme` one time)", path.display());
+            let exe = std::env::current_exe()?;
+            if raw.contains(&"--url") {
+                let path = plinth_hub::os::write_shortcut(&dir, id, &entry.name, &exe)?;
+                println!("wrote {} (it opens plinth://app/{id}; run `plinth hub register-scheme` one time)", path.display());
+                return Ok(ExitCode::SUCCESS);
+            }
+            let icon = match hub.write_app_icon(id) {
+                Ok(icon) => icon,
+                Err(e) => {
+                    eprintln!("[plinth] the shortcut gets the Plinth icon: {e:#}");
+                    None
+                }
+            };
+            let launcher = plinth_hub::os::gui_launcher(&exe);
+            let path = plinth_hub::os::write_link_shortcut(&dir, id, &entry.name, &launcher, icon.as_deref())?;
+            println!("wrote {} (it runs {} {})", path.display(), launcher.display(), plinth_hub::os::shortcut_arguments(id));
             return Ok(ExitCode::SUCCESS);
         }
         Some("search") => {
@@ -752,32 +774,27 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some("update") => {
+            // `docs/HUB.md` §9.2: the same code path as the Hub UI's
+            // `update` (`plinth_hub::apply_update`).
             let only = args.get(1).copied();
+            let client = plinth_registry::HubSources;
             for entry in hub.list()? {
                 if let Some(only) = only
                     && entry.id != only
                 {
                     continue;
                 }
-                let Some(reg) = entry.registry.clone() else { continue };
-                let source = plinth_registry::source::Source::open(&reg.base).with_context(|| format!("open source {} ({})", reg.name, reg.base))?;
-                let doc = source.app(&entry.id)?;
-                let Some(latest) = doc.latest() else { continue };
-                let current = entry.active_version().map(|v| v.version.clone()).unwrap_or_default();
-                if !plinth_registry::is_newer(&latest.version, &current) {
+                if entry.registry.is_none() {
                     continue;
                 }
-                let previous_caps: std::collections::HashSet<String> =
-                    entry.active_version().map(|v| v.capabilities.iter().cloned().collect()).unwrap_or_default();
-                let bytes = source.package(&entry.id, &latest.version)?;
-                hub.add_package(&bytes)?;
-                hub.set_registry(&entry.id, &reg.name, &reg.base)?;
-                println!("updated {} to {} (from {})", entry.id, latest.version, reg.name);
-                let new_caps: Vec<&str> =
-                    latest.capabilities.iter().map(|c| c.name.as_str()).filter(|c| !previous_caps.contains(*c)).collect();
-                if !new_caps.is_empty() {
-                    println!("  new capabilities: {}", new_caps.join(", "));
+                let Some(updated) = plinth_hub::apply_update(&hub, &client, &entry.id)? else { continue };
+                println!("updated {} to {} (from {})", updated.id, updated.to, updated.source);
+                if !updated.new_capabilities.is_empty() {
+                    println!("  new capabilities: {}", updated.new_capabilities.join(", "));
                     println!("  note: `plinth hub run {}` will ask for them (medium/high risk only)", entry.id);
+                }
+                if let Some(pinned) = &entry.pinned {
+                    println!("  note: {} is pinned to {pinned}; `plinth hub pin {} --latest` runs the new version", entry.id, entry.id);
                 }
             }
             return Ok(ExitCode::SUCCESS);
@@ -865,6 +882,19 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
             let id = args.get(1).context("usage: plinth hub unblock <app id>")?;
             hub.unblock_app(id)?;
             println!("unblocked {id}");
+        }
+        Some("pin") => {
+            // `docs/HUB.md` §9.2: run one installed version, not the newest.
+            let usage = "usage: plinth hub pin <app id> <version> | plinth hub pin <app id> --latest";
+            let id = args.get(1).context(usage)?;
+            if raw.contains(&"--latest") {
+                hub.pin(id, None)?;
+                println!("{id} runs the newest version again");
+            } else {
+                let version = args.get(2).context(usage)?;
+                hub.pin(id, Some((*version).to_owned()))?;
+                println!("pinned {id} to {version}");
+            }
         }
         Some("block-publisher") => {
             let key = args.get(1).context("usage: plinth hub block-publisher <key id>")?;

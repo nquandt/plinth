@@ -16,12 +16,12 @@ Plinth is a framework for cross-platform apps. Authors write a strict subset of 
 
 | Area | State |
 |---|---|
-| Packages and cores (SPEC §10.4, §10.5) | Done. Core version is **1.8**. An app declares the lowest core that has the functions it imports. |
+| Packages and cores (SPEC §10.4, §10.5) | Done. Core version is **1.9** (the Hub calls of H3 step 3; a parallel compiler branch may also take 1.9, so renumber at merge). An app declares the lowest core that has the functions it imports. |
 | UI API (SPEC §6.3, `docs/ui.md`) | **1.5**: about 30 controls incl. Checkbox, TextArea, Slider, NumberField, Picker, Progress, Badge, Tabs, Sheet, Dialog, Menu (anchored popover), Grid, Action, Image (package assets), Icon, DatePicker, Chart (bar/line/pie), Row `trailing`. Stack navigation, screen actions, AccessKit roles, keyboard use. |
 | Lists | Keyed reconciler with a minimal-moves diff; host-side virtualization above 200 rows (variable row heights). 10,000 rows: about 4 ms per frame. |
 | Host APIs (SPEC §8.5, `docs/host-apis.md`) | `time` (timers, dates, time zone), `store` (kv), `clipboard`, `dialog` (async), `net` (HTTP fetch, per-host capabilities), `hub` (privileged). Async calls use request ids and `completion` events. Denied calls never trap. |
 | Compiler (SPEC §4) | Unions and narrowing (also on member paths), generic functions/interfaces/type aliases, classes with single inheritance and `instanceof`, `int`, `Map`/`Set` (iteration, `forEach`, `keys`/`values`/`entries`), fixed-length tuples, nullable boxing, `JSON.stringify`/`JSON.parse<T>`, fragments, `.map()` JSX children, checked `as` casts, many string and array methods (incl. stable `sort`, `splice`, `fill`, `flat`), dynamic-length `Chart` data. Golden tests for 54 of 55 diagnostics. |
-| Hub (`docs/HUB.md`) | H0 (library, grants, blocks, groups, consent window, risk-level defaults, re-consent on update, global policy), H1 (Ed25519 publisher signing), H3 step 1 (several apps per host, privileged `plinth:hub` for packages signed by a trusted key), H3 step 2 (the Hub UI app `examples/hub`, core 1.8 hub calls incl. async `search`/`install`, the host poll loop that opens launches in new windows, in-process consent, `plinth hub ui|open|shortcut|register-scheme`, `plinth://` links on Windows). |
+| Hub (`docs/HUB.md`) | H0 (library, grants, blocks, groups, consent window, risk-level defaults, re-consent on update, global policy), H1 (Ed25519 publisher signing), H3 step 1 (several apps per host, privileged `plinth:hub` for packages signed by a trusted key), H3 step 2 (the Hub UI app `examples/hub`, core 1.8 hub calls incl. async `search`/`install`, the host poll loop that opens launches in new windows, in-process consent, `plinth hub ui|open|shortcut|register-scheme`, `plinth://` links on Windows), H3 step 3 (core 1.9: `appInfo`, `pin`, publisher blocks, async `checkUpdates`/`update`; the Hub UI checks for updates on start, shows a count in the Library and "Update available" on the App screen, updates with re-consent, pins versions, blocks publishers; `.lnk` shortcuts with the app icon and Start menu entries; the `plinthw` launcher with no console window). |
 | Registry (`docs/REGISTRY.md`) | Draft 1: static or dynamic registries, `plinth registry build|serve`, `plinth hub source|search|install|update`. |
 | Tooling | Hot reload that keeps signal state, headless screenshots (`plinth-shoot`), GC stress mode, `plinth native` single-file executables, VS Code extension (`editors/vscode`, not published), npm packages (smoke-tested locally, not published). |
 | Web host (`web/`) | Runs the same `.plnt` and core file in a browser: all UI API 1.5 controls, timers, kv, clipboard, dialogs, net. axe-core: 0 violations on 5 apps. |
@@ -44,7 +44,7 @@ plinth native <app.plnt|dir> -o app.exe
 plinth validate <app.plnt>               # signature, declared vs reachable capabilities
 plinth core list|install|export
 plinth publisher init|show ; plinth sign <app.plnt> ; plinth build --sign
-plinth hub add|list|run|ui|open|remove|grants|block|unblock|block-publisher|policy|groups|source|search|install|update|shortcut|register-scheme
+plinth hub add|list|run|ui|open|remove|grants|block|unblock|block-publisher|policy|groups|source|search|install|update|pin|shortcut|register-scheme
 plinth registry build <folder> [--with-core] ; plinth registry serve <folder>
 plinth-shoot <app.plnt> <out-dir>        # PNGs of every screen at compact/regular/wide
 node web/test/run-a11y.mjs               # axe-core in headless Edge (local only; needs the CDN)
@@ -111,7 +111,7 @@ Test crates must run **one at a time** on Windows (linker errors LNK1318/LNK1201
 
 1. **Push the local commits** (§0) when CI minutes are available again and the owner agrees. CI run `37517664495` (commit `38004ef`) was still running at handoff; check it first.
 2. **Open decisions for the owner:** the license (Cargo.toml says Apache-2.0; there is no LICENSE file yet; "MIT OR Apache-2.0" is the Rust norm), and whether to use a self-hosted CI runner.
-3. **Hub, after H3 step 2:** a Plinth project Hub key (so the Hub UI needs no `PLINTH_HUB_TRUSTED_KEYS`), updates and version pins from the Hub UI, first-use prompts (H5), `.lnk` shortcuts with the app icon and Start menu entries, and a live GUI check of the Hub UI by a person (the tests are headless).
+3. **Hub, after H3 step 3:** a Plinth project Hub key (the owner's decision; so the Hub UI needs no `PLINTH_HUB_TRUSTED_KEYS`), first-use prompts (H5; the design needs an answer to `docs/HUB.md` H-Q4 first, and a synchronous call such as `clipboard.readText` cannot wait for a prompt), `addShortcut` from the Hub UI, automatic or daily update checks, and a live GUI check of the Hub UI by a person (the tests are headless; a `.lnk` shortcut was opened by hand once and started the app through `plinthw` with no console window).
 4. **Compiler:** `async`/`await` on top of the request/completion machinery, `try`/`catch` (SPEC §5.6), `Chart` `series` as a non-literal expression, tuples with optional or rest elements, `flat(depth > 1)`.
 5. **Platforms:** open a GUI window on Linux and macOS and fix what breaks; then mobile (SPEC Q1, Q3).
 6. **Distribution:** publish the npm packages and a first registry; Hub H2 (signed indexes, transparency log); key rotation.

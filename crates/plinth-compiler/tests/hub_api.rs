@@ -95,7 +95,11 @@ impl HubBackend for FakeHub {
 }
 
 fn build(caps: &[&str]) -> plinth_compiler::Artifact {
-    let fs = MemFs::default().with("app/main.tsx", APP);
+    build_src(APP, caps)
+}
+
+fn build_src(src: &str, caps: &[&str]) -> plinth_compiler::Artifact {
+    let fs = MemFs::default().with("app/main.tsx", src);
     let caps: Vec<String> = caps.iter().map(|c| c.to_string()).collect();
     let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &caps).expect("compile");
     let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
@@ -110,7 +114,11 @@ struct Harness {
 
 impl Harness {
     fn start(policy: Policy, hub: Option<Box<dyn HubBackend>>) -> Self {
-        let artifact = build(&["hub.manage"]);
+        Self::start_src(APP, policy, hub)
+    }
+
+    fn start_src(src: &str, policy: Policy, hub: Option<Box<dyn HubBackend>>) -> Self {
+        let artifact = build_src(src, &["hub.manage"]);
         let runner = Runner::new().unwrap();
         let mut guest = runner
             .load_with_policy_and_hub(&artifact.component, Limits::default(), policy, Kv::in_memory(), Box::new(MemoryClipboard::default()), hub)
@@ -235,4 +243,137 @@ fn no_backend_is_unsupported() {
     h.press("Install");
     h.deliver_completions(1);
     assert_eq!(h.text("installed:"), "installed: denied:unsupported");
+}
+
+// -- Core 1.9 (`docs/HUB.md` §4.1, §7.4, §9.2) --------------------------------
+
+const APP_19: &str = r#"
+import { app, signal, Screen, Text, Button } from "plinth:ui";
+import { appInfo, pin, blockPublisher, unblockPublisher, checkUpdates, update, lastError } from "plinth:hub";
+
+function Home() {
+  const info = signal("");
+  const checked = signal("");
+  const updated = signal("");
+  const refresh = () => {
+    const i = appInfo("com.example.a");
+    info.set(i === null ? "denied " + (lastError() ?? "") : i);
+  };
+  refresh();
+  return (
+    <Screen title="Home">
+      <Text>{"info: " + info()}</Text>
+      <Text>{"checked: " + checked()}</Text>
+      <Text>{"updated: " + updated()}</Text>
+      <Button label="Pin" onPress={() => { pin("com.example.a", "1.0.0"); refresh(); }} />
+      <Button label="Unpin" onPress={() => { pin("com.example.a", ""); refresh(); }} />
+      <Button label="Block publisher" onPress={() => { blockPublisher("ed25519:k"); refresh(); }} />
+      <Button label="Unblock publisher" onPress={() => { unblockPublisher("ed25519:k"); refresh(); }} />
+      <Button label="Check" onPress={() => checkUpdates("", (json) => checked.set(json ?? "null"))} />
+      <Button label="Update" onPress={() => update("com.example.a", (error) => updated.set(error ?? "ok"))} />
+    </Screen>
+  );
+}
+
+export default app({ screens: { home: { title: "Home", component: Home } } });
+"#;
+
+#[derive(Default)]
+struct State19 {
+    pinned: String,
+    publisher_blocked: bool,
+}
+
+struct FakeHub19(Arc<Mutex<State19>>);
+
+impl HubBackend for FakeHub19 {
+    fn list_apps_json(&self) -> Result<String, String> {
+        Ok("[]".into())
+    }
+    fn launch(&mut self, _id: &str) {}
+    fn set_grant(&mut self, _id: &str, _capability: &str, _allowed: bool) -> Result<(), String> {
+        Ok(())
+    }
+    fn block(&mut self, _id: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn unblock(&mut self, _id: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn app_info_json(&self, id: &str) -> Result<String, String> {
+        let s = self.0.lock().unwrap();
+        Ok(format!("{{\"id\":\"{id}\",\"pinned\":\"{}\",\"publisherBlocked\":{}}}", s.pinned, s.publisher_blocked))
+    }
+    fn pin(&mut self, _id: &str, version: &str) -> Result<(), String> {
+        self.0.lock().unwrap().pinned = version.to_owned();
+        Ok(())
+    }
+    fn block_publisher(&mut self, key: &str) -> Result<(), String> {
+        assert_eq!(key, "ed25519:k");
+        self.0.lock().unwrap().publisher_blocked = true;
+        Ok(())
+    }
+    fn unblock_publisher(&mut self, _key: &str) -> Result<(), String> {
+        self.0.lock().unwrap().publisher_blocked = false;
+        Ok(())
+    }
+    fn check_updates(&self, id: &str) -> HubJob {
+        let id = id.to_owned();
+        Box::new(move || Ok(format!("{{\"updates\":[],\"errors\":[],\"only\":\"{id}\"}}")))
+    }
+    fn update(&self, id: &str) -> HubJob {
+        let id = id.to_owned();
+        Box::new(move || if id == "com.example.a" { Ok("2.0.0".into()) } else { Err("not found".into()) })
+    }
+}
+
+#[test]
+fn the_core_1_9_app_needs_core_1_9() {
+    let artifact = build_src(APP_19, &["hub.manage"]);
+    assert_eq!(plinth_link::split::app_core_version(&artifact.app), Some((1, 9)));
+}
+
+#[test]
+fn app_info_pins_publisher_blocks_and_updates_reach_the_backend() {
+    let state = Arc::new(Mutex::new(State19::default()));
+    let mut h = Harness::start_src(APP_19, Policy::new(["hub.manage".to_owned()]), Some(Box::new(FakeHub19(state.clone()))));
+    assert_eq!(h.text("info:"), r#"info: {"id":"com.example.a","pinned":"","publisherBlocked":false}"#);
+    h.press("Pin");
+    assert_eq!(h.text("info:"), r#"info: {"id":"com.example.a","pinned":"1.0.0","publisherBlocked":false}"#);
+    h.press("Unpin");
+    assert_eq!(state.lock().unwrap().pinned, "");
+    h.press("Block publisher");
+    assert_eq!(h.text("info:"), r#"info: {"id":"com.example.a","pinned":"","publisherBlocked":true}"#);
+    h.press("Unblock publisher");
+    assert!(!state.lock().unwrap().publisher_blocked);
+    h.press("Check");
+    h.press("Update");
+    h.deliver_completions(2);
+    assert_eq!(h.text("checked:"), r#"checked: {"updates":[],"errors":[],"only":""}"#);
+    assert_eq!(h.text("updated:"), "updated: ok");
+}
+
+/// Refused and unsupported: denied results, never a trap (SPEC.md §8.5).
+#[test]
+fn core_1_9_calls_are_denied_without_the_capability_or_a_backend() {
+    let state = Arc::new(Mutex::new(State19::default()));
+    let mut policy = Policy::new(["hub.manage".to_owned()]);
+    policy.refuse("hub.manage");
+    let mut h = Harness::start_src(APP_19, policy, Some(Box::new(FakeHub19(state.clone()))));
+    assert_eq!(h.text("info:"), "info: denied denied:refused");
+    h.press("Pin");
+    h.press("Block publisher");
+    h.press("Check");
+    h.press("Update");
+    h.deliver_completions(2);
+    assert_eq!(h.text("checked:"), "checked: null");
+    assert_eq!(h.text("updated:"), "updated: denied:refused");
+    assert_eq!(state.lock().unwrap().pinned, "");
+    assert!(!state.lock().unwrap().publisher_blocked);
+
+    let mut h = Harness::start_src(APP_19, Policy::new(["hub.manage".to_owned()]), None);
+    assert_eq!(h.text("info:"), "info: denied denied:unsupported");
+    h.press("Update");
+    h.deliver_completions(1);
+    assert_eq!(h.text("updated:"), "updated: denied:unsupported");
 }

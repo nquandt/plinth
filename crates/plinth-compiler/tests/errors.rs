@@ -1,4 +1,4 @@
-//! `try`/`catch`/`finally`/`throw` (SPEC.md §5.6, core 1.9). A thrown
+//! `try`/`catch`/`finally`/`throw` (SPEC.md §5.6, core 1.10). A thrown
 //! value is an `Error` (or a subclass); runtime traps are not catchable; an
 //! uncaught exception in an event handler is reported through
 //! `error.report` and the app keeps running.
@@ -300,13 +300,13 @@ export default app({ screens: { home: { title: "Home", component: Home } } });
 // -- Cost --------------------------------------------------------------------------
 
 #[test]
-fn an_app_without_throw_does_not_need_core_1_9() {
+fn an_app_without_throw_does_not_need_core_1_10() {
     let a = compile(&show("", "const x = 1;", "\"\" + x"));
-    assert!(!a.runtime.ends_with(".9"), "runtime {}", a.runtime);
+    assert!(!a.runtime.ends_with("1.10"), "runtime {}", a.runtime);
     let b = compile(&show("", "let m = \"\"; try { m = \"a\"; } catch (e) { m = e.message; }", "m"));
-    assert!(!b.runtime.ends_with(".9"), "a try with no throw reaches no new function: {}", b.runtime);
+    assert!(!b.runtime.ends_with("1.10"), "a try with no throw reaches no new function: {}", b.runtime);
     let c = compile(HANDLER_SRC);
-    assert!(c.runtime.ends_with("1.9"), "an uncaught throw needs `uncaught`: {}", c.runtime);
+    assert!(c.runtime.ends_with("1.10"), "an uncaught throw needs `uncaught`: {}", c.runtime);
 }
 
 // -- Diagnostics -----------------------------------------------------------------
