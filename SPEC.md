@@ -141,6 +141,8 @@ The closed world is enforced at three levels:
 | `Promise<T>` | GC ref to a task | §4.5 |
 | generics | monomorphized | No higher-kinded tricks. Conditional and mapped types are rejected. |
 
+**Status (2026-10-05).** Implemented: `int`; `T | null` for every type except signals; discriminated unions of object types with `typeof` and discriminant narrowing; generic functions, generic interfaces and generic type aliases (monomorphized, no constraints or defaults); `Map` and `Set` (insertion order, `for…of`); classes without `extends` (fields, one constructor, methods with static dispatch, `new`). A method reference without a call is the error `PL2021` (write `() => c.m()`). Not yet: `extends`, `instanceof`, static members, `async`/`await`, `try`/`catch`, `JSON`.
+
 ### 4.3 Supported syntax (v0 → v1)
 
 **v0 (the minimum to build real apps):**
