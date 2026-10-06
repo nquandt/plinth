@@ -375,6 +375,12 @@ function hostImports(
         timers.delete(id);
         cancelTimerEvent?.(id);
       },
+      "timezone-offset"(ms) {
+        // JS `getTimezoneOffset` is minutes *west* of UTC (backwards from
+        // the WIT function, which is minutes east, matching Howard
+        // Hinnant's/most other APIs' convention).
+        return -new Date(Number(ms)).getTimezoneOffset();
+      },
     },
     "plinth:app/store@1.0.0": {
       "kv-get"(keyPtr, keyLen, retptr) {

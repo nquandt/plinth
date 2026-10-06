@@ -80,6 +80,12 @@ pub enum StdFn {
     DialogConfirm,
     DialogPrompt,
     NetFetch,
+    TimezoneOffset,
+    DateParts,
+    MakeDate,
+    FormatDate,
+    ToIsoString,
+    ParseDate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -350,6 +356,21 @@ impl Checker<'_> {
             Field { name: "text".into(), ty: Type::String, optional: false },
             Field { name: "error".into(), ty: Type::String.nullable(), optional: false },
         ];
+        match self.anon_struct(fields) {
+            Type::Struct(s) => s,
+            _ => unreachable!(),
+        }
+    }
+
+    /// The memoized `DateParts` struct that `dateParts` returns (SPEC.md
+    /// §4.7, `plinth:time`, docs/GAPS.md gap #5): `{ year, month, day,
+    /// hour, minute, second, millisecond, weekday }`, all `number` (field
+    /// order matches `date_field`'s ABI `field` index, `check/stdlib.rs`).
+    pub(crate) fn date_parts_struct(&mut self) -> types::StructId {
+        let fields = ["year", "month", "day", "hour", "minute", "second", "millisecond", "weekday"]
+            .iter()
+            .map(|n| Field { name: (*n).into(), ty: Type::Number, optional: false })
+            .collect();
         match self.anon_struct(fields) {
             Type::Struct(s) => s,
             _ => unreachable!(),

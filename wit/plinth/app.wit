@@ -57,6 +57,13 @@ interface time {
   /// Cancels a timer. Canceling an unknown or already-fired one-shot
   /// timer is not an error.
   cancel-timer: func(timer: u32);
+
+  /// The local time zone's offset from UTC, in minutes east of UTC, at
+  /// the instant `ms` (milliseconds since the Unix epoch). Negative west
+  /// of UTC, e.g. `-300` for US Eastern Standard Time. Comes from the OS
+  /// (`plinth:time`'s date/time additions, docs/GAPS.md gap #5); the web
+  /// host uses `-Date.getTimezoneOffset()`.
+  timezone-offset: func(ms: s64) -> s32;
 }
 
 /// A per-app key/value store (SPEC.md §8.5; capability: `store.kv`).

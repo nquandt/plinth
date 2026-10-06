@@ -13,7 +13,7 @@ small local change), per the dogfooding task's scope.
 | 2 | Checker | An array produced with `.map()` cannot be used as JSX children; there is no way to render a variable number of elements except through `List`/`Grid`, even for small, non-interactive repeats (e.g. one `Progress` bar per category). | `{categories.map((c) => <Progress label={c} value={1} />)}` | `PL4004: an array of elements is not a child` (plus `PL4002: <Progress> has no prop key` for the `key` attempt) | Medium | Document the `List`/`Grid`-only rule for repeated children, or add a lightweight non-interactive repeat primitive. Workaround used: wrap `Progress` rows in `<List items={categories} key={(c) => c} row={(c) => <Progress .../>} />` (`examples/budget/app/stats.tsx`). |
 | 3 | Checker/Parser | JSX fragments (`<>...</>`) parse but are rejected by the checker, so a conditional block that renders more than one sibling element needs a wrapper control. | `return <>{a}{b}</>;` inside a conditional branch | `PL4004: fragments are not supported` (help: use a `<Section>` or `<Group>`) | Low | Either stop parsing `<>` (clearer, earlier error) or support it as sugar for `<Group>`. Workaround used: `<Group axis="column">...</Group>` (`examples/utility/app/texttools.tsx`). |
 | 4 | Stdlib (`lib.d.ts`) | `String` has no `split`. Any tokenizing (word splitting for a title-case transform, CSV-like parsing) must be done with a manual `slice`/character-scan loop. | `text.split(" ")` | TypeScript error: `Property 'split' does not exist on type 'string'` | Medium | Add `split(separator: string): string[]` to `std/lib.d.ts` and the checker's built-in `String` signature; implement in `plinth-rt` string routines. Workaround used: hand-written `toTitleCase` char scan (`examples/utility/app/texttools.tsx`). |
-| 5 | Stdlib (`plinth:time`) | No `Date` type and no calendar/timestamp formatting (no way to turn an epoch-ms number into a year/month/day/hour string). A "timestamp converter" can only do elapsed-time breakdown by hand. | Need: format `now()` as a human date | n/a (no API exists; nothing to call) | Medium | Add a minimal `Date`-like helper to `plinth:time` (e.g. `toParts(ms): {year, month, day, hour, minute, second}` in UTC) so apps can show calendar dates without a full `Intl`/timezone stack. Workaround used: manual days/hours/minutes/seconds breakdown from `now()` (`examples/utility/app/texttools.tsx`). |
+| 5 | Stdlib (`plinth:time`) | **Fixed in this pass.** No `Date` type and no calendar/timestamp formatting (no way to turn an epoch-ms number into a year/month/day/hour string). A "timestamp converter" can only do elapsed-time breakdown by hand. | Need: format `now()` as a human date | n/a (no API exists; nothing to call) | Medium | Added `timezoneOffset`, `dateParts`, `makeDate`, `formatDate`, `toISOString`, `parseDate` to `plinth:time` (see below and `docs/host-apis.md`). Workaround removed from `examples/utility`; the new "Timestamps" tab uses the real API. |
 | 6 | Checker | `as` casts are rejected outright (`PL2006`), including narrow, locally-safe casts such as turning a `Picker`'s validated `string` signal value back into a small string-literal union (`"Groceries" \| "Rent" \| ...`). There is no other way to narrow a dynamic string to a literal union. | `const c: Category = draftCategory() as Category;` | `PL2006: \`as\` casts are not allowed` (help: annotate the variable type instead) | Medium | Either add a safe narrowing helper (e.g. a user-defined type guard function, which already works for `null` narrowing in the examples) that is documented as the sanctioned pattern for this case, or allow `as` to a union of string literals when the source is `string` and the checker can verify exhaustiveness isn't required. Workaround used: `Category` is a plain `string` alias instead of a literal union in `examples/budget/app/types.ts` (loses compile-time exhaustiveness checking on category names). |
 | 7 | UI / rendering | On the "wide" window shot, the sidebar icon for `icon="edit"` (used on the utility app's "Text tools" primary screen) renders as a blank glyph box instead of a recognizable icon, while other icons (`#`/`number`) render correctly. | `plinth-shoot examples/utility/dist/utility.plnt out` → `screen1-regular.png`/`screen1-wide.png` sidebar | n/a (visual only, no error) | Low | Check the icon font/mapping for `edit` (and audit the rest of `IconName` the same way) in `plinth-ui`'s icon table. |
 
@@ -211,6 +211,28 @@ small local change), per the dogfooding task's scope.
   `array_reduce_on_an_empty_array_returns_the_initial_value`,
   `array_reduce_with_index_builds_a_string`,
   `array_reduce_without_an_initial_value_is_rejected`.
+
+- #5 (fixed): `plinth:time` gained date/time support: `timezoneOffset`
+  (a new host function, `plinth:app@1.0.0`'s `time` interface, core
+  1.6), `dateParts`/`weekday` and `makeDate` (Howard Hinnant's
+  `civil_from_days`/`days_from_civil`, like `plinth-ui/src/calendar.rs`,
+  duplicated in a new `plinth-rt/src/datetime.rs` rather than shared, to
+  keep `plinth-rt` dependency-free), `formatDate`/`toISOString` (a small
+  pattern language, manual string building, no `core::fmt`), and
+  `parseDate` (ISO forms, `number | null` via the existing `box_f64`
+  boxing `number | null` already uses). Every date function is pure and
+  takes the local offset as a parameter in `plinth-rt`, so it is fully
+  unit-tested without a host (fixed epochs, leap years, month/century
+  boundaries, negative pre-1970 timestamps, parse→format round trips);
+  the desktop runner's `timezone-offset` is injectable
+  (`Guest::set_fake_timezone_offset`) for an end-to-end compiler→wasm→
+  wasmtime test (`date_time_round_trip_with_a_fake_offset` in
+  `crates/plinth-compiler/tests/hostapi.rs`). Used in
+  `examples/utility`'s new "Timestamps" tab and in `examples/budget`
+  (`DatePicker` for transaction dates, `dateParts` for the "by month"
+  breakdown in `stats.tsx`; grouping uses a linear-scan array rather
+  than `Map` for…of, since `std/lib.d.ts`'s `Map` is not declared
+  `Iterable` for `tsc`, see "Larger items" above).
 
 ## Found later
 

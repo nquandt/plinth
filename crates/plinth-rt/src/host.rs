@@ -170,6 +170,19 @@ pub fn monotonic_now() -> f64 {
     0.0
 }
 
+/// `time.timezone-offset(ms)`: minutes east of UTC at that instant
+/// (docs/GAPS.md gap #5). Used by `dateParts`/`makeDate`/`formatDate`/
+/// `parseDate` for local time.
+pub fn timezone_offset(ms: i64) -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    return host::time::timezone_offset(ms);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = ms;
+        0
+    }
+}
+
 /// `setTimeout`/`setInterval`: schedules `callable` and returns a timer
 /// id (as a `number`) for `clearTimeout`/`clearInterval`.
 pub fn set_timer(callable: Callable, ms: f64, repeat: bool) -> f64 {
