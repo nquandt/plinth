@@ -6,7 +6,14 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 
 **Never push before `bash scripts/ci-local.sh full` passes locally.** CI runs the same script. The owner's GitHub Actions minutes are nearly used up (about 90 % of the month on 2026-10-06), and earlier pushes failed CI because only parts of the tests ran locally. Batch commits into few pushes, and ask the owner before a push.
 
-**Update (2026-10-06, later): the Actions minutes are fully used up.** Do not push. Keep commits local on `master`. Until the minutes reset or a self-hosted runner exists, the local `ci-local.sh full` pass is the only gate.
+**Update (2026-10-06, later): the Actions minutes are fully used up.** Do not push. Keep commits local on `master`. Until the minutes reset or a self-hosted runner exists, the local `ci-local.sh full` pass is the only gate. At the end of 2026-10-06, `master` was 99 commits ahead of `origin/master`; `ci-local.sh full` and `node web/test/run-a11y.mjs` passed on it. The owner wants self-hosted runners later.
+
+**Owner decisions of 2026-10-06 (keep them):**
+- One implementation for all hosts: one `.plnt` runs everywhere; a host only supplies host APIs. Never build a second UI for one host (the web Hub was rebuilt for this reason).
+- Mobile hosts render with gpui. Only the web host renders to the DOM (SPEC M5, Q1).
+- Every web app runs in a sandboxed iframe; the parent page is the host shell (SPEC §10.3).
+- Advanced UI: typed style props, no raw pixels for now, semantic controls rebuilt on Level 2 later (`docs/UI-ADVANCED.md` §8).
+- Data belongs to the user: "your device or your storage, never the vendor's"; strong walls between apps; lasting cross-app access is deferred (`docs/STORAGE.md`).
 
 ## 1. What Plinth is
 
@@ -51,6 +58,8 @@ bash scripts/web-hub-demo.sh             # the web App Hub with the examples on 
 plinth-shoot <app.plnt> <out-dir>        # PNGs of every screen at compact/regular/wide
 node web/test/run-a11y.mjs               # axe-core in headless Edge, also the web App Hub (local only; needs the CDN; --hub-only)
 ```
+
+**The owner's machine (set up on 2026-10-06):** `plinth` and `plinthw` are installed with `cargo install --path crates/plinth-cli --locked --force` in `%USERPROFILE%\.cargo\bin` (on the PATH); reinstall after CLI changes. A personal publisher key "Nate" exists, and `PLINTH_HUB_TRUSTED_KEYS` is a user environment variable with its id. `powershell -File scripts/dev-hub.ps1` rebuilds and signs a copy of the Hub app in `target/dev-hub` (no tracked file changes), fills the library, and starts the desktop Hub. The web demo (`scripts/web-hub-demo.sh`) signs the Hub with a throwaway key in `target/web-hub-demo-key`. A Cloudflare quick tunnel (`cloudflared tunnel --url http://127.0.0.1:8787`) gives a public URL for tests from other devices; start it only when the owner asks. When the demo server runs, `target/debug/plinth.exe` is locked: rename it before a rebuild.
 
 Test crates must run **one at a time** on Windows (linker errors LNK1318/LNK1201 otherwise); the script does this. Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`, `PLINTH_HUB_TRUSTED_KEYS`, `PLINTH_BLESS=1` (rewrite diagnostic goldens), `PLINTH_TRACE_RENDER=1` (frame times).
 
