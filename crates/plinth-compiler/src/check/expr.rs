@@ -2000,11 +2000,22 @@ impl Checker<'_> {
                     Type::Bool,
                     span,
                 );
-                let set_existing = self.arr_set_at(values.clone(), idx_r, val.clone(), span);
+                // Evaluate the value once, before any change: `m.set(k,
+                // (m.get(k) ?? 0) + 1)` must not see the key pushed without
+                // its value (that read was out of bounds).
+                let val_v = self.temp(v.clone());
+                let val_r = TExpr::new(TExprKind::Var(val_v), v.clone(), span);
+                let set_existing = self.arr_set_at(values.clone(), idx_r, val_r.clone(), span);
                 let push_key = self.arr_push_discard(keys, key_r, span);
-                let push_val = self.arr_push_discard(values, val, span);
+                let push_val = self.arr_push_discard(values, val_r, span);
                 let if_stmt = TStmt::If(found, vec![set_existing], vec![push_key, push_val]);
-                let body = vec![TStmt::Let(obj_v, Some(o)), TStmt::Let(key_v, Some(key)), TStmt::Let(idx_v, Some(search)), if_stmt];
+                let body = vec![
+                    TStmt::Let(obj_v, Some(o)),
+                    TStmt::Let(key_v, Some(key)),
+                    TStmt::Let(val_v, Some(val)),
+                    TStmt::Let(idx_v, Some(search)),
+                    if_stmt,
+                ];
                 TExpr::new(TExprKind::Block(body, bx(self.void_tail(span))), Type::Void, span)
             }
             "has" => {

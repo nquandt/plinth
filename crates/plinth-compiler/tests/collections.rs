@@ -235,3 +235,11 @@ fn tuple_index_must_be_a_literal_in_range() {
 fn tuple_literal_with_the_wrong_length_is_rejected() {
     assert_eq!(codes(&show("const p: [string, number] = [\"x\"];", "\"\"")), ["PL3001"]);
 }
+
+#[test]
+fn map_set_with_a_value_that_reads_the_same_new_key() {
+    // Before the fix, `set` pushed the key and then evaluated the value, so
+    // `get` found the key with no value and read out of bounds.
+    let body = "const xs = [\"a\", \"b\", \"a\"]; const m = new Map<string, number>(); for (const t of xs) { m.set(t, (m.get(t) ?? 0) + 1); } let out = \"\"; for (const [k, v] of m) { out = out + k + v; }";
+    assert_eq!(shown(body, "out"), "a2b1");
+}
