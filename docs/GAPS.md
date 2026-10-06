@@ -35,7 +35,8 @@ small local change), per the dogfooding task's scope.
 
 ## Fixed in this pass
 
-None. Every item above needs more than a small, local fix (a new stdlib
-function with a runtime implementation, or a checker design change for
-dynamic `Picker` options/fragments/casts), so per the task's instructions
-they are listed and worked around, not fixed.
+- #7 (fixed): `icon="edit"` rendered as a blank glyph box because U+270E
+  (LOWER RIGHT PENCIL) is missing from the default font. Changed
+  `icon_glyph` in `crates/plinth-ui/src/theme.rs` to U+270D (WRITING HAND),
+  which renders. Verified with `plinth-shoot` on `examples/utility`
+  before/after the change.

@@ -132,7 +132,7 @@ pub fn icon_glyph(name: &str) -> &'static str {
         "number" | "counter" => "#",
         // UI API 1.2
         "search" => "🔍",
-        "edit" => "✎",
+        "edit" => "✍",
         "close" => "✕",
         "back" => "←",
         "forward" => "→",
