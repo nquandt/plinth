@@ -38,6 +38,19 @@ pub fn free_data(p: u32) {
     gc::buffer_free(data(p), (cap * elem_size(p)) as usize);
 }
 
+/// Fills the data buffer with the poison pattern in GC stress mode, before
+/// it is freed. Test-only (see `gc::set_stress`); normal apps never reach
+/// this because `grow` frees old buffers without poisoning them.
+pub fn poison_data(p: u32) {
+    if gc::stress_enabled() {
+        let cap = unsafe { load_u32(p + 12) };
+        let d = data(p);
+        if d != 0 {
+            unsafe { core::ptr::write_bytes(d as *mut u8, 0xAA, (cap * elem_size(p)) as usize) };
+        }
+    }
+}
+
 fn check(p: u32, i: i32) -> u32 {
     if i < 0 || i as u32 >= len(p) {
         crate::trap("array index out of bounds");

@@ -151,7 +151,12 @@ fn start(component: &[u8], app_id: &str, capabilities: &[String], args: &[u8]) -
             // Hot reload (SPEC.md §13): `args` is the previous instance's
             // signal snapshot, or empty on the first start. A release
             // build of the app ignores it (it never registered anything).
-            let init = guest.init(args).map_err(|e| format!("{e:#}"));
+            let init_args = if args.is_empty() {
+                Vec::new()
+            } else {
+                plinth_protocol::init_arg::one(plinth_protocol::init_arg::SNAPSHOT, args)
+            };
+            let init = guest.init(&init_args).map_err(|e| format!("{e:#}"));
             print_logs(&mut guest);
             (Box::new(WasmGuest { guest, _runner: runner }), init)
         }

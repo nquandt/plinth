@@ -56,6 +56,49 @@ pub mod event_code {
 }
 
 /// `kind` values of the `navigate` op.
+/// The `init` args buffer (SPEC.md §8.1): a sequence of records, each a
+/// `tag: u8`, a `len: u32` and `len` bytes. An empty buffer is a normal
+/// start. A guest skips records with tags that it does not know.
+pub mod init_arg {
+    use alloc::vec::Vec;
+
+    /// Collect after every `init` and `on-event` and poison freed memory
+    /// (tests only, SPEC.md §16). No data.
+    pub const GC_STRESS: u8 = 1;
+    /// A hot-reload signal snapshot from the previous instance (dev only,
+    /// SPEC.md §13).
+    pub const SNAPSHOT: u8 = 2;
+
+    /// Appends one record.
+    pub fn push(out: &mut Vec<u8>, tag: u8, data: &[u8]) {
+        out.push(tag);
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(data);
+    }
+
+    /// One record as a buffer.
+    pub fn one(tag: u8, data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        push(&mut out, tag, data);
+        out
+    }
+
+    /// The data of the first record with `tag`. A malformed buffer gives
+    /// `None`.
+    pub fn find(buf: &[u8], tag: u8) -> Option<&[u8]> {
+        let mut rest = buf;
+        while rest.len() >= 5 {
+            let len = u32::from_le_bytes([rest[1], rest[2], rest[3], rest[4]]) as usize;
+            let data = rest.get(5..5 + len)?;
+            if rest[0] == tag {
+                return Some(data);
+            }
+            rest = &rest[5 + len..];
+        }
+        None
+    }
+}
+
 pub mod nav_kind {
     pub const PUSH: u8 = 0;
     pub const REPLACE: u8 = 1;

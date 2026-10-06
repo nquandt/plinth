@@ -180,7 +180,7 @@ fn signals_with_a_matching_shape_survive_a_reload_and_mismatches_reset() {
     // `greeting` changed from `string` to `number`) and start it with the
     // snapshot passed as `init`'s `args`.
     let b = build_dev(VERSION_B);
-    let h2 = Harness::start(&b.component, &snapshot);
+    let h2 = Harness::start(&b.component, &plinth_protocol::init_arg::one(plinth_protocol::init_arg::SNAPSHOT, &snapshot));
     assert_eq!(h2.screen_title(), "Version B", "the new UI text shows");
     assert_eq!(h2.heading_text(), "3", "count kept its value: same key, same shape");
     assert_eq!(h2.texts(), ["99"], "greeting's shape changed, so it reset to its new initializer, not \"hi\"");

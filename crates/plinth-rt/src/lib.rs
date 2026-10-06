@@ -156,10 +156,11 @@ fn commit() {
 }
 
 fn collect_if_needed() {
-    if gc::should_collect() {
+    if gc::should_collect() || gc::stress_enabled() {
         gc::collect(|f| {
             reactive::trace_roots(f);
             ui::trace_roots(f);
+            host::trace_roots(f);
         });
     }
 }
@@ -168,16 +169,19 @@ struct Rt;
 
 impl bindings::Guest for Rt {
     fn init(args: Vec<u8>) {
-        #[cfg(not(feature = "dev"))]
-        let _ = &args;
+        // GC stress mode (SPEC.md §16): tests ask for a collection after
+        // every `init`/`on-event` for the life of this instance.
+        if plinth_protocol::init_arg::find(&args, plinth_protocol::init_arg::GC_STRESS).is_some() {
+            gc::set_stress(true);
+        }
         let Some(main) = MAIN.get() else { trap("the artifact has no app entry point") };
         invoke(Callable { thunk: main, env: 0 }, Val::None);
         // Hot reload (SPEC.md §13, dev builds only): restore the
         // module-level signals that `plinth dev` snapshotted from the
         // previous instance, before the first render.
         #[cfg(feature = "dev")]
-        if !args.is_empty() {
-            reactive::sig_restore(&args);
+        if let Some(snapshot) = plinth_protocol::init_arg::find(&args, plinth_protocol::init_arg::SNAPSHOT) {
+            reactive::sig_restore(snapshot);
         }
         reactive::flush();
         commit();

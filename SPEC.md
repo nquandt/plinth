@@ -458,6 +458,8 @@ world app {
 }
 ```
 
+**`init` args:** a sequence of records (`tag: u8`, `len: u32`, `len` bytes). Tag 1 asks for GC stress mode (tests only: collect after every call and poison freed memory). Tag 2 carries a hot-reload snapshot (dev only, §13). An empty buffer is a normal start, and a guest skips unknown tags.
+
 The artifact is a **Wasm component**.
 - **Desktop and Android:** wasmtime runs the component directly.
 - **Web:** the build creates browser glue with `jco` (§9.2).
