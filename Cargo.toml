@@ -42,6 +42,7 @@ plinth-guest = { path = "crates/plinth-guest" }
 plinth-compiler = { path = "crates/plinth-compiler" }
 plinth-link = { path = "crates/plinth-link" }
 plinth-package = { path = "crates/plinth-package" }
+plinth-hub = { path = "crates/plinth-hub" }
 plinth-host-desktop = { path = "crates/plinth-host-desktop" }
 anyhow = "1"
 log = "0.4"

@@ -18,6 +18,7 @@ plinth-runner-wasmtime.workspace = true
 plinth-package.workspace = true
 plinth-link.workspace = true
 plinth-protocol.workspace = true
+plinth-hub.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true
