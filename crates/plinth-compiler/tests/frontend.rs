@@ -116,6 +116,35 @@ fn image_control() {
 }
 
 #[test]
+fn icon_control() {
+    // Good usage: a name from the runtime icon set, decorative (no label).
+    let good = "import { app, Screen, Icon } from \"plinth:ui\";\n\
+                function Home() { return <Screen title=\"Home\"><Icon name=\"star\" tone=\"muted\" /></Screen>; }"
+        .to_owned()
+        + APP;
+    let f = frontend(&MemFs::default().with("app/main.tsx", &good));
+    assert!(f.diags.is_empty(), "{}", render(&f));
+    assert!(f.program.is_some());
+
+    // With a label, it is still accepted (the label makes it accessible,
+    // not visible to the type checker as anything special).
+    let labeled = "import { app, Screen, Icon } from \"plinth:ui\";\n\
+                   function Home() { return <Screen title=\"Home\"><Icon name=\"star\" label=\"Favorite\" /></Screen>; }"
+        .to_owned()
+        + APP;
+    let f = frontend(&MemFs::default().with("app/main.tsx", &labeled));
+    assert!(f.diags.is_empty(), "{}", render(&f));
+
+    // An unknown icon name is rejected.
+    let bad = "import { app, Screen, Icon } from \"plinth:ui\";\n\
+               function Home() { return <Screen title=\"Home\"><Icon name=\"not-a-real-icon\" /></Screen>; }"
+        .to_owned()
+        + APP;
+    let f = frontend(&MemFs::default().with("app/main.tsx", &bad));
+    assert!(!f.diags.is_empty());
+}
+
+#[test]
 fn slider_number_picker_progress_badge() {
     // Good usage: all five check clean.
     let good = "import { app, Screen, Slider, NumberField, Picker, Progress, Badge, signal } from \"plinth:ui\";\n\

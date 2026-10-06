@@ -352,6 +352,19 @@ pub const CONTROLS: &[ControlSpec] = &[
         ],
         children: ChildKind::None,
     },
+    // -- UI API 1.4 --
+    ControlSpec {
+        name: "Icon",
+        kind: ControlKind::Icon,
+        props: &[
+            p("name", T::StrOneOf(ICONS), true, P(prop::ICON)),
+            p("tone", T::Enum(TONES), false, P(prop::TONE)),
+            // Decorative by default (hidden from AccessKit); giving a
+            // `label` makes it an accessible, named icon (SPEC.md §6.3).
+            p("label", T::Str, false, P(prop::LABEL)),
+        ],
+        children: ChildKind::None,
+    },
 ];
 
 pub fn by_name(name: &str) -> Option<&'static ControlSpec> {
