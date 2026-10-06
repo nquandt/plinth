@@ -23,7 +23,7 @@ import { createServer } from "node:http";
 import { readFile, mkdtemp, rm, copyFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -41,14 +41,14 @@ const MIME = {
   ".json": "application/json",
 };
 
-/** A tiny static file server rooted at the repo root (no dependency). */
-function startServer() {
+/** A tiny static file server rooted at `dir` (the repo root by default; no dependency, no CORS headers). */
+function startServer(dir = root) {
   return new Promise((resolve, reject) => {
     const server = createServer(async (req, res) => {
       try {
         const urlPath = decodeURIComponent(req.url.split("?")[0]);
-        const filePath = path.join(root, urlPath);
-        if (!filePath.startsWith(root)) {
+        const filePath = path.join(dir, urlPath.endsWith("/") ? `${urlPath}index.html` : urlPath);
+        if (!filePath.startsWith(dir)) {
           res.writeHead(403);
           res.end();
           return;
@@ -129,6 +129,9 @@ async function openPage(cdpPort) {
   // which Edge puts in its own process: an "iframe" target. Auto-attach
   // gives a session for each such frame, to evaluate code in it.
   const frames = [];
+  // A sandboxed frame can also stay in the page process (a `srcdoc` frame
+  // of a web export can): then its default execution context is the way in.
+  const childContexts = [];
   ws.addEventListener("message", (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.id !== undefined && pending.has(msg.id)) {
@@ -138,6 +141,14 @@ async function openPage(cdpPort) {
       else resolve(msg.result);
     } else if (msg.method === "Target.attachedToTarget" && msg.params.targetInfo.type === "iframe") {
       frames.push(msg.params.sessionId);
+    } else if (msg.method === "Runtime.executionContextCreated" && !msg.sessionId) {
+      const ctx = msg.params.context;
+      if (ctx.auxData?.isDefault && ctx.auxData.frameId !== target.id) childContexts.push(ctx.id);
+    } else if (msg.method === "Runtime.executionContextDestroyed" && !msg.sessionId) {
+      const i = childContexts.indexOf(msg.params.executionContextId);
+      if (i >= 0) childContexts.splice(i, 1);
+    } else if (msg.method === "Runtime.executionContextsCleared" && !msg.sessionId) {
+      childContexts.length = 0;
     } else if (msg.method === "Target.detachedFromTarget") {
       const i = frames.indexOf(msg.params.sessionId);
       if (i >= 0) frames.splice(i, 1);
@@ -150,10 +161,11 @@ async function openPage(cdpPort) {
   /** Evaluates `expression` in the newest app frame (undefined if there is none or it fails). */
   const frameEval = async (expression) => {
     const sessionId = frames.at(-1);
-    if (!sessionId) return undefined;
+    const contextId = sessionId ? undefined : childContexts.at(-1);
+    if (!sessionId && contextId === undefined) return undefined;
     let res;
     try {
-      res = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
+      res = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true, contextId }, sessionId);
     } catch {
       return undefined; // the frame is not ready yet, or it was replaced
     }
@@ -224,11 +236,13 @@ async function main() {
   let failed = false;
   const summary = [];
   const hubOnly = process.argv.includes("--hub-only");
+  const typingOnly = process.argv.includes("--typing-only");
+  const exportOnly = process.argv.includes("--export-only");
 
   try {
     await waitForCdp(cdpPort);
 
-    for (const app of hubOnly || process.argv.includes("--typing-only") ? [] : APPS) {
+    for (const app of hubOnly || typingOnly || exportOnly ? [] : APPS) {
       const appUrl = `${base}/examples/${app}/dist/${app}.plnt`;
       const coreUrl = `${base}/target/core.wasm`;
       const testUrl = `${base}/web/test/a11y.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(coreUrl)}`;
@@ -277,16 +291,16 @@ async function main() {
 
     // Typing: each key re-renders the page, and the TextField must keep the
     // focus and the caret (a regression: the first key moved the focus away).
-    console.log("== typing in todo ==");
-    try {
+    if (!exportOnly) console.log("== typing in todo ==");
+    if (!exportOnly) try {
       await checkTyping(cdpPort, base);
       console.log("  focus and caret kept after each key: ok");
     } catch (err) {
       console.error(`  FAILED: ${err.stack ?? err}`);
       failed = true;
     }
-    console.log("== one click stops the stopwatch ==");
-    try {
+    if (!exportOnly) console.log("== one click stops the stopwatch ==");
+    if (!exportOnly) try {
       await checkStopwatch(cdpPort, base);
       console.log("  ok");
     } catch (err) {
@@ -295,7 +309,7 @@ async function main() {
     }
     // The renderer updates elements in place (SPEC.md M5): hover, text
     // selection and unchanged elements survive re-renders.
-    for (const [name, check] of [
+    for (const [name, check] of exportOnly ? [] : [
       ["hover and text selection survive timer ticks (stopwatch)", checkHoverAndSelection],
       ["TextArea selection survives a re-render (settings-gallery)", checkTextAreaSelection],
       ["an unchanged row is the same element after a commit (todo)", checkRowIdentity],
@@ -310,9 +324,24 @@ async function main() {
         failed = true;
       }
     }
+    // The web export (SPEC.md §10.3): `plinth build --target web`.
+    if (!typingOnly && !hubOnly) {
+      console.log("== web export (plinth build --target web) ==");
+      try {
+        const r = await checkWebExport(cdpPort);
+        const serious = r.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+        summary.push({ app: "web export: notes", serious: serious.length, minor: r.violations.length - serious.length });
+        for (const v of r.violations) console.log(`  [${v.impact}] ${v.id}: ${v.help} (${v.nodes.length} node(s))`);
+        if (serious.length > 0) failed = true;
+        console.log(`  ok: ${r.note}`);
+      } catch (err) {
+        console.error(`  FAILED: ${err.stack ?? err}`);
+        failed = true;
+      }
+    }
     // The web App Hub (docs/web-hub.md): served by `plinth registry serve --web`.
-    if (!process.argv.includes("--typing-only")) console.log("== web App Hub ==");
-    if (!process.argv.includes("--typing-only")) try {
+    if (!typingOnly && !exportOnly) console.log("== web App Hub ==");
+    if (!typingOnly && !exportOnly) try {
       const hub = await checkHub(cdpPort);
       for (const r of hub) {
         const serious = r.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
@@ -615,6 +644,59 @@ async function checkTyping(cdpPort, base) {
     await typeKeys(page, surface, () => surface.eval(`document.querySelector("#app input[type=text]").focus()`));
   } finally {
     await page.close();
+  }
+}
+
+/**
+ * The web export (SPEC.md §10.3). The folder form of notes on a plain static
+ * server (no CORS headers): `<plinth-app>` runs the app in a sandboxed
+ * frame, a note goes into the kv data of the page origin and is there
+ * again after a reload. The single-file form of todo from disk (file://):
+ * the app runs and typing works in the frame. Returns the axe result of
+ * the notes frame.
+ */
+async function checkWebExport(cdpPort) {
+  const exe = path.join(root, "target/debug", process.platform === "win32" ? "plinth.exe" : "plinth");
+  const dir = await mkdtemp(path.join(tmpdir(), "plinth-a11y-export-"));
+  const folder = path.join(dir, "notes-web");
+  execFileSync(exe, ["build", path.join(root, "examples/notes"), "--target", "web", "--out", folder], { stdio: "ignore" });
+  const single = path.join(dir, "todo.html");
+  execFileSync(exe, ["build", path.join(root, "examples/todo"), "--target", "web", "--single-file", "--out", single], { stdio: "ignore" });
+  const server = await startServer(folder);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const state = `(() => { const e = document.querySelector("plinth-app"); const s = e?.dataset.state;
+    if (s === "failed") throw new Error("the app did not start: " + e.textContent); return s === "running" ? true : null; })()`;
+  const page = await openPage(cdpPort);
+  const frame = frameSurface(page);
+  try {
+    await page.navigate(`${base}/`);
+    await page.waitFor(state, 20000);
+    await frame.waitFor(`[...document.querySelectorAll("#app button")].some((b) => b.textContent.trim() === "Add note") ? true : null`, 10000).catch(async (err) => {
+      throw new Error(`${err.message}; the frame shows: ${JSON.stringify(await page.frameEval(`document.body?.innerHTML.slice(0, 300)`))}`);
+    });
+    const violations = await axeRun(page, (e) => page.frameEval(e));
+    await frame.eval(`(() => {
+      const set = (label, v) => { const i = [...document.querySelectorAll("#app input, #app textarea")].find((e) => e.labels?.[0]?.textContent.trim() === label || e.getAttribute("aria-label") === label);
+        i.value = v; i.dispatchEvent(new Event("input", { bubbles: true })); };
+      set("Title", "Exported note"); set("Body", "From the web export test");
+    })()`);
+    await frame.eval(`[...document.querySelectorAll("#app button")].find((b) => b.textContent.trim() === "Add note").click()`);
+    await frame.waitFor(`document.getElementById("app").innerText.includes("Exported note") ? true : null`, 5000);
+    await page.waitFor(`Object.keys(localStorage).some((k) => k.startsWith("plinth-hub:kv:dev.plinth.examples.notes:")) ? true : null`, 5000);
+    const height = await page.eval(`document.querySelector("plinth-app > iframe").getBoundingClientRect().height`);
+    if (height < 200) throw new Error(`the app frame is ${height} px high; height="fill" must give it the page`);
+    await page.navigate(`${base}/`);
+    await page.waitFor(state, 20000);
+    await frame.waitFor(`document.getElementById("app").innerText.includes("Exported note") ? true : null`, 10000);
+
+    await page.navigate(pathToFileURL(single).href);
+    await page.waitFor(state, 20000);
+    await typeKeys(page, frame, () => frame.eval(`document.querySelector("#app input[type=text]").focus()`));
+    return { violations, note: "notes from a static server (kv kept across a reload), todo from one file on disk" };
+  } finally {
+    await page.close();
+    server.close();
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

@@ -681,7 +681,7 @@ The stub finds its payload through a footer: the magic bytes `PLNTH\0`, the offs
 
 **Web export (design, 2026-10-06).** A developer must be able to put a Plinth app on any static web host with no server logic. The export has two forms:
 
-- `plinth build <dir> --target web` writes a folder, `dist/web/`: `index.html`, `plinth.js`, the core file that the app needs (`plinth-core-<version>.wasm`), and the unchanged `.plnt`.
+- `plinth build <dir> --target web` writes a folder, `dist/web/`: `index.html`, `plinth.js`, the core file (`plinth-core-<version>.wasm`), and the unchanged `.plnt`. The core is the newest core of the CLI, which runs every older app of its major version (§10.5); `index.html` names it in the `core` attribute.
 - `plinth build <dir> --target web --single-file` writes one file, `dist/<name>.html`. The loader is inline. The core and the `.plnt` are inline as base64 in `<script type="application/octet-stream" id="…">` elements.
 
 The page uses one loader script and one custom element:
@@ -693,10 +693,13 @@ The page uses one loader script and one custom element:
 
 - `plinth.js` is the web host as one ES module (the protocol, the DOM renderer, the zip reader, and the host APIs). It defines the `<plinth-app>` element.
 - `<plinth-app src>` takes a URL to a `.plnt`, or `#id` for an inline package. An optional `core` attribute gives the URL or `#id` of the core file; by default, the loader looks for `plinth-core-<version>.wasm` next to `plinth.js`, with the version from the app's manifest.
-- A page can hold more than one `<plinth-app>`, and other HTML around it. The element takes the width of its container (the width classes of §6.1 follow the element, not the window).
+- A page can hold more than one `<plinth-app>`, and other HTML around it. The element takes the width of its container (the width classes of §6.1 follow the element, not the window). The attribute `height` is `content` (the default: the element takes the height of the app) or `fill` (the app fills the height that the page gives the element; the export's `index.html` uses it).
+- The frame document is inline (`srcdoc`): it holds the style and the whole of `plinth.js`. Thus the frame needs no URL, no CORS headers and no second page, and a single file works from disk (`file://`). A page with a Content Security Policy must allow inline scripts for the frame.
 - **Every app runs in a sandboxed iframe** (`sandbox="allow-scripts"`, an opaque origin), in a web export and in the web App Hub alike. The frame holds the core, the app and the renderer: the untrusted guest. The parent page is the trusted host shell: it keeps the app's storage, checks capabilities, makes `fetch` calls for the app (so requests carry the page's origin), and does the clipboard and dialogs. All host calls go through one `postMessage` bridge. The frame reports its content height, and `<plinth-app>` sizes itself to it. So an app behaves the same in the Hub, on the developer's site and in a single file, and the page's scripts and styles cannot reach the app.
 - A web export works like a native export (`plinth native`): there is no Hub and no consent screen, because the developer publishes the app on their own site. The host still gives only the declared capabilities. App storage belongs to the site's origin. `net` calls need CORS on the target server.
 - The web App Hub uses the same loader: `hub.html` is a page with a `<plinth-app>` for the Hub package.
+
+**Status (2026-10-06):** the export is done: `web/plinth.js` (generated from the files in `web/` by `scripts/gen-plinth-js.mjs`; `web/test/run-bundle.mjs` fails if it is not up to date), `web/plinth-app.js` (the element), and `plinth build --target web [--single-file] [--out <path>]`. `run-a11y.mjs` loads the folder form from a plain static server and the single file from disk in headless Edge. Not done: `hub.html` on `<plinth-app>` (the frame needs the `plinth:hub` bridge first); a minified `plinth.js` (136 KiB now).
 
 ### 10.4 App modules and the runtime
 

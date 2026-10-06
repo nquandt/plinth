@@ -83,6 +83,9 @@ plinth build                 # writes dist/<name>.plnt
 plinth run dist/<name>.plnt    # run the built package in the local host
 plinth native dist/<name>.plnt -o MyApp.exe
                               # one executable: this host, a runtime core, and your app
+plinth build --target web      # dist/web/: put the folder on any static web host
+plinth build --target web --single-file
+                              # dist/<name>.html: one file, also works from disk
 ```
 
 `plinth check` catches two kinds of problem: ordinary TypeScript type
@@ -221,3 +224,37 @@ This file bundles the desktop host, a runtime core, and your app. It is
 much larger than the `.plnt` (tens of MB, mostly the host and the
 renderer); the `.plnt` itself stays a few KB and is the file you would
 publish to a hub or a registry.
+
+## 8. Put your app on the web
+
+```sh
+plinth build --target web
+```
+
+writes the folder `dist/web/`: `index.html`, `plinth.js` (the web host),
+the runtime core, and your `.plnt`. Copy the folder to any static web
+host (GitHub Pages, a CDN, a plain file server). The host needs no server
+logic and no special headers. To test it on your computer, serve the
+folder with any static server, for example `npx http-server dist/web`.
+
+```sh
+plinth build --target web --single-file
+```
+
+writes one file, `dist/<name>.html`, with everything inline. Open it from
+disk, attach it to an email, or put it on a web host.
+
+To show an app in your own page, load `plinth.js` and add the element:
+
+```html
+<script type="module" src="plinth.js"></script>
+<plinth-app src="notes.plnt" core="plinth-core-1.10.wasm"></plinth-app>
+```
+
+The app runs in a sandboxed frame, so the scripts and styles of your page
+cannot reach it. The element takes the width of its container and the
+height of the app (`height="fill"`: the height that you give the
+element). The app gets the capabilities that `plinth.toml` declares, with
+no consent screen, and its `store.kv` data stays in the browser storage of
+your site. A `plinth:net` request needs CORS on the target server. See
+SPEC.md §10.3.

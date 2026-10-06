@@ -25,6 +25,23 @@ test from a phone or another laptop, use a Cloudflare quick tunnel
 (`cloudflared tunnel --url http://127.0.0.1:8787`); the tunnel URL is
 public, see `docs/web-hub.md` §2.
 
+## Export an app for the web
+
+`plinth build <dir> --target web` writes `dist/web/` (`index.html`,
+`plinth.js`, the core, the `.plnt`) for any static web host;
+`--single-file` writes one `dist/<name>.html` that also works from disk.
+A page shows an app with `<plinth-app src="app.plnt">` after it loads
+`plinth.js` as a module script (SPEC.md §10.3, `docs/getting-started.md` §8).
+
+`plinth.js` is GENERATED from the files below by
+`node scripts/gen-plinth-js.mjs` (no bundler dependency). Run the script
+after each change to a bundled file and commit the result;
+`test/run-bundle.mjs` fails when the file is not up to date. The bundle is
+one function: the page calls it to define `<plinth-app>`, and the element
+puts its source in the `srcdoc` of the sandboxed app frame, which calls it
+again to run `app-frame.js`. Thus a bundled file must not use
+`import.meta`, top-level `await`, or the text of an HTML script tag.
+
 ## Try it: one app, any static server (stand-alone, for tests and development)
 
 ```sh
@@ -54,13 +71,15 @@ itself, not in a sandboxed frame: use it for tests and development only.
 | `index.html` | Stand-alone: `index.html?app=<url of .plnt>&core=<url of core.wasm>`. The app runs in the page (no frame). For tests and development. |
 | `app-frame.html`, `app-frame.js` | **The frame side** of the app-frame pair: runs in `<iframe sandbox="allow-scripts">` (opaque origin). Loads the core and the app from the `start` message, renders with `dom-renderer.js`, and sends every host call that needs the page through the bridge (below). |
 | `frame-host.js` | **The parent side** of the pair, for any page that shows a Plinth app (`AppFrame`): kv data of each app, capability checks, `plinth:net` requests made by the page, the clipboard, dialogs drawn by the page (`hostDialog`), the content height. |
+| `plinth.js` | GENERATED (`scripts/gen-plinth-js.mjs`): the web host as one ES module, for web exports. It defines `<plinth-app>`. |
+| `plinth-app.js` | The `<plinth-app>` element (only in the bundle): reads the package (`src`, a URL or `#id` with base64), finds the core (`core`, or `plinth-core-<version>.wasm` next to `plinth.js`), and runs the app in an `AppFrame` with an inline frame document. Attributes `height="content"` (default) or `fill`; `data-state` is `loading`, `running` or `failed`. |
 | `hub-storage.js` | The bridge messages (`checkFrameMessage`, `startMessage`) and the kv store of the page (`HubStore`, one namespace for each app) and of the frame (`frameKvStore`). No DOM. |
 | `hub-integrity.js` | Package checks with WebCrypto: SHA-256 against the registry, the manifest, the Ed25519 signature (`signature.json`), the core digest. No DOM. |
 | `registry-client.js` | Reads a registry (`docs/REGISTRY.md`): the service index, the app list, app documents, cores, search. No DOM. |
 | `hub-host.js` | The `plinth:hub` backend (`HubHost`): browse mode (the library is the registry listing), grants, blocks, pins, groups and updates in IndexedDB, the JSON of the desktop `HubService`. No DOM. |
 | `hub.html`, `hub-shell.js` | The web App Hub (`docs/web-hub.md`): a thin bootstrap that runs the signed Hub app (`examples/hub`) from the registry with `hub-host.js`, plus the host consent window and the app window (an `AppFrame`). |
 | `test/run-*.mjs` | Node 22 tests (same `WebAssembly` API as the browser) that exercise `plinth-web.js`, `protocol.js`, the bridge, the package checks and the Hub backend directly, with no DOM (`run-hub-host.mjs` also runs the Hub app). `scripts/ci-local.sh` runs all of them except `run-a11y.mjs`. |
-| `test/run-a11y.mjs` | By hand (needs Edge and the axe-core CDN): axe-core on 5 apps and on the web App Hub in headless Edge, over the DevTools protocol; the Hub app, the consent window, apps in the sandboxed frame, kv isolation, the digest check, typing and the stopwatch in the frame; plus the in-place renderer checks (typing, a held click during timer ticks, hover and text selection across ticks, a TextArea selection across a commit, row identity in todo, and one changed row of big-list's 10,000 with its time). `--hub-only` checks only the hub; `--typing-only` runs only the renderer checks; `A11Y_SHOTS=<folder>` saves screenshots of the hub. |
+| `test/run-a11y.mjs` | By hand (needs Edge and the axe-core CDN): axe-core on 5 apps and on the web App Hub in headless Edge, over the DevTools protocol; the Hub app, the consent window, apps in the sandboxed frame, kv isolation, the digest check, typing and the stopwatch in the frame; plus the in-place renderer checks (typing, a held click during timer ticks, hover and text selection across ticks, a TextArea selection across a commit, row identity in todo, and one changed row of big-list's 10,000 with its time). `--hub-only` checks only the hub; `--typing-only` runs only the renderer checks; `--export-only` checks only the web export (notes from a plain static server, todo as a single file from disk); `A11Y_SHOTS=<folder>` saves screenshots of the hub. |
 
 ## Host APIs in the browser
 
@@ -76,7 +95,7 @@ itself, not in a sandboxed frame: use it for tests and development only.
 
 ## The app-frame bridge
 
-Every Plinth app on the web runs in `<iframe sandbox="allow-scripts" src="app-frame.html">` (an opaque origin). `app-frame.js` (in the frame) and `frame-host.js` (in the page) talk only through `postMessage`. Each message is an object with `channel: "plinth-frame/1"` and a `type`. The page posts to the frame with the target origin `"*"` (the only one that reaches an opaque origin), and only to the frame window that it made; the frame posts to the origin of the `start` message. The page accepts only messages whose `source` is its frame, and checks each one (`checkFrameMessage`): the frame runs app code and is not trusted.
+Every Plinth app on the web runs in `<iframe sandbox="allow-scripts" src="app-frame.html">` (an opaque origin). `app-frame.js` (in the frame) and `frame-host.js` (in the page) talk only through `postMessage`. Each message is an object with `channel: "plinth-frame/1"` and a `type`. The page posts to the frame with the target origin `"*"` (the only one that reaches an opaque origin), and only to the frame window that it made; the frame posts to the origin of the `start` message (or to `"*"` when that origin is `"null"`, a page from disk). The page accepts only messages whose `source` is its frame, and checks each one (`checkFrameMessage`): the frame runs app code and is not trusted.
 
 Frame to page:
 
@@ -100,7 +119,7 @@ Page to frame:
 | `start` | `pkg` and `core` (`ArrayBuffer`, transferred), `kv` (this app's kv data), `quota` (characters), `refused` (capability names). |
 | `answer` | `id`, `value`: the answer to a request with that `id`. |
 
-`AppFrame` options (`frame-host.js`): `appId`, `title`, `pkg`, `core`, `declared`, `refused`, `store` (a `HubStore`), `quota`, `src`, `autoHeight`, `askDialog`, `fetchImpl`, `onStarted`, `onFailed`. The page decides the grants; the pair only applies them.
+`AppFrame` options (`frame-host.js`): `appId`, `title`, `pkg`, `core`, `declared`, `refused`, `store` (a `HubStore`), `quota`, `src` or `srcdoc`, `autoHeight`, `askDialog`, `fetchImpl`, `onStarted`, `onFailed`. The page decides the grants; the pair only applies them.
 
 ## Not done yet
 

@@ -80,7 +80,9 @@ window.addEventListener("message", (event) => {
   if (!msg || msg.channel !== CHANNEL) return;
   if (msg.type === "start" && !started) {
     started = true;
-    parentOrigin = event.origin;
+    // A page from disk (file://) has the origin "null", which is not a
+    // valid target origin; "*" still reaches only the parent window.
+    parentOrigin = event.origin === "null" ? "*" : event.origin;
     start(msg)
       .then(() => send({ type: "started" }))
       .catch((err) => {
@@ -88,7 +90,7 @@ window.addEventListener("message", (event) => {
         showError(String(err?.stack ?? err));
         send({ type: "failed", message: String(err?.message ?? err) });
       });
-  } else if (msg.type === "answer" && event.origin === parentOrigin && pending.has(msg.id)) {
+  } else if (msg.type === "answer" && (parentOrigin === "*" || event.origin === parentOrigin) && pending.has(msg.id)) {
     const resolve = pending.get(msg.id);
     pending.delete(msg.id);
     resolve(msg.value ?? null);

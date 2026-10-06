@@ -76,7 +76,8 @@ export function hostDialog(kind, message, title = "") {
  * - `declared`: the capability names of the manifest; `refused`: the ones
  *   that the user did not allow. A refused call answers "denied" in the app.
  * - `store`: a `HubStore` (kv data of each app); `quota`: characters.
- * - `src`: the frame page (default `app-frame.html`).
+ * - `src`: the frame page (default `app-frame.html`); or `srcdoc`: the
+ *   HTML of the frame page (a web export, SPEC.md §10.3).
  * - `autoHeight`: size the iframe to the content height that the frame reports.
  * - `askDialog(kind, message)`: default `hostDialog`.
  * - `fetchImpl`: default `fetch`.
@@ -92,7 +93,9 @@ export class AppFrame {
     this.sent = false;
     // `allow-scripts` only: an opaque origin, no forms, no popups, no modal
     // dialogs, no top navigation, no same-origin access.
-    this.element = el("iframe", { class: "host-frame", sandbox: "allow-scripts", title: opts.title ?? opts.appId, src: this.opts.src });
+    this.element = el("iframe", { class: "host-frame", sandbox: "allow-scripts", title: opts.title ?? opts.appId });
+    if (opts.srcdoc !== undefined) this.element.srcdoc = opts.srcdoc;
+    else this.element.src = this.opts.src;
     this.onMessage = (event) => this.handle(event);
     window.addEventListener("message", this.onMessage);
   }

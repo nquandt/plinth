@@ -16,6 +16,8 @@ pub const FILES: &[(&str, &[u8])] = &[
     ("frame-host.js", include_bytes!("../../../web/frame-host.js")),
     ("index.html", include_bytes!("../../../web/index.html")),
     ("plinth-web.js", include_bytes!("../../../web/plinth-web.js")),
+    ("plinth-app.js", include_bytes!("../../../web/plinth-app.js")),
+    ("plinth.js", include_bytes!("../../../web/plinth.js")),
     ("dom-renderer.js", include_bytes!("../../../web/dom-renderer.js")),
     ("protocol.js", include_bytes!("../../../web/protocol.js")),
     ("zip.js", include_bytes!("../../../web/zip.js")),

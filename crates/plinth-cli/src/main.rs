@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime};
 
 mod dev_tools;
 mod registry_cmd;
+mod web_export;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -23,6 +24,10 @@ usage:
                                    type-check, with no build
   plinth build [dir] [--out <file>] [--sign]
                                    make dist/<name>.plnt (--sign adds signature.json)
+  plinth build [dir] --target web [--single-file] [--out <path>]
+                                   make dist/web/ (index.html, plinth.js, the core,
+                                   the package) for any static web host, or
+                                   dist/<name>.html with everything inline
   plinth sign <file.plnt>          add signature.json to an existing package
   plinth publisher init [--name <publisher>]
                                    create a publisher key pair (docs/HUB.md §6.1)
@@ -121,9 +126,17 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
             }
         }
         Some("build") => {
-            let out = args.iter().position(|a| *a == "--out").and_then(|i| args.get(i + 1)).map(PathBuf::from);
-            let project = positional.get(1).filter(|p| Some(**p) != out.as_ref().and_then(|o| o.to_str())).map(PathBuf::from);
-            Ok(if build(&project.unwrap_or_else(|| PathBuf::from(".")), out, flag("--sign"))? { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+            let value = |f: &str| args.iter().position(|a| *a == f).and_then(|i| args.get(i + 1)).copied();
+            let (out, target) = (value("--out"), value("--target"));
+            let project = positional[1..].iter().find(|p| Some(**p) != out && Some(**p) != target).map(PathBuf::from);
+            let project = project.unwrap_or_else(|| PathBuf::from("."));
+            let out = out.map(PathBuf::from);
+            let ok = match target {
+                None => build(&project, out, flag("--sign"))?,
+                Some("web") => build_web(&project, out, flag("--single-file"), flag("--sign"))?,
+                Some(t) => bail!("unknown target `{t}`; use `--target web`, or `plinth native` for an executable"),
+            };
+            Ok(if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE })
         }
         Some("sign") => {
             let file = positional.get(1).context("usage: plinth sign <file.plnt>")?;
@@ -259,7 +272,7 @@ fn new_project(dir: &Path) -> Result<()> {
     write(
         "package.json",
         &format!(
-            "{{\n  \"name\": \"{slug}\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"scripts\": {{\n    \"dev\": \"plinth dev\",\n    \"check\": \"plinth check\",\n    \"build\": \"plinth build\"\n  }},\n  \"devDependencies\": {{\n    \"@plinth/cli\": \"^{VERSION}\"\n  }}\n}}\n"
+            "{{\n  \"name\": \"{slug}\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"scripts\": {{\n    \"dev\": \"plinth dev\",\n    \"check\": \"plinth check\",\n    \"build\": \"plinth build\",\n    \"build:web\": \"plinth build --target web\"\n  }},\n  \"devDependencies\": {{\n    \"@plinth/cli\": \"^{VERSION}\"\n  }}\n}}\n"
         ),
     )?;
     write_typings(dir)?;
@@ -461,6 +474,36 @@ fn build_package(dir: &Path, out: Option<PathBuf>, sign: bool) -> Result<Option<
         bytes.len().div_ceil(1024)
     );
     Ok(Some(out))
+}
+
+// -- web export (SPEC.md §10.3) -------------------------------------------------
+
+/// Builds the package, then the web export: the folder `dist/web/` or, with
+/// `single_file`, `dist/<name>.html`. `out` replaces the default path.
+fn build_web(dir: &Path, out: Option<PathBuf>, single_file: bool, sign: bool) -> Result<bool> {
+    let Some(plnt_path) = build_package(dir, None, sign)? else { return Ok(false) };
+    let plnt = std::fs::read(&plnt_path).with_context(|| format!("read {}", plnt_path.display()))?;
+    let app = plinth_host_desktop::HostApp::from_bytes(plnt.clone(), &plnt_path)?;
+    let core = plinth_compiler::link::runtime();
+    let (major, minor) = plinth_compiler::cores::core_version(core).context("the built-in core has no version")?;
+    let version = format!("{major}.{minor}");
+    let file = plnt_path.file_name().and_then(|n| n.to_str()).context("package file name")?.to_owned();
+    let web = web_export::WebApp { name: &app.title, plnt: (&plnt, &file), core: (core, &version) };
+    let dist = plnt_path.parent().unwrap_or(Path::new("."));
+    if single_file {
+        let out = out.unwrap_or_else(|| plnt_path.with_extension("html"));
+        if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)?;
+        }
+        let html = web_export::single_file_html(&web);
+        std::fs::write(&out, &html).with_context(|| format!("write {}", out.display()))?;
+        println!("made {} ({}, core {version}, {} KiB): open it in a browser, or put it on any web host", out.display(), app.title, html.len().div_ceil(1024));
+    } else {
+        let out = out.unwrap_or_else(|| dist.join("web"));
+        web_export::write_folder(&out, &web)?;
+        println!("made {} ({}, core {version}): put the folder on any static web host", out.display(), app.title);
+    }
+    Ok(true)
 }
 
 // -- native (single-file export, SPEC.md §10.3) ---------------------------------

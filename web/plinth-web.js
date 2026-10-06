@@ -219,7 +219,9 @@ export function parseManifest(manifestText) {
   const capRe = /\[\[capabilities\]\]\s*\r?\n\s*name\s*=\s*"([^"]*)"/g;
   let m;
   while ((m = capRe.exec(manifestText))) capabilities.add(m[1]);
-  return { id: idMatch ? idMatch[1] : "", capabilities };
+  const nameMatch = manifestText.match(/^name\s*=\s*"([^"]*)"/m);
+  const runtimeMatch = manifestText.match(/^runtime\s*=\s*"([^"]*)"/m);
+  return { id: idMatch ? idMatch[1] : "", name: nameMatch ? nameMatch[1] : "", runtime: runtimeMatch ? runtimeMatch[1] : "", capabilities };
 }
 
 /**
