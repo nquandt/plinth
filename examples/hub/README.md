@@ -35,6 +35,10 @@ refuses every other package that declares `hub.manage`, before it runs.
 
 ## Run it
 
+On Windows, `scripts/dev-hub.ps1` does steps 2–4 for you without changing a tracked file. It needs `plinth` on the PATH (`cargo install --path crates/plinth-cli`), a publisher key (step 1), and your key id in `PLINTH_HUB_TRUSTED_KEYS`. It copies this app to `target/dev-hub`, sets your publisher name there, builds and signs it, adds it and some examples to the library, and starts the Hub.
+
+By hand:
+
 1. Make a publisher key, if you do not have one:
 
    ```sh
