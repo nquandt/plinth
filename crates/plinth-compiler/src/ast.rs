@@ -41,6 +41,10 @@ pub struct Interface {
     pub fields: Vec<FieldAnn>,
     pub exported: bool,
     pub span: Span,
+    /// Names of `<A, B, …>` type parameters (generic interfaces,
+    /// monomorphized per distinct type arguments, like generic type
+    /// aliases; HANDOFF.md item 1).
+    pub type_params: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
