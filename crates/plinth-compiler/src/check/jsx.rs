@@ -95,13 +95,14 @@ impl Checker<'_> {
                     let te = self.typed(&value, &t);
                     (PropTarget::Enum(id, table.iter().map(|(s, v)| (s.to_string(), *v)).collect()), te)
                 }
-                PropTy::Callback0 | PropTy::CallbackStr | PropTy::CallbackBool => {
+                PropTy::Callback0 | PropTy::CallbackStr | PropTy::CallbackBool | PropTy::CallbackNum => {
                     if ps.name == "onChange" {
                         has_on_change = true;
                     }
                     let params = match ps.ty {
                         PropTy::CallbackStr => vec![Type::String],
                         PropTy::CallbackBool => vec![Type::Bool],
+                        PropTy::CallbackNum => vec![Type::Number],
                         _ => Vec::new(),
                     };
                     let (f, _) = self.callback(&value, &params, Some(Type::Void));
@@ -112,19 +113,27 @@ impl Checker<'_> {
                     }
                     (PropTarget::Event(id), f)
                 }
-                PropTy::ValueStr | PropTy::ValueBool => {
-                    let is_bool = ps.ty == PropTy::ValueBool;
-                    let base = if is_bool { Type::Bool } else { Type::String };
+                PropTy::ValueStr | PropTy::ValueBool | PropTy::ValueNum => {
+                    let kind = match ps.ty {
+                        PropTy::ValueBool => BindValKind::Bool,
+                        PropTy::ValueNum => BindValKind::Num,
+                        _ => BindValKind::Str,
+                    };
+                    let base = match kind {
+                        BindValKind::Bool => Type::Bool,
+                        BindValKind::Num => Type::Number,
+                        BindValKind::Str => Type::String,
+                    };
                     let te = self.expr(&value, Some(&base));
                     match &te.ty {
                         Type::Signal(inner) if self.conversion(inner, &base).is_some() && self.conversion(&base, inner).is_some() => {
                             has_bind = true;
-                            (PropTarget::Bind { is_bool }, te)
+                            (PropTarget::Bind { kind }, te)
                         }
                         Type::Signal(inner) => {
                             let msg = format!("`value` needs a `Signal<{}>`, not `Signal<{}>`", self.show(&base), self.show(inner));
                             self.err(code::BAD_BINDING, value.span, msg);
-                            (PropTarget::Bind { is_bool }, te)
+                            (PropTarget::Bind { kind }, te)
                         }
                         Type::Computed(_) => {
                             self.err_help(
@@ -137,14 +146,42 @@ impl Checker<'_> {
                         }
                         _ => {
                             let te = self.coerce(te, &base);
-                            let target = if is_bool {
-                                PropTarget::Bool(plinth_protocol::prop::VALUE)
-                            } else {
-                                PropTarget::Str(plinth_protocol::prop::VALUE)
+                            let target = match kind {
+                                BindValKind::Bool => PropTarget::Bool(plinth_protocol::prop::VALUE),
+                                BindValKind::Num => PropTarget::Num(plinth_protocol::prop::VALUE),
+                                BindValKind::Str => PropTarget::Str(plinth_protocol::prop::VALUE),
                             };
                             (target, te)
                         }
                     }
+                }
+                PropTy::StrList => {
+                    let mut parts = Vec::new();
+                    let mut ok = matches!(value.kind, ExprKind::Array(_));
+                    if let ExprKind::Array(items) = &value.kind {
+                        for (spread, item) in items {
+                            if *spread {
+                                ok = false;
+                                break;
+                            }
+                            if let ExprKind::Str(s) = &item.kind {
+                                parts.push(s.clone());
+                            } else {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if !ok {
+                        self.err_help(
+                            code::TYPE_MISMATCH,
+                            value.span,
+                            format!("`{}` must be an array literal of string literals", ps.name),
+                            "pass [\"a\", \"b\"]",
+                        );
+                    }
+                    let joined = parts.join("\u{1f}");
+                    (PropTarget::Str(id), TExpr::new(TExprKind::Str(joined), Type::String, value.span))
                 }
                 PropTy::ListItems => {
                     let te = self.expr(&value, None);

@@ -2,7 +2,7 @@
 //!
 //! The runtime owns all layout, spacing and color. Apps only supply the tree.
 
-use crate::theme::{Tokens, WidthClass, icon_glyph};
+use crate::theme::{Tokens, WidthClass, icon_glyph, with_alpha};
 use crate::tree::{Node, Tree};
 use gpui::{
     AnyElement, ClickEvent, Context, ElementId, Entity, FontWeight, IntoElement, Render,
@@ -22,12 +22,20 @@ pub trait GuestPort {
     fn dispatch(&mut self, events: &[u8]) -> anyhow::Result<Vec<Vec<u8>>>;
 }
 
-/// Host-side state of one `TextField`.
+/// Host-side state of one `TextField`, `TextArea` or `NumberField`.
 struct Field {
     state: Entity<EditableTextState>,
-    /// The last value that the host and the guest agree on.
+    /// The last value that the host and the guest agree on, as text.
     last_synced: String,
+    /// `NumberField` holds its value as text but the prop is a number.
+    numeric: bool,
     _subscription: Subscription,
+}
+
+/// Formats a `Value::Number` the way a `NumberField` shows it: no trailing
+/// `.0` for whole numbers (SPEC.md §6.3).
+fn format_num(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
 }
 
 pub struct PlinthRoot {
@@ -135,11 +143,15 @@ impl PlinthRoot {
     /// Pushes guest-side `value` changes into the text field states.
     fn sync_fields(&mut self, cx: &mut Context<Self>) {
         for (id, field) in self.fields.iter_mut() {
-            let guest_value = self.tree.get(*id).and_then(|n| n.str_prop(prop::VALUE)).unwrap_or("");
+            let node = self.tree.get(*id);
+            let guest_value = if field.numeric {
+                node.and_then(|n| n.num_prop(prop::VALUE)).map(format_num).unwrap_or_default()
+            } else {
+                node.and_then(|n| n.str_prop(prop::VALUE)).unwrap_or("").to_owned()
+            };
             if guest_value != field.last_synced {
-                field.last_synced = guest_value.to_owned();
-                let value = field.last_synced.clone();
-                field.state.update(cx, |s, cx| s.emplace(&value, cx));
+                field.last_synced = guest_value.clone();
+                field.state.update(cx, |s, cx| s.emplace(&guest_value, cx));
             }
         }
     }
@@ -151,32 +163,52 @@ impl PlinthRoot {
             return; // The host set this value, so the guest knows it already.
         }
         field.last_synced = text.clone();
-        self.tree.set_local_prop(id, prop::VALUE, Value::Str(text.clone()));
-        if let Some(handler) = self.tree.get(id).and_then(|n| n.handler(event::CHANGE)) {
-            self.fire(handler, event::CHANGE, Value::Str(text), cx);
+        if field.numeric {
+            let Ok(mut n) = text.trim().parse::<f64>() else { return };
+            if let Some(node) = self.tree.get(id) {
+                if let Some(min) = node.num_prop(prop::MIN) {
+                    n = n.max(min);
+                }
+                if let Some(max) = node.num_prop(prop::MAX) {
+                    n = n.min(max);
+                }
+            }
+            self.tree.set_local_prop(id, prop::VALUE, Value::Number(n));
+            if let Some(handler) = self.tree.get(id).and_then(|n| n.handler(event::CHANGE)) {
+                self.fire(handler, event::CHANGE, Value::Number(n), cx);
+            }
+        } else {
+            self.tree.set_local_prop(id, prop::VALUE, Value::Str(text.clone()));
+            if let Some(handler) = self.tree.get(id).and_then(|n| n.handler(event::CHANGE)) {
+                self.fire(handler, event::CHANGE, Value::Str(text), cx);
+            }
         }
     }
 
-    /// Makes the text field states for visible `TextField` nodes. This must
-    /// happen before the element pass, because it needs `&mut self`.
+    /// Makes the text field states for visible `TextField`, `TextArea` and
+    /// `NumberField` nodes. This must happen before the element pass,
+    /// because it needs `&mut self`.
     fn ensure_fields(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.tree.current_root() else { return };
         let mut stack = vec![root.id];
         let mut missing = Vec::new();
         while let Some(id) = stack.pop() {
             let Some(node) = self.tree.get(id) else { continue };
-            let is_text_input = matches!(node.kind, Some(ControlKind::TextField) | Some(ControlKind::TextArea));
+            let numeric = node.kind == Some(ControlKind::NumberField);
+            let is_text_input = matches!(node.kind, Some(ControlKind::TextField) | Some(ControlKind::TextArea)) || numeric;
             if is_text_input && !self.fields.contains_key(&id) {
-                missing.push((id, node.str_prop(prop::VALUE).unwrap_or("").to_owned()));
+                let initial =
+                    if numeric { node.num_prop(prop::VALUE).map(format_num).unwrap_or_default() } else { node.str_prop(prop::VALUE).unwrap_or("").to_owned() };
+                missing.push((id, initial, numeric));
             }
             stack.extend(node.children.iter().copied());
         }
-        for (id, value) in missing {
+        for (id, value, numeric) in missing {
             let initial = value.clone();
             let state = cx.new(|cx| EditableTextState::new(StringStorage::from(initial), cx));
             let subscription =
                 cx.subscribe(&state, move |this, state, _: &TextChanged, cx| this.on_text_changed(id, state, cx));
-            self.fields.insert(id, Field { state, last_synced: value, _subscription: subscription });
+            self.fields.insert(id, Field { state, last_synced: value, numeric, _subscription: subscription });
         }
     }
 }
@@ -345,6 +377,11 @@ impl PlinthRoot {
             ControlKind::Group => self.render_group(node, t, cx),
             ControlKind::Checkbox => self.render_checkbox(node, t, cx),
             ControlKind::TextArea => self.render_text_area(node, t, cx),
+            ControlKind::Slider => self.render_slider(node, t, cx),
+            ControlKind::NumberField => self.render_number_field(node, t, cx),
+            ControlKind::Picker => self.render_picker(node, t, cx),
+            ControlKind::Progress => self.render_progress(node, t),
+            ControlKind::Badge => self.render_badge(node, t),
         }
     }
 
@@ -675,6 +712,204 @@ impl PlinthRoot {
                 .text_sm(),
         );
         self.labelled(label, input, None, t)
+    }
+
+    /// Steps a `Slider` or `NumberField` value by `delta`, clamped to
+    /// `min`/`max`, and fires `onChange` if the app set one.
+    fn step_value(&mut self, id: NodeId, delta: f64, cx: &mut Context<Self>) {
+        let Some(node) = self.tree.get(id) else { return };
+        let min = node.num_prop(prop::MIN).unwrap_or(f64::MIN);
+        let max = node.num_prop(prop::MAX).unwrap_or(f64::MAX);
+        let current = node.num_prop(prop::VALUE).unwrap_or(0.0);
+        let next = (current + delta).clamp(min, max);
+        let handler = node.handler(event::CHANGE);
+        self.tree.set_local_prop(id, prop::VALUE, Value::Number(next));
+        match handler {
+            Some(h) => self.fire(h, event::CHANGE, Value::Number(next), cx),
+            None => cx.notify(),
+        }
+    }
+
+    fn step_button(&self, id: NodeId, label: &'static str, delta: f64, disabled: bool, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id(eid(if delta < 0.0 { "step-down" } else { "step-up" }, id))
+            .flex_none()
+            .size(px(28.))
+            .rounded_md()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(t.surface_alt)
+            .text_color(t.text)
+            .when(disabled, |d| d.opacity(0.5))
+            .when(!disabled, |d| {
+                d.cursor_pointer().hover(move |s| s.bg(t.hover)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.step_value(id, delta, cx);
+                }))
+            })
+            .child(label)
+            .into_any_element()
+    }
+
+    fn render_slider(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
+        let min = node.num_prop(prop::MIN).unwrap_or(0.0);
+        let max = node.num_prop(prop::MAX).unwrap_or(1.0);
+        let step = node.num_prop(prop::STEP).unwrap_or(((max - min) / 20.0).max(0.000_1));
+        let value = node.num_prop(prop::VALUE).unwrap_or(min).clamp(min, max);
+        let disabled = node.bool_prop(prop::DISABLED) || self.stopped.is_some();
+        let id = node.id;
+        let frac = if max > min { ((value - min) / (max - min)).clamp(0.0, 1.0) } else { 0.0 };
+        let track = div()
+            .flex_1()
+            .h(px(8.))
+            .rounded_full()
+            .bg(t.track)
+            .child(div().h_full().rounded_full().bg(t.accent).w(gpui::relative(frac as f32)));
+        let row = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(self.step_button(id, "-", -step, disabled, t, cx))
+            .child(track)
+            .child(self.step_button(id, "+", step, disabled, t, cx))
+            .child(div().w(px(44.)).text_xs().text_color(t.text_muted).text_right().child(format_num(value)));
+        self.labelled(label, row, None, t)
+    }
+
+    fn render_number_field(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
+        let step = node.num_prop(prop::STEP).unwrap_or(1.0);
+        let disabled = node.bool_prop(prop::DISABLED) || self.stopped.is_some();
+        let id = node.id;
+        let Some(field) = self.fields.get(&id) else { return div().into_any_element() };
+        let input = div().id(eid("nf-wrap", id)).flex().items_center().gap_1().child(self.step_button(id, "-", -step, disabled, t, cx)).child(
+            text_input(eid("nf", id))
+                .state(field.state.downgrade())
+                .accepts_input(self.stopped.is_none())
+                .caret_color(t.text)
+                .selection_color(t.selection)
+                .caret_blink_interval_500ms()
+                .w(px(64.))
+                .px_2()
+                .py_2()
+                .rounded_lg()
+                .border_1()
+                .border_color(t.border)
+                .bg(t.background)
+                .text_color(t.text)
+                .text_sm()
+                .text_center()
+                .min_h_auto(),
+        ).child(self.step_button(id, "+", step, disabled, t, cx));
+        self.labelled(label, input, None, t)
+    }
+
+    /// A `Picker` (SPEC.md §6.3): a segmented control for up to 4 options,
+    /// or a stacked list of rows for more.
+    fn render_picker(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
+        let current = node.str_prop(prop::VALUE).unwrap_or("").to_owned();
+        let disabled = node.bool_prop(prop::DISABLED) || self.stopped.is_some();
+        let id = node.id;
+        let options: Vec<String> = node.str_prop(prop::OPTIONS).unwrap_or("").split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_owned).collect();
+        let select = move |this: &mut Self, opt: String, cx: &mut Context<Self>| {
+            let handler = this.tree.get(id).and_then(|n| n.handler(event::CHANGE));
+            this.tree.set_local_prop(id, prop::VALUE, Value::Str(opt.clone()));
+            match handler {
+                Some(h) => this.fire(h, event::CHANGE, Value::Str(opt), cx),
+                None => cx.notify(),
+            }
+        };
+        let body = if options.len() <= 4 {
+            let items = options.into_iter().enumerate().map(|(i, opt)| {
+                let selected = opt == current;
+                let opt_for_click = opt.clone();
+                div()
+                    .id(eid("picker-opt", (id as u64) * 100 + i as u64))
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .py_1()
+                    .rounded_md()
+                    .text_xs()
+                    .when(selected, |d| d.bg(t.accent).text_color(t.on_accent))
+                    .when(!selected, |d| d.text_color(t.text))
+                    .when(disabled, |d| d.opacity(0.5))
+                    .when(!disabled, |d| {
+                        d.cursor_pointer().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| select(this, opt_for_click.clone(), cx)))
+                    })
+                    .child(opt)
+            });
+            div().flex().gap_1().p_1().rounded_lg().bg(t.surface_alt).children(items).into_any_element()
+        } else {
+            let hover = t.hover;
+            let rows = options.into_iter().map(|opt| {
+                let selected = opt == current;
+                let opt_for_click = opt.clone();
+                div()
+                    .id(eid("picker-row", {
+                        use std::hash::{Hash, Hasher};
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        opt.hash(&mut h);
+                        h.finish()
+                    }))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px_3()
+                    .py_2()
+                    .when(disabled, |d| d.opacity(0.5))
+                    .when(!disabled, |d| {
+                        d.cursor_pointer()
+                            .hover(move |s| s.bg(hover))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| select(this, opt_for_click.clone(), cx)))
+                    })
+                    .child(div().text_sm().child(opt))
+                    .when(selected, |d| d.child(div().text_color(t.accent).child("✓")))
+            });
+            div().flex().flex_col().rounded_lg().border_1().border_color(t.border).children(rows).into_any_element()
+        };
+        self.labelled(label, body, None, t)
+    }
+
+    fn render_progress(&self, node: &Node, t: &Tokens) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).map(str::to_owned);
+        let value = node.num_prop(prop::VALUE).map(|v| v.clamp(0.0, 1.0) as f32);
+        let bar = div().w_full().h(px(6.)).rounded_full().bg(t.track).child(match value {
+            Some(frac) => div().h_full().rounded_full().bg(t.accent).w(gpui::relative(frac)).into_any_element(),
+            // Indeterminate: a fixed-width segment. There is no animation yet.
+            None => div().h_full().rounded_full().bg(t.accent).w(gpui::relative(0.3)).into_any_element(),
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .when_some(label, |d, l| d.child(div().text_sm().text_color(t.text_muted).child(l)))
+            .child(bar)
+            .into_any_element()
+    }
+
+    fn render_badge(&self, node: &Node, t: &Tokens) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
+        let (bg, fg) = match node.enum_prop(prop::TONE) {
+            tone::DANGER => (with_alpha(t.danger, 0.16), t.danger),
+            tone::SUCCESS => (with_alpha(t.success, 0.16), t.success),
+            tone::MUTED => (t.surface_alt, t.text_muted),
+            _ => (with_alpha(t.accent, 0.16), t.accent),
+        };
+        div()
+            .flex_none()
+            .px_2()
+            .py_0p5()
+            .rounded_full()
+            .bg(bg)
+            .text_color(fg)
+            .text_xs()
+            .font_weight(FontWeight::MEDIUM)
+            .child(label)
+            .into_any_element()
     }
 }
 

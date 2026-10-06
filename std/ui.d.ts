@@ -24,7 +24,9 @@ export declare function effect(f: () => void): void;
 
 export type Accent = "teal" | "blue" | "indigo" | "purple" | "pink" | "red" | "orange" | "green";
 export type IconName =
-  | "house" | "gear" | "check" | "list" | "plus" | "trash" | "star" | "info" | "number";
+  | "house" | "gear" | "check" | "list" | "plus" | "trash" | "star" | "info" | "number"
+  | "search" | "edit" | "close" | "back" | "forward" | "calendar" | "clock" | "user" | "mail" | "heart"
+  | "bell" | "share" | "download" | "upload" | "refresh" | "filter" | "menu" | "more" | "lock" | "warning";
 
 export interface ScreenDef {
   title: string;
@@ -136,4 +138,47 @@ export declare function TextArea(props: {
   value: Signal<string> | string;
   placeholder?: string;
   onChange?: (value: string) => void;
+}): Element;
+
+export declare function Slider(props: {
+  label: string;
+  /** A signal binds both ways. A number needs `onChange`. */
+  value: Signal<number> | number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange?: (value: number) => void;
+  disabled?: boolean;
+}): Element;
+
+export declare function NumberField(props: {
+  label: string;
+  /** A signal binds both ways. A number needs `onChange`. */
+  value: Signal<number> | number;
+  min?: number;
+  max?: number;
+  step?: number;
+  onChange?: (value: number) => void;
+  disabled?: boolean;
+}): Element;
+
+export declare function Picker(props: {
+  label: string;
+  /** A signal binds both ways. A string needs `onChange`. */
+  value: Signal<string> | string;
+  /** <= 4 options render as a segmented control; more render as a list. */
+  options: string[];
+  onChange?: (value: string) => void;
+  disabled?: boolean;
+}): Element;
+
+export declare function Progress(props: {
+  label?: string;
+  /** 0 to 1. Missing means indeterminate. */
+  value?: number;
+}): Element;
+
+export declare function Badge(props: {
+  label: string;
+  tone?: Tone;
 }): Element;

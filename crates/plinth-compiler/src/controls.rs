@@ -20,10 +20,16 @@ pub enum PropTy {
     CallbackStr,
     /// `(value: boolean) => void`
     CallbackBool,
+    /// `(value: number) => void`
+    CallbackNum,
     /// `Signal<string> | string`
     ValueStr,
     /// `Signal<boolean> | boolean`
     ValueBool,
+    /// `Signal<number> | number`
+    ValueNum,
+    /// A string array literal (e.g. `options`), joined with U+001F.
+    StrList,
     ListItems,
     ListKey,
     ListRow,
@@ -61,7 +67,12 @@ pub struct ControlSpec {
     pub children: ChildKind,
 }
 
-pub const ICONS: &[&str] = &["house", "gear", "check", "list", "plus", "trash", "star", "info", "number"];
+pub const ICONS: &[&str] = &[
+    "house", "gear", "check", "list", "plus", "trash", "star", "info", "number",
+    // UI API 1.2
+    "search", "edit", "close", "back", "forward", "calendar", "clock", "user", "mail", "heart", "bell", "share",
+    "download", "upload", "refresh", "filter", "menu", "more", "lock", "warning",
+];
 
 const BUTTON_ROLES: &[(&str, u16)] =
     &[("default", button_role::DEFAULT), ("primary", button_role::PRIMARY), ("destructive", button_role::DESTRUCTIVE)];
@@ -198,6 +209,65 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("value", T::ValueStr, true, Target::Value),
             p("placeholder", T::Str, false, P(prop::PLACEHOLDER)),
             p("onChange", T::CallbackStr, false, Ev(event::CHANGE)),
+        ],
+        children: ChildKind::None,
+    },
+    ControlSpec {
+        name: "Slider",
+        kind: ControlKind::Slider,
+        props: &[
+            p("label", T::Str, true, P(prop::LABEL)),
+            p("value", T::ValueNum, true, Target::Value),
+            p("min", T::Num, true, P(prop::MIN)),
+            p("max", T::Num, true, P(prop::MAX)),
+            p("step", T::Num, false, P(prop::STEP)),
+            p("onChange", T::CallbackNum, false, Ev(event::CHANGE)),
+            p("disabled", T::Bool, false, P(prop::DISABLED)),
+        ],
+        children: ChildKind::None,
+    },
+    ControlSpec {
+        name: "NumberField",
+        kind: ControlKind::NumberField,
+        props: &[
+            p("label", T::Str, true, P(prop::LABEL)),
+            p("value", T::ValueNum, true, Target::Value),
+            p("min", T::Num, false, P(prop::MIN)),
+            p("max", T::Num, false, P(prop::MAX)),
+            p("step", T::Num, false, P(prop::STEP)),
+            p("onChange", T::CallbackNum, false, Ev(event::CHANGE)),
+            p("disabled", T::Bool, false, P(prop::DISABLED)),
+        ],
+        children: ChildKind::None,
+    },
+    ControlSpec {
+        name: "Picker",
+        kind: ControlKind::Picker,
+        props: &[
+            p("label", T::Str, true, P(prop::LABEL)),
+            p("value", T::ValueStr, true, Target::Value),
+            p("options", T::StrList, true, P(prop::OPTIONS)),
+            p("onChange", T::CallbackStr, false, Ev(event::CHANGE)),
+            p("disabled", T::Bool, false, P(prop::DISABLED)),
+        ],
+        children: ChildKind::None,
+    },
+    ControlSpec {
+        name: "Progress",
+        kind: ControlKind::Progress,
+        props: &[
+            p("label", T::Str, false, P(prop::LABEL)),
+            // Missing (not passed) means indeterminate.
+            p("value", T::Num, false, P(prop::VALUE)),
+        ],
+        children: ChildKind::None,
+    },
+    ControlSpec {
+        name: "Badge",
+        kind: ControlKind::Badge,
+        props: &[
+            p("label", T::Str, true, P(prop::LABEL)),
+            p("tone", T::Enum(TONES), false, P(prop::TONE)),
         ],
         children: ChildKind::None,
     },
