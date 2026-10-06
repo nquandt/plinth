@@ -209,6 +209,13 @@ Each module has a hand-written `.d.ts` file in `std/` of this repo. The editor r
 
 In M1, `plinth:core` exports `Math`, `parseNumber`, `toString` and `console`; `plinth:ui` exports the reactive primitives, `app`, `navigate` and the M0 controls.
 
+M2 adds three modules:
+- `plinth:time`: `now()`, `monotonicNow()`, `setTimeout(f, ms)`, `setInterval(f, ms)`, `clearTimeout(id)` and `clearInterval(id)`. A timer id is a `number`. No capability is necessary.
+- `plinth:store`: `kv.get(key): string | null`, `kv.set(key, value)`, `kv.remove(key)` and `kv.keys(): string[]`. Capability `store.kv`.
+- `plinth:clipboard`: `writeText(text)` and `readText()`. Capabilities `clipboard.write` and `clipboard.read`.
+
+A call to a module function whose capability is not in `plinth.toml` is the compile error `PL1007`.
+
 ---
 
 ## 5. Compiler
@@ -299,6 +306,8 @@ export default app({
 
 `navigate("settings")`, `navigate.push(Screen, props)`, and `navigate.back()` are the only navigation APIs.
 
+**Status (UI API 1.2):** `navigate("name")` selects a primary screen. `navigate.push("name")` pushes any declared screen on the stack of the current primary tab, and `navigate.back()` pops it. The compiler checks each name against `app({ screens })`. `push` does not take props yet. Screens that are not in `primary` are pushable only. The host keeps one stack for each primary tab. It shows a back control in the screen header when the stack has more than one entry, and Escape or Alt+Left goes back. The guest marks the primary screens with the `navigate` op kind `mark-primary` (4) at start.
+
 ### 6.3 Control vocabulary (UI API 1.0)
 
 Every control is a typed JSX intrinsic from `plinth:ui`. Props in **bold** are required.
@@ -362,6 +371,16 @@ Every control is a typed JSX intrinsic from `plinth:ui`. Props in **bold** are r
 | `Canvas` | **label**, **draw** (`(ctx: Canvas2D, size) => void`), `onPointer?`, `aspect?` |
 
 UI API 1.1 adds `Group`, `Button.size` and `Text`/`Heading` `align`. These props state intent (a row of equal keys, a large key, a numeric display that reads from the end); they do not give pixels, spacing or colors.
+
+UI API 1.2 adds the controls `Checkbox`, `TextArea`, `Slider`, `NumberField`, `Picker`, `Progress`, `Badge`, `Tabs`, `Sheet`, `Dialog`, `Menu`, `Grid` and `Action`, the `Screen` prop `actions`, and 20 more icon names. These rules apply in 1.2:
+
+- `Slider` and `NumberField` bind a `Signal<number>` both ways.
+- `Picker.options` and `Tabs.items` must be array literals of string literals. The compiler joins them with U+001F into one string prop. A `Picker` with four options or less shows as a segmented control, and with more as a list.
+- `Action` is a tag in 1.2. `actions={[<Action ... />]}` takes an array literal of `Action` elements. The elements become child nodes of the `Screen`, `Dialog` or `Menu`, and the host tells them apart by their kind. The toolbar shows two actions on `compact` and four on `regular` and `wide`; the rest go into an overflow menu.
+- A destructive `Action` asks for confirmation through a host dialog, unless it has `confirm={false}`.
+- `Sheet` and `Dialog` bind `open` both ways. When the user closes one (backdrop, close button, Escape), the host sets `open` to false and `Sheet` sends `close`.
+- `Grid` uses the keyed reconciler of `List`. The runtime sets the column count from the width class (2, 3 or 4).
+- `Progress` without `value` is indeterminate.
 
 ### 6.4 Layout rules (runtime-owned)
 
@@ -501,6 +520,7 @@ The `kind`, `prop`, `event`, and enum ids are generated from one table in `wit/p
 - Each host API module is a WIT interface. Fallible calls return `result<T, error>`.
 - Calls that can block (net, file dialogs, large reads) return a `request: u32` at once and finish through a `completion` event. Synchronous calls are permitted only when they are guaranteed fast (clock, locale, kv get from cache).
 - Every call checks the capability policy (§11). A denied call returns `error.denied(reason)` and never traps.
+- **Status (M2):** `wit/plinth/app.wit` has the interfaces `error` (`host-error`, `denied-reason`), `time` (`now`, `monotonic-now`, `set-timer`, `cancel-timer`), `store` (`kv-get`, `kv-set`, `kv-delete`, `kv-keys`) and `clipboard` (`write-text`, `read-text`). All of these calls are synchronous. The host fires timers with the `timer` event. The desktop host polls the timers each 15 ms and delivers one firing for each poll. It does not catch up missed ticks. The kv store is a JSON file at `%APPDATA%\plinthpps\<id>\kv.json`.
 
 ---
 
@@ -761,6 +781,9 @@ Each milestone has exit criteria. Work in this order. Windows is the first platf
 - All controls in §6.3, the layout rules in §6.4, the theme in §6.5, and accessibility.
 - The `store`, `time`, `clipboard`, `dialog`, and `net` host APIs, with the policy and the consent UI.
 - **Exit:** `examples/notes` (a list-detail app with sync) works. `plinth shoot` makes screenshots at all width classes.
+- **Status (2026-10-05):** in progress.
+  - Done: the UI API 1.2 controls, stack navigation and screen actions (§6.3); `plinth:time`, `plinth:store` and `plinth:clipboard` with the policy (§8.5, §11); `examples/settings-gallery`, `examples/contacts` and `examples/timer`; `examples/notes` keeps its notes in the kv store; `plinth-shoot` (§13).
+  - Not done: accessibility, the consent UI (a declared capability is granted), `dialog` and `net`, `DatePicker`, `Image` and `Canvas`, and arguments for `navigate.push`.
 
 ### M3: Compiler v1
 - Classes, unions, generics, `async`/`await`, and the tsserver plugin.
