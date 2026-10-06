@@ -1,19 +1,19 @@
 {
-  "name": "@plinth/cli-win32-x64",
+  "name": "@plinth/cli-darwin-x64",
   "version": "0.1.0",
-  "description": "The plinth binary for Windows x64",
+  "description": "The plinth binary for macOS x64 (Intel)",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/nquandt/plinth"
   },
   "os": [
-    "win32"
+    "darwin"
   ],
   "cpu": [
     "x64"
   ],
   "files": [
-    "plinth.exe"
+    "plinth"
   ]
 }

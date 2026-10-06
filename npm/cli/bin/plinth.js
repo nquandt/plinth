@@ -16,7 +16,7 @@ function binaryPath() {
   } catch {
     console.error(
       `plinth: there is no binary for ${process.platform}-${process.arch}.\n` +
-        `The package ${pkg} is not installed. Supported platforms: win32-x64.\n` +
+        `The package ${pkg} is not installed. Supported platforms: win32-x64, linux-x64, darwin-x64, darwin-arm64.\n` +
         `Set PLINTH_BINARY to a plinth binary to use your own build.`,
     );
     process.exit(1);
