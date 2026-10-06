@@ -17,8 +17,8 @@ use gpui_elements::editable_text::actions::Enter;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_area, text_input};
 use crate::calendar;
 use plinth_protocol::{
-    ControlKind, Event, NodeId, Op, Value, Writer, aspect, axis, button_role, button_size, date_picker_mode, decode_ops,
-    event, prop, text_align, text_style, tone,
+    ControlKind, Event, NodeId, Op, Value, Writer, aspect, axis, button_role, button_size, chart_kind, date_picker_mode,
+    decode_ops, event, prop, text_align, text_style, tone,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -635,6 +635,167 @@ fn eid(prefix: &'static str, id: impl Into<u64>) -> ElementId {
     ElementId::NamedInteger(prefix.into(), id.into())
 }
 
+// -- Chart (SPEC.md §6.3, UI API 1.5) ----------------------------------------
+
+/// One label/value pair.
+type ChartPoints = Vec<(String, f64)>;
+
+/// Decodes `data`/`series` (wire format in `wit/plinth/ui-api.toml`) into
+/// `(series name, points)`. A single-series `data` gets one entry with an
+/// empty name. Malformed numbers become `0.0` rather than panicking: a
+/// drawing bug should never crash the host.
+fn chart_series(node: &Node) -> Vec<(String, ChartPoints)> {
+    if let Some(s) = node.str_prop(prop::SERIES).filter(|s| !s.is_empty()) {
+        return s.split('\u{1e}').map(|one| {
+            let (name, points) = one.split_once('\u{1}').unwrap_or((one, ""));
+            (name.to_string(), parse_points(points))
+        }).collect();
+    }
+    let pts = parse_points(node.str_prop(prop::DATA).unwrap_or(""));
+    if pts.is_empty() { Vec::new() } else { vec![(String::new(), pts)] }
+}
+
+fn parse_points(s: &str) -> ChartPoints {
+    if s.is_empty() {
+        return Vec::new();
+    }
+    s.split('\u{1f}')
+        .filter_map(|pair| {
+            let (label, value) = pair.split_once('\u{1}')?;
+            Some((label.to_string(), value.parse::<f64>().unwrap_or(0.0)))
+        })
+        .collect()
+}
+
+/// The AccessKit summary of every value (there is no visual data table).
+fn chart_description(series: &[(String, ChartPoints)]) -> String {
+    series
+        .iter()
+        .map(|(name, pts)| {
+            let body = pts.iter().map(|(l, v)| format!("{l}: {v}")).collect::<Vec<_>>().join(", ");
+            if name.is_empty() { body } else { format!("{name}: {body}") }
+        })
+        .collect::<Vec<_>>()
+        .join(". ")
+}
+
+/// Draws a bar chart (one column of grouped bars per label) or, when
+/// `connect` is true, a line chart approximated as thin bars with a
+/// rounded top marker (SPEC.md §6.3: the runtime, not the app, picks how
+/// the line reads). Height is proportional to `value / max(|value|)`.
+fn render_line_or_bars(series: &[(String, ChartPoints)], t: &Tokens, height: f32, connect: bool) -> AnyElement {
+    let palette = t.chart_palette();
+    let max = series
+        .iter()
+        .flat_map(|(_, pts)| pts.iter().map(|(_, v)| v.abs()))
+        .fold(0.0_f64, f64::max)
+        .max(1e-9);
+    let labels: Vec<&str> = series.first().map(|(_, pts)| pts.iter().map(|(l, _)| l.as_str()).collect()).unwrap_or_default();
+    let columns = labels.iter().enumerate().map(|(i, label)| {
+        let bars = series.iter().enumerate().map(|(si, (_, pts))| {
+            let v = pts.get(i).map(|(_, v)| *v).unwrap_or(0.0);
+            let frac = (v.abs() / max).clamp(0.0, 1.0) as f32;
+            let color = palette[si % palette.len()];
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .justify_end()
+                .h_full()
+                .child(
+                    div()
+                        .w_full()
+                        .h(gpui::relative(frac.max(0.02)))
+                        .when(connect, |d| d.rounded_t_full())
+                        .when(!connect, |d| d.rounded_t_sm())
+                        .bg(color),
+                )
+                .into_any_element()
+        });
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_1()
+            .flex_1()
+            .h_full()
+            .child(div().flex().gap_1().flex_1().w_full().items_end().children(bars))
+            .child(div().text_xs().text_color(t.text_muted).child(label.to_string()))
+            .into_any_element()
+    });
+    div()
+        .flex()
+        .gap_2()
+        .items_end()
+        .h(px(height))
+        .child(div().flex().gap_2().items_end().flex_1().h_full().children(columns))
+        .into_any_element()
+}
+
+/// Draws a pie as a proportional horizontal segmented bar (SPEC.md §6.3):
+/// each wedge's share of the whole, colored from the chart palette. Values
+/// are made non-negative shares; a pie with no positive values renders as
+/// one neutral segment.
+fn render_pie(points: &ChartPoints, t: &Tokens, height: f32) -> AnyElement {
+    let palette = t.chart_palette();
+    let total: f64 = points.iter().map(|(_, v)| v.abs()).sum();
+    let total = if total <= 0.0 { 1.0 } else { total };
+    let segs = points.iter().enumerate().map(|(i, (_, v))| {
+        let frac = (v.abs() / total) as f32;
+        div().h_full().w(gpui::relative(frac.max(0.001))).bg(palette[i % palette.len()]).into_any_element()
+    });
+    div()
+        .flex()
+        .w_full()
+        .h(px(height.min(28.)))
+        .rounded_full()
+        .overflow_hidden()
+        .children(segs)
+        .into_any_element()
+}
+
+/// A row of color-swatch legend entries.
+fn render_legend(names: &[String], t: &Tokens) -> AnyElement {
+    let palette = t.chart_palette();
+    let entries = names.iter().enumerate().map(|(i, name)| {
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(div().w(px(10.)).h(px(10.)).rounded_sm().bg(palette[i % palette.len()]))
+            .child(div().text_xs().text_color(t.text_muted).child(name.clone()))
+            .into_any_element()
+    });
+    div().flex().flex_wrap().gap_3().children(entries).into_any_element()
+}
+
+#[cfg(test)]
+mod chart_wire_tests {
+    use super::{chart_description, parse_points};
+
+    #[test]
+    fn parses_points_and_skips_malformed() {
+        let pts = parse_points("Jan\u{1}10\u{1f}Feb\u{1}12.5");
+        assert_eq!(pts, vec![("Jan".to_string(), 10.0), ("Feb".to_string(), 12.5)]);
+        assert_eq!(parse_points(""), Vec::<(String, f64)>::new());
+    }
+
+    #[test]
+    fn describes_every_value() {
+        let series = vec![("".to_string(), parse_points("Jan\u{1}10\u{1f}Feb\u{1}12.5"))];
+        assert_eq!(chart_description(&series), "Jan: 10, Feb: 12.5");
+    }
+
+    #[test]
+    fn describes_named_series() {
+        let series = vec![
+            ("2025".to_string(), parse_points("Jan\u{1}10")),
+            ("2026".to_string(), parse_points("Jan\u{1}12")),
+        ];
+        assert_eq!(chart_description(&series), "2025: Jan: 10. 2026: Jan: 12");
+    }
+}
+
 /// Warns once per render that an interactive node has no label (a cheap hub
 /// lint, SPEC.md §12 item 5). Screen readers announce such a node with no
 /// name, which makes it useless to a non-sighted user.
@@ -1046,6 +1207,7 @@ impl PlinthRoot {
             ControlKind::Image => self.render_image(node, t),
             ControlKind::Icon => self.render_icon(node, t),
             ControlKind::DatePicker => self.render_date_picker(node, t, cx),
+            ControlKind::Chart => self.render_chart(node, t),
         }
     }
 
@@ -1901,6 +2063,81 @@ impl PlinthRoot {
             None => el.aria_hidden(),
         }
         .into_any_element()
+    }
+
+    /// `<Chart>` (SPEC.md §6.3, UI API 1.5): a data-driven bar, line or pie
+    /// chart. The runtime picks the colors (the theme's chart palette),
+    /// height and labels; the app only supplies `label`, `kind` and data.
+    /// Empty data shows a "No data" placeholder. The role is `Figure`,
+    /// named by `label`, with a hidden text summary of every value so a
+    /// screen reader gets the numbers (there is no visual data table).
+    fn render_chart(&self, node: &Node, t: &Tokens) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
+        warn_if_unlabeled("Chart", node.id, &label);
+        let kind = node.enum_prop(prop::CHART_KIND);
+        let series = chart_series(node);
+        let id = eid("chart", node.id);
+
+        if series.is_empty() || series.iter().all(|(_, pts)| pts.is_empty()) {
+            return div()
+                .id(id)
+                .role(accesskit::Role::Figure)
+                .aria_label(label)
+                .flex()
+                .items_center()
+                .justify_center()
+                .h(px(120.))
+                .rounded_lg()
+                .bg(t.surface_alt)
+                .text_color(t.text_muted)
+                .text_sm()
+                .child("No data")
+                .into_any_element();
+        }
+
+        let desc = chart_description(&series);
+        let chart_h = match self.class { WidthClass::Compact => 160., _ => 220. };
+        let body = match kind {
+            chart_kind::PIE => render_pie(&series[0].1, t, chart_h),
+            chart_kind::LINE => render_line_or_bars(&series, t, chart_h, true),
+            _ => render_line_or_bars(&series, t, chart_h, false),
+        };
+        let show_legend = series.len() > 1 || (kind == chart_kind::PIE && series[0].1.len() > 1);
+        let legend = if show_legend {
+            let names: Vec<String> = if kind == chart_kind::PIE {
+                series[0].1.iter().map(|(l, _)| l.clone()).collect()
+            } else {
+                series.iter().map(|(n, _)| n.clone()).collect()
+            };
+            Some(render_legend(&names, t))
+        } else {
+            None
+        };
+
+        div()
+            .id(id)
+            .role(accesskit::Role::Figure)
+            .aria_label(label)
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(body)
+            .children(legend)
+            // A visually hidden description with every value, so
+            // AccessKit (and `plinth-shoot`'s a11y check) exposes the
+            // numbers without relying on the drawing.
+            .child(
+                div()
+                    .id(eid("chart-data", node.id))
+                    .role(accesskit::Role::Label)
+                    .aria_label(desc)
+                    .invisible()
+                    .absolute()
+                    .w(px(0.))
+                    .h(px(0.))
+                    .overflow_hidden(),
+            )
+            .into_any_element()
     }
 
     /// `<DatePicker>` (SPEC.md §6.3, UI API 1.4): a labelled field that

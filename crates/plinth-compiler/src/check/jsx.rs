@@ -1,7 +1,7 @@
 //! JSX: controls of UI API 1.0 and user components (SPEC.md §6.3, §7.2).
 
 use super::{Binding, Checker, ReactiveCtx};
-use crate::ast::{Expr, ExprKind, JsxChild, JsxElement};
+use crate::ast::{Expr, ExprKind, JsxChild, JsxElement, ObjProp};
 use crate::controls::{self, ChildKind, PropTy, Target};
 use crate::diag::code;
 use crate::tir::*;
@@ -115,6 +115,74 @@ impl Checker<'_> {
                     let te = self.typed(&value, &Type::Array(Box::new(Type::String)));
                     let sep = TExpr::new(TExprKind::Str("\u{1f}".into()), Type::String, value.span);
                     let joined = TExpr::new(TExprKind::Rt("arr_join", vec![te, sep]), Type::String, value.span);
+                    props.push(TProp { target: PropTarget::Str(id), value: joined });
+                }
+                continue;
+            }
+            if ps.ty == PropTy::ChartPoints {
+                let Target::Prop(id) = ps.target else { unreachable!("ChartPoints always targets a prop") };
+                match self.encode_chart_points(&value) {
+                    Some(te) => props.push(TProp { target: PropTarget::Str(id), value: te }),
+                    None => self.err_help(
+                        code::TYPE_MISMATCH,
+                        value.span,
+                        format!("`{}` must be an array literal of `{{ label, value }}` objects", ps.name),
+                        "write `data={[{ label: \"Jan\", value: total() }]}`",
+                    ),
+                }
+                continue;
+            }
+            if ps.ty == PropTy::ChartSeries {
+                let Target::Prop(id) = ps.target else { unreachable!("ChartSeries always targets a prop") };
+                let ExprKind::Array(items) = &value.kind else {
+                    self.err_help(
+                        code::TYPE_MISMATCH,
+                        value.span,
+                        "`series` must be an array literal of `{ name, points }` objects",
+                        "write `series={[{ name: \"2026\", points: [...] }]}`",
+                    );
+                    continue;
+                };
+                let mut parts = Vec::new();
+                let mut ok = true;
+                for (spread, it) in items {
+                    if *spread {
+                        self.err(code::TYPE_MISMATCH, it.span, "a series cannot be spread");
+                        ok = false;
+                        continue;
+                    }
+                    let ExprKind::Object(fields) = &it.kind else {
+                        self.err(code::TYPE_MISMATCH, it.span, "each series must be a `{ name, points }` object literal");
+                        ok = false;
+                        continue;
+                    };
+                    let mut name_e = None;
+                    let mut points_e = None;
+                    for f in fields {
+                        if let ObjProp::Field(key, e, _) = f {
+                            match key.as_str() {
+                                "name" => name_e = Some(e),
+                                "points" => points_e = Some(e),
+                                _ => {}
+                            }
+                        }
+                    }
+                    let (Some(name_e), Some(points_e)) = (name_e, points_e) else {
+                        self.err(code::TYPE_MISMATCH, it.span, "a series needs `name` and `points`");
+                        ok = false;
+                        continue;
+                    };
+                    let name_te = self.typed(name_e, &Type::String);
+                    let Some(points_te) = self.encode_chart_points(points_e) else {
+                        self.err(code::TYPE_MISMATCH, points_e.span, "`points` must be an array literal of `{ label, value }` objects");
+                        ok = false;
+                        continue;
+                    };
+                    let sep = TExpr::new(TExprKind::Str("\u{1}".into()), Type::String, it.span);
+                    parts.push(self.concat3(name_te, sep, points_te, it.span));
+                }
+                if ok {
+                    let joined = self.join_parts(parts, "\u{1e}", value.span);
                     props.push(TProp { target: PropTarget::Str(id), value: joined });
                 }
                 continue;
@@ -286,7 +354,9 @@ impl Checker<'_> {
                     (PropTarget::ListRow, f)
                 }
                 PropTy::Element => (PropTarget::ListEmpty, self.typed(&value, &Type::Element)),
-                PropTy::StrList | PropTy::ActionList => unreachable!("handled above with `continue`"),
+                PropTy::StrList | PropTy::ActionList | PropTy::ChartPoints | PropTy::ChartSeries => {
+                    unreachable!("handled above with `continue`")
+                }
             };
             props.push(TProp { target, value: te });
         }
@@ -317,6 +387,70 @@ impl Checker<'_> {
     fn typed(&mut self, e: &Expr, ty: &Type) -> TExpr {
         let te = self.expr(e, Some(ty));
         self.coerce(te, ty)
+    }
+
+    /// `str_concat(a, str_concat(b, c))`, left to right.
+    fn concat3(&mut self, a: TExpr, b: TExpr, c: TExpr, span: crate::diag::Span) -> TExpr {
+        let bc = TExpr::new(TExprKind::Rt("str_concat", vec![b, c]), Type::String, span);
+        TExpr::new(TExprKind::Rt("str_concat", vec![a, bc]), Type::String, span)
+    }
+
+    /// Joins already-string `parts` with a literal `sep`, as one `str_concat`
+    /// chain. An empty list gives the empty string.
+    fn join_parts(&mut self, parts: Vec<TExpr>, sep: &str, span: crate::diag::Span) -> TExpr {
+        let mut it = parts.into_iter();
+        let Some(mut acc) = it.next() else {
+            return TExpr::new(TExprKind::Str(String::new()), Type::String, span);
+        };
+        for part in it {
+            let sep_lit = TExpr::new(TExprKind::Str(sep.to_string()), Type::String, span);
+            let with_sep = TExpr::new(TExprKind::Rt("str_concat", vec![acc, sep_lit]), Type::String, span);
+            acc = TExpr::new(TExprKind::Rt("str_concat", vec![with_sep, part]), Type::String, span);
+        }
+        acc
+    }
+
+    /// Encodes `Chart.data`/`Chart.series[].points` (SPEC.md §6.3, UI API
+    /// 1.5): an array literal of `{ label: string, value: number }` object
+    /// literals, into one `"label\u0001value"` string per point, joined
+    /// with U+001F. `None` means `value` was not that shape; the caller
+    /// reports the diagnostic. The `value` expressions may read signals,
+    /// which keeps the resulting prop reactive through the normal JSX
+    /// reactive-effect machinery, same as any other string prop.
+    fn encode_chart_points(&mut self, value: &Expr) -> Option<TExpr> {
+        let ExprKind::Array(items) = &value.kind else { return None };
+        let mut parts = Vec::new();
+        for (spread, it) in items {
+            if *spread {
+                self.err(code::TYPE_MISMATCH, it.span, "a chart point cannot be spread");
+                continue;
+            }
+            let ExprKind::Object(fields) = &it.kind else {
+                self.err(code::TYPE_MISMATCH, it.span, "each point must be a `{ label, value }` object literal");
+                continue;
+            };
+            let mut label_e = None;
+            let mut value_e = None;
+            for f in fields {
+                if let ObjProp::Field(key, e, _) = f {
+                    match key.as_str() {
+                        "label" => label_e = Some(e),
+                        "value" => value_e = Some(e),
+                        _ => {}
+                    }
+                }
+            }
+            let (Some(label_e), Some(value_e)) = (label_e, value_e) else {
+                self.err(code::TYPE_MISMATCH, it.span, "a chart point needs `label` and `value`");
+                continue;
+            };
+            let label_te = self.typed(label_e, &Type::String);
+            let num_te = self.typed(value_e, &Type::Number);
+            let num_str = TExpr::new(TExprKind::Rt("json_num_str", vec![num_te]), Type::String, value_e.span);
+            let sep = TExpr::new(TExprKind::Str("\u{1}".into()), Type::String, it.span);
+            parts.push(self.concat3(label_te, sep, num_str, it.span));
+        }
+        Some(self.join_parts(parts, "\u{1f}", value.span))
     }
 
     fn children(&mut self, el: &JsxElement, spec: &controls::ControlSpec) -> TChildren {

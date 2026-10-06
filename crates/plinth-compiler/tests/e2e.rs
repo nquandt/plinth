@@ -479,3 +479,36 @@ fn gallery_image_nodes_carry_src_alt_and_aspect() {
     assert_eq!(h.tree.get(badge).unwrap().str_prop(prop::ALT), Some("A red badge"));
     assert_eq!(h.tree.get(badge).unwrap().enum_prop(prop::ASPECT), aspect::TALL);
 }
+
+/// `<Chart>.data` (SPEC.md §6.3, UI API 1.5): a literal array of
+/// `{ label, value }` objects, where `value` can read a signal. Pressing a
+/// button that updates the signal must re-send the `data` prop with the
+/// new encoded value, the same reactive-effect path any other prop uses.
+#[test]
+fn chart_data_prop_updates_when_a_signal_changes() {
+    use plinth_compiler::driver::MemFs;
+
+    let main = "import { app, Screen, Button, Chart, signal } from \"plinth:ui\";\n\
+                function Home() {\n  \
+                const total = signal(10);\n  \
+                return <Screen title=\"Home\">\n    \
+                <Button label=\"Bump\" onPress={() => total.set(total() + 5)} />\n    \
+                <Chart label=\"Spending\" kind=\"bar\" data={[{ label: \"Jan\", value: total() }]} />\n  \
+                </Screen>;\n\
+                }\n"
+    .to_owned()
+        + "\nexport default app({ screens: { home: { title: \"Home\", component: Home } } });\n";
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+
+    let mut h = Harness::start(&artifact.component);
+    let chart = h.one(ControlKind::Chart, |_| true);
+    assert_eq!(h.tree.get(chart).unwrap().str_prop(prop::DATA), Some("Jan\u{1}10"));
+
+    h.fire(h.label("Bump"), event::PRESS, Value::Null);
+    assert_eq!(h.tree.get(chart).unwrap().str_prop(prop::DATA), Some("Jan\u{1}15"));
+}

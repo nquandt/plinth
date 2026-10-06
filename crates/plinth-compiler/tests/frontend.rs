@@ -168,6 +168,53 @@ fn date_picker_control() {
 }
 
 #[test]
+fn chart_control() {
+    // Good usage: a literal `data` array, a reactive `value`.
+    let good = "import { app, Screen, Chart, signal } from \"plinth:ui\";\n\
+                function Home() {\n  const total = signal(10);\n  return <Screen title=\"Home\">\n    \
+                <Chart label=\"Spending\" kind=\"bar\" data={[{ label: \"Jan\", value: total() }, { label: \"Feb\", value: 20 }]} />\n  \
+                </Screen>;\n}"
+        .to_owned()
+        + APP;
+    assert_eq!(codes(&good), Vec::<&str>::new());
+
+    // Multi-series: `series` is an array literal of `{ name, points }`.
+    let series = "import { app, Screen, Chart } from \"plinth:ui\";\n\
+                  function Home() {\n  return <Screen title=\"Home\">\n    \
+                  <Chart label=\"Totals\" kind=\"line\" data={[{ label: \"Jan\", value: 1 }]} series={[\
+                  { name: \"2025\", points: [{ label: \"Jan\", value: 1 }] }, \
+                  { name: \"2026\", points: [{ label: \"Jan\", value: 2 }] }]} />\n  \
+                  </Screen>;\n}"
+        .to_owned()
+        + APP;
+    assert_eq!(codes(&series), Vec::<&str>::new());
+
+    // Missing `label`: accessibility is required (SPEC.md §6.1 item 3).
+    let no_label = "import { app, Screen, Chart } from \"plinth:ui\";\n\
+                     function Home() { return <Screen title=\"Home\"><Chart kind=\"bar\" data={[{ label: \"a\", value: 1 }]} /></Screen>; }"
+        .to_owned()
+        + APP;
+    assert_eq!(codes(&no_label), ["PL4003"]);
+
+    // An unknown `kind` is rejected.
+    let bad_kind = "import { app, Screen, Chart } from \"plinth:ui\";\n\
+                     function Home() { return <Screen title=\"Home\"><Chart label=\"x\" kind=\"scatter\" data={[{ label: \"a\", value: 1 }]} /></Screen>; }"
+        .to_owned()
+        + APP;
+    let f = frontend(&MemFs::default().with("app/main.tsx", &bad_kind));
+    assert!(!f.diags.is_empty());
+
+    // `data` must be an array literal of `{ label, value }` objects, not an
+    // arbitrary runtime value (SPEC.md §6.3: v1 encodes it at compile time).
+    let bad_data = "import { app, Screen, Chart, signal } from \"plinth:ui\";\n\
+                     function Home() {\n  const pts = signal([{ label: \"a\", value: 1 }]);\n  return <Screen title=\"Home\"><Chart label=\"x\" kind=\"bar\" data={pts()} /></Screen>;\n}"
+        .to_owned()
+        + APP;
+    let f = frontend(&MemFs::default().with("app/main.tsx", &bad_data));
+    assert!(!f.diags.is_empty());
+}
+
+#[test]
 fn slider_number_picker_progress_badge() {
     // Good usage: all five check clean.
     let good = "import { app, Screen, Slider, NumberField, Picker, Progress, Badge, signal } from \"plinth:ui\";\n\

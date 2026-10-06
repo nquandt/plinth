@@ -3,7 +3,7 @@
 //! `std_typings_match` compares them.
 
 use plinth_protocol::{
-    ControlKind, aspect, axis, button_role, button_size, date_picker_mode, event, prop, text_align, text_style, tone,
+    ControlKind, aspect, axis, button_role, button_size, chart_kind, date_picker_mode, event, prop, text_align, text_style, tone,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +44,17 @@ pub enum PropTy {
     /// `Image.src`: a string literal that must name a file under `assets/`
     /// (UI API 1.3, SPEC.md §6.3).
     Asset,
+    /// `Chart.data`: an array literal of `{ label: string, value: number }`
+    /// object literals. Encoded at compile time into one `data` string prop
+    /// (`"label\u0001value"` pairs joined with U+001F); the `value`
+    /// expressions can read signals, so the prop stays reactive like any
+    /// other (UI API 1.5, SPEC.md §6.3).
+    ChartPoints,
+    /// `Chart.series`: an array literal of `{ name: string, points: ... }`
+    /// object literals, each `points` an array literal in the same shape
+    /// as `Chart.data`. Encoded into one `series` string prop: series
+    /// joined with U+001E, each `"name\u0001points"` (UI API 1.5).
+    ChartSeries,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +106,7 @@ const TONES: &[(&str, u16)] =
 const ASPECTS: &[(&str, u16)] = &[("square", aspect::SQUARE), ("wide", aspect::WIDE), ("tall", aspect::TALL)];
 const DATE_PICKER_MODES: &[(&str, u16)] =
     &[("date", date_picker_mode::DATE), ("time", date_picker_mode::TIME), ("datetime", date_picker_mode::DATETIME)];
+const CHART_KINDS: &[(&str, u16)] = &[("bar", chart_kind::BAR), ("line", chart_kind::LINE), ("pie", chart_kind::PIE)];
 
 const fn p(name: &'static str, ty: PropTy, required: bool, target: Target) -> PropSpec {
     PropSpec { name, ty, required, target }
@@ -367,6 +379,21 @@ pub const CONTROLS: &[ControlSpec] = &[
             // Decorative by default (hidden from AccessKit); giving a
             // `label` makes it an accessible, named icon (SPEC.md §6.3).
             p("label", T::Str, false, P(prop::LABEL)),
+        ],
+        children: ChildKind::None,
+    },
+    // -- UI API 1.5 --
+    ControlSpec {
+        name: "Chart",
+        kind: ControlKind::Chart,
+        props: &[
+            p("label", T::Str, true, P(prop::LABEL)),
+            p("kind", T::Enum(CHART_KINDS), true, P(prop::CHART_KIND)),
+            p("data", T::ChartPoints, true, P(prop::DATA)),
+            // Multi-series bar/line (SPEC.md §6.3): when given, the
+            // renderer draws every series and `data` is the fallback a
+            // single-series host can show.
+            p("series", T::ChartSeries, false, P(prop::SERIES)),
         ],
         children: ChildKind::None,
     },
