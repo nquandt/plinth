@@ -258,3 +258,87 @@ fn lib_d_ts_declares_map_and_set_iterable() {
     assert!(lib.contains("interface Iterable<T, TReturn = unknown, TNext = unknown>"), "the global Iterable needs three type parameters");
     assert!(lib.contains("interface Iterator<T, TReturn = unknown, TNext = unknown>"), "the global Iterator needs three type parameters");
 }
+
+// -- Dynamic `Chart` data --------------------------------------------------------
+
+/// Compiles `main`, runs `init`, then presses the button labelled `press`
+/// (if any). Returns the `Chart`'s `prop` string before and after.
+fn chart_prop(main: &str, prop_id: u16, press: Option<&str>) -> (String, String) {
+    use plinth_protocol::{Event, Value, Writer, event, prop};
+    let fs = MemFs::default().with("app/main.tsx", main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        assert!(tree.apply(&commit).unwrap().is_empty());
+    }
+    let find = |tree: &Tree, kind: ControlKind, label: Option<&str>| {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        while let Some(id) = stack.pop() {
+            let node = tree.get(id).unwrap();
+            if node.kind == Some(kind) && label.is_none_or(|l| node.str_prop(prop::LABEL) == Some(l)) {
+                return id;
+            }
+            stack.extend(node.children.iter());
+        }
+        panic!("no {kind:?}");
+    };
+    let chart = find(&tree, ControlKind::Chart, None);
+    let before = tree.get(chart).unwrap().str_prop(prop_id).unwrap_or_default().to_owned();
+    if let Some(label) = press {
+        let button = find(&tree, ControlKind::Button, Some(label));
+        let handler = tree.get(button).unwrap().handler(event::PRESS).unwrap();
+        let mut w = Writer::new();
+        w.event(&Event::Ui { handler, event: event::PRESS, value: Value::Null });
+        for commit in guest.on_event(w.as_bytes()).unwrap() {
+            assert!(tree.apply(&commit).unwrap().is_empty());
+        }
+    }
+    let after = tree.get(chart).unwrap().str_prop(prop_id).unwrap_or_default().to_owned();
+    (before, after)
+}
+
+fn chart_app(body: &str, chart_props: &str) -> String {
+    format!(
+        "import {{ app, Screen, Button, Chart, ChartPoint, signal, computed }} from \"plinth:ui\";\nfunction Home() {{\n{body}\n  return <Screen title=\"Home\"><Button label=\"Add\" onPress={{() => add()}} /><Chart label=\"c\" kind=\"bar\" {chart_props} /></Screen>;\n}}\n{APP}"
+    )
+}
+
+#[test]
+fn chart_data_from_a_mapped_signal_updates() {
+    let body = "const xs = signal<number[]>([1, 2]);\n  const add = () => xs.set([...xs(), 3]);\n  const pts = computed(() => xs().map((x): ChartPoint => ({ label: \"p\" + x, value: x * 10 })));";
+    let main = chart_app(body, "data={pts()}");
+    let (before, after) = chart_prop(&main, plinth_protocol::prop::DATA, Some("Add"));
+    assert_eq!(before, "p1\u{1}10\u{1f}p2\u{1}20");
+    assert_eq!(after, "p1\u{1}10\u{1f}p2\u{1}20\u{1f}p3\u{1}30");
+}
+
+#[test]
+fn chart_data_from_an_interface_with_more_fields_and_an_empty_array() {
+    let body = "const rows = signal<Row[]>([]);\n  const add = () => rows.set([{ id: 1, label: \"a\", value: 1.5 }]);";
+    let main = chart_app(body, "data={rows()}").replace("function Home", "interface Row { id: number; label: string; value: number }\nfunction Home");
+    let (before, after) = chart_prop(&main, plinth_protocol::prop::DATA, Some("Add"));
+    assert_eq!(before, "");
+    assert_eq!(after, "a\u{1}1.5");
+}
+
+#[test]
+fn chart_series_points_can_be_dynamic() {
+    let body = "const a: ChartPoint[] = [{ label: \"x\", value: 1 }];\n  const add = () => {};";
+    let main = chart_app(body, "data={a} series={[{ name: \"s\", points: a }, { name: \"t\", points: [{ label: \"y\", value: 2 }] }]}");
+    let (before, _) = chart_prop(&main, plinth_protocol::prop::SERIES, None);
+    assert_eq!(before, "s\u{1}x\u{1}1\u{1e}t\u{1}y\u{1}2");
+}
+
+#[test]
+fn chart_data_of_the_wrong_type_is_rejected() {
+    let main = chart_app("const xs = [1, 2];\n  const add = () => {};", "data={xs}");
+    assert_eq!(codes(&main), ["PL3001"]);
+    let main = chart_app("const xs = [{ label: 1, value: 2 }];\n  const add = () => {};", "data={xs}");
+    assert_eq!(codes(&main), ["PL3001"]);
+}

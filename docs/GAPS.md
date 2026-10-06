@@ -278,6 +278,23 @@ small local change), per the dogfooding task's scope.
   and `lib_d_ts_declares_map_and_set_iterable` in
   `crates/plinth-compiler/tests/collections.rs`.
 
+- **Dynamic-length `Chart` data (HANDOFF.md §9 item 4).** Before,
+  `Chart.data` (and each series' `points`) had to be an array literal, so
+  the number of points was fixed at compile time. Now any expression of
+  an array of structs with a `label: string` and a `value: number` field
+  is accepted: a variable, a signal or computed read, a function call, or
+  a `.map()` result. `check/jsx.rs::encode_chart_points_dyn` builds the
+  same wire string as the literal path, with a generated loop (`arr_len`,
+  index reads, `str_concat`, `json_num_str`); no new runtime function. The
+  array literal path does not change. `ChartPoint` and `ChartSeriesDef` are
+  now real types when imported from `plinth:ui` (before, the import was
+  `PL1004`). `series` itself must still be an array literal (only its
+  `points` can be dynamic). `examples/budget`'s statistics screen now
+  builds both charts with `categories.map(...)`. Tests: the "Dynamic
+  `Chart` data" section of `crates/plinth-compiler/tests/collections.rs`,
+  and a chart check in `budget_add_filter_edit_delete_and_stats`
+  (`tests/apps.rs`).
+
 - #5 (fixed): `plinth:time` gained date/time support: `timezoneOffset`
   (a new host function, `plinth:app@1.0.0`'s `time` interface, core
   1.6), `dateParts`/`weekday` and `makeDate` (Howard Hinnant's

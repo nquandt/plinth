@@ -286,9 +286,9 @@ export interface ChartSeriesDef {
 /** A data-driven chart (SPEC.md §6.3). The runtime chooses the colors (from
  * the theme's chart palette), the height, axis ticks, value labels, and a
  * legend when one is needed; apps never set pixels or colors. `data` and
- * each `points` array must be an array literal of `{ label, value }`
- * objects; the `value` expressions can read signals, so the chart updates
- * like any other reactive prop. `series` draws several series over `data`
+ * each `points` array is an array of `{ label, value }` objects: a literal,
+ * a `ChartPoint[]` variable, a signal or computed, or a `.map()` result. A
+ * signal read in it makes the chart update like any other reactive prop. `series` draws several series over `data`
  * (bar and line only); `data` stays the fallback a host without `series`
  * support can show. */
 export declare function Chart(props: {

@@ -204,10 +204,10 @@ fn chart_control() {
     let f = frontend(&MemFs::default().with("app/main.tsx", &bad_kind));
     assert!(!f.diags.is_empty());
 
-    // `data` must be an array literal of `{ label, value }` objects, not an
-    // arbitrary runtime value (SPEC.md §6.3: v1 encodes it at compile time).
+    // `data` must be an array of `{ label, value }` objects (a literal or
+    // any other expression of that type), not, for example, `number[]`.
     let bad_data = "import { app, Screen, Chart, signal } from \"plinth:ui\";\n\
-                     function Home() {\n  const pts = signal([{ label: \"a\", value: 1 }]);\n  return <Screen title=\"Home\"><Chart label=\"x\" kind=\"bar\" data={pts()} /></Screen>;\n}"
+                     function Home() {\n  const pts = signal([1, 2]);\n  return <Screen title=\"Home\"><Chart label=\"x\" kind=\"bar\" data={pts()} /></Screen>;\n}"
         .to_owned()
         + APP;
     let f = frontend(&MemFs::default().with("app/main.tsx", &bad_data));

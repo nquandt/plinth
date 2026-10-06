@@ -550,6 +550,23 @@ impl Checker<'_> {
                     self.err(code::UNKNOWN_EXPORT, *span, "Plinth modules have no default export");
                 }
                 for (imported, local, span) in &imp.names {
+                    // `ChartPoint`/`ChartSeriesDef` are real object types, so
+                    // that an app can build `Chart` data in a variable.
+                    let chart_type = match (sm, imported.as_str()) {
+                        (StdModule::Ui, "ChartPoint") => Some(self.chart_point_type()),
+                        (StdModule::Ui, "ChartSeriesDef") => {
+                            let points = Type::Array(Box::new(self.chart_point_type()));
+                            Some(self.anon_struct(vec![
+                                Field { name: "name".into(), ty: Type::String, optional: false },
+                                Field { name: "points".into(), ty: points, optional: false },
+                            ]))
+                        }
+                        _ => None,
+                    };
+                    if let Some(t) = chart_type {
+                        self.define(local, *span, Binding::Type(t));
+                        continue;
+                    }
                     match stdlib::lookup(sm, imported) {
                         Some(b) => self.define(local, *span, b),
                         None => self.err_help(
@@ -1039,6 +1056,15 @@ impl Checker<'_> {
     pub(crate) fn tuple_elems(&self, sid: types::StructId) -> Option<Vec<Type>> {
         let def = &self.prog.structs[sid as usize];
         def.name.starts_with('[').then(|| def.fields.iter().map(|f| f.ty.clone()).collect())
+    }
+
+    /// `ChartPoint` from `plinth:ui`: `{ label: string; value: number }`,
+    /// the same struct an object literal of this shape gets.
+    fn chart_point_type(&mut self) -> Type {
+        self.anon_struct(vec![
+            Field { name: "label".into(), ty: Type::String, optional: false },
+            Field { name: "value".into(), ty: Type::Number, optional: false },
+        ])
     }
 
     fn anon_struct(&mut self, fields: Vec<Field>) -> Type {
