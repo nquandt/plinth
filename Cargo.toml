@@ -12,6 +12,7 @@ members = [
   "crates/plinth-link",
   "crates/plinth-package",
   "crates/plinth-shoot",
+  "crates/plinth-hub",
   "examples/counter-rs",
   "examples/todo-rs",
 ]
@@ -25,6 +26,7 @@ default-members = [
   "crates/plinth-compiler",
   "crates/plinth-link",
   "crates/plinth-package",
+  "crates/plinth-hub",
 ]
 
 [workspace.package]
@@ -40,12 +42,14 @@ plinth-guest = { path = "crates/plinth-guest" }
 plinth-compiler = { path = "crates/plinth-compiler" }
 plinth-link = { path = "crates/plinth-link" }
 plinth-package = { path = "crates/plinth-package" }
+plinth-hub = { path = "crates/plinth-hub" }
 plinth-host-desktop = { path = "crates/plinth-host-desktop" }
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 wasmtime = { version = "46.0.3", default-features = false, features = ["component-model", "cranelift", "runtime", "std", "parallel-compilation", "addr2line", "anyhow"] }
 wit-bindgen = { version = "0.57.1", default-features = false, features = ["macros", "realloc"] }
 wit-component = "0.251"

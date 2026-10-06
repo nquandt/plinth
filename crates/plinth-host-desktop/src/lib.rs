@@ -10,6 +10,8 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
+pub mod consent;
+
 actions!(plinth_host, [Quit]);
 
 /// An app that is ready to run.
@@ -159,6 +161,13 @@ impl GuestPort for NoGuest {
 /// `store.kv` file for `app_id`.
 fn start(component: &[u8], app_id: &str, capabilities: &[String], args: &[u8]) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
     let policy = Policy::new(capabilities.iter().cloned());
+    start_with_policy(component, app_id, policy, args)
+}
+
+/// Like `start`, but with a policy the caller already built (for example
+/// from the Hub's grants store, `docs/HUB.md` §7, §12.4, phase H0 part 2),
+/// instead of "declared is granted".
+pub fn start_with_policy(component: &[u8], app_id: &str, policy: Policy, args: &[u8]) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
     let kv = Kv::open(&plinth_runner_wasmtime::kv::data_dir(), app_id).unwrap_or_else(|e| {
         log::warn!("store.kv unavailable for {app_id}: {e:#}");
         Kv::in_memory()
@@ -259,6 +268,81 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
             }
         })
         .detach();
+    });
+    Ok(())
+}
+
+/// Runs one library app from the Hub (`docs/HUB.md` §7.3, §9, phase H0
+/// parts 2–3): refuses a blocked app, shows the consent screen for any
+/// declared capability that has no grant yet, saves the decisions, then
+/// opens the app with a policy built from the grants (declared AND
+/// allowed is granted; declared and refused is denied). Returns `Ok(())`
+/// without running anything if the user cancels consent.
+pub fn run_from_hub(hub: &plinth_hub::Hub, app_id: &str) -> Result<()> {
+    if hub.is_blocked(app_id)? {
+        anyhow::bail!("{app_id} is blocked; it will not run");
+    }
+    let bytes = hub.package(app_id)?;
+    let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("read the package for {app_id}"))?;
+    let declared: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
+
+    let pending = hub.needs_consent(app_id, &declared)?;
+    if !pending.is_empty() {
+        let publisher = pkg.manifest.publisher.clone();
+        let Some(decisions) = consent::show(&pkg.manifest.name, &publisher, &pending) else {
+            eprintln!("[plinth] consent cancelled; {app_id} will not run");
+            return Ok(());
+        };
+        for (capability, allowed) in decisions {
+            let decision = if allowed { plinth_hub::Decision::Allowed } else { plinth_hub::Decision::Refused };
+            hub.set_grant(app_id, &capability, decision, &pkg.manifest.version)?;
+        }
+    }
+
+    let policy = hub.policy_for(app_id, &declared)?;
+    let component = with_runtime(pkg.component)?;
+    let assets: std::collections::HashMap<String, Vec<u8>> =
+        pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
+    run_with_policy(component, pkg.manifest.name, pkg.manifest.accent.unwrap_or_else(|| "teal".into()), app_id.to_owned(), policy, assets)
+}
+
+/// Opens the app window with a policy the caller already built (`Policy`
+/// from grants, instead of "declared is granted"). No hot reload: this
+/// path is for library apps, not `plinth dev`.
+fn run_with_policy(
+    component: Vec<u8>,
+    title: String,
+    accent: String,
+    app_id: String,
+    policy: Policy,
+    assets: std::collections::HashMap<String, Vec<u8>>,
+) -> Result<()> {
+    let (port, init) = start_with_policy(&component, &app_id, policy, &[]);
+    let assets = std::sync::Arc::new(assets);
+
+    gpui_platform::application().run(move |cx: &mut App| {
+        plinth_ui::init(cx);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+
+        let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
+        let options = WindowOptions::new()
+            .window_bounds(Some(WindowBounds::Windowed(bounds)))
+            .titlebar(Some(gpui::TitlebarOptions { title: Some(title.clone().into()), ..Default::default() }));
+        cx.open_window(options, move |_, cx| {
+            cx.new(move |cx| match init {
+                Ok(commits) => PlinthRoot::with_assets(port, commits, accent, assets, cx),
+                Err(e) => PlinthRoot::stopped(port, e, accent, cx),
+            })
+        })
+        .expect("open the window");
+        cx.activate(true);
     });
     Ok(())
 }

@@ -4803,6 +4803,7 @@ dependencies = [
  "anyhow",
  "plinth-compiler",
  "plinth-host-desktop",
+ "plinth-hub",
  "plinth-package",
  "plinth-protocol",
  "wasmparser 0.251.0",
@@ -4849,12 +4850,28 @@ dependencies = [
  "gpui-ce",
  "gpui_ce_platform",
  "log",
+ "plinth-hub",
  "plinth-link",
  "plinth-package",
  "plinth-protocol",
  "plinth-runner-wasmtime",
  "plinth-ui",
  "wat",
+]
+
+[[package]]
+name = "plinth-hub"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "plinth-compiler",
+ "plinth-link",
+ "plinth-package",
+ "plinth-runner-wasmtime",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml 0.8.23",
 ]
 
 [[package]]
