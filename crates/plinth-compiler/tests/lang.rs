@@ -977,3 +977,160 @@ function Home() { return <Screen title="Home"><Button label="inc" onPress={c.inc
         + APP;
     assert_eq!(codes(&main), ["PL2021"]);
 }
+
+// -- JSON (SPEC.md §4.7): `JSON.stringify` for known-shape values. ---------
+
+#[test]
+fn json_stringify_scalars() {
+    let main = "import { app, Screen, Text } from \"plinth:ui\";\nimport { JSON } from \"plinth:core\";\nfunction Home() { return <Screen title=\"Home\"><Text>{JSON.stringify(1.5) + \"|\" + JSON.stringify(true) + \"|\" + JSON.stringify(false) + \"|\" + JSON.stringify(null)}</Text></Screen>; }"
+        .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "1.5|true|false|null");
+}
+
+#[test]
+fn json_stringify_nan_and_infinity_are_null() {
+    let main = "import { app, Screen, Text } from \"plinth:ui\";\nimport { JSON } from \"plinth:core\";\nfunction Home() { return <Screen title=\"Home\"><Text>{JSON.stringify(1 / 0) + \"|\" + JSON.stringify(0 / 0)}</Text></Screen>; }"
+        .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "null|null");
+}
+
+#[test]
+fn json_stringify_string_escapes() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { JSON } from "plinth:core";
+function Home() { return <Screen title="Home"><Text>{JSON.stringify("a\"b\nc\\d")}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "\"a\\\"b\\nc\\\\d\"");
+}
+
+#[test]
+fn json_stringify_unicode_passes_through() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { JSON } from "plinth:core";
+function Home() { return <Screen title="Home"><Text>{JSON.stringify("héllo")}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "\"héllo\"");
+}
+
+#[test]
+fn json_stringify_array() {
+    let main = "import { app, Screen, Text } from \"plinth:ui\";\nimport { JSON } from \"plinth:core\";\nfunction Home() { return <Screen title=\"Home\"><Text>{JSON.stringify([1, 2, 3])}</Text></Screen>; }"
+        .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "[1,2,3]");
+}
+
+#[test]
+fn json_stringify_empty_array() {
+    let main = "import { app, Screen, Text } from \"plinth:ui\";\nimport { JSON } from \"plinth:core\";\nfunction Home() { const a: number[] = []; return <Screen title=\"Home\"><Text>{JSON.stringify(a)}</Text></Screen>; }"
+        .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "[]");
+}
+
+#[test]
+fn json_stringify_nested_array() {
+    let main = "import { app, Screen, Text } from \"plinth:ui\";\nimport { JSON } from \"plinth:core\";\nfunction Home() { return <Screen title=\"Home\"><Text>{JSON.stringify([[1, 2], [3]])}</Text></Screen>; }"
+        .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "[[1,2],[3]]");
+}
+
+#[test]
+fn json_stringify_object_field_order() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { JSON } from "plinth:core";
+interface Point { x: number; y: number; name: string; }
+function Home() { const p: Point = { x: 1, y: 2, name: "a" }; return <Screen title="Home"><Text>{JSON.stringify(p)}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "{\"x\":1,\"y\":2,\"name\":\"a\"}");
+}
+
+#[test]
+fn json_stringify_nested_object_and_array() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { JSON } from "plinth:core";
+interface Item { id: number; tags: string[]; }
+function Home() { const it: Item = { id: 1, tags: ["a", "b"] }; return <Screen title="Home"><Text>{JSON.stringify(it)}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "{\"id\":1,\"tags\":[\"a\",\"b\"]}");
+}
+
+#[test]
+fn json_stringify_nullable_fields() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { JSON } from "plinth:core";
+interface Item { id: number; note: string | null; }
+function Home() {
+  const a: Item = { id: 1, note: "hi" };
+  const b: Item = { id: 2, note: null };
+  return <Screen title="Home"><Text>{JSON.stringify(a) + "|" + JSON.stringify(b)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "{\"id\":1,\"note\":\"hi\"}|{\"id\":2,\"note\":null}");
+}
+
+#[test]
+fn json_stringify_nullable_number() {
+    let main = "import { app, Screen, Text } from \"plinth:ui\";\nimport { JSON } from \"plinth:core\";\nfunction Home() { const n: number | null = null; const m: number | null = 5; return <Screen title=\"Home\"><Text>{JSON.stringify(n) + \"|\" + JSON.stringify(m)}</Text></Screen>; }"
+        .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "null|5");
+}
+
+#[test]
+fn json_stringify_map_as_object() {
+    let main = "import { app, Screen, Text } from \"plinth:ui\";\nimport { JSON } from \"plinth:core\";\nfunction Home() { const m = new Map<string, number>(); m.set(\"a\", 1); m.set(\"b\", 2); return <Screen title=\"Home\"><Text>{JSON.stringify(m)}</Text></Screen>; }"
+        .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "{\"a\":1,\"b\":2}");
+}
+
+#[test]
+fn json_stringify_int() {
+    let main = "import { app, Screen, Text } from \"plinth:ui\";\nimport { JSON, int } from \"plinth:core\";\nfunction Home() { return <Screen title=\"Home\"><Text>{JSON.stringify(int(7))}</Text></Screen>; }"
+        .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "7");
+}
+
+#[test]
+fn json_stringify_function_is_rejected() {
+    let main = "import { app, Screen, Text } from \"plinth:ui\";\nimport { JSON } from \"plinth:core\";\nfunction Home() { const f = () => 1; return <Screen title=\"Home\"><Text>{JSON.stringify(f)}</Text></Screen>; }"
+        .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL3001"]);
+}
+
+#[test]
+fn json_stringify_extra_args_is_rejected() {
+    let main = "import { app, Screen, Text } from \"plinth:ui\";\nimport { JSON } from \"plinth:core\";\nfunction Home() { return <Screen title=\"Home\"><Text>{JSON.stringify(1, 2)}</Text></Screen>; }"
+        .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL3006"]);
+}

@@ -33,7 +33,7 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 3] = *b"1.0";
+static CORE_VERSION: [u8; 3] = *b"1.1";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;
@@ -411,6 +411,10 @@ abi! {
     fn __plinth_rt_clipboard_read_text() -> i32 { host::clipboard_read_text() }
     fn __plinth_rt_kv_last_error() -> i32 { host::kv_last_error() }
     fn __plinth_rt_clipboard_last_error() -> i32 { host::clipboard_last_error() }
+
+    // -- JSON (plinth:core, SPEC.md §4.7) --------------------------------------
+    fn __plinth_rt_json_num_str(v: f64) -> i32 { strings::from_str(&strings::json_number_to_string(v)) as i32 }
+    fn __plinth_rt_json_quote_str(a: i32) -> i32 { strings::from_str(&strings::json_quote(strings::as_str(ptr(a)))) as i32 }
 }
 
 // Hot reload (SPEC.md §13): a dev-only ABI function, not declared with the

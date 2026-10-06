@@ -17,7 +17,7 @@ pub const UI_NAMES: &[&str] = &[
     // UI API 1.2
     "Tabs", "Sheet", "Dialog", "Menu", "Grid", "Action",
 ];
-pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int"];
+pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int", "JSON"];
 pub const TIME_NAMES: &[&str] = &["now", "monotonicNow", "setTimeout", "setInterval", "clearTimeout", "clearInterval"];
 pub const STORE_NAMES: &[&str] = &["kv"];
 pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
@@ -73,6 +73,7 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "parseNumber" => Binding::Std(StdFn::ParseNumber),
             "toString" => Binding::Std(StdFn::ToString),
             "int" => Binding::Std(StdFn::Int),
+            "JSON" => Binding::StdObj(StdObj::Json),
             _ => return None,
         }),
     }
@@ -387,6 +388,25 @@ impl Checker<'_> {
                     }
                 }
             }
+            StdObj::Json => match prop {
+                "stringify" => {
+                    if args.len() != 1 {
+                        self.err_help(
+                            code::ARG_COUNT,
+                            span,
+                            "`JSON.stringify` takes one argument",
+                            "the `replacer` and `space` arguments are not supported yet",
+                        );
+                        return TExpr::new(TExprKind::Str(String::new()), Type::Error, span);
+                    }
+                    let value = self.expr(&args[0], None);
+                    self.json_stringify_value(value, span)
+                }
+                _ => {
+                    self.err_help(code::NO_PROPERTY, prop_span, format!("`JSON.{prop}` does not exist"), "use `JSON.stringify`");
+                    TExpr::new(TExprKind::Null, Type::Error, span)
+                }
+            },
         }
     }
 

@@ -1951,4 +1951,171 @@ impl Checker<'_> {
             _ => None,
         }
     }
+
+    // -- JSON (plinth:core, SPEC.md §4.7) ----------------------------------
+    //
+    // `JSON.stringify` is generated per static type: no runtime schema, just
+    // a tree of string concatenations and (for arrays and `Map`, whose
+    // length is dynamic) a small loop. The runtime does only two small
+    // jobs, in their own functions (HANDOFF.md §7 size policy): formatting
+    // a number the JS way (`NaN`/`Infinity` -> `null`) and quoting/escaping
+    // a string.
+
+    /// Builds a `string` expression that serializes `value` as JSON.
+    pub(super) fn json_stringify_value(&mut self, value: TExpr, span: Span) -> TExpr {
+        match value.ty.clone() {
+            Type::Number => TExpr::new(TExprKind::Rt("json_num_str", vec![value]), Type::String, span),
+            Type::Int => {
+                let n = TExpr::new(TExprKind::Coerce(Coercion::I32ToNum, bx(value)), Type::Number, span);
+                TExpr::new(TExprKind::Rt("json_num_str", vec![n]), Type::String, span)
+            }
+            Type::Bool => TExpr::new(TExprKind::Coerce(Coercion::BoolToStr, bx(value)), Type::String, span),
+            Type::String => TExpr::new(TExprKind::Rt("json_quote_str", vec![value]), Type::String, span),
+            Type::StrLits(_) => {
+                let s = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(value)), Type::String, span);
+                TExpr::new(TExprKind::Rt("json_quote_str", vec![s]), Type::String, span)
+            }
+            Type::Null => TExpr::new(TExprKind::Str("null".into()), Type::String, span),
+            Type::Nullable(inner) => self.json_stringify_nullable(value, &inner, span),
+            Type::Array(elem) => self.json_stringify_array(value, &elem, span),
+            Type::Struct(sid) => self.json_stringify_struct(value, sid, span),
+            Type::Map(k, v) if *k == Type::String => self.json_stringify_map(value, &v, span),
+            Type::Error => TExpr { ty: Type::Error, ..value },
+            other => {
+                let msg = format!("`JSON.stringify` does not support a value of type `{}`", self.show(&other));
+                self.err(code::TYPE_MISMATCH, span, msg);
+                TExpr::new(TExprKind::Str(String::new()), Type::Error, span)
+            }
+        }
+    }
+
+    fn json_stringify_nullable(&mut self, value: TExpr, inner: &Type, span: Span) -> TExpr {
+        let nullable_ty = value.ty.clone();
+        let v = self.temp(nullable_ty.clone());
+        let v_r = TExpr::new(TExprKind::Var(v), nullable_ty, span);
+        let is_null = TExpr::new(TExprKind::IsNull(bx(v_r.clone())), Type::Bool, span);
+        let unboxed = match inner.repr() {
+            crate::types::Repr::F64 => TExpr::new(TExprKind::Coerce(Coercion::UnboxNum, bx(v_r)), inner.clone(), span),
+            crate::types::Repr::I32 => TExpr::new(TExprKind::Coerce(Coercion::UnboxI32, bx(v_r)), inner.clone(), span),
+            _ => TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(v_r)), inner.clone(), span),
+        };
+        let inner_str = self.json_stringify_value(unboxed, span);
+        let null_lit = TExpr::new(TExprKind::Str("null".into()), Type::String, span);
+        let cond = TExpr::new(TExprKind::Cond(bx(is_null), bx(null_lit), bx(inner_str)), Type::String, span);
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(v, Some(value))], bx(cond)), Type::String, span)
+    }
+
+    /// Struct fields are a fixed, known-at-compile-time list: no loop, just
+    /// a chain of concatenations in declaration order.
+    fn json_stringify_struct(&mut self, value: TExpr, sid: crate::types::StructId, span: Span) -> TExpr {
+        let fields = self.prog.structs[sid as usize].fields.clone();
+        let v = self.temp(value.ty.clone());
+        let v_r = TExpr::new(TExprKind::Var(v), value.ty.clone(), span);
+        let mut acc = TExpr::new(TExprKind::Str("{".into()), Type::String, span);
+        for (i, f) in fields.iter().enumerate() {
+            let prefix = if i == 0 { format!("\"{}\":", f.name) } else { format!(",\"{}\":", f.name) };
+            let field_val = TExpr::new(TExprKind::Field(bx(v_r.clone()), sid, i as u32), f.ty.clone(), span);
+            let field_str = self.json_stringify_value(field_val, span);
+            let prefix_e = TExpr::new(TExprKind::Str(prefix), Type::String, span);
+            let piece = TExpr::new(TExprKind::Concat(bx(prefix_e), bx(field_str)), Type::String, span);
+            acc = TExpr::new(TExprKind::Concat(bx(acc), bx(piece)), Type::String, span);
+        }
+        let close = TExpr::new(TExprKind::Str("}".into()), Type::String, span);
+        let result = TExpr::new(TExprKind::Concat(bx(acc), bx(close)), Type::String, span);
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(v, Some(value))], bx(result)), Type::String, span)
+    }
+
+    /// `[e0,e1,...]`: a loop, since the length is only known at run time.
+    fn json_stringify_array(&mut self, value: TExpr, elem_ty: &Type, span: Span) -> TExpr {
+        let id = self.prog.new_loop();
+        let arr_v = self.temp(value.ty.clone());
+        let arr_r = TExpr::new(TExprKind::Var(arr_v), value.ty.clone(), span);
+        let len = self.arr_len_of(arr_r.clone(), span);
+        let len_v = self.temp(Type::Number);
+        let len_r = TExpr::new(TExprKind::Var(len_v), Type::Number, span);
+        let i_v = self.temp(Type::Number);
+        let i_r = TExpr::new(TExprKind::Var(i_v), Type::Number, span);
+        let acc_v = self.temp(Type::String);
+        let acc_r = TExpr::new(TExprKind::Var(acc_v), Type::String, span);
+
+        let elem = self.arr_get_at(arr_r, i_r.clone(), elem_ty.clone(), span);
+        let elem_str = self.json_stringify_value(elem, span);
+        let append_elem = self.json_append(acc_v, elem_str, span);
+        let append_comma = self.json_append(acc_v, TExpr::new(TExprKind::Str(",".into()), Type::String, span), span);
+        let sep_cond = TExpr::new(TExprKind::Cmp(CmpOp::Gt, EqKind::F64, bx(i_r.clone()), bx(TExpr::new(TExprKind::Num(0.0), Type::Number, span))), Type::Bool, span);
+        let if_sep = TStmt::If(sep_cond, vec![append_comma], Vec::new());
+
+        let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(len_r)), Type::Bool, span);
+        let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))), Type::Number, span);
+        let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
+        let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![if_sep, append_elem] };
+
+        let open = TExpr::new(TExprKind::Str("[".into()), Type::String, span);
+        let close = TExpr::new(TExprKind::Str("]".into()), Type::String, span);
+        let result = TExpr::new(TExprKind::Concat(bx(acc_r), bx(close)), Type::String, span);
+        let body = vec![
+            TStmt::Let(arr_v, Some(value)),
+            TStmt::Let(len_v, Some(len)),
+            TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
+            TStmt::Let(acc_v, Some(open)),
+            loop_stmt,
+        ];
+        TExpr::new(TExprKind::Block(body, bx(result)), Type::String, span)
+    }
+
+    /// `Map<string, V>` as a JSON object: same loop shape as an array.
+    fn json_stringify_map(&mut self, value: TExpr, v_ty: &Type, span: Span) -> TExpr {
+        let sid = self.map_struct(&Type::String, v_ty);
+        let id = self.prog.new_loop();
+        let obj_v = self.temp(value.ty.clone());
+        let obj_r = TExpr::new(TExprKind::Var(obj_v), value.ty.clone(), span);
+        let keys = self.kv_field(&obj_r, sid, 0, span);
+        let values = self.kv_field(&obj_r, sid, 1, span);
+        let len = self.arr_len_of(keys.clone(), span);
+        let len_v = self.temp(Type::Number);
+        let len_r = TExpr::new(TExprKind::Var(len_v), Type::Number, span);
+        let i_v = self.temp(Type::Number);
+        let i_r = TExpr::new(TExprKind::Var(i_v), Type::Number, span);
+        let acc_v = self.temp(Type::String);
+        let acc_r = TExpr::new(TExprKind::Var(acc_v), Type::String, span);
+
+        let key = self.arr_get_at(keys, i_r.clone(), Type::String, span);
+        let key_str = TExpr::new(TExprKind::Rt("json_quote_str", vec![key]), Type::String, span);
+        let val = self.arr_get_at(values, i_r.clone(), v_ty.clone(), span);
+        let val_str = self.json_stringify_value(val, span);
+        let colon = TExpr::new(TExprKind::Str(":".into()), Type::String, span);
+        let entry = TExpr::new(
+            TExprKind::Concat(bx(TExpr::new(TExprKind::Concat(bx(key_str), bx(colon)), Type::String, span)), bx(val_str)),
+            Type::String,
+            span,
+        );
+        let append_entry = self.json_append(acc_v, entry, span);
+        let append_comma = self.json_append(acc_v, TExpr::new(TExprKind::Str(",".into()), Type::String, span), span);
+        let sep_cond = TExpr::new(TExprKind::Cmp(CmpOp::Gt, EqKind::F64, bx(i_r.clone()), bx(TExpr::new(TExprKind::Num(0.0), Type::Number, span))), Type::Bool, span);
+        let if_sep = TStmt::If(sep_cond, vec![append_comma], Vec::new());
+
+        let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(len_r)), Type::Bool, span);
+        let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))), Type::Number, span);
+        let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
+        let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![if_sep, append_entry] };
+
+        let open = TExpr::new(TExprKind::Str("{".into()), Type::String, span);
+        let close = TExpr::new(TExprKind::Str("}".into()), Type::String, span);
+        let result = TExpr::new(TExprKind::Concat(bx(acc_r), bx(close)), Type::String, span);
+        let body = vec![
+            TStmt::Let(obj_v, Some(value)),
+            TStmt::Let(len_v, Some(len)),
+            TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
+            TStmt::Let(acc_v, Some(open)),
+            loop_stmt,
+        ];
+        TExpr::new(TExprKind::Block(body, bx(result)), Type::String, span)
+    }
+
+    /// `acc = acc + piece;`
+    fn json_append(&self, acc_v: VarId, piece: TExpr, span: Span) -> TStmt {
+        let acc_r = TExpr::new(TExprKind::Var(acc_v), Type::String, span);
+        let sum = TExpr::new(TExprKind::Concat(bx(acc_r), bx(piece)), Type::String, span);
+        TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(acc_v), bx(sum)), Type::String, span))
+    }
 }
