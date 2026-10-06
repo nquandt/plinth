@@ -214,6 +214,10 @@ fn budget_add_filter_edit_delete_and_stats() {
         let data = h.tree.get(chart).unwrap().str_prop(prop::DATA).unwrap_or_default().to_owned();
         assert_eq!(data.split('\u{1f}').count(), 6, "{data:?}");
         assert!(data.starts_with("Groceries\u{1}"), "{data:?}");
+        // Spending charts: income (the Salary row) counts as 0, not 2500.
+        let salary = data.split('\u{1f}').find(|p| p.starts_with("Salary\u{1}")).expect("a Salary point");
+        let value: f64 = salary.split('\u{1}').nth(1).unwrap().parse().unwrap();
+        assert_eq!(value, 0.0, "{data:?}");
     }
     assert!(!h.find(ControlKind::Text, |n| n.text.as_deref().is_some_and(|t| t.starts_with("2026-10: "))).is_empty());
     h.fire(h.label("Back to transactions"), event::PRESS, Value::Null);

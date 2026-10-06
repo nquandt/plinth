@@ -46,6 +46,19 @@ const ICON_GLYPH = {
 
 const TONE_CLASS = { [EnumTone.muted]: "pl-tone-muted", [EnumTone.danger]: "pl-tone-danger", [EnumTone.success]: "pl-tone-success" };
 
+/**
+ * The SVG path of one pie wedge: center (cx, cy), radius r, start angle a0
+ * (radians, 0 = 3 o'clock, clockwise) and its share `frac` of the circle.
+ * A wedge over half the circle needs the large-arc flag.
+ */
+export function piePath(cx, cy, r, a0, frac) {
+  if (frac > 0.9999) return `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx - 0.001} ${cy - r} Z`;
+  const a1 = a0 + frac * Math.PI * 2;
+  const x1 = cx + r * Math.cos(a0), y1 = cy + r * Math.sin(a0);
+  const x2 = cx + r * Math.cos(a1), y2 = cy + r * Math.sin(a1);
+  return `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${frac > 0.5 ? 1 : 0} 1 ${x2} ${y2} Z`;
+}
+
 /** Elements that can hold the focus, in document order (see `saveFocus`). */
 const FOCUSABLE = "input, textarea, select, button, a[href], [tabindex]";
 
@@ -881,15 +894,9 @@ export class DomRenderer {
       let angle = -Math.PI / 2;
       points.forEach((p, i) => {
         const frac = Math.abs(p.value) / total;
-        const next = angle + frac * Math.PI * 2;
-        const large = frac > 0.9999;
-        const x1 = cx + r * Math.cos(angle), y1 = cy + r * Math.sin(angle);
-        const x2 = cx + r * Math.cos(next), y2 = cy + r * Math.sin(next);
-        const path = large
-          ? `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx - 0.001} ${cy - r} Z`
-          : `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 0 1 ${x2} ${y2} Z`;
-        svg.appendChild(svgEl("path", { d: path, class: `pl-chart-c${i % 6}` }));
-        angle = next;
+        if (frac <= 0) return;
+        svg.appendChild(svgEl("path", { d: piePath(cx, cy, r, angle, frac), class: `pl-chart-c${i % 6}` }));
+        angle += frac * Math.PI * 2;
       });
       return svg;
     }

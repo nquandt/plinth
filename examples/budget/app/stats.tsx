@@ -18,10 +18,12 @@ function categoryLabel(category: Category): string {
 
 // `<Chart>.data` is built from `categories` with `.map(...)`. Each `value`
 // reads the `totalsByCategory` computed, so the chart updates when
-// transactions change, like any other reactive prop.
+// transactions change, like any other reactive prop. Spending is the
+// negative part of a total only: income (Salary) is not spending.
 function spendingMagnitude(category: Category): number {
   const totals = totalsByCategory();
-  return Math.abs(totals.get(category) ?? 0);
+  const value = totals.get(category) ?? 0;
+  return value < 0 ? -value : 0;
 }
 
 function spendingPoints(): ChartPoint[] {
