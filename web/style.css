@@ -371,9 +371,12 @@ body {
   font-size: 7px;
   fill: var(--pl-muted);
 }
+/* `fill: none` here, not as an SVG attribute: the palette class below sets
+   `fill`, and CSS wins over presentation attributes. */
 .pl-chart-line {
   stroke-width: 2;
   stroke: currentColor;
+  fill: none !important;
 }
 .pl-chart-c0 { fill: var(--pl-accent); color: var(--pl-accent); stroke: var(--pl-accent); }
 .pl-chart-c1 { fill: hsl(from var(--pl-accent) calc(h + 180) s l); color: hsl(from var(--pl-accent) calc(h + 180) s l); }

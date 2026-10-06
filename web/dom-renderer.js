@@ -1173,10 +1173,12 @@ export class DomRenderer {
     const yOf = (f) => padT + (1 - f) * plotH;
 
     if (kind === EnumChartKind.line) {
-      const xOf = (i) => padL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+      // Each point sits in the center of its column, over its x label (as
+      // on the desktop, `x_frac`).
+      const xOf = (i) => padL + ((i + 0.5) / n) * plotW;
       series.forEach((s, si) => {
         const pts = s.points.map((p, i) => `${xOf(i)},${yOf(scaleFrac(scale, p.value))}`);
-        svg.appendChild(svgEl("polyline", { points: pts.join(" "), class: `pl-chart-line pl-chart-c${si % 6}`, fill: "none" }));
+        svg.appendChild(svgEl("polyline", { points: pts.join(" "), class: `pl-chart-line pl-chart-c${si % 6}` }));
         s.points.forEach((p, i) => {
           svg.appendChild(svgEl("circle", { cx: xOf(i), cy: yOf(scaleFrac(scale, p.value)), r: 2.5, class: `pl-chart-c${si % 6}` }));
         });
@@ -1197,7 +1199,7 @@ export class DomRenderer {
     const zy = yOf(scaleFrac(scale, 0));
     svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: zy, y2: zy, class: "pl-chart-zero" }));
     labels.forEach((lbl, i) => {
-      const x = padL + (n === 1 ? plotW / 2 : (i + 0.5) * (plotW / n));
+      const x = padL + ((i + 0.5) / n) * plotW;
       svg.appendChild(svgEl("text", { x, y: H - 3, class: "pl-chart-axis-label", "text-anchor": "middle" })).textContent = lbl;
     });
     return svg;

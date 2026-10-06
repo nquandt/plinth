@@ -691,57 +691,6 @@ fn chart_description(series: &[(String, ChartPoints)]) -> String {
         .join(". ")
 }
 
-/// Draws a bar chart: one column of grouped bars per label (SPEC.md
-/// §6.3). Height is proportional to `value / max(|value|)`. Line and pie
-/// charts are path-based (`crate::chart`).
-fn render_bars(series: &[(String, ChartPoints)], t: &Tokens, height: f32) -> AnyElement {
-    let palette = t.chart_palette();
-    let max = series
-        .iter()
-        .flat_map(|(_, pts)| pts.iter().map(|(_, v)| v.abs()))
-        .fold(0.0_f64, f64::max)
-        .max(1e-9);
-    let labels: Vec<&str> = series.first().map(|(_, pts)| pts.iter().map(|(l, _)| l.as_str()).collect()).unwrap_or_default();
-    let columns = labels.iter().enumerate().map(|(i, label)| {
-        let bars = series.iter().enumerate().map(|(si, (_, pts))| {
-            let v = pts.get(i).map(|(_, v)| *v).unwrap_or(0.0);
-            let frac = (v.abs() / max).clamp(0.0, 1.0) as f32;
-            let color = palette[si % palette.len()];
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .justify_end()
-                .h_full()
-                .child(
-                    div()
-                        .w_full()
-                        .h(gpui::relative(frac.max(0.02)))
-                        .rounded_t_sm()
-                        .bg(color),
-                )
-                .into_any_element()
-        });
-        div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap_1()
-            .flex_1()
-            .h_full()
-            .child(div().flex().gap_1().flex_1().w_full().items_end().children(bars))
-            .child(div().text_xs().text_color(t.text_muted).child(label.to_string()))
-            .into_any_element()
-    });
-    div()
-        .flex()
-        .gap_2()
-        .items_end()
-        .h(px(height))
-        .child(div().flex().gap_2().items_end().flex_1().h_full().children(columns))
-        .into_any_element()
-}
-
 /// A row of color-swatch legend entries.
 fn render_legend(names: &[String], t: &Tokens) -> AnyElement {
     let palette = t.chart_palette();
@@ -2094,7 +2043,7 @@ impl PlinthRoot {
                 let max_x_labels = match self.class { WidthClass::Compact => 6, WidthClass::Regular => 10, _ => 14 };
                 crate::chart::render_line(&series, t, chart_h, max_x_labels)
             }
-            _ => render_bars(&series, t, chart_h),
+            _ => crate::chart::render_bars(&series, t, chart_h),
         };
         let legend = (kind != chart_kind::PIE && series.len() > 1).then(|| {
             let names: Vec<String> = series.iter().map(|(n, _)| n.clone()).collect();
