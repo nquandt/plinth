@@ -67,6 +67,28 @@ function startServer() {
   });
 }
 
+/**
+ * Closes Edge through CDP `Browser.close` (it closes the tabs first), then
+ * kills the process if it is still there. A plain kill leaves the tabs
+ * registered with the Windows shell, so they stay in Alt+Tab as ghosts.
+ */
+async function closeEdge(cdpPort, edge) {
+  try {
+    const version = await (await fetch(`http://127.0.0.1:${cdpPort}/json/version`)).json();
+    const ws = new WebSocket(version.webSocketDebuggerUrl);
+    await new Promise((resolve, reject) => {
+      ws.addEventListener("open", resolve, { once: true });
+      ws.addEventListener("error", reject, { once: true });
+    });
+    const exited = new Promise((resolve) => edge.once("exit", resolve));
+    ws.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+    await Promise.race([exited, new Promise((r) => setTimeout(r, 5000))]);
+  } catch {
+    // Edge is gone already, or CDP did not answer: kill it below.
+  }
+  if (edge.exitCode === null) edge.kill();
+}
+
 /** Waits for Edge's `/json/version` endpoint, so we know CDP is ready. */
 async function waitForCdp(port, timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs;
@@ -272,7 +294,7 @@ async function main() {
       failed = true;
     }
   } finally {
-    edge.kill();
+    await closeEdge(cdpPort, edge);
     server.close();
     await rm(userDataDir, { recursive: true, force: true }).catch(() => {});
   }
