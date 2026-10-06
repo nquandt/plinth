@@ -60,6 +60,9 @@ wasmparser = "0.251"
 wasm-encoder = "0.251"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 sha2 = "0.10.9"
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+base64 = "0.22"
 gpui = { path = "../gpui-ce/crates/gpui", package = "gpui-ce" }
 gpui_platform = { path = "../gpui-ce/crates/gpui_platform", package = "gpui_ce_platform" }
 gpui_elements = { path = "../gpui-ce/crates/gpui_elements", package = "gpui_ce_elements" }

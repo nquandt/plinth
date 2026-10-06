@@ -681,7 +681,7 @@ mod tests {
         }
         let cfg = plinth_package::ProjectConfig::parse(&toml).unwrap();
         let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
-        let pkg = plinth_package::Package { manifest, component, assets: Vec::new() };
+        let pkg = plinth_package::Package { manifest, component, assets: Vec::new(), signature: None };
         pkg.write().unwrap()
     }
 

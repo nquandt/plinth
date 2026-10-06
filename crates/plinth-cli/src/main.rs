@@ -411,7 +411,7 @@ fn build_package(dir: &Path, out: Option<PathBuf>) -> Result<Option<PathBuf>> {
     let Some(b) = compile(dir)? else { return Ok(None) };
     let manifest = b.config.manifest(plinth_protocol::UI_API_VERSION, &b.runtime, b.accent, &b.app);
     let assets: Vec<(String, Vec<u8>)> = read_assets(dir).into_iter().map(|(name, bytes)| (format!("assets/{name}"), bytes)).collect();
-    let pkg = Package { manifest, component: b.app, assets };
+    let pkg = Package { manifest, component: b.app, assets, signature: None };
     let bytes = pkg.write()?;
     let out = out.unwrap_or_else(|| {
         let slug = b.config.id.rsplit('.').next().unwrap_or("app").to_owned();
