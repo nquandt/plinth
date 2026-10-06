@@ -16,9 +16,85 @@ interface dev {
   log: func(msg: string);
 }
 
+/// A fallible-call error (SPEC.md §8.5, §11). `denied` covers every
+/// capability-policy rejection; the `reason` names which of the three
+/// policy outcomes applied (`undeclared`, `refused`, `unsupported`,
+/// SPEC.md §11).
+interface error {
+  enum denied-reason {
+    /// The app's manifest does not declare the capability this call needs.
+    undeclared,
+    /// The capability is declared, but the user has not granted it (or
+    /// has refused it) yet.
+    refused,
+    /// This host/platform build has no implementation for the capability.
+    unsupported,
+  }
+
+  variant host-error {
+    denied(denied-reason),
+  }
+}
+
+/// Clocks and timers (SPEC.md §8.5; capability: none, always available).
+interface time {
+  use error.{host-error};
+
+  /// Milliseconds since the Unix epoch, UTC. Not monotonic across host
+  /// clock changes; use only for display and logging.
+  now: func() -> u64;
+
+  /// Monotonic milliseconds since an arbitrary, fixed origin. Always
+  /// increases, even if the wall clock changes. Use this to measure
+  /// elapsed time.
+  monotonic-now: func() -> u64;
+
+  /// Schedules a `timer` event (SPEC.md §8.4) after `ms` milliseconds.
+  /// When `repeat` is true, the host reschedules the same timer after
+  /// each firing until `cancel-timer` is called. Returns the timer id.
+  set-timer: func(ms: u32, repeat: bool) -> result<u32, host-error>;
+
+  /// Cancels a timer. Canceling an unknown or already-fired one-shot
+  /// timer is not an error.
+  cancel-timer: func(timer: u32);
+}
+
+/// A per-app key/value store (SPEC.md §8.5; capability: `store.kv`).
+/// Calls are synchronous: SPEC.md §8.5 permits a synchronous kv get when
+/// it is cache-backed, and this host keeps the whole store in memory
+/// (backed by a file flushed on every write), so every call is fast.
+interface store {
+  use error.{host-error};
+
+  /// Returns the value for `key`, or `none` if it is not set.
+  kv-get: func(key: string) -> result<option<string>, host-error>;
+  /// Sets `key` to `value`, replacing any existing value.
+  kv-set: func(key: string, value: string) -> result<_, host-error>;
+  /// Removes `key`. Removing a missing key is not an error.
+  kv-delete: func(key: string) -> result<_, host-error>;
+  /// Lists every key currently set, in no particular order.
+  kv-keys: func() -> result<list<string>, host-error>;
+}
+
+/// The system clipboard (SPEC.md §8.5; capabilities: `clipboard.read`,
+/// `clipboard.write`).
+interface clipboard {
+  use error.{host-error};
+
+  /// Replaces the clipboard's text content.
+  write-text: func(text: string) -> result<_, host-error>;
+  /// Reads the clipboard's text content, or `none` if it holds no text
+  /// (for example an image). This call is synchronous: clipboard reads on
+  /// every target this host supports are fast and do not block on I/O.
+  read-text: func() -> result<option<string>, host-error>;
+}
+
 world app {
   import ui;
   import dev;
+  import time;
+  import store;
+  import clipboard;
 
   /// Builds the initial tree.
   export init: func(args: list<u8>);
