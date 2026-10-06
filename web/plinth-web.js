@@ -265,9 +265,15 @@ export class PlinthApp {
     this.onCommit = () => {};
   }
 
-  /** `corePromiseOrBytes` and `appPromiseOrBytes` are `Uint8Array`s (already fetched). */
+  /**
+   * `corePromiseOrBytes` and `appPromiseOrBytes` are `Uint8Array`s (already
+   * fetched). Unless the caller supplies its own `scheduleTimerEvent`, a
+   * fired timer is delivered back into the app as a `timer` event (SPEC.md
+   * §8.4 code 0x03) through `on-event`, same as any other host event.
+   */
   async load(coreBytes, appBytes, opts = {}) {
-    this.core = await loadCore(coreBytes, { ...opts, onCommit: (ops) => this.onCommit(ops) });
+    const scheduleTimerEvent = opts.scheduleTimerEvent ?? ((id) => this.onEvent({ kind: "timer", timer: id }));
+    this.core = await loadCore(coreBytes, { ...opts, scheduleTimerEvent, onCommit: (ops) => this.onCommit(ops) });
     this.appInstance = await linkApp(this.core, appBytes);
     return this;
   }
