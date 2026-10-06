@@ -245,6 +245,8 @@ body {
   background: transparent;
   padding: 8px 12px;
   cursor: pointer;
+  color: var(--pl-muted);
+  font: inherit;
 }
 .pl-tab-selected {
   border-bottom: 2px solid var(--pl-accent, #3b7);
