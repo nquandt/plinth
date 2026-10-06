@@ -121,11 +121,23 @@ refuses every other package that declares it, before the package runs.
 | `createGroup(name)`, `setGroup(id, group, member)`, `remove(id)` | 1.8 | Make a group; put an app in a group or take it out; remove an app from the library. |
 | `search(query, done)` | 1.8 | Searches every configured source off the UI thread. `done` gets `{ hits, errors }` as JSON text, or `null` if denied. |
 | `install(id, done)` | 1.8 | Installs the latest version from the first source that lists it. `done` gets `null` on success, or the error text. |
+| `appInfo(id)` | 1.9 | One app as JSON text, with the same fields as a `listApps` element. `null` if denied or if the app is not in the library. |
+| `pin(id, version)` | 1.9 | Keeps the app on an installed version. An empty `version` removes the pin; then the newest version runs. |
+| `blockPublisher(key)`, `unblockPublisher(key)` | 1.9 | Block or unblock a publisher key (the `signer` of an app). No app that the key signed opens or installs. |
+| `checkUpdates(id, done)` | 1.9 | Checks the source of the app for a newer version, off the UI thread. An empty `id` checks every app. `done` gets `{ updates, errors }` as JSON text, or `null` if denied. The host keeps the result, so `listApps` shows it. |
+| `update(id, done)` | 1.9 | Installs the newest version from the source of the app, off the UI thread. `done` gets `null` on success (also when the app is up to date), or the error text. The new version opens only after the user decides its new capabilities. |
 | `lastError()` | 1.7 | The reason the last synchronous call was denied, or `null`. |
 
-`search` and `install` use the same request id and `completion` event as
-`plinth:dialog`. The web host answers every `plinth:hub` call with
-"unsupported" (the web Hub is phase H6).
+From core 1.9, each element of `listApps` also has these fields:
+`publisherBlocked`, `pinned` (`""` if there is no pin), `versions` (the
+installed versions, newest first), `update` (the newer version that the
+last check found, or `""`), and `updateCapabilities` (the capabilities
+that the update adds).
+
+`search`, `install`, `checkUpdates` and `update` use the same request id
+and `completion` event as `plinth:dialog`. The web host answers every
+`plinth:hub` call with "unsupported" and does not trap (the web Hub is
+phase H6).
 
 ## Declaring a capability
 
