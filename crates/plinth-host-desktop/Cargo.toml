@@ -32,3 +32,7 @@ plinth-compiler.workspace = true
 ed25519-dalek.workspace = true
 rand_core.workspace = true
 wat = "1"
+# `TestAppContext` (a test platform with no GPU and no real windows), for
+# the Hub launch poll loop test (`tests/hub_host.rs`).
+gpui = { workspace = true, features = ["test-support"] }
+plinth-ui.workspace = true

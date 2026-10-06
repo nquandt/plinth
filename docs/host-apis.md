@@ -105,6 +105,28 @@ Planned `fetch`-like HTTP and WebSocket access, gated by
 because a network call cannot finish synchronously. Do not depend on
 `plinth:net` yet — it is not implemented.
 
+## `plinth:hub` (privileged)
+
+The Hub UI (`examples/hub`, `docs/HUB.md` §4.1) uses this module. It needs
+the `hub.manage` capability (High risk). The host gives `hub.manage` only
+to a package that a trusted Hub key signed (`PLINTH_HUB_TRUSTED_KEYS`); it
+refuses every other package that declares it, before the package runs.
+
+| Call | Core | What it does |
+|---|---|---|
+| `listApps()` | 1.7 | The library as JSON text (decode it with `JSON.parse<T>`): each app with its version, publisher, signer, source, groups, `blocked`, and its capability label (risk, description, reason, decision). `null` if denied. |
+| `launch(id)` | 1.7 | The host opens the app in a new window, with the consent window first if necessary. |
+| `setGrant(id, capability, allowed)`, `block(id)`, `unblock(id)` | 1.7 | Change a grant; block or unblock an app. |
+| `listGroups()` | 1.8 | The groups as a JSON string array, or `null`. |
+| `createGroup(name)`, `setGroup(id, group, member)`, `remove(id)` | 1.8 | Make a group; put an app in a group or take it out; remove an app from the library. |
+| `search(query, done)` | 1.8 | Searches every configured source off the UI thread. `done` gets `{ hits, errors }` as JSON text, or `null` if denied. |
+| `install(id, done)` | 1.8 | Installs the latest version from the first source that lists it. `done` gets `null` on success, or the error text. |
+| `lastError()` | 1.7 | The reason the last synchronous call was denied, or `null`. |
+
+`search` and `install` use the same request id and `completion` event as
+`plinth:dialog`. The web host answers every `plinth:hub` call with
+"unsupported" (the web Hub is phase H6).
+
 ## Declaring a capability
 
 Add a `[[capabilities]]` block to `plinth.toml` for each capability you

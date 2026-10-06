@@ -4938,6 +4938,7 @@ dependencies = [
  "plinth-runner-wasmtime",
  "plinth-ui",
  "serde",
+ "serde_json",
  "sha2",
  "toml 0.8.23",
  "wasm-encoder 0.251.0",
@@ -4990,6 +4991,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml 0.8.23",
+ "windows-registry",
 ]
 
 [[package]]
@@ -5035,6 +5037,7 @@ dependencies = [
  "plinth-hub",
  "plinth-link",
  "plinth-package",
+ "plinth-runner-wasmtime",
  "rand_core 0.6.4",
  "serde",
  "serde_json",

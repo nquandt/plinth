@@ -64,6 +64,10 @@ pub fn describe(capability: &str, app_rationale: &str) -> String {
     if app_rationale.trim().is_empty() { fixed } else { format!("{fixed} The app says: \u{201c}{}\u{201d}", app_rationale.trim()) }
 }
 
+/// What the consent window calls when the user decides: `Some(decisions)`
+/// for Continue, `None` for Cancel.
+type OnDone = Box<dyn FnOnce(Option<Vec<(String, bool)>>, &mut App)>;
+
 struct ConsentView {
     app_name: String,
     publisher: String,
@@ -71,7 +75,7 @@ struct ConsentView {
     /// (`docs/HUB.md` §6.1, phase H1); `None` for an unsigned package.
     signed: Option<String>,
     items: Vec<Item>,
-    result: Rc<Cell<Option<Outcome>>>,
+    on_done: Option<OnDone>,
 }
 
 impl ConsentView {
@@ -83,9 +87,15 @@ impl ConsentView {
     }
 
     fn finish(&mut self, outcome: Outcome, window: &mut Window, cx: &mut Context<Self>) {
-        self.result.set(Some(outcome));
         window.remove_window();
-        let _ = cx;
+        if let Some(on_done) = self.on_done.take() {
+            let decisions = match outcome {
+                Outcome::Continue(decisions) => Some(decisions),
+                Outcome::Cancelled => None,
+            };
+            // After this update: `on_done` may open the app's window.
+            cx.defer(move |cx| on_done(decisions, cx));
+        }
     }
 }
 
@@ -198,6 +208,46 @@ impl Render for ConsentView {
 
 actions!(plinth_consent, [ConsentQuit]);
 
+fn items_for(capabilities: &[(String, String)]) -> Vec<Item> {
+    capabilities
+        .iter()
+        .map(|(c, why)| {
+            let risk = plinth_link::capabilities::info(c).map(|i| i.risk).unwrap_or(plinth_link::capabilities::Risk::Medium);
+            Item { capability: c.clone(), risk_label: risk_label(risk).to_owned(), rationale: describe(c, why), allowed: true }
+        })
+        .collect()
+}
+
+/// Opens the consent window in an application that runs already (the Hub
+/// host, `docs/HUB.md` §4.2, §7.3), and returns at once. `on_done` gets the
+/// decisions after Continue, or `None` after Cancel. If the user closes
+/// the window in another way, `on_done` is not called, and the app does
+/// not open.
+pub fn open(
+    cx: &mut App,
+    app_name: &str,
+    publisher: &str,
+    signed: Option<&str>,
+    capabilities: &[(String, String)],
+    on_done: impl FnOnce(Option<Vec<(String, bool)>>, &mut App) + 'static,
+) {
+    let items = items_for(capabilities);
+    let view = ConsentView {
+        app_name: app_name.to_owned(),
+        publisher: publisher.to_owned(),
+        signed: signed.map(|s| s.to_owned()),
+        items,
+        on_done: Some(Box::new(on_done)),
+    };
+    let bounds = Bounds::centered(None, size(px(480.), px(420.)), cx);
+    let options = WindowOptions::new()
+        .window_bounds(Some(WindowBounds::Windowed(bounds)))
+        .titlebar(Some(gpui::TitlebarOptions { title: Some("Allow this app?".into()), ..Default::default() }));
+    if let Err(e) = cx.open_window(options, move |_, cx| cx.new(|_| view)) {
+        log::error!("cannot open the consent window: {e:#}");
+    }
+}
+
 /// Shows the consent screen for `capabilities` (the capabilities that
 /// still need a decision, each with the app's rationale from its manifest;
 /// see `plinth_hub::Hub::needs_consent`) and
@@ -208,17 +258,11 @@ pub fn show(app_name: &str, publisher: &str, signed: Option<&str>, capabilities:
     if capabilities.is_empty() {
         return Some(Vec::new());
     }
-    let items: Vec<Item> = capabilities
-        .iter()
-        .map(|(c, why)| {
-            let risk = plinth_link::capabilities::info(c).map(|i| i.risk).unwrap_or(plinth_link::capabilities::Risk::Medium);
-            Item { capability: c.clone(), risk_label: risk_label(risk).to_owned(), rationale: describe(c, why), allowed: true }
-        })
-        .collect();
-    let result = Rc::new(Cell::new(None));
+    let result: Rc<Cell<Option<Option<Vec<(String, bool)>>>>> = Rc::new(Cell::new(None));
     let app_name = app_name.to_owned();
     let publisher = publisher.to_owned();
     let signed = signed.map(|s| s.to_owned());
+    let capabilities = capabilities.to_vec();
     let out = result.clone();
 
     gpui_platform::application().run(move |cx: &mut App| {
@@ -230,19 +274,9 @@ pub fn show(app_name: &str, publisher: &str, signed: Option<&str>, capabilities:
             }
         })
         .detach();
-        let bounds = Bounds::centered(None, size(px(480.), px(420.)), cx);
-        let options = WindowOptions::new()
-            .window_bounds(Some(WindowBounds::Windowed(bounds)))
-            .titlebar(Some(gpui::TitlebarOptions { title: Some("Allow this app?".into()), ..Default::default() }));
-        cx.open_window(options, move |_, cx| {
-            cx.new(|_| ConsentView { app_name: app_name.clone(), publisher: publisher.clone(), signed: signed.clone(), items, result: out.clone() })
-        })
-        .expect("open the consent window");
+        open(cx, &app_name, &publisher, signed.as_deref(), &capabilities, move |decisions, _| out.set(Some(decisions)));
         cx.activate(true);
     });
 
-    match result.take() {
-        Some(Outcome::Continue(decisions)) => Some(decisions),
-        Some(Outcome::Cancelled) | None => None,
-    }
+    result.take().flatten()
 }

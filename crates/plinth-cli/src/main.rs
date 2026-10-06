@@ -38,6 +38,12 @@ usage:
   plinth hub add <app.plnt>        add a package to the Hub library
   plinth hub list                  list library apps
   plinth hub run <app id>          run a library app (consent screen first)
+  plinth hub ui [<app id>]         run the Hub UI app (default dev.plinth.hub)
+  plinth hub open <plinth://app/<id>>  open an app link (installs from sources if needed)
+  plinth hub register-scheme [--exe <path>] | unregister-scheme
+                                   register plinth:// links for this user (Windows)
+  plinth hub shortcut <app id> [--dir <folder>]
+                                   write a desktop shortcut that opens the app
   plinth hub remove <app id>       remove an app from the library
   plinth hub grants <app id> [allow|refuse <capability>]
                                    show or set a grant
@@ -617,6 +623,30 @@ fn publisher_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
     }
 }
 
+#[cfg(windows)]
+fn register_scheme(exe: &Path) -> Result<()> {
+    plinth_hub::os::register_scheme(&mut plinth_hub::os::CurrentUserRegistry, exe)
+}
+
+#[cfg(windows)]
+fn unregister_scheme() -> Result<()> {
+    plinth_hub::os::unregister_scheme(&mut plinth_hub::os::CurrentUserRegistry)
+}
+
+#[cfg(not(windows))]
+fn register_scheme(_exe: &Path) -> Result<()> {
+    bail!("`plinth hub register-scheme` is for Windows only (docs/HUB.md §10)")
+}
+
+#[cfg(not(windows))]
+fn unregister_scheme() -> Result<()> {
+    bail!("`plinth hub unregister-scheme` is for Windows only (docs/HUB.md §10)")
+}
+
+/// The app id of the Hub UI (`examples/hub`), which `plinth hub ui` runs
+/// when no id is given.
+const HUB_UI_APP_ID: &str = "dev.plinth.hub";
+
 /// `plinth hub …` (`docs/HUB.md` §4.3, §9, §15 phase H0 part 4): a thin CLI
 /// over `plinth-hub`, for testing the library, grants and consent flow
 /// without the Hub UI (which comes in H3).
@@ -643,6 +673,55 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                 }
                 Some(other) => bail!("unknown `plinth hub source {other}`; use add, list or remove"),
             }
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some("register-scheme") => {
+            // `docs/HUB.md` §10: Windows runs `plinth hub open <link>` for a
+            // plinth:// link. Per user (HKEY_CURRENT_USER), no administrator.
+            let exe = match raw.iter().position(|a| *a == "--exe").and_then(|i| raw.get(i + 1)) {
+                Some(exe) => PathBuf::from(exe),
+                None => std::env::current_exe()?,
+            };
+            register_scheme(&exe)?;
+            println!("registered plinth:// links to run {} hub open", exe.display());
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some("unregister-scheme") => {
+            unregister_scheme()?;
+            println!("removed the plinth:// registration");
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some("open") => {
+            let url = args.get(1).context("usage: plinth hub open <plinth://app/<app id>>")?;
+            let sources: std::sync::Arc<dyn plinth_hub::SourceClient> = std::sync::Arc::new(plinth_registry::HubSources);
+            let id = match plinth_hub::os::parse_link(url)? {
+                plinth_hub::os::Link::Hub => HUB_UI_APP_ID.to_owned(),
+                plinth_hub::os::Link::App { id, version } => {
+                    // `docs/HUB.md` §5.3: an app that is not in the library
+                    // comes from the user's sources (the latest version).
+                    if hub.get(&id)?.is_none() {
+                        if let Some(version) = &version {
+                            eprintln!("[plinth] installing the latest version of {id}, not {version} (pinned links are not supported yet)");
+                        }
+                        plinth_hub::install_from_sources(&hub, sources.as_ref(), &id)?;
+                        eprintln!("[plinth] installed {id}");
+                    }
+                    id
+                }
+            };
+            plinth_host_desktop::init_logging();
+            plinth_host_desktop::run_from_hub_with_sources(&hub, &id, Some(sources))?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some("shortcut") => {
+            let id = args.get(1).context("usage: plinth hub shortcut <app id> [--dir <folder>]")?;
+            let entry = hub.get(id)?.with_context(|| format!("{id} is not in the library"))?;
+            let dir = match raw.iter().position(|a| *a == "--dir").and_then(|i| raw.get(i + 1)) {
+                Some(dir) => PathBuf::from(dir),
+                None => plinth_hub::os::desktop_dir().context("no desktop folder on this platform; use --dir <folder>")?,
+            };
+            let path = plinth_hub::os::write_shortcut(&dir, id, &entry.name, &std::env::current_exe()?)?;
+            println!("wrote {} (it opens plinth://app/{id}; run `plinth hub register-scheme` one time)", path.display());
             return Ok(ExitCode::SUCCESS);
         }
         Some("search") => {
@@ -727,10 +806,18 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                 println!("{}  {}  {}{}  [{signer}]", app.id, app.name, version, pin);
             }
         }
-        Some("run") => {
-            let id = args.get(1).context("usage: plinth hub run <app id>")?;
+        Some(cmd @ ("run" | "ui")) => {
+            // `plinth hub ui` runs the Hub UI app (`docs/HUB.md` §4.1,
+            // `examples/hub`); `run` needs an id. Either way, an app that
+            // the Hub UI launches opens in a new window of this process.
+            let id = match (cmd, args.get(1)) {
+                (_, Some(id)) => *id,
+                ("ui", None) => HUB_UI_APP_ID,
+                _ => bail!("usage: plinth hub run <app id>"),
+            };
             plinth_host_desktop::init_logging();
-            plinth_host_desktop::run_from_hub(&hub, id)?;
+            let sources: std::sync::Arc<dyn plinth_hub::SourceClient> = std::sync::Arc::new(plinth_registry::HubSources);
+            plinth_host_desktop::run_from_hub_with_sources(&hub, id, Some(sources))?;
         }
         Some("remove") => {
             let id = args.get(1).context("usage: plinth hub remove <app id>")?;

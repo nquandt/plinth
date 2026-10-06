@@ -528,3 +528,82 @@ pub fn hub_last_error() -> i32 {
     #[cfg(not(target_arch = "wasm32"))]
     0
 }
+
+/// Records the outcome of a synchronous `plinth:hub` call for
+/// `hub.lastError()`.
+#[cfg(target_arch = "wasm32")]
+fn hub_outcome<T>(r: Result<T, host::error::HostError>) -> Option<T> {
+    match r {
+        Ok(v) => {
+            HUB_LAST_ERROR.with(|e| *e = None);
+            Some(v)
+        }
+        Err(e) => {
+            HUB_LAST_ERROR.with(|slot| *slot = Some(denied_reason(e)));
+            None
+        }
+    }
+}
+
+/// `hub.listGroups()`: a JSON array of the library's group names
+/// (`docs/HUB.md` §9.1), or `null` when denied.
+pub fn hub_list_groups() -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    return match hub_outcome(host::hub::list_groups()) {
+        Some(json) => strings::from_str(&json) as i32,
+        None => 0,
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    0
+}
+
+/// `hub.createGroup(name)`. A no-op when denied.
+pub fn hub_create_group(name: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let name = strings::as_str(name as u32);
+        hub_outcome(host::hub::create_group(name));
+    }
+}
+
+/// `hub.setGroup(id, group, member)`. A no-op when denied.
+pub fn hub_set_group(id: i32, group: i32, member: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = strings::as_str(id as u32);
+        let group = strings::as_str(group as u32);
+        hub_outcome(host::hub::set_group(id, group, member != 0));
+    }
+}
+
+/// `hub.remove(id)`. A no-op when denied.
+pub fn hub_remove(id: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = strings::as_str(id as u32);
+        hub_outcome(host::hub::remove(id));
+    }
+}
+
+/// `hub.search(query, done)`: the host searches its sources on a worker
+/// thread; `done` gets the JSON result text, or `null` when denied
+/// (`docs/HUB.md` §5.2).
+pub fn hub_search(callable: Callable, query: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let query = strings::as_str(query as u32);
+        let id = host::hub::search(query);
+        register_request(id, callable);
+    }
+}
+
+/// `hub.install(id, done)`: the host installs the app on a worker thread;
+/// `done` gets `null` on success, or the error text.
+pub fn hub_install(callable: Callable, id: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = strings::as_str(id as u32);
+        let request = host::hub::install(id);
+        register_request(request, callable);
+    }
+}

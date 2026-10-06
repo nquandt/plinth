@@ -153,6 +153,30 @@ interface hub {
   block: func(id: string) -> result<_, host-error>;
   /// Reverses `block`.
   unblock: func(id: string) -> result<_, host-error>;
+
+  // -- Core 1.8 (`docs/HUB.md` §9.1, §5.2, phase H3 step 2) ---------------
+
+  /// The groups of the library (`docs/HUB.md` §9.1), as a JSON array of
+  /// strings, in the order the user made them.
+  list-groups: func() -> result<string, host-error>;
+  /// Makes an empty group. A group that exists already is not an error.
+  create-group: func(name: string) -> result<_, host-error>;
+  /// Puts `id` in `group` (`member` true; this makes the group if
+  /// necessary) or takes it out (`member` false).
+  set-group: func(id: string, group: string, member: bool) -> result<_, host-error>;
+  /// Removes an app from the library. Its data and grants stay.
+  remove: func(id: string) -> result<_, host-error>;
+  /// Searches every configured source (`docs/HUB.md` §5.2,
+  /// `docs/REGISTRY.md` §9) on a worker thread. Returns a request id at
+  /// once; the `completion` result is a JSON string `{ "hits": [{ id,
+  /// name, version, description, source }], "errors": [string] }` (one
+  /// error for each source that failed), or null if the call is denied.
+  search: func(query: string) -> u32;
+  /// Installs the latest version of `id` from the first configured source
+  /// that lists it, on a worker thread. Returns a request id at once; the
+  /// `completion` result is null on success, or an error string (for a
+  /// denied call, `"denied:<reason>"`).
+  install: func(id: string) -> u32;
 }
 
 world app {

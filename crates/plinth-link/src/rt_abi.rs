@@ -160,6 +160,13 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("hub_block", &[I32], &[]),
     ("hub_unblock", &[I32], &[]),
     ("hub_last_error", &[], &[I32]),
+    // -- plinth:hub, core 1.8 (`docs/HUB.md` §9.1, §5.2, H3 step 2) ---------
+    ("hub_list_groups", &[], &[I32]),
+    ("hub_create_group", &[I32], &[]),
+    ("hub_set_group", &[I32, I32, I32], &[]),
+    ("hub_remove", &[I32], &[]),
+    ("hub_search", &[I32, I32, I32], &[]),
+    ("hub_install", &[I32, I32, I32], &[]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -222,13 +229,19 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("hub_block", 7),
     ("hub_unblock", 7),
     ("hub_last_error", 7),
+    ("hub_list_groups", 8),
+    ("hub_create_group", 8),
+    ("hub_set_group", 8),
+    ("hub_remove", 8),
+    ("hub_search", 8),
+    ("hub_install", 8),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).
 pub fn added_in(name: &str) -> u32 {
     ADDED_IN.iter().find(|(n, _)| *n == name).map_or(0, |(_, m)| *m)
 }
-pub const CORE_MINOR: u32 = 7;
+pub const CORE_MINOR: u32 = 8;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;

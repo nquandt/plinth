@@ -94,6 +94,12 @@ pub enum StdFn {
     HubBlock,
     HubUnblock,
     HubLastError,
+    HubListGroups,
+    HubCreateGroup,
+    HubSetGroup,
+    HubRemove,
+    HubSearch,
+    HubInstall,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
