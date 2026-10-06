@@ -309,7 +309,7 @@ Every control is a typed JSX intrinsic from `plinth:ui`. Props in **bold** are r
 |---|---|---|
 | `Screen` | **title**, `actions?: Action[]`, `detail?` | The root of each screen. Actions go to the toolbar or an overflow menu. |
 | `Section` | `title?`, `footer?` | A titled group. The runtime decides card or inset-group style. |
-| `Group` | `axis?: "auto" \| "row" \| "column"` | A logical grouping. `auto` lets the runtime choose. Only a hint. |
+| `Group` | `axis?: "auto" \| "row" \| "column"` | A logical grouping (UI API 1.1). In a row, each child gets the same width. `auto` is a row on `regular` and `wide`, and a column on `compact`. The runtime owns the spacing. |
 | `Tabs` | **items** | In-screen segmented tabs. |
 | `Sheet` | **open**, **title**, `onClose` | Modal on compact, side panel or dialog on wide. |
 | `Dialog` | **open**, **title**, `actions` | Alert or confirmation. |
@@ -326,8 +326,8 @@ Every control is a typed JSX intrinsic from `plinth:ui`. Props in **bold** are r
 
 | Control | Props |
 |---|---|
-| `Text` | `style?: "body" \| "caption" \| "mono"`, `tone?: "default" \| "muted" \| "danger" \| "success"` |
-| `Heading` | `level?: 1 \| 2 \| 3` |
+| `Text` | `style?: "body" \| "caption" \| "mono"`, `tone?: "default" \| "muted" \| "danger" \| "success"`, `align?: "start" \| "center" \| "end"` (1.1) |
+| `Heading` | `level?: 1 \| 2 \| 3`, `align?` (1.1) |
 | `Image` | **src** (asset or URL token), **alt**, `aspect?` |
 | `Icon` | **name** (from the runtime icon set) |
 | `Badge` | **text**, `tone?` |
@@ -338,7 +338,7 @@ Every control is a typed JSX intrinsic from `plinth:ui`. Props in **bold** are r
 
 | Control | Props |
 |---|---|
-| `Button` | **label** (or a text child), `role?: "primary" \| "default" \| "destructive"`, **onPress**, `disabled?`, `icon?` |
+| `Button` | **label** (or a text child), `role?: "primary" \| "default" \| "destructive"`, `size?: "default" \| "large"` (1.1), **onPress**, `disabled?`, `icon?` |
 | `TextField` | **label**, **value**, `placeholder?`, `kind?: "text" \| "email" \| "password" \| "url" \| "search"`, `error?` |
 | `TextArea` | **label**, **value**, `placeholder?` |
 | `NumberField` | **label**, **value**, `min?`, `max?`, `step?` |
@@ -360,6 +360,8 @@ Every control is a typed JSX intrinsic from `plinth:ui`. Props in **bold** are r
 | Control | Props |
 |---|---|
 | `Canvas` | **label**, **draw** (`(ctx: Canvas2D, size) => void`), `onPointer?`, `aspect?` |
+
+UI API 1.1 adds `Group`, `Button.size` and `Text`/`Heading` `align`. These props state intent (a row of equal keys, a large key, a numeric display that reads from the end); they do not give pixels, spacing or colors.
 
 ### 6.4 Layout rules (runtime-owned)
 

@@ -12,7 +12,7 @@ use crate::types::Type;
 /// The value and type names that each std module exports.
 pub const UI_NAMES: &[&str] = &[
     "signal", "computed", "effect", "app", "navigate", "Signal", "Computed", "Accent", "IconName", "ScreenDef", "AppConfig",
-    "App", "Tone", "Screen", "Section", "Text", "Heading", "Button", "TextField", "Toggle", "List", "Row", "Empty",
+    "App", "Tone", "Align", "Group", "Screen", "Section", "Text", "Heading", "Button", "TextField", "Toggle", "List", "Row", "Empty",
 ];
 pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console"];
 
@@ -28,6 +28,7 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "Computed" => Binding::Type(Type::Computed(Box::new(Type::Error))),
             "Accent" => Binding::Type(Type::str_lits(controls::ACCENTS.iter().map(|s| s.to_string()).collect())),
             "IconName" => Binding::Type(Type::str_lits(controls::ICONS.iter().map(|s| s.to_string()).collect())),
+            "Align" => Binding::Type(Type::str_lits(["start", "center", "end"].iter().map(|s| s.to_string()).collect())),
             "Tone" => Binding::Type(Type::str_lits(["default", "muted", "danger", "success"].iter().map(|s| s.to_string()).collect())),
             "App" => Binding::Type(Type::App),
             // Config shapes exist for the editor only.

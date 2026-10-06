@@ -61,16 +61,25 @@ export type Tone = "default" | "muted" | "danger" | "success";
 export declare function Screen(props: { title: string; children?: Children }): Element;
 export declare function Section(props: { title?: string; footer?: string; children?: Children }): Element;
 
+export type Align = "start" | "center" | "end";
+
+/** Lays out its children along an axis. In a row, each child gets the same
+ * width. "auto" is a row on wide windows and a column on narrow ones. */
+export declare function Group(props: { axis?: "auto" | "row" | "column"; children?: Children }): Element;
+
 export declare function Text(props: {
   style?: "body" | "caption" | "mono";
   tone?: Tone;
+  align?: Align;
   children?: TextContent;
 }): Element;
-export declare function Heading(props: { level?: 1 | 2 | 3; children?: TextContent }): Element;
+export declare function Heading(props: { level?: 1 | 2 | 3; align?: Align; children?: TextContent }): Element;
 
 export declare function Button(props: {
   label: string;
   role?: "primary" | "default" | "destructive";
+  /** "large" makes a taller key, for keypads and main actions. */
+  size?: "default" | "large";
   onPress: () => void;
   disabled?: boolean;
 }): Element;

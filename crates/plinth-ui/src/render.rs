@@ -10,7 +10,9 @@ use gpui::{
 };
 use gpui_elements::editable_text::actions::Enter;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
-use plinth_protocol::{ControlKind, Event, NodeId, Value, Writer, button_role, event, prop, text_style, tone};
+use plinth_protocol::{
+    ControlKind, Event, NodeId, Value, Writer, axis, button_role, button_size, event, prop, text_align, text_style, tone,
+};
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -339,6 +341,7 @@ impl PlinthRoot {
             ControlKind::List => self.render_list(node, t, cx),
             ControlKind::Row => self.render_row(node, t, cx),
             ControlKind::Empty => self.render_empty(node, t),
+            ControlKind::Group => self.render_group(node, t, cx),
         }
     }
 
@@ -374,7 +377,7 @@ impl PlinthRoot {
             _ => t.text,
         };
         let text = node.text.clone().unwrap_or_default();
-        let d = div().text_color(color);
+        let d = aligned(div().text_color(color), node);
         match node.enum_prop(prop::STYLE) {
             text_style::CAPTION => d.text_xs(),
             text_style::MONO => d.text_sm().font_family("monospace"),
@@ -387,7 +390,7 @@ impl PlinthRoot {
     fn render_heading(&self, node: &Node) -> AnyElement {
         let level = node.prop(prop::LEVEL).and_then(Value::as_int).unwrap_or(2);
         let text = node.text.clone().unwrap_or_default();
-        let d = div().font_weight(FontWeight::SEMIBOLD);
+        let d = aligned(div().font_weight(FontWeight::SEMIBOLD), node);
         match level {
             1 => d.text_2xl().font_weight(FontWeight::BOLD),
             2 => d.text_xl(),
@@ -406,6 +409,7 @@ impl PlinthRoot {
             _ => (t.surface_alt, t.text, t.hover),
         };
         let handler = node.handler(event::PRESS);
+        let large = node.enum_prop(prop::SIZE) == button_size::LARGE;
         div()
             .id(eid("btn", node.id))
             .flex()
@@ -413,11 +417,10 @@ impl PlinthRoot {
             .items_center()
             .justify_center()
             .px_4()
-            .h(px(36.))
             .rounded_lg()
             .bg(bg)
             .text_color(fg)
-            .text_sm()
+            .map(|d| if large { d.h(px(56.)).text_xl() } else { d.h(px(36.)).text_sm() })
             .font_weight(FontWeight::MEDIUM)
             .child(label)
             .when(disabled, |d| d.opacity(0.5))
@@ -572,6 +575,28 @@ impl PlinthRoot {
             .into_any_element()
     }
 
+    /// A group (UI API 1.1). In a row, each child gets the same width; the
+    /// runtime still owns the spacing.
+    fn render_group(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let row = match node.enum_prop(prop::AXIS) {
+            axis::ROW => true,
+            axis::COLUMN => false,
+            _ => self.class != WidthClass::Compact,
+        };
+        let kids = self.render_children(node, t, cx);
+        if row {
+            div()
+                .w_full()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .children(kids.into_iter().map(|k| div().flex_1().min_w_0().flex().flex_col().child(k)))
+                .into_any_element()
+        } else {
+            div().w_full().flex().flex_col().gap_3().children(kids).into_any_element()
+        }
+    }
+
     fn render_empty(&self, node: &Node, t: &Tokens) -> AnyElement {
         let title = node.str_prop(prop::TITLE).unwrap_or("").to_owned();
         let message = node.str_prop(prop::MESSAGE).map(str::to_owned);
@@ -584,5 +609,14 @@ impl PlinthRoot {
             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(title))
             .when_some(message, |d, m| d.child(div().text_xs().text_color(t.text_muted).child(m)))
             .into_any_element()
+    }
+}
+
+/// Applies the `align` prop of Text and Heading (UI API 1.1).
+fn aligned(d: gpui::Div, node: &Node) -> gpui::Div {
+    match node.enum_prop(prop::ALIGN) {
+        text_align::CENTER => d.text_center(),
+        text_align::END => d.text_right(),
+        _ => d,
     }
 }

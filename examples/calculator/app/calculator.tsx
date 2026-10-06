@@ -1,38 +1,57 @@
-import { Screen, Section, Heading, Button } from "plinth:ui";
-import { display, inputDigit, inputDot, chooseOperator, equals, clear } from "./model";
+import { Screen, Section, Group, Heading, Text, Button } from "plinth:ui";
+import { toString } from "plinth:core";
+import { display, stored, pending, inputDigit, inputDot, chooseOperator, equals, clear } from "./model";
+
+/** One digit key. */
+function Digit(props: { digit: string }) {
+  return <Button label={props.digit} size="large" onPress={() => inputDigit(props.digit)} />;
+}
+
+/** The line above the display: the stored value and the pending operator. */
+function pendingLine(): string {
+  const op = pending();
+  if (op === null) {
+    return " ";
+  }
+  const symbol = op === "*" ? "×" : op === "/" ? "÷" : op === "-" ? "−" : "+";
+  return `${toString(stored())} ${symbol}`;
+}
 
 export default function Calculator() {
   return (
     <Screen title="Calculator">
-      <Section title="Display">
-        <Heading level={1}>{display()}</Heading>
+      <Section>
+        <Text tone="muted" align="end">{pendingLine()}</Text>
+        <Heading level={1} align="end">{display()}</Heading>
       </Section>
-      <Section title="Clear">
-        <Button label="C" onPress={clear} />
-      </Section>
-      <Section title="7 8 9 /">
-        <Button label="7" onPress={() => inputDigit("7")} />
-        <Button label="8" onPress={() => inputDigit("8")} />
-        <Button label="9" onPress={() => inputDigit("9")} />
-        <Button label="÷" onPress={() => chooseOperator("/")} />
-      </Section>
-      <Section title="4 5 6 x">
-        <Button label="4" onPress={() => inputDigit("4")} />
-        <Button label="5" onPress={() => inputDigit("5")} />
-        <Button label="6" onPress={() => inputDigit("6")} />
-        <Button label="×" onPress={() => chooseOperator("*")} />
-      </Section>
-      <Section title="1 2 3 -">
-        <Button label="1" onPress={() => inputDigit("1")} />
-        <Button label="2" onPress={() => inputDigit("2")} />
-        <Button label="3" onPress={() => inputDigit("3")} />
-        <Button label="-" onPress={() => chooseOperator("-")} />
-      </Section>
-      <Section title="0 . = +">
-        <Button label="0" onPress={() => inputDigit("0")} />
-        <Button label="." onPress={inputDot} />
-        <Button label="=" role="primary" onPress={equals} />
-        <Button label="+" onPress={() => chooseOperator("+")} />
+      <Section>
+        <Group axis="row">
+          <Button label="C" role="destructive" size="large" onPress={clear} />
+          <Button label="." size="large" onPress={inputDot} />
+          <Button label="÷" role="primary" size="large" onPress={() => chooseOperator("/")} />
+        </Group>
+        <Group axis="row">
+          <Digit digit="7" />
+          <Digit digit="8" />
+          <Digit digit="9" />
+          <Button label="×" role="primary" size="large" onPress={() => chooseOperator("*")} />
+        </Group>
+        <Group axis="row">
+          <Digit digit="4" />
+          <Digit digit="5" />
+          <Digit digit="6" />
+          <Button label="−" role="primary" size="large" onPress={() => chooseOperator("-")} />
+        </Group>
+        <Group axis="row">
+          <Digit digit="1" />
+          <Digit digit="2" />
+          <Digit digit="3" />
+          <Button label="+" role="primary" size="large" onPress={() => chooseOperator("+")} />
+        </Group>
+        <Group axis="row">
+          <Digit digit="0" />
+          <Button label="=" role="primary" size="large" onPress={equals} />
+        </Group>
       </Section>
     </Screen>
   );
