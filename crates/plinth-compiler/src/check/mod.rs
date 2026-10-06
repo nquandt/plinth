@@ -113,11 +113,17 @@ pub enum Binding {
     Generic(usize),
 }
 
+/// A narrowing key: a plain variable (`x`, empty path) or a member path
+/// rooted at a `const`/parameter variable (`x.a` is `(x, [idx_a])`, `x.a.b`
+/// is `(x, [idx_a, idx_b])`). See `docs/language.md` ("Narrowing").
+pub(crate) type NarrowKey = (VarId, Vec<u32>);
+
 #[derive(Default)]
 struct Scope {
     names: HashMap<String, Binding>,
-    /// Narrowed types of variables (`if (x !== null)`).
-    narrow: HashMap<VarId, Type>,
+    /// Narrowed types of variables and member paths (`if (x !== null)`,
+    /// `if (r.subtitle !== null)`).
+    narrow: HashMap<NarrowKey, Type>,
 }
 
 /// Where a signal/computed read happens, for the "not reactive" lint
@@ -590,13 +596,24 @@ impl Checker<'_> {
         self.module_scopes[self.module].get(name).cloned()
     }
 
-    fn narrowed(&self, v: VarId) -> Option<Type> {
+    fn narrowed(&self, key: &NarrowKey) -> Option<Type> {
         for s in self.fx.scopes.iter().rev() {
-            if let Some(t) = s.narrow.get(&v) {
+            if let Some(t) = s.narrow.get(key) {
                 return Some(t.clone());
             }
         }
         None
+    }
+
+    /// Drops all member-path narrowing (`r.subtitle`, not plain `x`) in
+    /// every live scope: called after anything that could change a field
+    /// through an alias (an assignment to any member path, or a call).
+    /// Plain variable narrowing never needs this: it only ever narrows a
+    /// `const`/parameter, which cannot be reassigned.
+    pub(crate) fn invalidate_member_narrowing(&mut self) {
+        for s in self.fx.scopes.iter_mut() {
+            s.narrow.retain(|k, _| k.1.is_empty());
+        }
     }
 
     fn push_scope(&mut self) {
@@ -1800,6 +1817,11 @@ impl Checker<'_> {
             None => expected.map(|e| e.ret.clone()).filter(|t| *t == Type::Void || !t.is_error()),
         };
         let reactive = if std::mem::take(&mut self.pending_reactive) { ReactiveCtx::Reactive } else { ReactiveCtx::Callback };
+        // Set before checking the body (not just after, at the bottom):
+        // member-path narrowing (`check/stmt.rs`'s `narrow_path`) looks up
+        // `self.prog.funcs[owner].params` to tell a parameter from a
+        // captured `let`, and it runs while the body below is checked.
+        self.prog.funcs[fid as usize].params = param_vars.clone();
         let mut saved =
             std::mem::replace(&mut self.fx, FnCx { func: fid, scopes: Vec::new(), loops: Vec::new(), ret: declared.clone(), inferred: None, reactive });
         // A closure sees the scopes of the enclosing function: move them in

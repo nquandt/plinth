@@ -22,8 +22,8 @@ large enough to write real apps; see the examples in `examples/`.
 | `int` | A branded `number` from `plinth:core`. Literals and arithmetic on `int` stay `int` and wrap at 32 bits. `int` converts to `number` implicitly; convert back with `int(x)` (it truncates). |
 | `boolean` | — |
 | `string` | Immutable. `length`, indexing, and `slice` count UTF-16 code units, for TypeScript compatibility; see "Deviations" below. |
-| `T[]` / `Array<T>` | A growable array, monomorphized per `T`. See `std/lib.d.ts` for the supported methods (`push`, `pop`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `forEach`, `includes`, `indexOf`, `slice`, `reverse`, `join`, `for…of`). |
-| `Map<K, V>`, `Set<T>` | `K`/element type must be `string`, `int`, `number`, `boolean`, or an enum. Insertion order; lookup, insert, and delete are linear scans. `get` returns `null`, not `undefined`, for a missing key. |
+| `T[]` / `Array<T>` | A growable array, monomorphized per `T`. See `std/lib.d.ts` for the supported methods (`push`, `pop`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `forEach`, `includes`, `indexOf`, `slice`, `reverse`, `join`, `concat`, `reduce` (needs an initial value; there is no no-initial-value overload), `for…of`). Not supported yet: `sort`, `splice`, `fill`, `flat`. |
+| `Map<K, V>`, `Set<T>` | `K`/element type must be `string`, `int`, `number`, `boolean`, or an enum. Insertion order; lookup, insert, and delete are linear scans. `get` returns `null`, not `undefined`, for a missing key. `forEach`, `keys()`, `values()` work as plain methods too, not just as a bare `for…of` target (`[...m.keys()]`, `m.values().reduce(...)`); `entries()` only works as a `for…of` target (`for (const [k, v] of m)`) since there is no tuple/array-of-pairs type to return it as a plain array. |
 | `T \| null` | Supported for every type except signals. `undefined` exists only as "absent" for optional properties and parameters; it is otherwise the same value as `null`. |
 | interfaces, object types | A GC-allocated struct with a fixed layout. |
 | classes | Single inheritance: fields, one constructor, methods, `new`, `extends`, `super(...)` as the first statement, `super.m()`, overriding, `instanceof` with narrowing. A base class must be declared before its subclasses. A method reference without a call (`arr.map(obj.method)`) is the error `PL2021`; write `() => obj.method()` instead. |
@@ -80,6 +80,22 @@ yet:** static members, getters/setters, generic classes,
 - Classes, single inheritance, `instanceof`, general union narrowing,
   generic functions and interfaces (all implemented; see "Status"
   above).
+- Narrowing on member expressions, not just plain variables: `if (r.subtitle
+  !== null) { use(r.subtitle); }`, `r.subtitle !== null ? r.subtitle : "x"`,
+  `r.subtitle === null ? "x" : r.subtitle`, and the same for `if (... ===
+  null) return;`/`throw` at the end of a block narrowing the rest of it.
+  `r.subtitle ?? "x"` and `r?.subtitle ?? "x"` already typed correctly
+  without this (`??` and `?.` build their own null check, independent of
+  the narrowing map). The rule, deliberately conservative: a path `a.b` or
+  `a.b.c` is narrowed only when `a` is a `const` or a parameter (never
+  reassigned) and every step is a direct struct field read — not a method
+  call, not a computed/array index. The narrowing is dropped (not carried
+  past) any assignment to any field, or any function/method call, anywhere
+  in between the test and the use, since either could change the field
+  through an alias that the checker cannot rule out. This is strictly more
+  conservative than necessary (a call that provably cannot reach the path
+  still drops it), by design: it costs an extra local variable in the rare
+  case that trips it, in exchange for never needing an alias analysis.
 - `expr as T`, but only for a checked, safe narrowing: `string` (or a
   wider string literal union) to a narrower string literal union, or a
   discriminated union to one of its members. Each accepted cast carries

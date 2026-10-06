@@ -597,6 +597,166 @@ fn set_entries_is_not_supported() {
     assert_eq!(codes(&main), ["PL3004"]);
 }
 
+#[test]
+fn map_foreach_visits_every_entry_in_insertion_order() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.set("c", 3);
+  let out = "";
+  m.forEach((v, k) => { out = out + k + "=" + v + ","; });
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "a=1,b=2,c=3,");
+}
+
+#[test]
+fn set_foreach_visits_every_value() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const s = new Set<number>();
+  s.add(1);
+  s.add(2);
+  s.add(3);
+  let out = "";
+  s.forEach((v) => { out = out + v + ","; });
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "1,2,3,");
+}
+
+#[test]
+fn map_keys_and_values_as_arrays() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  const ks = [...m.keys()];
+  const vs = m.values();
+  const sum = vs.reduce((acc, v) => acc + v, 0);
+  return <Screen title="Home"><Text>{ks.join(",") + "|" + sum}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "a,b|3");
+}
+
+#[test]
+fn set_keys_and_values_as_arrays() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const s = new Set<number>();
+  s.add(1);
+  s.add(2);
+  const ks = [...s.keys()];
+  const sum = ks.reduce((acc, v) => acc + v, 0);
+  return <Screen title="Home"><Text>{"" + sum}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "3");
+}
+
+// -- Array methods: concat/reduce (gap batch 3 item 3) -----------------------
+
+#[test]
+fn array_concat_joins_arrays() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const a = ["a", "b"];
+  const b = ["c", "d"];
+  const c = a.concat(b, ["e"]);
+  return <Screen title="Home"><Text>{c.join(",")}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "a,b,c,d,e");
+}
+
+#[test]
+fn array_concat_on_an_empty_array() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const a: number[] = [];
+  const b: number[] = [];
+  const c = a.concat(b);
+  return <Screen title="Home"><Text>{"" + c.length}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "0");
+}
+
+#[test]
+fn array_reduce_sums_with_an_initial_value() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const a = [1, 2, 3, 4];
+  const sum = a.reduce((acc, v) => acc + v, 0);
+  return <Screen title="Home"><Text>{"" + sum}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "10");
+}
+
+#[test]
+fn array_reduce_on_an_empty_array_returns_the_initial_value() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const a: number[] = [];
+  const sum = a.reduce((acc, v) => acc + v, 42);
+  return <Screen title="Home"><Text>{"" + sum}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "42");
+}
+
+#[test]
+fn array_reduce_with_index_builds_a_string() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const a = ["x", "y", "z"];
+  const out = a.reduce((acc, v, i) => acc + i + v, "");
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "0x1y2z");
+}
+
+#[test]
+fn array_reduce_without_an_initial_value_is_rejected() {
+    let main = with_app("const a = [1, 2, 3]; const sum = a.reduce((acc, v) => acc + v);");
+    assert_eq!(codes(&main), ["PL3006"]);
+}
+
 // -- 6. `int | null`, `boolean | null`, enum `| null` (HANDOFF.md item 2) ----
 //
 // These are boxed through the same box as `number | null` (`BoxI32`/
@@ -1073,6 +1233,179 @@ function Home() {
         + APP;
     let tree = run(&main);
     assert_eq!(text_of(&tree, ControlKind::Text), "no");
+}
+
+// -- Narrowing on member expressions (docs/GAPS.md "Found later") ---------
+
+#[test]
+fn nullish_coalesce_on_a_member_expression() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function sub(r: Row): string { return r.subtitle ?? "x"; }
+function Home() {
+  const r: Row = { subtitle: null };
+  const r2: Row = { subtitle: "hi" };
+  return <Screen title="Home"><Text>{sub(r) + "," + sub(r2)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "x,hi");
+}
+
+#[test]
+fn nullish_coalesce_on_optional_chaining() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function sub(r: Row | null): string { return r?.subtitle ?? "x"; }
+function Home() {
+  const r: Row = { subtitle: "hi" };
+  return <Screen title="Home"><Text>{sub(r) + "," + sub(null)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi,x");
+}
+
+#[test]
+fn ternary_narrows_a_member_expression() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function sub(r: Row): string { return r.subtitle !== null ? r.subtitle : "x"; }
+function Home() {
+  const r: Row = { subtitle: null };
+  const r2: Row = { subtitle: "hi" };
+  return <Screen title="Home"><Text>{sub(r) + "," + sub(r2)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "x,hi");
+}
+
+#[test]
+fn if_narrows_a_member_expression() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function sub(r: Row): string {
+  if (r.subtitle !== null) {
+    return r.subtitle;
+  }
+  return "x";
+}
+function Home() {
+  const r: Row = { subtitle: "hi" };
+  return <Screen title="Home"><Text>{sub(r)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi");
+}
+
+#[test]
+fn if_early_return_narrows_a_member_expression_for_the_rest_of_the_block() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function sub(r: Row): string {
+  if (r.subtitle === null) {
+    return "x";
+  }
+  return r.subtitle;
+}
+function Home() {
+  const r: Row = { subtitle: "hi" };
+  return <Screen title="Home"><Text>{sub(r)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi");
+}
+
+#[test]
+fn two_level_member_path_is_narrowed() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Inner { subtitle: string | null; }
+interface Row { inner: Inner; }
+function sub(r: Row): string { return r.inner.subtitle !== null ? r.inner.subtitle : "x"; }
+function Home() {
+  const r: Row = { inner: { subtitle: "hi" } };
+  return <Screen title="Home"><Text>{sub(r)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi");
+}
+
+#[test]
+fn member_narrowing_is_dropped_after_a_call() {
+    // Conservative rule (docs/language.md): a call between the test and the
+    // use drops member-path narrowing, even though this particular call
+    // cannot actually change `r.subtitle`.
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function noop(): void {}
+function sub(r: Row): string {
+  if (r.subtitle !== null) {
+    noop();
+    return r.subtitle;
+  }
+  return "x";
+}
+function Home() { return <Screen title="Home"><Text>{""}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL3001"]);
+}
+
+#[test]
+fn member_narrowing_is_dropped_after_an_assignment() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function sub(r: Row): string {
+  if (r.subtitle !== null) {
+    r.subtitle = r.subtitle;
+    return r.subtitle;
+  }
+  return "x";
+}
+function Home() { return <Screen title="Home"><Text>{""}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL3001"]);
+}
+
+#[test]
+fn if_early_return_narrows_a_member_expression_inside_a_closure() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+interface Row { subtitle: string | null; }
+function Home() {
+  const sub = (r: Row): string => {
+    const dummy = 1;
+    if (r.subtitle === null) {
+      return "x";
+    }
+    return r.subtitle;
+  };
+  const r: Row = { subtitle: "hi" };
+  return <Screen title="Home"><Text>{sub(r)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi");
 }
 
 #[test]
