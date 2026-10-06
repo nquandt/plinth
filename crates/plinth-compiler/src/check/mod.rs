@@ -100,6 +100,12 @@ pub enum StdFn {
     HubRemove,
     HubSearch,
     HubInstall,
+    HubAppInfo,
+    HubPin,
+    HubBlockPublisher,
+    HubUnblockPublisher,
+    HubCheckUpdates,
+    HubUpdate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -61,6 +61,12 @@ pub const HUB_NAMES: &[&str] = &[
     "remove",
     "search",
     "install",
+    "appInfo",
+    "pin",
+    "blockPublisher",
+    "unblockPublisher",
+    "checkUpdates",
+    "update",
 ];
 
 /// The capability names, from the shared map (`plinth-link`'s
@@ -129,6 +135,12 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "remove" => Binding::Std(StdFn::HubRemove),
             "search" => Binding::Std(StdFn::HubSearch),
             "install" => Binding::Std(StdFn::HubInstall),
+            "appInfo" => Binding::Std(StdFn::HubAppInfo),
+            "pin" => Binding::Std(StdFn::HubPin),
+            "blockPublisher" => Binding::Std(StdFn::HubBlockPublisher),
+            "unblockPublisher" => Binding::Std(StdFn::HubUnblockPublisher),
+            "checkUpdates" => Binding::Std(StdFn::HubCheckUpdates),
+            "update" => Binding::Std(StdFn::HubUpdate),
             _ => return None,
         }),
         StdModule::Ui => Some(match name {
@@ -596,10 +608,46 @@ impl Checker<'_> {
                 let id = self.coerce(id, &Type::String);
                 TExpr::new(TExprKind::Rt("hub_remove", vec![id]), Type::Void, span)
             }
-            StdFn::HubSearch | StdFn::HubInstall => {
+            StdFn::HubAppInfo => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                if !one_arg(self, "appInfo") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let id = self.expr_with(&args[0], &Type::String);
+                let id = self.coerce(id, &Type::String);
+                TExpr::new(TExprKind::Rt("hub_app_info", vec![id]), Type::String.nullable(), span)
+            }
+            StdFn::HubPin => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                if args.len() != 2 {
+                    self.err(code::ARG_COUNT, span, "`pin` takes an app id and a version (`\"\"` removes the pin)");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let id = self.expr_with(&args[0], &Type::String);
+                let id = self.coerce(id, &Type::String);
+                let version = self.expr_with(&args[1], &Type::String);
+                let version = self.coerce(version, &Type::String);
+                TExpr::new(TExprKind::Rt("hub_pin", vec![id, version]), Type::Void, span)
+            }
+            StdFn::HubBlockPublisher | StdFn::HubUnblockPublisher => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                let (name, rt_fn) = match f {
+                    StdFn::HubBlockPublisher => ("blockPublisher", "hub_block_publisher"),
+                    _ => ("unblockPublisher", "hub_unblock_publisher"),
+                };
+                if !one_arg(self, name) {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let key = self.expr_with(&args[0], &Type::String);
+                let key = self.coerce(key, &Type::String);
+                TExpr::new(TExprKind::Rt(rt_fn, vec![key]), Type::Void, span)
+            }
+            StdFn::HubSearch | StdFn::HubInstall | StdFn::HubCheckUpdates | StdFn::HubUpdate => {
                 self.require_capability(CAP_HUB_MANAGE, span);
                 let (name, rt_fn, what) = match f {
                     StdFn::HubSearch => ("search", "hub_search", "a query"),
+                    StdFn::HubCheckUpdates => ("checkUpdates", "hub_check_updates", "an app id (`\"\"` for every app)"),
+                    StdFn::HubUpdate => ("update", "hub_update", "an app id"),
                     _ => ("install", "hub_install", "an app id"),
                 };
                 if args.len() != 2 {
