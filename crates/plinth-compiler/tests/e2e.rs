@@ -246,3 +246,56 @@ fn notes_add_select_and_search() {
     h.fire(search, event::CHANGE, "zzzz-no-match".into());
     assert!(h.row_titles().is_empty());
 }
+
+// -- UI API 1.2: structure and stack navigation -----------------------------
+
+#[test]
+fn contacts_push_back_tabs_sheet_and_destructive_action() {
+    let art = build("contacts");
+    eprintln!("contacts: core {} KiB, component {} KiB", art.core_size / 1024, art.component.len() / 1024);
+    let mut h = Harness::start(&art.component);
+
+    // "list" is the only primary screen; "detail" is pushable only.
+    assert_eq!(h.tree.screens().count(), 2);
+    assert_eq!(h.tree.primary_screens().count(), 1);
+    assert_eq!(h.tree.current_root().unwrap().str_prop(prop::TITLE), Some("Contacts"));
+    assert!(!h.tree.can_go_back());
+
+    // Tabs: switching to "favorites" filters the list.
+    assert_eq!(h.row_titles(), ["Ada Lovelace", "Grace Hopper", "Alan Turing"]);
+    let tabs = h.one(ControlKind::Tabs, |_| true);
+    assert_eq!(h.tree.get(tabs).unwrap().str_prop(prop::ITEMS), Some("all\u{1}favorites"));
+    h.fire(tabs, event::CHANGE, "favorites".into());
+    assert_eq!(h.row_titles(), ["Ada Lovelace", "Grace Hopper"]);
+    h.fire(tabs, event::CHANGE, "all".into());
+
+    // Selecting a row pushes the detail screen (`navigate.push`).
+    let row = h.find(ControlKind::Row, |n| n.str_prop(prop::TITLE) == Some("Ada Lovelace"))[0];
+    h.fire(row, event::PRESS, Value::Null);
+    assert!(h.tree.can_go_back());
+    let detail = h.tree.current_root().unwrap();
+    assert_eq!(detail.str_prop(prop::TITLE), Some("Ada Lovelace"));
+
+    // Screen actions: Edit opens the Sheet; Save edits and closes it.
+    let edit = h.one(ControlKind::Action, |n| n.str_prop(prop::LABEL) == Some("Edit"));
+    h.fire(edit, event::PRESS, Value::Null);
+    let sheet = h.one(ControlKind::Sheet, |_| true);
+    assert!(h.tree.get(sheet).unwrap().bool_prop(prop::VALUE));
+    let name_field = h.tree.get(sheet).unwrap().children[0];
+    assert_eq!(h.tree.get(name_field).unwrap().str_prop(prop::LABEL), Some("Name"));
+    h.tree.set_local_prop(name_field, prop::VALUE, "Ada, Countess Lovelace".into());
+    h.fire(name_field, event::CHANGE, "Ada, Countess Lovelace".into());
+    h.fire(h.label("Save"), event::PRESS, Value::Null);
+    assert!(!h.tree.get(sheet).unwrap().bool_prop(prop::VALUE));
+    assert_eq!(h.tree.current_root().unwrap().str_prop(prop::TITLE), Some("Ada, Countess Lovelace"));
+
+    // The destructive Delete action: the host shows a confirmation dialog
+    // (SPEC.md §6.4) before firing `onPress`; at the protocol level, firing
+    // the handler deletes the contact and `navigate.back()` pops the stack.
+    let delete = h.one(ControlKind::Action, |n| n.str_prop(prop::LABEL) == Some("Delete"));
+    assert_eq!(h.tree.get(delete).unwrap().enum_prop(prop::ROLE), plinth_protocol::button_role::DESTRUCTIVE);
+    h.fire(delete, event::PRESS, Value::Null);
+    assert!(!h.tree.can_go_back());
+    assert_eq!(h.tree.current_root().unwrap().str_prop(prop::TITLE), Some("Contacts"));
+    assert_eq!(h.row_titles(), ["Grace Hopper", "Alan Turing"]);
+}

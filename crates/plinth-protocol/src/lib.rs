@@ -548,6 +548,6 @@ mod tests {
         assert_eq!(ControlKind::TextField.name(), "text-field");
         assert_eq!(prop::name(prop::VALUE), Some("value"));
         assert_eq!(button_role::DESTRUCTIVE, 2);
-        assert_eq!(UI_API_VERSION, "1.1");
+        assert_eq!(UI_API_VERSION, "1.2");
     }
 }
