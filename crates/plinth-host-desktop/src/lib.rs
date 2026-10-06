@@ -7,6 +7,7 @@ use gpui::{App, AppContext, Bounds, KeyBinding, WindowBounds, WindowOptions, act
 use plinth_runner_wasmtime::{Clipboard, Guest, Limits, Runner, kv::Kv, policy::Policy};
 use plinth_ui::{GuestPort, PlinthRoot};
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
@@ -118,8 +119,10 @@ impl Clipboard for SystemClipboard {
 
 struct WasmGuest {
     guest: Guest,
-    // The runner owns the engine's epoch ticker, so it lives as long as the guest.
-    _runner: Runner,
+    // The runner owns the engine's epoch ticker; several guests across
+    // several windows share one runner (`docs/HUB.md` §4.2, §12.2), so it
+    // is kept alive by reference count rather than owned here.
+    _runner: Arc<Runner>,
 }
 
 impl GuestPort for WasmGuest {
@@ -177,30 +180,26 @@ impl GuestPort for NoGuest {
     }
 }
 
-/// Instantiates a component and runs `init`. Builds the capability policy
-/// from `capabilities` (SPEC.md §11: a declared capability is granted;
-/// there is no consent UI yet, SPEC.md §11 stretch) and opens the
-/// `store.kv` file for `app_id`.
-fn start(component: &[u8], app_id: &str, capabilities: &[String], args: &[u8]) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
-    let policy = Policy::new(capabilities.iter().cloned());
-    start_with_policy(component, app_id, policy, args)
-}
-
-/// Like `start`, but with a policy the caller already built (for example
-/// from the Hub's grants store, `docs/HUB.md` §7, §12.4, phase H0 part 2),
-/// instead of "declared is granted".
-pub fn start_with_policy(component: &[u8], app_id: &str, policy: Policy, args: &[u8]) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
+/// Instantiates a component and runs `init`, with a policy the caller
+/// already built (for example from the Hub's grants store, `docs/HUB.md`
+/// §7, §12.4, phase H0 part 2) instead of "declared is granted", and a
+/// `Runner` the caller already has, shared across every app the process
+/// runs (`docs/HUB.md` §4.2, §12.2).
+pub fn start_with_policy(
+    runner: Arc<Runner>,
+    component: &[u8],
+    app_id: &str,
+    policy: Policy,
+    args: &[u8],
+) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
     let kv = Kv::open(&plinth_runner_wasmtime::kv::data_dir(), app_id).unwrap_or_else(|e| {
         log::warn!("store.kv unavailable for {app_id}: {e:#}");
         Kv::in_memory()
     });
     let clipboard: Box<dyn Clipboard> = Box::new(SystemClipboard);
-    let loaded = Runner::new().and_then(|runner| {
-        let guest = runner.load_with_policy(component, Limits::default(), policy, kv, clipboard)?;
-        Ok((runner, guest))
-    });
+    let loaded = runner.load_with_policy(component, Limits::default(), policy, kv, clipboard);
     match loaded {
-        Ok((runner, mut guest)) => {
+        Ok(mut guest) => {
             // Hot reload (SPEC.md §13): `args` is the previous instance's
             // signal snapshot, or empty on the first start. A release
             // build of the app ignores it (it never registered anything).
@@ -217,39 +216,81 @@ pub fn start_with_policy(component: &[u8], app_id: &str, policy: Policy, args: &
     }
 }
 
-/// Opens the app window and runs until it closes. Each component that
-/// arrives on `reloads` replaces the running app (hot reload).
+/// Registers the app-level behavior that every host window shares: `Cmd/
+/// Ctrl+Q` quits, and the process exits once the last window closes
+/// (`docs/HUB.md` §4.2: closing one app window must not close the others,
+/// so this is set up once per `gpui::App`, not once per window). Callers
+/// that open more than one window (the Hub, later) call this one time
+/// before the first `open_app`.
+pub fn init_app(cx: &mut App) {
+    plinth_ui::init(cx);
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
+    cx.on_window_closed(|cx, _| {
+        if cx.windows().is_empty() {
+            cx.quit();
+        }
+    })
+    .detach();
+}
+
+/// Opens one app window: its own guest instance (on `runner`, which may be
+/// shared with other open app windows, `docs/HUB.md` §4.2, §12.2), its own
+/// policy, data directory (the `store.kv` file is keyed by `app.app_id`),
+/// assets and `PlinthRoot`. Closing this window does not close any other;
+/// the caller's `gpui::App` already arranged (`init_app`) for the process
+/// to exit when the last window closes. Any code, including the future
+/// Hub UI, can call this to launch an app.
+pub fn open_app(cx: &mut App, runner: Arc<Runner>, app: HostApp, policy: Policy) -> gpui::WindowHandle<PlinthRoot> {
+    let HostApp { component, title, accent, app_id, assets, .. } = app;
+    let (port, init) = start_with_policy(runner, &component, &app_id, policy, &[]);
+    let assets = Arc::new(assets);
+
+    let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
+    let options = WindowOptions::new()
+        .window_bounds(Some(WindowBounds::Windowed(bounds)))
+        .titlebar(Some(gpui::TitlebarOptions { title: Some(title.into()), ..Default::default() }));
+    let window = cx
+        .open_window(options, move |_, cx| {
+            cx.new(move |cx| match init {
+                Ok(commits) => PlinthRoot::with_assets(port, commits, accent, assets, cx),
+                Err(e) => PlinthRoot::stopped(port, e, accent, cx),
+            })
+        })
+        .expect("open the window");
+
+    // Drives this window's `plinth:time` timers (SPEC.md §8.4, §8.5,
+    // §9.4). Each app window polls its own guest independently
+    // (`docs/HUB.md` §4.2): one app's timers never touch another's.
+    cx.spawn(async move |cx| loop {
+        cx.background_executor().timer(Duration::from_millis(15)).await;
+        if window.update(cx, |root, _, cx| root.poll_timers(cx)).is_err() {
+            return;
+        }
+    })
+    .detach();
+
+    window
+}
+
+/// Opens the app window and runs until the process's last window closes.
+/// Each component that arrives on `reloads` replaces the running app in
+/// that same window (hot reload); `plinth dev`/`plinth run` only ever open
+/// one window, but the window closing no longer quits other windows a
+/// later caller (the Hub) may have opened in the same process.
 pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
-    let (port, init) = start(&app.component, &app.app_id, &app.capabilities, &[]);
-    let HostApp { title, accent, app_id, capabilities, assets, .. } = app;
-    let assets = std::sync::Arc::new(assets);
+    let runner = Arc::new(Runner::new()?);
+    let app_id = app.app_id.clone();
+    let capabilities = app.capabilities.clone();
+    let policy = Policy::new(capabilities.iter().cloned());
 
     gpui_platform::application().run(move |cx: &mut App| {
-        plinth_ui::init(cx);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-
-        let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
-        let options = WindowOptions::new()
-            .window_bounds(Some(WindowBounds::Windowed(bounds)))
-            .titlebar(Some(gpui::TitlebarOptions { title: Some(title.into()), ..Default::default() }));
-        let window = cx
-            .open_window(options, move |_, cx| {
-                cx.new(move |cx| match init {
-                    Ok(commits) => PlinthRoot::with_assets(port, commits, accent, assets, cx),
-                    Err(e) => PlinthRoot::stopped(port, e, accent, cx),
-                })
-            })
-            .expect("open the window");
+        init_app(cx);
+        let window = open_app(cx, runner.clone(), app, policy);
         cx.activate(true);
 
         if let Some(rx) = reloads {
+            let runner = runner.clone();
             let app_id = app_id.clone();
             let capabilities = capabilities.clone();
             cx.spawn(async move |cx| {
@@ -264,9 +305,18 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
                         }
                     }
                     if let Some(bytes) = latest {
+                        let runner = runner.clone();
+                        let app_id = app_id.clone();
+                        let capabilities = capabilities.clone();
                         let ok = window
                             .update(cx, |root, _, cx| {
-                                root.reload(|args| start(&bytes, &app_id, &capabilities, args), cx)
+                                root.reload(
+                                    |args| {
+                                        let policy = Policy::new(capabilities.iter().cloned());
+                                        start_with_policy(runner, &bytes, &app_id, policy, args)
+                                    },
+                                    cx,
+                                )
                             })
                             .is_ok();
                         if !ok {
@@ -278,18 +328,6 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
             })
             .detach();
         }
-
-        // Drives `plinth:time` timers (SPEC.md §8.4, §8.5, §9.4): a short
-        // fixed tick is simpler and robust enough than sleeping until the
-        // next exact deadline, and `poll_timers` is a cheap no-op when
-        // nothing is due.
-        cx.spawn(async move |cx| loop {
-            cx.background_executor().timer(Duration::from_millis(15)).await;
-            if window.update(cx, |root, _, cx| root.poll_timers(cx)).is_err() {
-                return;
-            }
-        })
-        .detach();
     });
     Ok(())
 }
@@ -360,45 +398,21 @@ pub fn run_from_hub(hub: &plinth_hub::Hub, app_id: &str) -> Result<()> {
     let component = with_runtime(pkg.component, &declared)?;
     let assets: std::collections::HashMap<String, Vec<u8>> =
         pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
-    run_with_policy(component, title, accent, app_id.to_owned(), policy, assets)
+    let host_app = HostApp { component, title, accent, app_id: app_id.to_owned(), capabilities: declared, assets };
+    run_with_policy(host_app, policy)
 }
 
-/// Opens the app window with a policy the caller already built (`Policy`
-/// from grants, instead of "declared is granted"). No hot reload: this
-/// path is for library apps, not `plinth dev`.
-fn run_with_policy(
-    component: Vec<u8>,
-    title: String,
-    accent: String,
-    app_id: String,
-    policy: Policy,
-    assets: std::collections::HashMap<String, Vec<u8>>,
-) -> Result<()> {
-    let (port, init) = start_with_policy(&component, &app_id, policy, &[]);
-    let assets = std::sync::Arc::new(assets);
-
+/// Opens one app window, alone in its own process, with a policy the
+/// caller already built (`Policy` from grants, instead of "declared is
+/// granted"). No hot reload: this path is for library apps, not `plinth
+/// dev`. The Hub UI (`docs/HUB.md` §4.2, step 2 of this phase) will instead
+/// keep its own process alive and call `open_app` directly for each app it
+/// launches, so several run at once beside the Hub window.
+fn run_with_policy(app: HostApp, policy: Policy) -> Result<()> {
+    let runner = Arc::new(Runner::new()?);
     gpui_platform::application().run(move |cx: &mut App| {
-        plinth_ui::init(cx);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-
-        let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
-        let options = WindowOptions::new()
-            .window_bounds(Some(WindowBounds::Windowed(bounds)))
-            .titlebar(Some(gpui::TitlebarOptions { title: Some(title.clone().into()), ..Default::default() }));
-        cx.open_window(options, move |_, cx| {
-            cx.new(move |cx| match init {
-                Ok(commits) => PlinthRoot::with_assets(port, commits, accent, assets, cx),
-                Err(e) => PlinthRoot::stopped(port, e, accent, cx),
-            })
-        })
-        .expect("open the window");
+        init_app(cx);
+        open_app(cx, runner.clone(), app, policy);
         cx.activate(true);
     });
     Ok(())
