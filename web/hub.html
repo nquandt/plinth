@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plinth apps</title>
+    <link rel="stylesheet" href="style.css" />
+    <style>
+      /* The web App Hub (docs/web-hub.md). Colors come from the tokens in
+         style.css; only the risk colors are new. */
+      :root {
+        --hub-warn: #f0b429;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --hub-warn: #7a4d00;
+        }
+      }
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        line-height: 1.45;
+      }
+      .hub-header {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--pl-border);
+        background: var(--pl-surface);
+      }
+      .hub-brand {
+        font-weight: 700;
+        color: var(--pl-text);
+        text-decoration: none;
+      }
+      .hub-registry {
+        color: var(--pl-muted);
+        font-size: 0.9rem;
+      }
+      .hub-main {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 16px;
+      }
+      .hub-main:focus {
+        outline: none;
+      }
+      .hub-main h1 {
+        font-size: 1.5rem;
+        margin: 8px 0 12px;
+      }
+      .hub-main h1:focus {
+        outline: none;
+      }
+      .hub-search {
+        display: block;
+        margin: 0 0 8px;
+      }
+      .hub-search label {
+        display: block;
+        font-size: 0.85rem;
+        color: var(--pl-muted);
+        margin-bottom: 4px;
+      }
+      .hub-count {
+        color: var(--pl-muted);
+        font-size: 0.9rem;
+        margin: 0 0 12px;
+      }
+      .hub-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 10px;
+      }
+      @media (min-width: 640px) {
+        .hub-list {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+      .hub-card {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        height: 100%;
+        background: var(--pl-surface);
+        border: 1px solid var(--pl-border);
+        border-radius: 10px;
+        padding: 12px;
+        color: var(--pl-text);
+        text-decoration: none;
+      }
+      .hub-card:hover {
+        border-color: var(--pl-accent);
+      }
+      .hub-card-body {
+        min-width: 0;
+        flex: 1;
+      }
+      .hub-card h2 {
+        font-size: 1.05rem;
+        margin: 0;
+      }
+      .hub-meta {
+        color: var(--pl-muted);
+        font-size: 0.85rem;
+        margin: 2px 0 0;
+        overflow-wrap: anywhere;
+      }
+      .hub-summary {
+        margin: 6px 0 0;
+      }
+      .hub-icon {
+        flex: none;
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        object-fit: cover;
+        background: var(--pl-accent);
+        color: var(--pl-accent-text);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 1.3rem;
+      }
+      .hub-icon-large {
+        width: 72px;
+        height: 72px;
+        border-radius: 16px;
+        font-size: 2rem;
+      }
+      .hub-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 8px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .hub-chip {
+        border: 1px solid var(--pl-border);
+        border-radius: 999px;
+        padding: 1px 8px;
+        font-size: 0.8rem;
+        color: var(--pl-text);
+      }
+      .hub-risk-medium {
+        border-color: var(--hub-warn);
+        color: var(--hub-warn);
+      }
+      .hub-risk-high,
+      .hub-risk-unknown {
+        border-color: var(--pl-danger);
+        color: var(--pl-danger);
+      }
+      .hub-note {
+        border: 1px solid var(--hub-warn);
+        border-radius: 8px;
+        padding: 8px 12px;
+        margin: 12px 0;
+      }
+      .hub-note-danger {
+        border-color: var(--pl-danger);
+      }
+      .hub-back {
+        display: inline-block;
+        color: var(--pl-accent);
+        margin: 4px 0 8px;
+      }
+      @media (prefers-color-scheme: dark) {
+        .hub-back {
+          color: #8fb0ff;
+        }
+      }
+      .hub-app-head {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+      }
+      .hub-app-head h1 {
+        margin: 0;
+      }
+      .hub-open {
+        display: inline-block;
+        background: var(--pl-accent);
+        color: var(--pl-accent-text);
+        border-radius: 8px;
+        padding: 10px 22px;
+        font-weight: 600;
+        text-decoration: none;
+        margin: 16px 0 4px;
+      }
+      .hub-section {
+        margin: 24px 0 0;
+      }
+      .hub-section h2 {
+        font-size: 1.1rem;
+        margin: 0 0 8px;
+      }
+      .hub-caps {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 8px;
+      }
+      .hub-cap {
+        background: var(--pl-surface);
+        border: 1px solid var(--pl-border);
+        border-radius: 8px;
+        padding: 10px 12px;
+      }
+      .hub-cap-head {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: baseline;
+        justify-content: space-between;
+      }
+      .hub-cap-title {
+        font-weight: 600;
+        margin: 0;
+      }
+      .hub-cap p {
+        margin: 4px 0 0;
+      }
+      .hub-code {
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 0.85rem;
+        color: var(--pl-muted);
+      }
+      .hub-support-no {
+        color: var(--pl-danger);
+        font-weight: 600;
+      }
+      .hub-support-limited {
+        color: var(--hub-warn);
+        font-weight: 600;
+      }
+      .hub-table-wrap {
+        overflow-x: auto;
+      }
+      .hub-table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 0.9rem;
+      }
+      .hub-table th,
+      .hub-table td {
+        text-align: left;
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--pl-border);
+        white-space: nowrap;
+      }
+      .hub-error {
+        color: var(--pl-danger);
+        white-space: pre-wrap;
+      }
+      .hub-visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="hub-header">
+      <a class="hub-brand" href="#/">Plinth apps</a>
+      <span class="hub-registry" id="hub-registry"></span>
+    </header>
+    <main class="hub-main" id="hub-main" tabindex="-1">
+      <p>Loading&hellip;</p>
+    </main>
+    <div class="hub-visually-hidden" id="hub-status" role="status" aria-live="polite"></div>
+    <script type="module" src="hub.js"></script>
+  </body>
+</html>

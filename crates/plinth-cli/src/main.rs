@@ -65,8 +65,9 @@ usage:
                                    a hub-wide switch for a capability
   plinth registry build <folder> [--with-core]
                                    generate a static registry from .plnt files
-  plinth registry serve <folder> [--port N]
-                                   serve a static registry on 127.0.0.1
+  plinth registry serve <folder> [--port N] [--web]
+                                   serve a static registry on 127.0.0.1;
+                                   --web also serves the web App Hub at /
 
 The project directory defaults to the current directory.";
 
@@ -981,9 +982,12 @@ fn registry_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Some("serve") => {
-            let folder = args.get(1).context("usage: plinth registry serve <folder> [--port N]")?;
-            let port: u16 = raw.iter().position(|a| *a == "--port").and_then(|i| raw.get(i + 1)).and_then(|p| p.parse().ok()).unwrap_or(8080);
-            registry_cmd::serve(Path::new(folder), port)?;
+            let folder = args.get(1).context("usage: plinth registry serve <folder> [--port N] [--web]")?;
+            let port: u16 = match raw.iter().position(|a| *a == "--port") {
+                Some(i) => raw.get(i + 1).and_then(|p| p.parse().ok()).context("--port needs a number from 0 to 65535")?,
+                None => 8080,
+            };
+            registry_cmd::serve(Path::new(folder), port, raw.iter().any(|a| *a == "--web"))?;
             Ok(ExitCode::SUCCESS)
         }
         Some(other) => bail!("unknown `plinth registry {other}`; use build or serve"),
