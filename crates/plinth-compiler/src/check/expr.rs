@@ -482,7 +482,7 @@ impl Checker<'_> {
                         return self.super_method_call(prop, *prop_span, args, span);
                     }
                     if let Some(Binding::StdObj(o)) = self.lookup(name) {
-                        return self.std_obj_call(o, prop, *prop_span, args, span);
+                        return self.std_obj_call(o, prop, *prop_span, type_args, args, span);
                     }
                 }
                 let o = self.expr(obj, None);
@@ -2210,5 +2210,260 @@ impl Checker<'_> {
         let acc_r = TExpr::new(TExprKind::Var(acc_v), Type::String, span);
         let sum = TExpr::new(TExprKind::Concat(bx(acc_r), bx(piece)), Type::String, span);
         TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(acc_v), bx(sum)), Type::String, span))
+    }
+
+    // -- JSON.parse<T> (plinth:core, SPEC.md §4.7) -------------------------
+    //
+    // The decoder is generated per static type `T`, like `json_stringify_value`
+    // but reversed: it reads from the runtime's cursor (`crates/plinth-rt/src/json.rs`)
+    // and keeps going after a failure (every `json_*` read then returns a
+    // safe default), so the generated TIR never branches on failure itself.
+    // Only the very end checks `json_finish()` and picks `null` if anything
+    // along the way failed.
+
+    /// Builds the `T | null` expression for `JSON.parse<T>(text)`.
+    pub(super) fn json_parse_value(&mut self, text: TExpr, ty: &Type, span: Span) -> TExpr {
+        if ty.is_error() {
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        let result_ty = match ty {
+            Type::Nullable(_) => ty.clone(),
+            _ => Type::Nullable(Box::new(ty.clone())),
+        };
+        let begin = TExpr::new(TExprKind::Rt("json_begin", vec![text]), Type::Void, span);
+        let decoded = self.json_decode(ty, span);
+        let decoded_v = self.temp(ty.clone());
+        let decoded_r = TExpr::new(TExprKind::Var(decoded_v), ty.clone(), span);
+        let finish_ok = TExpr::new(TExprKind::Rt("json_finish", Vec::new()), Type::Bool, span);
+        let success = match ty {
+            Type::Nullable(_) => decoded_r,
+            _ => self.json_box_nullable(decoded_r, ty, span),
+        };
+        let failure = TExpr::new(TExprKind::Null, result_ty.clone(), span);
+        let tail = TExpr::new(TExprKind::Cond(bx(finish_ok), bx(success), bx(failure)), result_ty.clone(), span);
+        let body = vec![TStmt::Expr(begin), TStmt::Let(decoded_v, Some(decoded))];
+        TExpr::new(TExprKind::Block(body, bx(tail)), result_ty, span)
+    }
+
+    /// `inner` -> `inner | null` (a value already in hand, not read from JSON).
+    fn json_box_nullable(&self, value: TExpr, inner: &Type, span: Span) -> TExpr {
+        let nullable_ty = Type::Nullable(Box::new(inner.clone()));
+        match inner.repr() {
+            crate::types::Repr::F64 => TExpr::new(TExprKind::Coerce(Coercion::BoxNum, bx(value)), nullable_ty, span),
+            crate::types::Repr::I32 => TExpr::new(TExprKind::Coerce(Coercion::BoxI32, bx(value)), nullable_ty, span),
+            _ => TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(value)), nullable_ty, span),
+        }
+    }
+
+    /// Reads one value of type `ty` from the cursor.
+    fn json_decode(&mut self, ty: &Type, span: Span) -> TExpr {
+        match ty {
+            Type::Number => TExpr::new(TExprKind::Rt("json_read_num", Vec::new()), Type::Number, span),
+            Type::Int => TExpr::new(TExprKind::Rt("json_read_int", Vec::new()), Type::Int, span),
+            Type::Bool => TExpr::new(TExprKind::Rt("json_read_bool", Vec::new()), Type::Bool, span),
+            Type::String => TExpr::new(TExprKind::Rt("json_read_str", Vec::new()), Type::String, span),
+            Type::StrLits(lits) => self.json_decode_str_lits(lits.clone(), span),
+            Type::Null => {
+                let read = TExpr::new(TExprKind::Rt("json_read_null", Vec::new()), Type::Void, span);
+                let null_v = TExpr::new(TExprKind::Null, Type::Null, span);
+                TExpr::new(TExprKind::Block(vec![TStmt::Expr(read)], bx(null_v)), Type::Null, span)
+            }
+            Type::Nullable(inner) => self.json_decode_nullable(inner, span),
+            Type::Array(elem) => self.json_decode_array(elem, span),
+            Type::Struct(sid) => self.json_decode_struct(*sid, span),
+            Type::Map(k, v) if **k == Type::String => self.json_decode_map(v, span),
+            Type::Error => TExpr::new(TExprKind::Null, Type::Error, span),
+            other => {
+                let msg = format!("`JSON.parse` does not support a value of type `{}`", self.show(other));
+                self.err(code::TYPE_MISMATCH, span, msg);
+                TExpr::new(TExprKind::Null, Type::Error, span)
+            }
+        }
+    }
+
+    fn json_decode_str_lits(&mut self, lits: Rc<[String]>, span: Span) -> TExpr {
+        let v = self.temp(Type::String);
+        let v_r = TExpr::new(TExprKind::Var(v), Type::String, span);
+        let read = TExpr::new(TExprKind::Rt("json_read_str", Vec::new()), Type::String, span);
+        let mut cond: Option<TExpr> = None;
+        for lit in lits.iter() {
+            let eq = TExpr::new(
+                TExprKind::Cmp(CmpOp::Eq, EqKind::Str, bx(v_r.clone()), bx(TExpr::new(TExprKind::Str(lit.clone()), Type::String, span))),
+                Type::Bool,
+                span,
+            );
+            cond = Some(match cond {
+                Some(c) => TExpr::new(TExprKind::Or(bx(c), bx(eq)), Type::Bool, span),
+                None => eq,
+            });
+        }
+        let matched = cond.unwrap_or_else(|| TExpr::new(TExprKind::Bool(false), Type::Bool, span));
+        let not_matched = TExpr::new(TExprKind::Not(bx(matched)), Type::Bool, span);
+        let fail_call = TExpr::new(TExprKind::Rt("json_fail", Vec::new()), Type::Void, span);
+        let guard = TStmt::If(not_matched, vec![TStmt::Expr(fail_call)], Vec::new());
+        let result = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(v_r)), Type::StrLits(lits.clone()), span);
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(v, Some(read)), guard], bx(result)), Type::StrLits(lits), span)
+    }
+
+    fn json_decode_nullable(&mut self, inner: &Type, span: Span) -> TExpr {
+        let kind = TExpr::new(TExprKind::Rt("json_peek_kind", Vec::new()), Type::Int, span);
+        let is_null = TExpr::new(
+            TExprKind::Cmp(CmpOp::Eq, EqKind::I32, bx(kind), bx(TExpr::new(TExprKind::Num(0.0), Type::Int, span))),
+            Type::Bool,
+            span,
+        );
+        let nullable_ty = Type::Nullable(Box::new(inner.clone()));
+        let consume = TExpr::new(TExprKind::Rt("json_read_null", Vec::new()), Type::Void, span);
+        let null_v = TExpr::new(TExprKind::Null, nullable_ty.clone(), span);
+        let null_branch = TExpr::new(TExprKind::Block(vec![TStmt::Expr(consume)], bx(null_v)), nullable_ty.clone(), span);
+        let inner_val = self.json_decode(inner, span);
+        let inner_branch = self.json_box_nullable(inner_val, inner, span);
+        TExpr::new(TExprKind::Cond(bx(is_null), bx(null_branch), bx(inner_branch)), nullable_ty, span)
+    }
+
+    fn json_decode_array(&mut self, elem_ty: &Type, span: Span) -> TExpr {
+        let arr_ty = Type::Array(Box::new(elem_ty.clone()));
+        let arr_v = self.temp(arr_ty.clone());
+        let arr_r = TExpr::new(TExprKind::Var(arr_v), arr_ty.clone(), span);
+        let begin = TExpr::new(TExprKind::Rt("json_arr_begin", Vec::new()), Type::Void, span);
+        let next = TExpr::new(TExprKind::Rt("json_arr_next", Vec::new()), Type::Bool, span);
+        let elem_val = self.json_decode(elem_ty, span);
+        let push = self.arr_push_discard(arr_r.clone(), elem_val, span);
+        let id = self.prog.new_loop();
+        let loop_stmt = TStmt::Loop { id, cond: Some(next), test_after: false, update: None, body: vec![push] };
+        let body = vec![
+            TStmt::Let(arr_v, Some(TExpr::new(TExprKind::ArrayLit(Vec::new()), arr_ty.clone(), span))),
+            TStmt::Expr(begin),
+            loop_stmt,
+        ];
+        TExpr::new(TExprKind::Block(body, bx(arr_r)), arr_ty, span)
+    }
+
+    /// An object with a known shape: a `while (true)` loop over the keys
+    /// that the cursor reports, matching each against the field names. An
+    /// unknown key (or any key, for an empty-struct edge case) is skipped.
+    fn json_decode_struct(&mut self, sid: crate::types::StructId, span: Span) -> TExpr {
+        let fields = self.prog.structs[sid as usize].fields.clone();
+        let field_vars: Vec<VarId> = fields.iter().map(|f| self.temp(f.ty.clone())).collect();
+        let seen_vars: Vec<VarId> = fields.iter().map(|_| self.temp(Type::Bool)).collect();
+
+        let mut stmts = Vec::new();
+        for (i, f) in fields.iter().enumerate() {
+            let default = self.json_default(&f.ty, span);
+            stmts.push(TStmt::Let(field_vars[i], Some(default)));
+            stmts.push(TStmt::Let(seen_vars[i], Some(TExpr::new(TExprKind::Bool(false), Type::Bool, span))));
+        }
+        stmts.push(TStmt::Expr(TExpr::new(TExprKind::Rt("json_obj_begin", Vec::new()), Type::Void, span)));
+
+        let key_v = self.temp(Type::String);
+        let key_r = TExpr::new(TExprKind::Var(key_v), Type::String, span);
+        let next_key = TExpr::new(TExprKind::Rt("json_obj_next_key", Vec::new()), Type::String, span);
+        let assign_key = TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(key_v), bx(next_key)), Type::String, span));
+        let is_none = TExpr::new(TExprKind::IsNull(bx(key_r.clone())), Type::Bool, span);
+        let break_if_none = TStmt::If(is_none, vec![TStmt::Break], Vec::new());
+
+        let mut chain: Vec<TStmt> = vec![TStmt::Expr(TExpr::new(TExprKind::Rt("json_skip_value", Vec::new()), Type::Void, span))];
+        for (i, f) in fields.iter().enumerate().rev() {
+            let eq = TExpr::new(
+                TExprKind::Cmp(CmpOp::Eq, EqKind::Str, bx(key_r.clone()), bx(TExpr::new(TExprKind::Str(f.name.clone()), Type::String, span))),
+                Type::Bool,
+                span,
+            );
+            let decode_val = self.json_decode(&f.ty, span);
+            let assign_field = TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(field_vars[i]), bx(decode_val)), f.ty.clone(), span));
+            let mark_seen = TStmt::Expr(TExpr::new(
+                TExprKind::Assign(Place::Var(seen_vars[i]), bx(TExpr::new(TExprKind::Bool(true), Type::Bool, span))),
+                Type::Bool,
+                span,
+            ));
+            chain = vec![TStmt::If(eq, vec![assign_field, mark_seen], chain)];
+        }
+
+        let id = self.prog.new_loop();
+        let mut loop_body = vec![assign_key, break_if_none];
+        loop_body.extend(chain);
+        stmts.push(TStmt::Let(key_v, Some(TExpr::new(TExprKind::Null, Type::String, span))));
+        stmts.push(TStmt::Loop { id, cond: None, test_after: false, update: None, body: loop_body });
+
+        for (i, f) in fields.iter().enumerate() {
+            if f.optional {
+                continue;
+            }
+            let not_seen = TExpr::new(TExprKind::Not(bx(TExpr::new(TExprKind::Var(seen_vars[i]), Type::Bool, span))), Type::Bool, span);
+            let fail_call = TExpr::new(TExprKind::Rt("json_fail", Vec::new()), Type::Void, span);
+            stmts.push(TStmt::If(not_seen, vec![TStmt::Expr(fail_call)], Vec::new()));
+        }
+
+        let values: Vec<TExpr> = field_vars.iter().zip(fields.iter()).map(|(v, f)| TExpr::new(TExprKind::Var(*v), f.ty.clone(), span)).collect();
+        let lit = TExpr::new(TExprKind::StructLit(sid, values), Type::Struct(sid), span);
+        TExpr::new(TExprKind::Block(stmts, bx(lit)), Type::Struct(sid), span)
+    }
+
+    /// `Map<string, V>` from a JSON object: the same key loop as a struct,
+    /// but every key is accepted and pushed into the keys/values arrays.
+    fn json_decode_map(&mut self, v_ty: &Type, span: Span) -> TExpr {
+        let sid = self.map_struct(&Type::String, v_ty);
+        let map_ty = Type::Map(Box::new(Type::String), Box::new(v_ty.clone()));
+        let keys_ty = Type::Array(Box::new(Type::String));
+        let vals_ty = Type::Array(Box::new(v_ty.clone()));
+        let keys_v = self.temp(keys_ty.clone());
+        let vals_v = self.temp(vals_ty.clone());
+        let keys_r = TExpr::new(TExprKind::Var(keys_v), keys_ty.clone(), span);
+        let vals_r = TExpr::new(TExprKind::Var(vals_v), vals_ty.clone(), span);
+
+        let begin = TExpr::new(TExprKind::Rt("json_obj_begin", Vec::new()), Type::Void, span);
+        let key_v = self.temp(Type::String);
+        let key_r = TExpr::new(TExprKind::Var(key_v), Type::String, span);
+        let next_key = TExpr::new(TExprKind::Rt("json_obj_next_key", Vec::new()), Type::String, span);
+        let assign_key = TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(key_v), bx(next_key)), Type::String, span));
+        let is_none = TExpr::new(TExprKind::IsNull(bx(key_r.clone())), Type::Bool, span);
+        let break_if_none = TStmt::If(is_none, vec![TStmt::Break], Vec::new());
+        let val = self.json_decode(v_ty, span);
+        let push_key = self.arr_push_discard(keys_r.clone(), key_r.clone(), span);
+        let push_val = self.arr_push_discard(vals_r.clone(), val, span);
+
+        let id = self.prog.new_loop();
+        let loop_stmt = TStmt::Loop { id, cond: None, test_after: false, update: None, body: vec![assign_key, break_if_none, push_key, push_val] };
+        let body = vec![
+            TStmt::Let(keys_v, Some(TExpr::new(TExprKind::ArrayLit(Vec::new()), keys_ty, span))),
+            TStmt::Let(vals_v, Some(TExpr::new(TExprKind::ArrayLit(Vec::new()), vals_ty, span))),
+            TStmt::Let(key_v, Some(TExpr::new(TExprKind::Null, Type::String, span))),
+            TStmt::Expr(begin),
+            loop_stmt,
+        ];
+        let lit = TExpr::new(TExprKind::StructLit(sid, vec![keys_r, vals_r]), map_ty.clone(), span);
+        TExpr::new(TExprKind::Block(body, bx(lit)), map_ty, span)
+    }
+
+    /// A safe placeholder value of type `ty`, used to initialize a struct
+    /// field before the decoder has seen it (and, for a missing required
+    /// field, never will: `json_fail` already marked the parse failed, and
+    /// the caller discards the whole result in favor of `null`).
+    fn json_default(&mut self, ty: &Type, span: Span) -> TExpr {
+        match ty {
+            Type::Number => TExpr::new(TExprKind::Num(0.0), Type::Number, span),
+            Type::Int => TExpr::new(TExprKind::Num(0.0), Type::Int, span),
+            Type::Bool => TExpr::new(TExprKind::Bool(false), Type::Bool, span),
+            Type::String => TExpr::new(TExprKind::Str(String::new()), Type::String, span),
+            Type::StrLits(lits) => {
+                let first = lits.first().cloned().unwrap_or_default();
+                let s = TExpr::new(TExprKind::Str(first), Type::String, span);
+                TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(s)), ty.clone(), span)
+            }
+            Type::Nullable(_) => TExpr::new(TExprKind::Null, ty.clone(), span),
+            Type::Array(elem) => TExpr::new(TExprKind::ArrayLit(Vec::new()), Type::Array(elem.clone()), span),
+            Type::Struct(sid) => {
+                let fields = self.prog.structs[*sid as usize].fields.clone();
+                let values = fields.iter().map(|f| self.json_default(&f.ty, span)).collect();
+                TExpr::new(TExprKind::StructLit(*sid, values), ty.clone(), span)
+            }
+            Type::Map(k, v) => {
+                let sid = self.map_struct(k, v);
+                let ka = TExpr::new(TExprKind::ArrayLit(Vec::new()), Type::Array(k.clone()), span);
+                let va = TExpr::new(TExprKind::ArrayLit(Vec::new()), Type::Array(v.clone()), span);
+                TExpr::new(TExprKind::StructLit(sid, vec![ka, va]), ty.clone(), span)
+            }
+            _ => TExpr::new(TExprKind::Null, ty.clone(), span),
+        }
     }
 }

@@ -114,6 +114,22 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     // -- JSON (SPEC.md §4.7) -----------------------------------------------
     ("json_num_str", &[F64], &[I32]),
     ("json_quote_str", &[I32], &[I32]),
+    // -- JSON.parse (SPEC.md §4.7) -----------------------------------------
+    ("json_begin", &[I32], &[]),
+    ("json_ok", &[], &[I32]),
+    ("json_finish", &[], &[I32]),
+    ("json_fail", &[], &[]),
+    ("json_peek_kind", &[], &[I32]),
+    ("json_read_null", &[], &[]),
+    ("json_read_bool", &[], &[I32]),
+    ("json_read_num", &[], &[F64]),
+    ("json_read_int", &[], &[I32]),
+    ("json_read_str", &[], &[I32]),
+    ("json_skip_value", &[], &[]),
+    ("json_arr_begin", &[], &[]),
+    ("json_arr_next", &[], &[I32]),
+    ("json_obj_begin", &[], &[]),
+    ("json_obj_next_key", &[], &[I32]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -133,13 +149,31 @@ pub const CORE_MAJOR: u32 = 1;
 /// needs the highest minor version among the functions that it imports, so
 /// an app that uses only 1.0 functions still runs on a 1.0 core. Add each
 /// new function here with the new `CORE_MINOR`.
-pub const ADDED_IN: &[(&str, u32)] = &[("json_num_str", 1), ("json_quote_str", 1)];
+pub const ADDED_IN: &[(&str, u32)] = &[
+    ("json_num_str", 1),
+    ("json_quote_str", 1),
+    ("json_begin", 2),
+    ("json_ok", 2),
+    ("json_finish", 2),
+    ("json_fail", 2),
+    ("json_peek_kind", 2),
+    ("json_read_null", 2),
+    ("json_read_bool", 2),
+    ("json_read_num", 2),
+    ("json_read_int", 2),
+    ("json_read_str", 2),
+    ("json_skip_value", 2),
+    ("json_arr_begin", 2),
+    ("json_arr_next", 2),
+    ("json_obj_begin", 2),
+    ("json_obj_next_key", 2),
+];
 
 /// The minor version that added `name` (0 for the functions of 1.0).
 pub fn added_in(name: &str) -> u32 {
     ADDED_IN.iter().find(|(n, _)| *n == name).map_or(0, |(_, m)| *m)
 }
-pub const CORE_MINOR: u32 = 1;
+pub const CORE_MINOR: u32 = 2;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;

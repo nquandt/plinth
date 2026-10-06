@@ -141,7 +141,7 @@ The closed world is enforced at three levels:
 | `Promise<T>` | GC ref to a task | §4.5 |
 | generics | monomorphized | No higher-kinded tricks. Conditional and mapped types are rejected. |
 
-**Status (2026-10-05).** Implemented: `int`; `T | null` for every type except signals; discriminated unions of object types with `typeof` and discriminant narrowing; generic functions, generic interfaces and generic type aliases (monomorphized, no constraints or defaults); `Map` and `Set` (insertion order, `for…of`); classes with single inheritance (fields, one constructor, methods, `new`, `extends`, `super(...)` as the first statement, `super.m()`, overriding, `instanceof` with narrowing). A method call is direct when no subclass overrides it; otherwise the compiler dispatches on the object's type id. A base class must be declared before its subclasses. A method reference without a call is the error `PL2021` (write `() => c.m()`); `JSON.stringify`. Not yet: static members, getters and setters, generic classes, `JSON.parse`, `async`/`await`, `try`/`catch`.
+**Status (2026-10-05).** Implemented: `int`; `T | null` for every type except signals; discriminated unions of object types with `typeof` and discriminant narrowing; generic functions, generic interfaces and generic type aliases (monomorphized, no constraints or defaults); `Map` and `Set` (insertion order, `for…of`); classes with single inheritance (fields, one constructor, methods, `new`, `extends`, `super(...)` as the first statement, `super.m()`, overriding, `instanceof` with narrowing). A method call is direct when no subclass overrides it; otherwise the compiler dispatches on the object's type id. A base class must be declared before its subclasses. A method reference without a call is the error `PL2021` (write `() => c.m()`); `JSON.stringify` and `JSON.parse<T>`. Not yet: static members, getters and setters, generic classes, `async`/`await`, `try`/`catch`.
 
 ### 4.3 Supported syntax (v0 → v1)
 
@@ -211,7 +211,7 @@ Each module has a hand-written `.d.ts` file in `std/` of this repo. The editor r
 
 In M1, `plinth:core` exports `Math`, `parseNumber`, `toString` and `console`; `plinth:ui` exports the reactive primitives, `app`, `navigate` and the M0 controls.
 
-`JSON.stringify` (core 1.1) is generated for the static type of its argument: `number`, `int`, `boolean`, `string`, nullable types, arrays, objects of known shape (fields in declaration order) and `Map<string, V>`. `NaN` and `Infinity` become `null`, as in JS. `JSON.parse<T>` is not done yet.
+`JSON.stringify` (core 1.1) is generated for the static type of its argument: `number`, `int`, `boolean`, `string`, nullable types, arrays, objects of known shape (fields in declaration order) and `Map<string, V>`. `NaN` and `Infinity` become `null`, as in JS. `JSON.parse<T>(text): T | null` (core 1.2) decodes the same shapes for an explicit type argument. It returns `null` for invalid JSON or a shape mismatch (a missing field, a wrong type, trailing text); it ignores extra object fields.
 
 M2 adds three modules:
 - `plinth:time`: `now()`, `monotonicNow()`, `setTimeout(f, ms)`, `setInterval(f, ms)`, `clearTimeout(id)` and `clearInterval(id)`. A timer id is a `number`. No capability is necessary.
