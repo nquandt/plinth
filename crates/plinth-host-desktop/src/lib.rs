@@ -4,7 +4,7 @@
 
 use anyhow::{Context as _, Result};
 use gpui::{App, AppContext, Bounds, KeyBinding, WindowBounds, WindowOptions, actions, px, size};
-use plinth_runner_wasmtime::{Guest, Limits, Runner};
+use plinth_runner_wasmtime::{Clipboard, Guest, Limits, Runner, kv::Kv, policy::Policy};
 use plinth_ui::{GuestPort, PlinthRoot};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -17,6 +17,13 @@ pub struct HostApp {
     pub component: Vec<u8>,
     pub title: String,
     pub accent: String,
+    /// The manifest id, used to isolate `store.kv` data per app (SPEC.md
+    /// §11). A bare `app.wasm` with no manifest gets a `dev.`-prefixed id
+    /// derived from the title.
+    pub app_id: String,
+    /// The capability names the manifest (or `plinth.toml`) declares
+    /// (SPEC.md §11). A bare `app.wasm` with no manifest gets none.
+    pub capabilities: Vec<String>,
 }
 
 impl HostApp {
@@ -29,10 +36,42 @@ impl HostApp {
                 component: pkg.component,
                 title: pkg.manifest.name,
                 accent: pkg.manifest.accent.unwrap_or_else(|| "teal".into()),
+                app_id: pkg.manifest.id,
+                capabilities: pkg.manifest.capabilities.into_iter().map(|c| c.name).collect(),
             })
         } else {
             let title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-            Ok(HostApp { component: bytes, title, accent: "teal".into() })
+            Ok(HostApp { component: bytes, title: title.clone(), accent: "teal".into(), app_id: format!("dev.{title}"), capabilities: Vec::new() })
+        }
+    }
+}
+
+/// A `Clipboard` backed by the real system clipboard (`arboard`), used
+/// when a `Policy` grants `clipboard.read`/`clipboard.write` (SPEC.md
+/// §9.4, §11). Each call opens the platform clipboard fresh; it is not
+/// kept open between calls, so other apps may use it meanwhile.
+#[derive(Default)]
+struct SystemClipboard;
+
+impl Clipboard for SystemClipboard {
+    fn write_text(&mut self, text: &str) {
+        match arboard::Clipboard::new() {
+            Ok(mut cb) => {
+                if let Err(e) = cb.set_text(text) {
+                    log::warn!("clipboard write failed: {e}");
+                }
+            }
+            Err(e) => log::warn!("clipboard unavailable: {e}"),
+        }
+    }
+
+    fn read_text(&mut self) -> Option<String> {
+        match arboard::Clipboard::new() {
+            Ok(mut cb) => cb.get_text().ok(),
+            Err(e) => {
+                log::warn!("clipboard unavailable: {e}");
+                None
+            }
         }
     }
 }
@@ -46,6 +85,16 @@ struct WasmGuest {
 impl GuestPort for WasmGuest {
     fn dispatch(&mut self, events: &[u8]) -> Result<Vec<Vec<u8>>> {
         let r = self.guest.on_event(events);
+        print_logs(&mut self.guest);
+        r
+    }
+
+    fn next_timer_deadline(&self) -> Option<std::time::Instant> {
+        self.guest.next_timer_deadline()
+    }
+
+    fn fire_due_timers(&mut self, now: std::time::Instant) -> Result<Vec<Vec<u8>>> {
+        let r = self.guest.fire_due_timers(now);
         print_logs(&mut self.guest);
         r
     }
@@ -66,10 +115,19 @@ impl GuestPort for NoGuest {
     }
 }
 
-/// Instantiates a component and runs `init`.
-fn start(component: &[u8]) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
+/// Instantiates a component and runs `init`. Builds the capability policy
+/// from `capabilities` (SPEC.md §11: a declared capability is granted;
+/// there is no consent UI yet, SPEC.md §11 stretch) and opens the
+/// `store.kv` file for `app_id`.
+fn start(component: &[u8], app_id: &str, capabilities: &[String]) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
+    let policy = Policy::new(capabilities.iter().cloned());
+    let kv = Kv::open(&plinth_runner_wasmtime::kv::data_dir(), app_id).unwrap_or_else(|e| {
+        log::warn!("store.kv unavailable for {app_id}: {e:#}");
+        Kv::in_memory()
+    });
+    let clipboard: Box<dyn Clipboard> = Box::new(SystemClipboard);
     let loaded = Runner::new().and_then(|runner| {
-        let guest = runner.load(component, Limits::default())?;
+        let guest = runner.load_with_policy(component, Limits::default(), policy, kv, clipboard)?;
         Ok((runner, guest))
     });
     match loaded {
@@ -85,8 +143,8 @@ fn start(component: &[u8]) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>)
 /// Opens the app window and runs until it closes. Each component that
 /// arrives on `reloads` replaces the running app (hot reload).
 pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
-    let (port, init) = start(&app.component);
-    let HostApp { title, accent, .. } = app;
+    let (port, init) = start(&app.component, &app.app_id, &app.capabilities);
+    let HostApp { title, accent, app_id, capabilities, .. } = app;
 
     gpui_platform::application().run(move |cx: &mut App| {
         plinth_ui::init(cx);
@@ -114,6 +172,8 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
         cx.activate(true);
 
         if let Some(rx) = reloads {
+            let app_id = app_id.clone();
+            let capabilities = capabilities.clone();
             cx.spawn(async move |cx| {
                 loop {
                     cx.background_executor().timer(Duration::from_millis(100)).await;
@@ -126,7 +186,7 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
                         }
                     }
                     if let Some(bytes) = latest {
-                        let (port, init) = start(&bytes);
+                        let (port, init) = start(&bytes, &app_id, &capabilities);
                         let ok = window.update(cx, |root, _, cx| root.reload(port, init, cx)).is_ok();
                         if !ok {
                             return;
@@ -137,6 +197,18 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
             })
             .detach();
         }
+
+        // Drives `plinth:time` timers (SPEC.md §8.4, §8.5, §9.4): a short
+        // fixed tick is simpler and robust enough than sleeping until the
+        // next exact deadline, and `poll_timers` is a cheap no-op when
+        // nothing is due.
+        cx.spawn(async move |cx| loop {
+            cx.background_executor().timer(Duration::from_millis(15)).await;
+            if window.update(cx, |root, _, cx| root.poll_timers(cx)).is_err() {
+                return;
+            }
+        })
+        .detach();
     });
     Ok(())
 }
