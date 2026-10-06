@@ -73,7 +73,7 @@ fn grow(p: u32) {
     let new_cap = (cap * 2).max(4);
     let buf = gc::buffer_alloc((new_cap * size) as usize);
     unsafe {
-        std::ptr::copy_nonoverlapping(data(p) as *const u8, buf as *mut u8, (len * size) as usize);
+        core::ptr::copy_nonoverlapping(data(p) as *const u8, buf as *mut u8, (len * size) as usize);
     }
     free_data(p);
     unsafe {
@@ -110,7 +110,7 @@ pub fn slice(p: u32, start: u32, end: u32) -> u32 {
     let q = new(gc::type_of(p), n);
     let size = elem_size(p);
     unsafe {
-        std::ptr::copy_nonoverlapping((data(p) + start * size) as *const u8, data(q) as *mut u8, (n * size) as usize);
+        core::ptr::copy_nonoverlapping((data(p) + start * size) as *const u8, data(q) as *mut u8, (n * size) as usize);
         store_u32(q + 8, n);
     }
     q
@@ -155,6 +155,6 @@ pub fn reverse(p: u32) {
     let base = data(p) as *mut u8;
     for i in 0..(n / 2) as usize {
         let j = n as usize - 1 - i;
-        unsafe { std::ptr::swap_nonoverlapping(base.add(i * size), base.add(j * size), size) };
+        unsafe { core::ptr::swap_nonoverlapping(base.add(i * size), base.add(j * size), size) };
     }
 }

@@ -10,5 +10,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-plinth-protocol.workspace = true
+plinth-protocol = { path = "../plinth-protocol", default-features = false }
 wit-bindgen.workspace = true
+ryu = { version = "1", features = ["small"] }
+libm = "0.2" 

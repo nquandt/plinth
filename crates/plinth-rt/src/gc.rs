@@ -22,8 +22,9 @@
 //! Compiler-defined types (structs and environments) are registered at start
 //! with their size and the offsets of their reference fields.
 
-use std::alloc::{Layout, alloc_zeroed, dealloc};
-use std::cell::RefCell;
+use crate::global::Global;
+use alloc::alloc::{Layout, alloc_zeroed, dealloc};
+use alloc::vec::Vec;
 
 pub const T_STRING: u32 = 0;
 pub const T_ARR_F64: u32 = 1;
@@ -44,7 +45,6 @@ struct TypeDesc {
     ref_offsets: Vec<u32>,
 }
 
-#[derive(Default)]
 struct Heap {
     objects: Vec<u32>,
     types: Vec<TypeDesc>,
@@ -52,9 +52,7 @@ struct Heap {
     allocated_since_gc: usize,
 }
 
-thread_local! {
-    static HEAP: RefCell<Heap> = RefCell::new(Heap::default());
-}
+static HEAP: Global<Heap> = Global::new(Heap { objects: Vec::new(), types: Vec::new(), roots: Vec::new(), allocated_since_gc: 0 });
 
 #[inline]
 pub unsafe fn load_u32(addr: u32) -> u32 {
@@ -95,7 +93,7 @@ pub fn buffer_free(ptr: u32, size: usize) {
 pub fn alloc(type_id: u32, size: u32) -> u32 {
     let p = raw_alloc(size as usize);
     unsafe { store_u32(p, type_id) };
-    HEAP.with_borrow_mut(|h| {
+    HEAP.with(|h| {
         h.objects.push(p);
         h.allocated_since_gc += size as usize;
     });
@@ -104,7 +102,7 @@ pub fn alloc(type_id: u32, size: u32) -> u32 {
 
 /// Allocates an object of a registered compiler-defined type.
 pub fn alloc_user(type_id: u32) -> u32 {
-    let size = HEAP.with_borrow(|h| {
+    let size = HEAP.read(|h| {
         h.types
             .get((type_id - FIRST_USER_TYPE) as usize)
             .map(|t| t.size)
@@ -118,7 +116,7 @@ pub fn alloc_user(type_id: u32) -> u32 {
 pub fn register_types(table: &[u32]) {
     let mut it = table.iter().copied();
     let count = it.next().unwrap_or(0);
-    HEAP.with_borrow_mut(|h| {
+    HEAP.with(|h| {
         for _ in 0..count {
             let size = it.next().unwrap_or(HEADER);
             let n = it.next().unwrap_or(0);
@@ -130,7 +128,7 @@ pub fn register_types(table: &[u32]) {
 
 pub fn add_root(ptr: u32) {
     if ptr != 0 {
-        HEAP.with_borrow_mut(|h| h.roots.push(ptr));
+        HEAP.with(|h| h.roots.push(ptr));
     }
 }
 
@@ -149,19 +147,19 @@ fn object_size(h: &Heap, ptr: u32) -> usize {
 }
 
 pub fn should_collect() -> bool {
-    HEAP.with_borrow(|h| h.allocated_since_gc >= GC_THRESHOLD)
+    HEAP.read(|h| h.allocated_since_gc >= GC_THRESHOLD)
 }
 
 /// Runs one full collection. `runtime_roots` gives every reference that the
 /// runtime holds outside the heap.
 pub fn collect(runtime_roots: impl FnOnce(&mut dyn FnMut(u32))) {
-    let mut work: Vec<u32> = HEAP.with_borrow(|h| h.roots.clone());
+    let mut work: Vec<u32> = HEAP.read(|h| h.roots.clone());
     runtime_roots(&mut |p| {
         if p != 0 {
             work.push(p)
         }
     });
-    HEAP.with_borrow_mut(|h| {
+    HEAP.with(|h| {
         while let Some(p) = work.pop() {
             let flags = unsafe { load_u32(p + 4) };
             if flags & MARK != 0 {
@@ -195,7 +193,7 @@ pub fn collect(runtime_roots: impl FnOnce(&mut dyn FnMut(u32))) {
                 }
             }
         }
-        let mut objects = std::mem::take(&mut h.objects);
+        let mut objects = core::mem::take(&mut h.objects);
         objects.retain(|&p| {
             let flags = unsafe { load_u32(p + 4) };
             if flags & MARK != 0 {
@@ -217,5 +215,5 @@ pub fn collect(runtime_roots: impl FnOnce(&mut dyn FnMut(u32))) {
 
 /// The number of live objects. Tests use it.
 pub fn live_objects() -> usize {
-    HEAP.with_borrow(|h| h.objects.len())
+    HEAP.read(|h| h.objects.len())
 }

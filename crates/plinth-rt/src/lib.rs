@@ -16,15 +16,29 @@
 //! Values: `number` is f64; `boolean`, `int`, enums and node ids are i32;
 //! every heap reference (string, array, object, closure) is an i32 address,
 //! and `null` is 0. Signal and computed handles are i32.
+//!
+//! On wasm32 the crate is `no_std`: `core::fmt`, the float formatting of
+//! `core` and the Unicode tables would make every app much larger (SPEC.md
+//! §5.5). Host builds use `std`, for the unit tests.
 
+#![cfg_attr(target_arch = "wasm32", no_std)]
+
+extern crate alloc;
+
+#[cfg(target_arch = "wasm32")]
+mod allocator;
 pub mod arrays;
+mod global;
 pub mod gc;
 mod reactive;
 pub mod strings;
 mod ui;
 
+use alloc::borrow::ToOwned;
+use alloc::string::String;
+use alloc::vec::Vec;
+use global::GlobalCell;
 use plinth_protocol::decode_events;
-use std::cell::Cell;
 
 mod bindings {
     wit_bindgen::generate!({
@@ -80,11 +94,9 @@ pub struct Callable {
     pub env: u32,
 }
 
-thread_local! {
-    static ARG: Cell<Val> = const { Cell::new(Val::None) };
-    static RESULT: Cell<Val> = const { Cell::new(Val::None) };
-    static MAIN: Cell<Option<u32>> = const { Cell::new(None) };
-}
+static ARG: GlobalCell<Val> = GlobalCell::new(Val::None);
+static RESULT: GlobalCell<Val> = GlobalCell::new(Val::None);
+static MAIN: GlobalCell<Option<u32>> = GlobalCell::new(None);
 
 /// Calls app code. The thunk reads `arg` at entry and sets the result last,
 /// so nested calls do not disturb the registers.
@@ -98,7 +110,7 @@ pub fn invoke(c: Callable, arg: Val) -> Val {
 #[cfg(target_arch = "wasm32")]
 fn call_thunk(thunk: u32, env: u32) {
     // On wasm32 a function pointer is an index into the function table.
-    let f: extern "C" fn(i32) = unsafe { std::mem::transmute(thunk as usize) };
+    let f: extern "C" fn(i32) = unsafe { core::mem::transmute(thunk as usize) };
     f(env as i32);
 }
 
@@ -109,7 +121,9 @@ fn call_thunk(_thunk: u32, _env: u32) {
 
 /// Logs `msg` and stops the guest. The host shows "This app stopped".
 pub fn trap(msg: &str) -> ! {
-    log(&format!("trap: {msg}"));
+    let mut line = String::from("trap: ");
+    line.push_str(msg);
+    log(&line);
     #[cfg(target_arch = "wasm32")]
     core::arch::wasm32::unreachable();
     #[cfg(not(target_arch = "wasm32"))]
@@ -151,7 +165,7 @@ impl bindings::Guest for Rt {
     }
 
     fn on_event(ev: Vec<u8>) {
-        let events = decode_events(&ev).unwrap_or_else(|e| trap(&format!("malformed event buffer: {e}")));
+        let events = decode_events(&ev).unwrap_or_else(|_| trap("malformed event buffer"));
         for e in events {
             if let plinth_protocol::Event::Ui { handler, value, .. } = e {
                 ui::dispatch(handler, &value);
@@ -198,7 +212,7 @@ abi! {
     fn __plinth_rt_alloc(type_id: i32) -> i32 { gc::alloc_user(type_id as u32) as i32 }
     fn __plinth_rt_scratch(len: i32) -> i32 { gc::buffer_alloc(len as usize) as i32 }
     fn __plinth_rt_types(table: i32, words: i32) {
-        let t = unsafe { std::slice::from_raw_parts(table as *const u32, words as usize) };
+        let t = unsafe { core::slice::from_raw_parts(table as *const u32, words as usize) };
         gc::register_types(t);
         gc::buffer_free(table as u32, words as usize * 4);
     }
@@ -227,8 +241,8 @@ abi! {
         let (a, b) = (strings::as_str(ptr(a)), strings::as_str(ptr(b)));
         let p = strings::new_uninit((a.len() + b.len()) as u32);
         unsafe {
-            std::ptr::copy_nonoverlapping(a.as_ptr(), (p + 12) as *mut u8, a.len());
-            std::ptr::copy_nonoverlapping(b.as_ptr(), (p + 12 + a.len() as u32) as *mut u8, b.len());
+            core::ptr::copy_nonoverlapping(a.as_ptr(), (p + 12) as *mut u8, a.len());
+            core::ptr::copy_nonoverlapping(b.as_ptr(), (p + 12 + a.len() as u32) as *mut u8, b.len());
         }
         p as i32
     }
@@ -236,9 +250,9 @@ abi! {
     fn __plinth_rt_str_cmp(a: i32, b: i32) -> i32 {
         // UTF-16 code unit order, as in JS.
         match strings::as_str(ptr(a)).encode_utf16().cmp(strings::as_str(ptr(b)).encode_utf16()) {
-            std::cmp::Ordering::Less => -1,
-            std::cmp::Ordering::Equal => 0,
-            std::cmp::Ordering::Greater => 1,
+            core::cmp::Ordering::Less => -1,
+            core::cmp::Ordering::Equal => 0,
+            core::cmp::Ordering::Greater => 1,
         }
     }
     fn __plinth_rt_str_len(a: i32) -> f64 { strings::len16(strings::as_str(ptr(a))) as f64 }
@@ -246,8 +260,8 @@ abi! {
     fn __plinth_rt_str_from_f64(v: f64) -> i32 { strings::from_str(&strings::number_to_string(v)) as i32 }
     fn __plinth_rt_str_from_bool(v: i32) -> i32 { strings::from_str(if v != 0 { "true" } else { "false" }) as i32 }
     fn __plinth_rt_str_trim(a: i32) -> i32 { strings::from_str(strings::as_str(ptr(a)).trim()) as i32 }
-    fn __plinth_rt_str_upper(a: i32) -> i32 { strings::from_str(&strings::as_str(ptr(a)).to_uppercase()) as i32 }
-    fn __plinth_rt_str_lower(a: i32) -> i32 { strings::from_str(&strings::as_str(ptr(a)).to_lowercase()) as i32 }
+    fn __plinth_rt_str_upper(a: i32) -> i32 { strings::from_str(&strings::to_upper(strings::as_str(ptr(a)))) as i32 }
+    fn __plinth_rt_str_lower(a: i32) -> i32 { strings::from_str(&strings::to_lower(strings::as_str(ptr(a)))) as i32 }
     fn __plinth_rt_str_includes(a: i32, b: i32) -> i32 { strings::as_str(ptr(a)).contains(strings::as_str(ptr(b))) as i32 }
     fn __plinth_rt_str_starts(a: i32, b: i32) -> i32 { strings::as_str(ptr(a)).starts_with(strings::as_str(ptr(b))) as i32 }
     fn __plinth_rt_str_ends(a: i32, b: i32) -> i32 { strings::as_str(ptr(a)).ends_with(strings::as_str(ptr(b))) as i32 }
@@ -257,10 +271,7 @@ abi! {
         let n = if n.is_finite() && n >= 0.0 { n as usize } else { trap("invalid repeat count") };
         strings::from_str(&strings::as_str(ptr(a)).repeat(n)) as i32
     }
-    fn __plinth_rt_str_to_f64(a: i32) -> f64 {
-        let s = strings::as_str(ptr(a)).trim();
-        if s.is_empty() { 0.0 } else { s.parse().unwrap_or(f64::NAN) }
-    }
+    fn __plinth_rt_str_to_f64(a: i32) -> f64 { strings::parse_number(strings::as_str(ptr(a))) }
     fn __plinth_rt_f64_to_fixed(v: f64, digits: f64) -> i32 { strings::from_str(&strings::to_fixed(v, digits)) as i32 }
 
     // -- Arrays ----------------------------------------------------------------
@@ -289,9 +300,9 @@ abi! {
     }
 
     // -- Numbers ---------------------------------------------------------------
-    fn __plinth_rt_f64_rem(a: f64, b: f64) -> f64 { a % b }
-    fn __plinth_rt_f64_pow(a: f64, b: f64) -> f64 { a.powf(b) }
-    fn __plinth_rt_f64_round(v: f64) -> f64 { (v + 0.5).floor() }
+    fn __plinth_rt_f64_rem(a: f64, b: f64) -> f64 { libm::fmod(a, b) }
+    fn __plinth_rt_f64_pow(a: f64, b: f64) -> f64 { libm::pow(a, b) }
+    fn __plinth_rt_f64_round(v: f64) -> f64 { libm::floor(v + 0.5) }
 
     // -- Reactivity ------------------------------------------------------------
     fn __plinth_rt_sig_new_f64(v: f64) -> i32 { reactive::signal_new(Val::F64(v)) as i32 }

@@ -53,6 +53,13 @@ gpui = { path = "../gpui-ce/crates/gpui", package = "gpui-ce" }
 gpui_platform = { path = "../gpui-ce/crates/gpui_platform", package = "gpui_ce_platform" }
 gpui_elements = { path = "../gpui-ce/crates/gpui_elements", package = "gpui_ce_elements" }
 
+# Small debug builds: gpui and wasmtime with full debug info take tens of GB.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = true
 

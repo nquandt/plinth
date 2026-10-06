@@ -2,6 +2,17 @@
 //!
 //! Both sides use this crate: the guest runtime writes ops and reads events,
 //! and the host reads ops and writes events. All integers are little-endian.
+//!
+//! Without the default `std` feature the crate is `no_std` (with `alloc`),
+//! so the guest runtime can use it.
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+use alloc::borrow::ToOwned;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 mod ids {
     include!(concat!(env!("OUT_DIR"), "/ids.rs"));
@@ -9,7 +20,7 @@ mod ids {
 
 pub use ids::*;
 
-use std::fmt;
+use core::fmt;
 
 /// A guest-assigned node id. `0` is the "no node" value.
 pub type NodeId = u32;
@@ -164,6 +175,7 @@ impl fmt::Display for DecodeError {
     }
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for DecodeError {}
 
 // ---------------------------------------------------------------------------
@@ -176,8 +188,8 @@ pub struct Writer {
 }
 
 impl Writer {
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self { buf: Vec::new() }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -190,7 +202,7 @@ impl Writer {
 
     /// Returns the bytes and leaves the writer empty.
     pub fn take(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.buf)
+        core::mem::take(&mut self.buf)
     }
 
     fn u8(&mut self, v: u8) {
@@ -388,7 +400,7 @@ impl<'a> Reader<'a> {
             tag::STRING => {
                 let len = self.u32()? as usize;
                 let bytes = self.bytes(len)?;
-                let s = std::str::from_utf8(bytes)
+                let s = core::str::from_utf8(bytes)
                     .map_err(|_| DecodeError { offset: start, message: "string is not UTF-8" })?;
                 Value::Str(s.to_owned())
             }
@@ -468,6 +480,7 @@ pub fn decode_events(buf: &[u8]) -> Result<Vec<Event>, DecodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn ops_round_trip() {

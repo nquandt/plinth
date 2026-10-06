@@ -4830,7 +4830,9 @@ dependencies = [
 name = "plinth-rt"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "plinth-protocol",
+ "ryu",
  "wit-bindgen",
 ]
 

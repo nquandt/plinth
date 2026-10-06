@@ -99,6 +99,9 @@ impl Harness {
 fn counter_behaves_like_m0() {
     let art = build("counter");
     eprintln!("counter: core {} KiB, component {} KiB", art.core_size / 1024, art.component.len() / 1024);
+    // SPEC.md §5.5 size targets.
+    assert!(plinth_compiler::link::runtime().len() <= 60 * 1024, "plinth-rt is over 60 KiB");
+    assert!(art.component.len() <= 80 * 1024, "the counter artifact is over 80 KiB");
     let mut h = Harness::start(&art.component);
     let root = h.tree.current_root().unwrap();
     assert_eq!(root.str_prop(prop::TITLE), Some("Counter"));

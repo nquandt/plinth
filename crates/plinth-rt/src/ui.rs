@@ -2,11 +2,13 @@
 //! child regions, event handlers, two-way bindings and the keyed list
 //! reconciler (SPEC.md §7.2, §7.3, §8.4).
 
+use crate::global::Global;
 use crate::reactive::{self, Cleanup, EffectKind, ScopeId};
 use crate::{Callable, Val, invoke, strings};
+use alloc::borrow::ToOwned;
+use alloc::string::String;
+use alloc::vec::Vec;
 use plinth_protocol::{ControlKind, NodeId, Op, Value, Writer, event, nav_kind, prop};
-use std::cell::RefCell;
-use std::collections::HashMap;
 
 /// A child position of a parent: a static node, or a dynamic region.
 #[derive(Clone, Copy, PartialEq)]
@@ -63,28 +65,70 @@ struct List {
     row: Callable,
     empty: Option<Callable>,
     rows: Vec<Row>,
+    /// The current child order in the host.
+    order: Vec<NodeId>,
     empty_node: Option<(NodeId, ScopeId)>,
 }
 
-#[derive(Default)]
 struct Ui {
     ops: Writer,
     next_node: NodeId,
     free_nodes: Vec<NodeId>,
-    slots: HashMap<NodeId, Vec<Slot>>,
+    /// Indexed by node id.
+    slots: Vec<Vec<Slot>>,
     regions: Vec<Option<Region>>,
-    next_handler: u32,
-    handlers: HashMap<u32, Handler>,
+    /// Indexed by handler id - 1.
+    handlers: Vec<Option<Handler>>,
+    free_handlers: Vec<u32>,
     binds: Vec<Option<Bind>>,
     lists: Vec<Option<List>>,
 }
 
-thread_local! {
-    static UI: RefCell<Ui> = RefCell::new(Ui { next_node: 1, next_handler: 1, ..Default::default() });
-}
+static UI: Global<Ui> = Global::new(Ui {
+    ops: Writer::new(),
+    next_node: 1,
+    free_nodes: Vec::new(),
+    slots: Vec::new(),
+    regions: Vec::new(),
+    handlers: Vec::new(),
+    free_handlers: Vec::new(),
+    binds: Vec::new(),
+    lists: Vec::new(),
+});
 
 fn with<R>(f: impl FnOnce(&mut Ui) -> R) -> R {
-    UI.with_borrow_mut(f)
+    UI.with(f)
+}
+
+impl Ui {
+    fn slots_mut(&mut self, parent: NodeId) -> &mut Vec<Slot> {
+        let i = parent as usize;
+        if self.slots.len() <= i {
+            self.slots.resize_with(i + 1, Vec::new);
+        }
+        &mut self.slots[i]
+    }
+
+    fn slots(&self, parent: NodeId) -> &[Slot] {
+        self.slots.get(parent as usize).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    fn add_handler(&mut self, h: Handler) -> u32 {
+        match self.free_handlers.pop() {
+            Some(id) => {
+                self.handlers[id as usize - 1] = Some(h);
+                id
+            }
+            None => {
+                self.handlers.push(Some(h));
+                self.handlers.len() as u32
+            }
+        }
+    }
+
+    fn handler(&self, id: u32) -> Option<&Handler> {
+        self.handlers.get((id as usize).wrapping_sub(1)).and_then(Option::as_ref)
+    }
 }
 
 /// Returns the pending op buffer and leaves it empty.
@@ -132,7 +176,7 @@ pub fn set_text(id: NodeId, text: &str) {
 /// Appends a static child.
 pub fn append(parent: NodeId, child: NodeId) {
     with(|u| {
-        u.slots.entry(parent).or_default().push(Slot::Node(child));
+        u.slots_mut(parent).push(Slot::Node(child));
         u.ops.op(&Op::Insert { parent, id: child, before: 0 });
     });
 }
@@ -147,8 +191,7 @@ pub fn navigate(screen: u32) {
 
 /// The first node after slot `index` of `parent`, or 0 (append).
 fn node_after(u: &Ui, parent: NodeId, index: usize) -> NodeId {
-    let Some(slots) = u.slots.get(&parent) else { return 0 };
-    for slot in &slots[index + 1..] {
+    for slot in &u.slots(parent)[index + 1..] {
         match *slot {
             Slot::Node(n) => return n,
             Slot::Region(r) => {
@@ -169,7 +212,7 @@ pub fn region(parent: NodeId, callable: Callable) {
     let id = with(|u| {
         let id = u.regions.len() as u32;
         u.regions.push(Some(Region { parent, callable, node: 0, content: None }));
-        u.slots.entry(parent).or_default().push(Slot::Region(id));
+        u.slots_mut(parent).push(Slot::Region(id));
         id
     });
     reactive::add_cleanup(Cleanup::Region(id));
@@ -177,9 +220,9 @@ pub fn region(parent: NodeId, callable: Callable) {
 }
 
 fn run_region(id: u32) {
-    let Some((callable, old_node, old_content)) = with(|u| {
-        u.regions[id as usize].as_mut().map(|r| (r.callable, r.node, r.content.take()))
-    }) else {
+    let Some((callable, old_node, old_content)) =
+        with(|u| u.regions[id as usize].as_mut().map(|r| (r.callable, r.node, r.content.take())))
+    else {
         return;
     };
     // The content gets its own scope, which the next run disposes. The
@@ -198,7 +241,7 @@ fn run_region(id: u32) {
     with(|u| {
         let parent = u.regions[id as usize].as_ref().map(|r| r.parent).unwrap_or(0);
         if node != 0 && node != old_node {
-            let index = u.slots[&parent].iter().position(|s| *s == Slot::Region(id)).unwrap_or(0);
+            let index = u.slots(parent).iter().position(|s| *s == Slot::Region(id)).unwrap_or(0);
             let before = node_after(u, parent, index);
             u.ops.op(&Op::Insert { parent, id: node, before });
         }
@@ -214,9 +257,7 @@ fn run_region(id: u32) {
 
 pub fn listen(node: NodeId, ev: u16, callable: Callable) {
     let h = with(|u| {
-        let h = u.next_handler;
-        u.next_handler += 1;
-        u.handlers.insert(h, Handler::User(callable));
+        let h = u.add_handler(Handler::User(callable));
         u.ops.op(&Op::Listen { id: node, event: ev, handler: h });
         h
     });
@@ -225,16 +266,15 @@ pub fn listen(node: NodeId, ev: u16, callable: Callable) {
 
 /// A two-way binding of `value` to a signal (SPEC.md §8.4).
 pub fn bind(node: NodeId, signal: u32, kind: BindKind) {
-    let id = with(|u| {
+    let (id, h) = with(|u| {
         let id = u.binds.len() as u32;
         u.binds.push(Some(Bind { node, signal, kind, synced: None }));
-        let h = u.next_handler;
-        u.next_handler += 1;
-        u.handlers.insert(h, Handler::Bind(id));
+        let h = u.add_handler(Handler::Bind(id));
         u.ops.op(&Op::Listen { id: node, event: event::CHANGE, handler: h });
-        id
+        (id, h)
     });
     reactive::add_cleanup(Cleanup::Bind(id));
+    reactive::add_cleanup(Cleanup::Handler(h));
     reactive::effect_new(EffectKind::Bind(id));
 }
 
@@ -285,7 +325,7 @@ pub fn dispatch(handler: u32, value: &Value) {
         User(Callable),
         Bind(u32, BindKind),
     }
-    let action = with(|u| match u.handlers.get(&handler) {
+    let action = with(|u| match u.handler(handler) {
         Some(Handler::User(c)) => Some(Action::User(*c)),
         Some(Handler::Bind(b)) => u.binds[*b as usize].as_ref().map(|bind| Action::Bind(*b, bind.kind)),
         None => None,
@@ -321,7 +361,17 @@ pub fn list(node: NodeId, items: Callable, key: Callable, row: Callable, empty: 
     let owner = reactive::current_scope();
     let id = with(|u| {
         let id = u.lists.len() as u32;
-        u.lists.push(Some(List { node, owner, items, key, row, empty, rows: Vec::new(), empty_node: None }));
+        u.lists.push(Some(List {
+            node,
+            owner,
+            items,
+            key,
+            row,
+            empty,
+            rows: Vec::new(),
+            order: Vec::new(),
+            empty_node: None,
+        }));
         id
     });
     reactive::add_cleanup(Cleanup::List(id));
@@ -358,8 +408,11 @@ fn run_list(id: u32) {
         }
     };
 
-    let mut old: Vec<Option<Row>> =
-        with(|u| u.lists[id as usize].as_mut().map(|l| std::mem::take(&mut l.rows))).unwrap_or_default().into_iter().map(Some).collect();
+    let (old_rows, prev_order) = with(|u| {
+        let l = u.lists[id as usize].as_mut().unwrap();
+        (core::mem::take(&mut l.rows), core::mem::take(&mut l.order))
+    });
+    let mut old: Vec<Option<Row>> = old_rows.into_iter().map(Some).collect();
     let mut rows = Vec::with_capacity(items.len());
     // The nodes of reused rows. A new row can get the id of a removed row,
     // so the order below must not match on ids alone.
@@ -367,7 +420,7 @@ fn run_list(id: u32) {
     reactive::untracked(|| {
         for item in items {
             let key = to_key(invoke(key_c, item));
-            let reuse = old.iter_mut().position(|r| r.as_ref().is_some_and(|r| r.key == key));
+            let reuse = old.iter().position(|r| r.as_ref().is_some_and(|r| r.key == key));
             match reuse.and_then(|i| old[i].take()) {
                 // The same key and the same item: keep the row.
                 Some(r) if r.item.same(&item) => {
@@ -393,12 +446,7 @@ fn run_list(id: u32) {
     }
 
     // Put the row nodes in order with insert and move ops.
-    let mut current: Vec<NodeId> = ORDER
-        .with_borrow_mut(|o| o.remove(&id))
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|n| kept.contains(n))
-        .collect();
+    let mut current: Vec<NodeId> = prev_order.into_iter().filter(|n| kept.contains(n)).collect();
     with(|u| {
         for (i, r) in rows.iter().enumerate() {
             if current.get(i) == Some(&r.node) {
@@ -417,13 +465,13 @@ fn run_list(id: u32) {
             current.insert(i, r.node);
         }
     });
-    ORDER.with_borrow_mut(|o| o.insert(id, current));
 
     // The empty placeholder.
     let has_rows = !rows.is_empty();
     let empty_node = with(|u| {
         let l = u.lists[id as usize].as_mut().unwrap();
         l.rows = rows;
+        l.order = current;
         l.empty_node
     });
     match (has_rows, empty_node, empty_c) {
@@ -451,11 +499,6 @@ fn run_list(id: u32) {
     }
 }
 
-thread_local! {
-    /// The current child order of each list.
-    static ORDER: RefCell<HashMap<u32, Vec<NodeId>>> = RefCell::new(HashMap::new());
-}
-
 fn remove_row(r: Row) {
     with(|u| u.ops.op(&Op::Remove { id: r.node }));
     reactive::dispose(r.scope);
@@ -477,11 +520,17 @@ pub fn run_effect(kind: EffectKind) {
 
 pub fn cleanup(c: Cleanup) {
     match c {
-        Cleanup::Handler(h) => {
-            with(|u| u.handlers.remove(&h));
-        }
+        Cleanup::Handler(h) => with(|u| {
+            if let Some(slot) = u.handlers.get_mut((h as usize).wrapping_sub(1))
+                && slot.take().is_some()
+            {
+                u.free_handlers.push(h);
+            }
+        }),
         Cleanup::Node(n) => with(|u| {
-            u.slots.remove(&n);
+            if let Some(s) = u.slots.get_mut(n as usize) {
+                s.clear();
+            }
             u.free_nodes.push(n);
         }),
         Cleanup::Region(r) => {
@@ -495,7 +544,6 @@ pub fn cleanup(c: Cleanup) {
         }),
         Cleanup::List(l) => {
             let list = with(|u| u.lists[l as usize].take());
-            ORDER.with_borrow_mut(|o| o.remove(&l));
             if let Some(list) = list {
                 for r in list.rows {
                     reactive::dispose(r.scope);
@@ -511,7 +559,7 @@ pub fn cleanup(c: Cleanup) {
 /// Gives every heap reference that the UI state holds.
 pub fn trace_roots(f: &mut dyn FnMut(u32)) {
     with(|u| {
-        for h in u.handlers.values() {
+        for h in u.handlers.iter().flatten() {
             if let Handler::User(c) = h {
                 f(c.env);
             }

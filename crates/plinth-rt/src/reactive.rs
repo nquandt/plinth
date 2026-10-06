@@ -12,8 +12,9 @@
 //! back into the runtime.
 
 use crate::{Callable, Val, invoke};
-use std::cell::RefCell;
-use std::collections::VecDeque;
+use crate::global::Global;
+use alloc::collections::VecDeque;
+use alloc::vec::Vec;
 
 pub type RId = u32;
 pub type ScopeId = u32;
@@ -61,23 +62,26 @@ struct State {
     queue: VecDeque<RId>,
 }
 
-thread_local! {
-    static STATE: RefCell<State> = RefCell::new(State {
-        nodes: Vec::new(),
-        free: Vec::new(),
-        // Scope 0 is the root scope. It is never disposed.
-        scopes: vec![Some(Scope { parent: None, children: Vec::new(), rnodes: Vec::new(), cleanups: Vec::new() })],
-        free_scopes: Vec::new(),
-        current_scope: 0,
-        observer: None,
-        queue: VecDeque::new(),
-    });
-}
+static STATE: Global<State> = Global::new(State {
+    nodes: Vec::new(),
+    free: Vec::new(),
+    scopes: Vec::new(),
+    free_scopes: Vec::new(),
+    current_scope: 0,
+    observer: None,
+    queue: VecDeque::new(),
+});
 
 const MAX_FLUSH_RUNS: usize = 100_000;
 
 fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
-    STATE.with_borrow_mut(f)
+    STATE.with(|s| {
+        if s.scopes.is_empty() {
+            // Scope 0 is the root scope. It is never disposed.
+            s.scopes.push(Some(Scope { parent: None, children: Vec::new(), rnodes: Vec::new(), cleanups: Vec::new() }));
+        }
+        f(s)
+    })
 }
 
 impl State {
@@ -125,7 +129,7 @@ impl State {
 
     fn unsubscribe(&mut self, id: RId) {
         let sources = match &mut self.nodes[id as usize] {
-            RNode::Computed { sources, .. } | RNode::Effect { sources, .. } => std::mem::take(sources),
+            RNode::Computed { sources, .. } | RNode::Effect { sources, .. } => core::mem::take(sources),
             _ => return,
         };
         for s in sources {
@@ -209,7 +213,7 @@ pub fn run_in_scope<R>(scope: ScopeId, f: impl FnOnce() -> R) -> R {
 /// Runs `f` with `scope` as the owner. The observer stays, so reads inside
 /// `f` are tracked by the running effect.
 pub fn with_scope<R>(scope: ScopeId, f: impl FnOnce() -> R) -> R {
-    let prev = with(|s| std::mem::replace(&mut s.current_scope, scope));
+    let prev = with(|s| core::mem::replace(&mut s.current_scope, scope));
     let r = f();
     with(|s| s.current_scope = prev);
     r
@@ -313,7 +317,7 @@ pub fn computed_get(id: RId) -> Val {
     if let Some(callable) = recompute {
         let prev = with(|s| {
             s.unsubscribe(id);
-            std::mem::replace(&mut s.observer, Some(id))
+            core::mem::replace(&mut s.observer, Some(id))
         });
         let v = invoke(callable, Val::None);
         with(|s| {
