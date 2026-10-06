@@ -206,6 +206,15 @@ pub fn run_in_scope<R>(scope: ScopeId, f: impl FnOnce() -> R) -> R {
     r
 }
 
+/// Runs `f` with `scope` as the owner. The observer stays, so reads inside
+/// `f` are tracked by the running effect.
+pub fn with_scope<R>(scope: ScopeId, f: impl FnOnce() -> R) -> R {
+    let prev = with(|s| std::mem::replace(&mut s.current_scope, scope));
+    let r = f();
+    with(|s| s.current_scope = prev);
+    r
+}
+
 /// Runs `f` with no observer. Reads inside it are not tracked.
 pub fn untracked<R>(f: impl FnOnce() -> R) -> R {
     let prev = with(|s| s.observer.take());

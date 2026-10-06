@@ -182,10 +182,10 @@ fn run_region(id: u32) {
     }) else {
         return;
     };
-    // The content gets its own scope, so its effects do not track into the
-    // region effect.
+    // The content gets its own scope, which the next run disposes. The
+    // region effect tracks the reads of the callable (the condition).
     let scope = reactive::new_scope(reactive::current_scope());
-    let node = reactive::run_in_scope(scope, || match invoke(callable, Val::None) {
+    let node = reactive::with_scope(scope, || match invoke(callable, Val::None) {
         Val::I32(n) => n as NodeId,
         _ => 0,
     });
@@ -361,13 +361,19 @@ fn run_list(id: u32) {
     let mut old: Vec<Option<Row>> =
         with(|u| u.lists[id as usize].as_mut().map(|l| std::mem::take(&mut l.rows))).unwrap_or_default().into_iter().map(Some).collect();
     let mut rows = Vec::with_capacity(items.len());
+    // The nodes of reused rows. A new row can get the id of a removed row,
+    // so the order below must not match on ids alone.
+    let mut kept: Vec<NodeId> = Vec::new();
     reactive::untracked(|| {
         for item in items {
             let key = to_key(invoke(key_c, item));
             let reuse = old.iter_mut().position(|r| r.as_ref().is_some_and(|r| r.key == key));
             match reuse.and_then(|i| old[i].take()) {
                 // The same key and the same item: keep the row.
-                Some(r) if r.item.same(&item) => rows.push(r),
+                Some(r) if r.item.same(&item) => {
+                    kept.push(r.node);
+                    rows.push(r)
+                }
                 stale => {
                     if let Some(r) = stale {
                         remove_row(r);
@@ -391,7 +397,7 @@ fn run_list(id: u32) {
         .with_borrow_mut(|o| o.remove(&id))
         .unwrap_or_default()
         .into_iter()
-        .filter(|n| rows.iter().any(|r| r.node == *n))
+        .filter(|n| kept.contains(n))
         .collect();
     with(|u| {
         for (i, r) in rows.iter().enumerate() {
