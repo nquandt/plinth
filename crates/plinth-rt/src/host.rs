@@ -343,3 +343,89 @@ pub fn dialog_prompt(callable: Callable, message: i32) {
         register_request(id, callable);
     }
 }
+
+/// The last denial reason for `plinth:hub` calls (`docs/HUB.md` §4.1,
+/// §12.2), as the string `hub.lastError()` returns, or `None` if the last
+/// call was not denied.
+static HUB_LAST_ERROR: Global<Option<&'static str>> = Global::new(None);
+
+/// `hub.listApps()`: a JSON array of the library's apps (`docs/HUB.md`
+/// §9.1), or `null` when denied. `std/hub.d.ts` decodes it with
+/// `JSON.parse` for the caller.
+pub fn hub_list_apps() -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        match host::hub::list_apps() {
+            Ok(json) => {
+                HUB_LAST_ERROR.with(|e| *e = None);
+                strings::from_str(&json) as i32
+            }
+            Err(e) => {
+                HUB_LAST_ERROR.with(|slot| *slot = Some(denied_reason(e)));
+                0
+            }
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    0
+}
+
+/// `hub.launch(id)`. A no-op when denied.
+pub fn hub_launch(id: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = strings::as_str(id as u32);
+        match host::hub::launch(id) {
+            Ok(_) => HUB_LAST_ERROR.with(|e| *e = None),
+            Err(e) => HUB_LAST_ERROR.with(|slot| *slot = Some(denied_reason(e))),
+        }
+    }
+}
+
+/// `hub.setGrant(id, capability, allowed)`. A no-op when denied.
+pub fn hub_set_grant(id: i32, capability: i32, allowed: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = strings::as_str(id as u32);
+        let capability = strings::as_str(capability as u32);
+        match host::hub::set_grant(id, capability, allowed != 0) {
+            Ok(_) => HUB_LAST_ERROR.with(|e| *e = None),
+            Err(e) => HUB_LAST_ERROR.with(|slot| *slot = Some(denied_reason(e))),
+        }
+    }
+}
+
+/// `hub.block(id)`. A no-op when denied.
+pub fn hub_block(id: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = strings::as_str(id as u32);
+        match host::hub::block(id) {
+            Ok(_) => HUB_LAST_ERROR.with(|e| *e = None),
+            Err(e) => HUB_LAST_ERROR.with(|slot| *slot = Some(denied_reason(e))),
+        }
+    }
+}
+
+/// `hub.unblock(id)`. A no-op when denied.
+pub fn hub_unblock(id: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = strings::as_str(id as u32);
+        match host::hub::unblock(id) {
+            Ok(_) => HUB_LAST_ERROR.with(|e| *e = None),
+            Err(e) => HUB_LAST_ERROR.with(|slot| *slot = Some(denied_reason(e))),
+        }
+    }
+}
+
+/// `hub.lastError()`: the reason the last `hub` call was denied, or `null`.
+pub fn hub_last_error() -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    return HUB_LAST_ERROR.with(|e| match e {
+        Some(s) => strings::from_str(s) as i32,
+        None => 0,
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    0
+}

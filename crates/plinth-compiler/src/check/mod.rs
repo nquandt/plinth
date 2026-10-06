@@ -25,6 +25,7 @@ pub enum StdModule {
     Store,
     Clipboard,
     Dialog,
+    Hub,
 }
 
 impl StdModule {
@@ -36,6 +37,7 @@ impl StdModule {
             "plinth:store" => Some(StdModule::Store),
             "plinth:clipboard" => Some(StdModule::Clipboard),
             "plinth:dialog" => Some(StdModule::Dialog),
+            "plinth:hub" => Some(StdModule::Hub),
             _ => None,
         }
     }
@@ -77,6 +79,12 @@ pub enum StdFn {
     DialogAlert,
     DialogConfirm,
     DialogPrompt,
+    HubListApps,
+    HubLaunch,
+    HubSetGrant,
+    HubBlock,
+    HubUnblock,
+    HubLastError,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

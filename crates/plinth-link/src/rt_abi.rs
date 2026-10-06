@@ -141,6 +141,13 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("str_pad_start", &[I32, F64, I32], &[I32]),
     ("str_pad_end", &[I32, F64, I32], &[I32]),
     ("str_split", &[I32, I32], &[I32]),
+    // -- plinth:hub (`docs/HUB.md` §4.1, §12.2; capability: hub.manage) -----
+    ("hub_list_apps", &[], &[I32]),
+    ("hub_launch", &[I32], &[]),
+    ("hub_set_grant", &[I32, I32, I32], &[]),
+    ("hub_block", &[I32], &[]),
+    ("hub_unblock", &[I32], &[]),
+    ("hub_last_error", &[], &[I32]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -187,13 +194,23 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("str_pad_start", 4),
     ("str_pad_end", 4),
     ("str_split", 4),
+    ("hub_list_apps", 6),
+    ("hub_launch", 6),
+    ("hub_set_grant", 6),
+    ("hub_block", 6),
+    ("hub_unblock", 6),
+    ("hub_last_error", 6),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).
 pub fn added_in(name: &str) -> u32 {
     ADDED_IN.iter().find(|(n, _)| *n == name).map_or(0, |(_, m)| *m)
 }
-pub const CORE_MINOR: u32 = 4;
+// NOTE for the coordinator (`docs/HUB.md` H3, step 1): this agent used
+// minor 6 for the `plinth:hub` functions above, leaving 5 free for the
+// `plinth:net` agent working in parallel (`crates/plinth-link/src/
+// rt_abi.rs`); renumber at merge if the two land in a different order.
+pub const CORE_MINOR: u32 = 6;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;

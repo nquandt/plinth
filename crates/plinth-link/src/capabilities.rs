@@ -14,6 +14,11 @@
 pub const STORE_KV: &str = "store.kv";
 pub const CLIPBOARD_READ: &str = "clipboard.read";
 pub const CLIPBOARD_WRITE: &str = "clipboard.write";
+/// Privileged Hub management (`docs/HUB.md` §4.1, §12.2): `list-apps`,
+/// `launch`, `set-grant`, `block`, `unblock`. The host grants this only to
+/// a package signed by a trusted Hub key (`docs/HUB.md` §4.1); it is not
+/// something an ordinary app can ever be granted by consent alone.
+pub const HUB_MANAGE: &str = "hub.manage";
 
 /// How much a capability can do, for the consent screen's wording and
 /// default (`docs/HUB.md` §7.2).
@@ -46,6 +51,11 @@ pub const CAPABILITIES: &[CapabilityInfo] = &[
     CapabilityInfo { name: STORE_KV, risk: Risk::Low, description: "save data on this device" },
     CapabilityInfo { name: CLIPBOARD_WRITE, risk: Risk::Low, description: "write to the clipboard" },
     CapabilityInfo { name: CLIPBOARD_READ, risk: Risk::Medium, description: "read the clipboard" },
+    CapabilityInfo {
+        name: HUB_MANAGE,
+        risk: Risk::High,
+        description: "manage the Hub library: list, launch, grant and block apps",
+    },
 ];
 
 /// The capability info for `name`, if it is a known capability.
@@ -65,6 +75,12 @@ pub const FUNCTION_CAPABILITIES: &[(&str, &str)] = &[
     // `kv_last_error` and `clipboard_last_error` read a local, harmless
     // status flag; the compiler does not gate them (`stdlib.rs`), so they
     // need no capability here either.
+    ("hub_list_apps", HUB_MANAGE),
+    ("hub_launch", HUB_MANAGE),
+    ("hub_set_grant", HUB_MANAGE),
+    ("hub_block", HUB_MANAGE),
+    ("hub_unblock", HUB_MANAGE),
+    // `hub_last_error` needs no capability, like `kv_last_error` above.
 ];
 
 /// The capability that a runtime function needs, if any.
