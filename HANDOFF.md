@@ -113,4 +113,4 @@ Test crates must run **one at a time** on Windows (linker errors LNK1318/LNK1201
 4. **Compiler:** `splice`/`fill`/`flat`, `Map.entries()` as a value, `async`/`await` on top of the request/completion machinery, `try`/`catch` (SPEC §5.6), dynamic-length `Chart` data, and `std/lib.d.ts` iteration types for `Map` so that `tsc` accepts `for…of` over a map.
 5. **Platforms:** open a GUI window on Linux and macOS and fix what breaks; then mobile (SPEC Q1, Q3).
 6. **Distribution:** publish the npm packages and a first registry; Hub H2 (signed indexes, transparency log); key rotation.
-7. **Charts:** real path-based line and pie geometry on the desktop (today they are proportional bars).
+7. ~~**Charts:** real path-based line and pie geometry on the desktop~~ done (`crates/plinth-ui/src/chart.rs`, test `plinth-shoot/tests/chart_geometry.rs`).
