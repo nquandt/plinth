@@ -5,14 +5,24 @@ import { signal, computed } from "plinth:ui";
 export interface Row {
   id: number;
   title: string;
-  subtitle: string;
+  subtitle?: string;
+  badge: boolean;
   on: boolean;
 }
 
 const ROW_COUNT = 10_000;
 
+// Mixed row shapes exercise variable-height virtualization (SPEC.md §7.3):
+// every third row has no subtitle (shorter), and every tenth row carries a
+// trailing Badge (taller than a Toggle-only row).
 function makeRow(id: number): Row {
-  return { id, title: `Row ${id}`, subtitle: `Item number ${id} of ${ROW_COUNT}`, on: false };
+  return {
+    id,
+    title: `Row ${id}`,
+    subtitle: id % 3 === 0 ? undefined : `Item number ${id} of ${ROW_COUNT}`,
+    badge: id % 10 === 0,
+    on: false,
+  };
 }
 
 function makeRows(count: number): Row[] {
@@ -32,7 +42,9 @@ export const visibleRows = computed(() => {
   if (needle === "") {
     return rows();
   }
-  return rows().filter((r) => r.title.toLowerCase().includes(needle) || r.subtitle.toLowerCase().includes(needle));
+  return rows().filter(
+    (r) => r.title.toLowerCase().includes(needle) || (r.subtitle ?? "").toLowerCase().includes(needle),
+  );
 });
 
 export function setRowOn(id: number, on: boolean): void {

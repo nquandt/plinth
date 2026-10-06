@@ -1,4 +1,4 @@
-import { signal, Screen, Section, TextField, Button, Text, List, Row as ListRow, Toggle, Empty } from "plinth:ui";
+import { signal, Screen, Section, TextField, Button, Text, List, Row as ListRow, Toggle, Badge, Empty } from "plinth:ui";
 import { filter, visibleRows, setRowOn, toggleAll } from "./model";
 
 export default function Rows() {
@@ -20,11 +20,25 @@ export default function Rows() {
         <List
           items={visibleRows()}
           key={(r) => r.id}
-          row={(r) => (
-            <ListRow title={r.title} subtitle={r.subtitle}>
-              <Toggle label="On" value={r.on} onChange={(on) => setRowOn(r.id, on)} />
-            </ListRow>
-          )}
+          row={(r) => {
+            const badge = r.badge ? <Badge label="Every 10th" tone="success" /> : null;
+            const toggle = <Toggle label="On" value={r.on} onChange={(on) => setRowOn(r.id, on)} />;
+            const subtitle = r.subtitle;
+            if (subtitle === null) {
+              return (
+                <ListRow title={r.title}>
+                  {badge}
+                  {toggle}
+                </ListRow>
+              );
+            }
+            return (
+              <ListRow title={r.title} subtitle={subtitle}>
+                {badge}
+                {toggle}
+              </ListRow>
+            );
+          }}
           empty={<Empty title="No rows match" message="Try a different filter." />}
         />
       </Section>

@@ -192,6 +192,10 @@ pub struct PlinthRoot {
     /// The package's assets (SPEC.md §10.1), by path under `assets/`
     /// (without the prefix), for `<Image>`.
     assets: Arc<HashMap<String, Vec<u8>>>,
+    /// One `gpui::ListState` per virtual `List` node (SPEC.md §7.3), keyed
+    /// by node id. `render_list` takes `&self`, so this needs a `RefCell`;
+    /// entries are dropped in `apply_commits` when the node is removed.
+    list_states: std::cell::RefCell<HashMap<NodeId, gpui::ListState>>,
 }
 
 impl PlinthRoot {
@@ -226,6 +230,7 @@ impl PlinthRoot {
             focus: cx.focus_handle(),
             focused_once: false,
             assets,
+            list_states: std::cell::RefCell::new(HashMap::new()),
         };
         root.apply_commits(initial_commits);
         root.sync_dialog(cx);
@@ -247,6 +252,7 @@ impl PlinthRoot {
             focus: cx.focus_handle(),
             focused_once: false,
             assets: Arc::new(HashMap::new()),
+            list_states: std::cell::RefCell::new(HashMap::new()),
         }
     }
 
@@ -332,6 +338,7 @@ impl PlinthRoot {
         }
         for id in self.tree.take_removed() {
             self.fields.remove(&id);
+            self.list_states.borrow_mut().remove(&id);
         }
     }
 
@@ -1242,18 +1249,21 @@ impl PlinthRoot {
     }
 
     /// A `List` with more than [`VIRTUAL_LIST_THRESHOLD`] rows renders with
-    /// gpui's `uniform_list` (SPEC.md §7.3, Q6: host-side virtualization):
-    /// only the rows that fit in the visible window become elements, so a
-    /// 10,000-row list costs a near-constant number of elements per frame
-    /// instead of one per row.
+    /// gpui's variable-height `list`/`ListState` (SPEC.md §7.3, Q6:
+    /// host-side virtualization): only the rows near the viewport become
+    /// elements, so a 10,000-row list costs a near-constant number of
+    /// elements per frame instead of one per row. Each row measures its own
+    /// height, so mixing rows with and without a subtitle (or any other
+    /// content that changes height) no longer clips or gaps rows.
     ///
-    /// `uniform_list` requires one row height for the whole list. Rows with
-    /// a subtitle are taller than rows without one; this picks the height
-    /// from the list's first row (SPEC.md note: a list that mixes rows with
-    /// and without a subtitle will clip or gap rows of the other kind once
-    /// virtualized — not a problem for the generated `big-list` example,
-    /// which gives every row the same shape, but a real fix needs gpui's
-    /// `list`/`ListState`, which this step didn't reach).
+    /// `PlinthRoot` keeps one [`gpui::ListState`] per virtual `List` node,
+    /// keyed by node id, in `self.list_states` (dropped in `apply_commits`
+    /// when the node is removed, alongside `self.fields`). When the row
+    /// count changes — the simplest correct way to react to a reorder or a
+    /// row added/removed — this splices the whole old range for the new
+    /// one; `ListState::splice` remeasures the replaced rows but keeps the
+    /// scroll position anchored to rows outside the spliced range, so a
+    /// prepend or an append does not reset the scroll to the top.
     ///
     /// Because only the rows inside the viewport become elements, rows
     /// scrolled out of view are not present in the AccessKit tree; the list
@@ -1262,34 +1272,40 @@ impl PlinthRoot {
     fn render_virtual_list(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let children: Rc<Vec<NodeId>> = Rc::new(node.children.clone());
         let count = children.len();
-        let has_subtitle = children
-            .first()
-            .and_then(|&c| self.tree.get(c))
-            .map(|n| n.str_prop(prop::SUBTITLE).is_some())
-            .unwrap_or(false);
-        let row_h = if has_subtitle { px(78.) } else { px(61.) };
         let max_h = match self.class {
             WidthClass::Compact => px(420.),
             WidthClass::Regular | WidthClass::Wide => px(560.),
         };
+        let state = {
+            let mut states = self.list_states.borrow_mut();
+            match states.get(&node.id) {
+                Some(existing) => {
+                    let old_count = existing.item_count();
+                    if old_count != count {
+                        existing.splice(0..old_count, count);
+                    }
+                    existing.clone()
+                }
+                None => {
+                    let new_state = gpui::ListState::new(count, gpui::ListAlignment::Top, px(200.));
+                    states.insert(node.id, new_state.clone());
+                    new_state
+                }
+            }
+        };
         let t = *t;
         let entity = cx.entity();
         let last_id = children.last().copied();
-        let list = gpui::uniform_list(eid("list-rows", node.id), count, move |range, _window, app| {
-            let children = children.clone();
-            range
-                .filter_map(|i| children.get(i).copied())
-                .map(|c| {
-                    let last = Some(c) == last_id;
-                    entity.update(app, |this, cx| {
-                        let row = this.render_node(c, &t, cx);
-                        div().h(row_h).when(!last, |d| d.border_b_1().border_color(t.border)).child(row).into_any_element()
-                    })
-                })
-                .collect::<Vec<_>>()
+        let list = gpui::list(state, move |i, _window, app| {
+            let Some(&c) = children.get(i) else { return div().into_any_element() };
+            let last = Some(c) == last_id;
+            entity.update(app, |this, cx| {
+                let row = this.render_node(c, &t, cx);
+                div().when(!last, |d| d.border_b_1().border_color(t.border)).child(row).into_any_element()
+            })
         })
-        .with_sizing_behavior(gpui::ListSizingBehavior::Infer)
-        .h(max_h.min(row_h * count as f32))
+        .with_sizing_behavior(gpui::ListSizingBehavior::Auto)
+        .h(max_h)
         .into_any_element();
         div()
             .id(eid("list", node.id))
