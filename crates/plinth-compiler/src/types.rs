@@ -9,6 +9,10 @@ pub type EnumId = u32;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
     Number,
+    /// `int` from `plinth:core` (SPEC.md §4.2): a branded `i32`. Literals
+    /// and arithmetic stay `i32`; it converts to `number` implicitly, and
+    /// from `number` only with `int(x)`.
+    Int,
     Bool,
     String,
     /// A union of string literals. At run time it is a string.
@@ -69,7 +73,7 @@ impl Type {
     pub fn repr(&self) -> Repr {
         match self {
             Type::Number => Repr::F64,
-            Type::Bool | Type::Element | Type::Enum(_) | Type::Signal(_) | Type::Computed(_) | Type::App => Repr::I32,
+            Type::Int | Type::Bool | Type::Element | Type::Enum(_) | Type::Signal(_) | Type::Computed(_) | Type::App => Repr::I32,
             Type::String
             | Type::StrLits(_)
             | Type::Null
@@ -143,6 +147,7 @@ impl fmt::Display for Display<'_> {
         let sub = |ty| Display { ty, structs: self.structs, enums: self.enums };
         match self.ty {
             Type::Number => write!(f, "number"),
+            Type::Int => write!(f, "int"),
             Type::Bool => write!(f, "boolean"),
             Type::String => write!(f, "string"),
             Type::StrLits(l) => {

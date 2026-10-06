@@ -57,6 +57,7 @@ pub enum StdFn {
     Navigate,
     ParseNumber,
     ToString,
+    Int,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -489,7 +490,7 @@ impl Checker<'_> {
     /// `T | null`, with a check that the representation supports null.
     fn nullable(&mut self, ty: Type, span: Span) -> Type {
         match ty {
-            Type::Bool | Type::Enum(_) | Type::Signal(_) | Type::Computed(_) => {
+            Type::Bool | Type::Int | Type::Enum(_) | Type::Signal(_) | Type::Computed(_) => {
                 self.err_help(
                     code::NULLABLE,
                     span,
@@ -591,10 +592,7 @@ impl Checker<'_> {
                 return Type::Array(Box::new(self.resolve_type(&args[0])));
             }
             "JSX.Element" => return Type::Element,
-            "int" => {
-                self.err_help(code::UNSUPPORTED, span, "`int` is not supported yet", "use `number`");
-                return Type::Error;
-            }
+            "int" => return Type::Int,
             "any" | "unknown" | "object" | "Object" => {
                 self.err(code::ANY, span, format!("`{name}` is not allowed"));
                 return Type::Error;
@@ -734,6 +732,7 @@ impl Checker<'_> {
         }
         match (from, to) {
             (T::Error, _) | (_, T::Error) => Some(None),
+            (T::Int, T::Number) => Some(Some(Coercion::I32ToNum)),
             (T::StrLits(_), T::String) => Some(Some(Coercion::Retag)),
             (T::StrLits(a), T::StrLits(b)) if a.iter().all(|x| b.contains(x)) => Some(Some(Coercion::Retag)),
             (T::Null, T::Nullable(_)) | (T::Null, T::Element) => Some(Some(Coercion::Retag)),
@@ -803,7 +802,7 @@ impl Checker<'_> {
             Type::StrLits(_) => Coercion::Retag,
             Type::Number => Coercion::NumToStr,
             Type::Bool => Coercion::BoolToStr,
-            Type::Enum(_) => {
+            Type::Enum(_) | Type::Int => {
                 let n = TExpr::new(TExprKind::Coerce(Coercion::I32ToNum, Box::new(e)), Type::Number, span);
                 return TExpr::new(TExprKind::Coerce(Coercion::NumToStr, Box::new(n)), Type::String, span);
             }

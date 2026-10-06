@@ -138,6 +138,7 @@ fn visit_expr(e: &TExpr, f: &mut dyn FnMut(&TExpr)) {
         TExprKind::UnionIs(o, _) => go(o),
         TExprKind::Index(a, b)
         | TExprKind::Num2(_, a, b)
+        | TExprKind::Int2(_, a, b)
         | TExprKind::Cmp(_, _, a, b)
         | TExprKind::StrCmp(_, a, b)
         | TExprKind::Concat(a, b)
@@ -339,6 +340,7 @@ impl Cx<'_> {
                 TExprKind::CallClosure(self.bx(c), args.into_iter().map(|a| self.expr(a)).collect())
             }
             TExprKind::Num2(op, a, b) => TExprKind::Num2(op, self.bx(a), self.bx(b)),
+            TExprKind::Int2(op, a, b) => TExprKind::Int2(op, self.bx(a), self.bx(b)),
             TExprKind::Neg(a) => TExprKind::Neg(self.bx(a)),
             TExprKind::Not(a) => TExprKind::Not(self.bx(a)),
             TExprKind::Cmp(op, k, a, b) => TExprKind::Cmp(op, k, self.bx(a), self.bx(b)),

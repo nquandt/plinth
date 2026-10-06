@@ -296,6 +296,65 @@ function Home() {
     assert_eq!(text_of(&tree, ControlKind::Text), "3");
 }
 
+// -- 4. `int` from plinth:core ------------------------------------------------
+
+#[test]
+fn int_arithmetic_stays_int_and_displays() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { int } from "plinth:core";
+function Home() {
+  const a: int = 7;
+  const b = int(3);
+  const c = a + b * int(2) - b;
+  return <Screen title="Home"><Text>{c}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    // 7 + 3*2 - 3 = 10
+    assert_eq!(text_of(&tree, ControlKind::Text), "10");
+}
+
+#[test]
+fn int_widens_to_number_implicitly() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { int } from "plinth:core";
+function Home() {
+  const a: int = 7;
+  const n: number = a;
+  return <Screen title="Home"><Text>{n / 2}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "3.5");
+}
+
+#[test]
+fn number_needs_explicit_int_conversion() {
+    let main = with_app("const n: number = 5; const x: int = n;");
+    assert_eq!(codes(&main), ["PL3001"]);
+}
+
+#[test]
+fn int_div_by_int_stays_int_truncated() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { int } from "plinth:core";
+function Home() {
+  const a = int(7);
+  const b = int(2);
+  return <Screen title="Home"><Text>{a / b}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    // Integer division truncates: 7 / 2 = 3, unlike `number` division (3.5).
+    assert_eq!(text_of(&tree, ControlKind::Text), "3");
+}
+
 // -- Behavior smoke test: confirms the `run` harness works and the lint
 // does not fire on a normal counter-style program. -------------------------
 

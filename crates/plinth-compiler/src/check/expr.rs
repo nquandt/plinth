@@ -31,7 +31,17 @@ impl Checker<'_> {
     pub(crate) fn expr(&mut self, e: &Expr, expected: Option<&Type>) -> TExpr {
         let span = e.span;
         match &e.kind {
-            ExprKind::Num(n) => TExpr::new(TExprKind::Num(*n), Type::Number, span),
+            ExprKind::Num(n) => {
+                // A literal is exactly representable, so it may satisfy an
+                // `int` context directly (SPEC.md §4.2); any other number
+                // needs an explicit `int(x)`.
+                let ty = match expected {
+                    Some(Type::Int) => Type::Int,
+                    Some(Type::Nullable(inner)) if **inner == Type::Int => Type::Int,
+                    _ => Type::Number,
+                };
+                TExpr::new(TExprKind::Num(*n), ty, span)
+            }
             ExprKind::Bool(b) => TExpr::new(TExprKind::Bool(*b), Type::Bool, span),
             ExprKind::Null => TExpr::new(TExprKind::Null, Type::Null, span),
             ExprKind::Str(s) => {
@@ -960,14 +970,26 @@ impl Checker<'_> {
                     let b = self.to_str(rt);
                     return TExpr::new(TExprKind::Concat(bx(a), bx(b)), Type::String, span);
                 }
+                if lt.ty == Type::Int && rt.ty == Type::Int {
+                    return TExpr::new(TExprKind::Int2(IntOp::Add, bx(lt), bx(rt)), Type::Int, span);
+                }
                 let a = self.coerce(lt, &Type::Number);
                 let b = self.coerce(rt, &Type::Number);
                 TExpr::new(TExprKind::Num2(NumOp::Add, bx(a), bx(b)), Type::Number, span)
             }
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow => {
-                let lt = self.expr(l, Some(&Type::Number));
+                let lt = self.expr(l, None);
+                let rt = self.expr(r, None);
+                if op != BinOp::Pow && lt.ty == Type::Int && rt.ty == Type::Int {
+                    let iop = match op {
+                        BinOp::Sub => IntOp::Sub,
+                        BinOp::Mul => IntOp::Mul,
+                        BinOp::Div => IntOp::Div,
+                        _ => IntOp::Rem,
+                    };
+                    return TExpr::new(TExprKind::Int2(iop, bx(lt), bx(rt)), Type::Int, span);
+                }
                 let a = self.coerce(lt, &Type::Number);
-                let rt = self.expr(r, Some(&Type::Number));
                 let b = self.coerce(rt, &Type::Number);
                 let nop = match op {
                     BinOp::Sub => NumOp::Sub,
@@ -1095,6 +1117,7 @@ impl Checker<'_> {
             (Type::Number, Type::Number) => EqKind::F64,
             (Type::Bool, Type::Bool) | (Type::Element, Type::Element) => EqKind::I32,
             (Type::Enum(x), Type::Enum(y)) if x == y => EqKind::I32,
+            (Type::Int, Type::Int) => EqKind::I32,
             (Type::String, Type::String) => EqKind::Str,
             (Type::Error, _) | (_, Type::Error) => EqKind::I32,
             (x, y) if x == y && x.repr() == crate::types::Repr::Ref => EqKind::Ref,

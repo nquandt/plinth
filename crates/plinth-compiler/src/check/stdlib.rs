@@ -14,7 +14,7 @@ pub const UI_NAMES: &[&str] = &[
     "signal", "computed", "effect", "app", "navigate", "Signal", "Computed", "Accent", "IconName", "ScreenDef", "AppConfig",
     "App", "Tone", "Align", "Group", "Screen", "Section", "Text", "Heading", "Button", "TextField", "Toggle", "List", "Row", "Empty",
 ];
-pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console"];
+pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int"];
 
 pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
     match m {
@@ -40,6 +40,7 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "console" => Binding::StdObj(StdObj::Console),
             "parseNumber" => Binding::Std(StdFn::ParseNumber),
             "toString" => Binding::Std(StdFn::ToString),
+            "int" => Binding::Std(StdFn::Int),
             _ => return None,
         }),
     }
@@ -151,6 +152,14 @@ impl Checker<'_> {
                 }
                 let te = self.expr(&args[0], None);
                 self.to_str(te)
+            }
+            StdFn::Int => {
+                if !one_arg(self, "int") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let te = self.expr(&args[0], Some(&Type::Number));
+                let te = self.coerce(te, &Type::Number);
+                TExpr::new(TExprKind::Coerce(Coercion::NumToI32, Box::new(te)), Type::Int, span)
             }
         }
     }

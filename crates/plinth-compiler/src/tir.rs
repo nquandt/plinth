@@ -133,6 +133,17 @@ pub enum NumOp {
     Pow,
 }
 
+/// Arithmetic on two `int` values (SPEC.md §4.2): stays `i32`, unlike
+/// `NumOp` which always works on `f64`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CmpOp {
     Eq,
@@ -214,6 +225,7 @@ pub enum TExprKind {
     /// A closure value for a function.
     Closure(FuncId),
     Num2(NumOp, Box<TExpr>, Box<TExpr>),
+    Int2(IntOp, Box<TExpr>, Box<TExpr>),
     Neg(Box<TExpr>),
     Not(Box<TExpr>),
     Cmp(CmpOp, EqKind, Box<TExpr>, Box<TExpr>),

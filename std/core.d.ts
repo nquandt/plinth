@@ -1,5 +1,13 @@
 // plinth:core: numbers, math, strings and dev logging (SPEC.md §4.7).
 
+/**
+ * A 32-bit integer (SPEC.md §4.2): a branded `number`. Literals and
+ * arithmetic on `int` stay `int`; it converts to `number` implicitly.
+ * Convert a `number` to `int` with `int(x)` (it truncates).
+ */
+export type int = number & { readonly __int: unique symbol };
+export declare function int(x: number): int;
+
 /** Mathematical functions. */
 export declare const Math: {
   readonly PI: number;

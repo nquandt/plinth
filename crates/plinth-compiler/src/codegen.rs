@@ -538,6 +538,7 @@ fn expr_vars(e: &TExpr, out: &mut Vec<VarId>) {
         | TExprKind::UnionIs(o, _) => go(o),
         TExprKind::Index(a, b)
         | TExprKind::Num2(_, a, b)
+        | TExprKind::Int2(_, a, b)
         | TExprKind::Cmp(_, _, a, b)
         | TExprKind::StrCmp(_, a, b)
         | TExprKind::Concat(a, b)
@@ -1096,6 +1097,17 @@ impl FnGen {
                     NumOp::Div => self.emit(I::F64Div),
                     NumOp::Rem => self.rt(g, "f64_rem"),
                     NumOp::Pow => self.rt(g, "f64_pow"),
+                }
+            }
+            TExprKind::Int2(op, a, b) => {
+                self.expr(g, a);
+                self.expr(g, b);
+                match op {
+                    IntOp::Add => self.emit(I::I32Add),
+                    IntOp::Sub => self.emit(I::I32Sub),
+                    IntOp::Mul => self.emit(I::I32Mul),
+                    IntOp::Div => self.emit(I::I32DivS),
+                    IntOp::Rem => self.emit(I::I32RemS),
                 }
             }
             TExprKind::Neg(a) => {
