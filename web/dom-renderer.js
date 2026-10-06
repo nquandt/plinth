@@ -7,7 +7,7 @@
 // This file is DOM-only: it does not touch wasm directly. `app.onCommit`
 // (from plinth-web.js) feeds it ops; it calls `app.onEvent(...)` back.
 
-import { ControlKind, Prop, Event, EnumAspect, EnumTone, EnumDatePickerMode } from "./ui-api.js";
+import { ControlKind, Prop, Event, EnumAspect, EnumTone, EnumDatePickerMode, EnumChartKind } from "./ui-api.js";
 
 const ASPECT_RATIO = { [EnumAspect.square]: "1 / 1", [EnumAspect.wide]: "16 / 9", [EnumAspect.tall]: "3 / 4" };
 
@@ -182,6 +182,54 @@ function el(tag, className, attrs) {
   return e;
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs) {
+  const e = document.createElementNS(SVG_NS, tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  return e;
+}
+
+/** `Chart.data`/`series[].points` wire format (`wit/plinth/ui-api.toml`):
+ * `"label\u0001value"` pairs joined with U+001F. */
+function parseChartPoints(s) {
+  if (!s) return [];
+  return s
+    .split("\u001f")
+    .map((pair) => {
+      const i = pair.indexOf("\u0001");
+      if (i < 0) return null;
+      const value = Number.parseFloat(pair.slice(i + 1));
+      return { label: pair.slice(0, i), value: Number.isFinite(value) ? value : 0 };
+    })
+    .filter((p) => p !== null);
+}
+
+/** `Chart.series` wire format: series joined with U+001E, each
+ * `"name\u0001points"`. */
+function parseChartSeries(n) {
+  const raw = n.props.get(Prop.series);
+  if (raw) {
+    return raw.split("\u001e").map((one) => {
+      const i = one.indexOf("\u0001");
+      const name = i < 0 ? one : one.slice(0, i);
+      const points = i < 0 ? [] : parseChartPoints(one.slice(i + 1));
+      return { name, points };
+    });
+  }
+  const points = parseChartPoints(n.props.get(Prop.data) ?? "");
+  return points.length ? [{ name: "", points }] : [];
+}
+
+/** The `<desc>`/AccessKit-equivalent summary of every value. */
+function chartDescription(series) {
+  return series
+    .map((s) => {
+      const body = s.points.map((p) => `${p.label}: ${p.value}`).join(", ");
+      return s.name ? `${s.name}: ${body}` : body;
+    })
+    .join(". ");
+}
+
 /** Guesses a MIME type from an asset's file extension, for a blob URL. */
 function assetMimeType(name) {
   const ext = name.split(".").pop()?.toLowerCase();
@@ -303,6 +351,8 @@ export class DomRenderer {
         return this.renderIcon(n);
       case "datePicker":
         return this.renderDatePicker(n);
+      case "chart":
+        return this.renderChart(n);
       default:
         return this.renderChildren(n, el("div", `pl-${kname}`));
     }
@@ -678,6 +728,163 @@ export class DomRenderer {
       wrap.appendChild(el("span", "pl-image-placeholder-text")).appendChild(text(alt));
     }
     return wrap;
+  }
+
+  /** `<Chart>` (SPEC.md §6.3, UI API 1.5): inline SVG with `<title>`/`<desc>`
+   * for the accessible name and summary, plus a visually hidden `<table>`
+   * so a screen reader gets every value. The runtime (this renderer), not
+   * the app, picks the colors (the CSS chart palette, derived from the
+   * accent and neutral tokens), height and axis ticks. */
+  renderChart(n) {
+    const label = n.props.get(Prop.label) ?? "";
+    const kind = n.props.get(Prop.chartKind)?.enum ?? EnumChartKind.bar;
+    const series = parseChartSeries(n);
+    const wrap = el("div", "pl-chart");
+
+    if (series.length === 0 || series.every((s) => s.points.length === 0)) {
+      wrap.setAttribute("role", "figure");
+      wrap.setAttribute("aria-label", label);
+      const empty = el("div", "pl-chart-empty");
+      empty.appendChild(text("No data"));
+      wrap.appendChild(empty);
+      return wrap;
+    }
+
+    wrap.appendChild(this.renderChartSvg(series, kind, label));
+    const showLegend = series.length > 1 || (kind === EnumChartKind.pie && series[0].points.length > 1);
+    if (showLegend) {
+      const names = kind === EnumChartKind.pie ? series[0].points.map((p) => p.label) : series.map((s) => s.name);
+      wrap.appendChild(this.renderChartLegend(names));
+    }
+    wrap.appendChild(this.renderChartTable(series));
+    return wrap;
+  }
+
+  renderChartSvg(series, kind, label) {
+    const W = 300, H = 150;
+    const svg = svgEl("svg", { class: "pl-chart-svg", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-labelledby": "" });
+    const titleId = `pl-chart-title-${Math.random().toString(36).slice(2)}`;
+    const descId = `pl-chart-desc-${Math.random().toString(36).slice(2)}`;
+    svg.setAttribute("aria-labelledby", `${titleId} ${descId}`);
+    const title = svgEl("title", { id: titleId });
+    title.appendChild(text(label));
+    svg.appendChild(title);
+    const desc = svgEl("desc", { id: descId });
+    desc.appendChild(text(chartDescription(series)));
+    svg.appendChild(desc);
+
+    if (kind === EnumChartKind.pie) {
+      const points = series[0].points;
+      const total = points.reduce((s, p) => s + Math.abs(p.value), 0) || 1;
+      const cx = W / 2, cy = H / 2, r = Math.min(W, H) / 2 - 6;
+      let angle = -Math.PI / 2;
+      points.forEach((p, i) => {
+        const frac = Math.abs(p.value) / total;
+        const next = angle + frac * Math.PI * 2;
+        const large = frac > 0.9999;
+        const x1 = cx + r * Math.cos(angle), y1 = cy + r * Math.sin(angle);
+        const x2 = cx + r * Math.cos(next), y2 = cy + r * Math.sin(next);
+        const path = large
+          ? `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx - 0.001} ${cy - r} Z`
+          : `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 0 1 ${x2} ${y2} Z`;
+        svg.appendChild(svgEl("path", { d: path, class: `pl-chart-c${i % 6}` }));
+        angle = next;
+      });
+      return svg;
+    }
+
+    const max = Math.max(1e-9, ...series.flatMap((s) => s.points.map((p) => Math.abs(p.value))));
+    const labels = series[0].points.map((p) => p.label);
+    const padL = 4, padR = 4, padB = 16, padT = 6;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const n = Math.max(1, labels.length);
+
+    if (kind === EnumChartKind.line) {
+      series.forEach((s, si) => {
+        const pts = s.points.map((p, i) => {
+          const x = padL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+          const y = padT + plotH - (Math.abs(p.value) / max) * plotH;
+          return `${x},${y}`;
+        });
+        svg.appendChild(svgEl("polyline", { points: pts.join(" "), class: `pl-chart-line pl-chart-c${si % 6}`, fill: "none" }));
+        s.points.forEach((p, i) => {
+          const x = padL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+          const y = padT + plotH - (Math.abs(p.value) / max) * plotH;
+          svg.appendChild(svgEl("circle", { cx: x, cy: y, r: 2.5, class: `pl-chart-c${si % 6}` }));
+        });
+      });
+    } else {
+      const groupW = plotW / n;
+      const barW = groupW / (series.length + 1);
+      labels.forEach((lbl, i) => {
+        series.forEach((s, si) => {
+          const v = s.points[i]?.value ?? 0;
+          const h = (Math.abs(v) / max) * plotH;
+          const x = padL + i * groupW + barW * (si + 0.5);
+          const y = padT + plotH - h;
+          svg.appendChild(svgEl("rect", { x, y, width: barW * 0.85, height: Math.max(h, 1), class: `pl-chart-c${si % 6}` }));
+        });
+      });
+    }
+    labels.forEach((lbl, i) => {
+      const x = padL + (n === 1 ? plotW / 2 : (i + 0.5) * (plotW / n));
+      const t = svgEl("text", { x, y: H - 3, class: "pl-chart-axis-label", "text-anchor": "middle" });
+      t.appendChild(text(lbl));
+      svg.appendChild(t);
+    });
+    return svg;
+  }
+
+  renderChartLegend(names) {
+    const legend = el("ul", "pl-chart-legend");
+    names.forEach((name, i) => {
+      const item = el("li", `pl-chart-legend-item pl-chart-c${i % 6}`);
+      item.appendChild(el("span", "pl-chart-legend-swatch"));
+      item.appendChild(text(name));
+      legend.appendChild(item);
+    });
+    return legend;
+  }
+
+  /** A visually hidden data table: a screen reader gets the exact numbers
+   * without relying on the drawing. */
+  renderChartTable(series) {
+    const table = el("table", "pl-chart-table pl-sr-only");
+    const multi = series.length > 1 && series.some((s) => s.name);
+    const labels = series[0]?.points.map((p) => p.label) ?? [];
+    const head = el("tr");
+    head.appendChild(el("th"));
+    if (multi) {
+      series.forEach((s) => {
+        const th = el("th");
+        th.appendChild(text(s.name));
+        head.appendChild(th);
+      });
+    } else {
+      head.appendChild(el("th"));
+    }
+    table.appendChild(el("thead")).appendChild(head);
+    const body = el("tbody");
+    labels.forEach((lbl, i) => {
+      const row = el("tr");
+      const th = el("th");
+      th.appendChild(text(lbl));
+      row.appendChild(th);
+      if (multi) {
+        series.forEach((s) => {
+          const td = el("td");
+          td.appendChild(text(String(s.points[i]?.value ?? "")));
+          row.appendChild(td);
+        });
+      } else {
+        const td = el("td");
+        td.appendChild(text(String(series[0].points[i]?.value ?? "")));
+        row.appendChild(td);
+      }
+      body.appendChild(row);
+    });
+    table.appendChild(body);
+    return table;
   }
 
   /** `Tabs.items` arrive joined with U+001F; `value` is the selected item's text. */

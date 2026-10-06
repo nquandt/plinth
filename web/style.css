@@ -337,6 +337,75 @@ body {
   text-align: center;
   padding: 8px;
 }
+
+/* <Chart> (SPEC.md §6.3, UI API 1.5): the app never picks these colors.
+   The chart palette is derived from the accent, hue-rotated with the CSS
+   relative color syntax, so it stays distinguishable in light and dark
+   without the app or this file naming a single fixed hex value. */
+.pl-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pl-chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  border-radius: 8px;
+  background: var(--pl-surface-alt, #eee);
+  color: var(--pl-muted);
+  font-size: 0.85rem;
+}
+.pl-chart-svg {
+  width: 100%;
+  height: 160px;
+}
+.pl-chart-axis-label {
+  font-size: 7px;
+  fill: var(--pl-muted);
+}
+.pl-chart-line {
+  stroke-width: 2;
+  stroke: currentColor;
+}
+.pl-chart-c0 { fill: var(--pl-accent); color: var(--pl-accent); stroke: var(--pl-accent); }
+.pl-chart-c1 { fill: hsl(from var(--pl-accent) calc(h + 180) s l); color: hsl(from var(--pl-accent) calc(h + 180) s l); }
+.pl-chart-c2 { fill: hsl(from var(--pl-accent) calc(h + 45) s l); color: hsl(from var(--pl-accent) calc(h + 45) s l); }
+.pl-chart-c3 { fill: hsl(from var(--pl-accent) calc(h + 223) s l); color: hsl(from var(--pl-accent) calc(h + 223) s l); }
+.pl-chart-c4 { fill: hsl(from var(--pl-accent) calc(h + 108) s l); color: hsl(from var(--pl-accent) calc(h + 108) s l); }
+.pl-chart-c5 { fill: var(--pl-muted); color: var(--pl-muted); }
+.pl-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8rem;
+  color: var(--pl-muted);
+}
+.pl-chart-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.pl-chart-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+}
+/* Visually hidden but still reachable by a screen reader: the Chart's
+   exact-value data table (SPEC.md §6.3). */
+.pl-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
 .pl-icon {
   display: inline-block;
   color: var(--pl-text);
