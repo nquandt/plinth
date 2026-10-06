@@ -69,6 +69,18 @@ pub struct Program {
     pub screens: Vec<Screen>,
     pub accent: Option<String>,
     pub loop_count: u32,
+    /// Classes (SPEC.md §4.2), keyed by the struct that holds their fields.
+    /// Codegen uses this to resolve `MethodCall` and `InstanceOf` against
+    /// the whole program's hierarchy, built after every module is checked.
+    pub classes: std::collections::HashMap<StructId, ClassDef>,
+}
+
+/// One class's place in the inheritance hierarchy and its own (not
+/// inherited) methods, by name.
+#[derive(Debug, Clone, Default)]
+pub struct ClassDef {
+    pub base: Option<StructId>,
+    pub methods: std::collections::HashMap<String, FuncId>,
 }
 
 impl Program {
@@ -256,6 +268,14 @@ pub enum TExprKind {
     /// True if the union value's runtime member is one of these indices
     /// into the `Type::Union` member list of the operand's static type.
     UnionIs(Box<TExpr>, Vec<usize>),
+    /// A class method call through a value whose static type is `StructId`
+    /// (SPEC.md §4.2 v1). Codegen resolves this to a direct call when no
+    /// reachable subclass overrides the method, or to an inline dispatch on
+    /// the receiver's runtime type id otherwise.
+    MethodCall(StructId, String, Box<TExpr>, Vec<TExpr>),
+    /// `x instanceof C`: true if the receiver's runtime type is `C` or one
+    /// of its subclasses.
+    InstanceOf(Box<TExpr>, StructId),
     Coerce(Coercion, Box<TExpr>),
     /// Statements, then a value.
     Block(Vec<TStmt>, Box<TExpr>),

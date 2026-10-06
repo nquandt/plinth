@@ -35,6 +35,8 @@ pub struct ClassDecl {
     pub methods: Vec<FuncDecl>,
     pub exported: bool,
     pub span: Span,
+    /// `class B extends A` (SPEC.md §4.2, v1: single inheritance).
+    pub extends: Option<(String, Span)>,
 }
 
 #[derive(Debug, Clone)]
@@ -290,6 +292,8 @@ pub enum ExprKind {
     New(String, Vec<TypeAnn>),
     /// `new C(args)`: construction of a user class (SPEC.md §4.2).
     NewInstance(String, Vec<Expr>),
+    /// `x instanceof C` (SPEC.md §4.2 v1): `(value, class name, name span)`.
+    InstanceOf(Box<Expr>, String, Span),
 }
 
 #[derive(Debug, Clone)]

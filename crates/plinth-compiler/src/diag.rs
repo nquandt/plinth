@@ -60,6 +60,15 @@ pub mod code {
     /// A class method is referenced without calling it (SPEC.md §4.2):
     /// methods are static-dispatch functions, so a bare `c.m` has no value.
     pub const UNBOUND_METHOD: &str = "PL2021";
+    /// `extends` names something that is not a class, or the hierarchy has
+    /// a cycle (SPEC.md §4.2 v1).
+    pub const EXTENDS: &str = "PL2022";
+    /// `super(...)`/`super.m(...)` used outside a subclass constructor or
+    /// method, missing, or not the constructor's first statement.
+    pub const SUPER: &str = "PL2023";
+    /// A method override's signature is not compatible with the base
+    /// class's method.
+    pub const OVERRIDE: &str = "PL2024";
     // 3xxx: types.
     pub const TYPE_MISMATCH: &str = "PL3001";
     pub const UNKNOWN_NAME: &str = "PL3002";

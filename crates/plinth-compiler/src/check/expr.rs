@@ -165,6 +165,7 @@ impl Checker<'_> {
             }
             ExprKind::New(name, type_args) => self.new_map_or_set(name, type_args, expected, span),
             ExprKind::NewInstance(name, args) => self.new_instance(name, args, span),
+            ExprKind::InstanceOf(obj, name, name_span) => self.instance_of(obj, name, *name_span, span),
         }
     }
 
@@ -361,7 +362,7 @@ impl Checker<'_> {
             Type::Struct(sid) => match self.prog.structs[sid as usize].field(prop).map(|(i, f)| (i, f.ty.clone())) {
                 Some((idx, ty)) => TExpr::new(TExprKind::Field(bx(o), sid, idx as u32), ty, span),
                 None => {
-                    if self.classes.get(&sid).is_some_and(|c| c.methods.contains_key(prop)) {
+                    if self.resolve_method(sid, prop).is_some() {
                         let msg = format!("`{prop}` is a method; it cannot be used without calling it");
                         self.err_help(code::UNBOUND_METHOD, prop_span, msg, format!("write `() => c.{prop}()`"));
                         return TExpr::new(TExprKind::Null, Type::Error, span);
@@ -439,6 +440,23 @@ impl Checker<'_> {
 
     fn call(&mut self, callee: &Expr, type_args: &[ast::TypeAnn], args: &[Expr], span: Span, expected: Option<&Type>) -> TExpr {
         match &callee.kind {
+            ExprKind::Ident(name) if name == "super" => {
+                // The one legitimate `super(...)` call is the first
+                // statement of a subclass constructor, extracted and
+                // checked directly by `declare_class`; any other one
+                // reaches this generic path, which is always an error
+                // (SPEC.md §4.2 v1).
+                self.err_help(
+                    code::SUPER,
+                    callee.span,
+                    "`super(...)` is only valid as the first statement of a subclass constructor",
+                    "move it there; it can be called only once",
+                );
+                for a in args {
+                    self.expr(a, None);
+                }
+                return TExpr::new(TExprKind::Null, Type::Error, span);
+            }
             ExprKind::Ident(name) => match self.lookup(name) {
                 Some(Binding::Std(f)) => return self.std_call(f, type_args, args, span, expected),
                 Some(Binding::StdObj(StdObj::Navigate)) => return self.std_call(StdFn::Navigate, type_args, args, span, expected),
@@ -459,10 +477,13 @@ impl Checker<'_> {
                 _ => {}
             },
             ExprKind::Member { obj, prop, prop_span, optional: false } => {
-                if let ExprKind::Ident(name) = &obj.kind
-                    && let Some(Binding::StdObj(o)) = self.lookup(name)
-                {
-                    return self.std_obj_call(o, prop, *prop_span, args, span);
+                if let ExprKind::Ident(name) = &obj.kind {
+                    if name == "super" {
+                        return self.super_method_call(prop, *prop_span, args, span);
+                    }
+                    if let Some(Binding::StdObj(o)) = self.lookup(name) {
+                        return self.std_obj_call(o, prop, *prop_span, args, span);
+                    }
                 }
                 let o = self.expr(obj, None);
                 return self.method_call(o, prop, *prop_span, args, span);
@@ -518,6 +539,35 @@ impl Checker<'_> {
         out
     }
 
+    /// `super.m(args)` (SPEC.md §4.2 v1): always a direct call to the base
+    /// class's method, never a dynamic dispatch.
+    fn super_method_call(&mut self, prop: &str, prop_span: Span, args: &[Expr], span: Span) -> TExpr {
+        let Some(Binding::Var(this_var)) = self.lookup("this") else {
+            self.err(code::SUPER, span, "`super` is only valid inside a class method or constructor");
+            for a in args {
+                self.expr(a, None);
+            }
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        };
+        let Type::Struct(sid) = self.prog.vars[this_var as usize].ty.clone() else {
+            self.err(code::SUPER, span, "`super` is only valid inside a class method or constructor");
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        };
+        let Some(base) = self.classes.get(&sid).and_then(|c| c.base) else {
+            self.err_help(code::SUPER, span, "this class has no base class", "`super` only works in a subclass");
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        };
+        let Some(fid) = self.resolve_method(base, prop) else {
+            let msg = format!("the base class has no method `{prop}`");
+            self.err(code::NO_PROPERTY, prop_span, msg);
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        };
+        let ft = self.func_type(fid, prop_span);
+        let this = TExpr::new(TExprKind::Var(this_var), Type::Struct(sid), span);
+        let targs = self.method_args(&ft, this, args, span);
+        TExpr::new(TExprKind::Call(fid, targs), ft.ret.clone(), span)
+    }
+
     /// `new C(args)`: calls the class's lowered constructor function.
     fn new_instance(&mut self, name: &str, args: &[Expr], span: Span) -> TExpr {
         let sid = match self.lookup(name) {
@@ -545,6 +595,44 @@ impl Checker<'_> {
         let ft = self.func_type(ctor, span);
         let targs = self.call_args(&ft, args, span);
         TExpr::new(TExprKind::Call(ctor, targs), Type::Struct(sid), span)
+    }
+
+    /// `x instanceof C` (SPEC.md §4.2 v1): true if `x`'s runtime type is `C`
+    /// or one of its subclasses.
+    fn instance_of(&mut self, obj: &Expr, name: &str, name_span: Span, span: Span) -> TExpr {
+        let sid = match self.lookup(name) {
+            Some(Binding::Type(Type::Struct(sid))) if self.classes.contains_key(&sid) => sid,
+            Some(Binding::Type(_)) => {
+                self.err_help(code::CLASS, name_span, format!("`{name}` is not a class"), "`instanceof` only works with a class");
+                self.expr(obj, None);
+                return TExpr::new(TExprKind::Null, Type::Error, span);
+            }
+            _ => {
+                self.err(code::UNKNOWN_NAME, name_span, format!("cannot find name `{name}`"));
+                self.expr(obj, None);
+                return TExpr::new(TExprKind::Null, Type::Error, span);
+            }
+        };
+        let o = self.expr(obj, None);
+        match o.ty.clone() {
+            Type::Struct(_) => TExpr::new(TExprKind::InstanceOf(bx(o), sid), Type::Bool, span),
+            Type::Nullable(inner) if matches!(*inner, Type::Struct(_)) => {
+                let tmp = self.temp(o.ty.clone());
+                let read = TExpr::new(TExprKind::Var(tmp), o.ty.clone(), o.span);
+                let is_null = TExpr::new(TExprKind::IsNull(bx(read.clone())), Type::Bool, span);
+                let unwrapped = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(read)), (*inner).clone(), span);
+                let test = TExpr::new(TExprKind::InstanceOf(bx(unwrapped), sid), Type::Bool, span);
+                let false_lit = TExpr::new(TExprKind::Bool(false), Type::Bool, span);
+                let cond = TExpr::new(TExprKind::Cond(bx(is_null), bx(false_lit), bx(test)), Type::Bool, span);
+                TExpr::new(TExprKind::Block(vec![TStmt::Let(tmp, Some(o))], bx(cond)), Type::Bool, span)
+            }
+            Type::Error => TExpr::new(TExprKind::Null, Type::Error, span),
+            other => {
+                let msg = format!("`instanceof` needs a class value, not `{}`", self.show(&other));
+                self.err(code::TYPE_MISMATCH, obj.span, msg);
+                TExpr::new(TExprKind::Null, Type::Error, span)
+            }
+        }
     }
 
     /// Checks arguments against a signature. Missing optional arguments
@@ -699,10 +787,15 @@ impl Checker<'_> {
             Type::Map(k, v) => self.map_method(o, &k, &v, prop, prop_span, args, span),
             Type::Set(t) => self.set_method(o, &t, prop, prop_span, args, span),
             Type::Struct(sid) => {
-                if let Some(&fid) = self.classes.get(&sid).and_then(|c| c.methods.get(prop)) {
+                if let Some(fid) = self.resolve_method(sid, prop) {
                     let ft = self.func_type(fid, prop_span);
-                    let targs = self.method_args(&ft, o, args, span);
-                    return TExpr::new(TExprKind::Call(fid, targs), ft.ret.clone(), span);
+                    let mut targs = self.method_args(&ft, o, args, span);
+                    let this = targs.remove(0);
+                    // Codegen resolves this to a direct call, or to an
+                    // inline dispatch on the receiver's runtime type, once
+                    // the whole program's class hierarchy is known
+                    // (SPEC.md §4.2 v1 overriding).
+                    return TExpr::new(TExprKind::MethodCall(sid, prop.to_string(), bx(this), targs), ft.ret.clone(), span);
                 }
                 // A function-typed field: `obj.f(x)`.
                 let field = self.property(o, prop, prop_span, span);

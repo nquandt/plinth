@@ -16,7 +16,7 @@
 use crate::link::{AppCode, Layout};
 use crate::rt_abi::{ARR_F64, ARR_I32, ARR_REF, FIRST_USER_TYPE, HEADER, STR_BYTES};
 use crate::tir::*;
-use crate::types::{Repr, Type};
+use crate::types::{Repr, StructId, Type};
 use std::collections::{HashMap, HashSet, VecDeque};
 use wasm_encoder::{BlockType, ConstExpr, Function, Instruction as I, MemArg, ValType};
 
@@ -258,6 +258,70 @@ impl<'p> Codegen<'p> {
             Type::String | Type::StrLits(_) => crate::rt_abi::T_STRING,
             other => panic!("a union member of type `{other:?}` has no runtime tag yet"),
         }
+    }
+
+    // -- Classes (SPEC.md §4.2 v1) -------------------------------------------
+
+    /// `sid` and every (transitive) subclass of it, including itself.
+    fn class_descendants(&self, sid: StructId) -> Vec<StructId> {
+        let mut out = vec![sid];
+        loop {
+            let mut added = false;
+            for (&s, info) in &self.prog.classes {
+                if out.contains(&s) {
+                    continue;
+                }
+                if info.base.is_some_and(|b| out.contains(&b)) {
+                    out.push(s);
+                    added = true;
+                }
+            }
+            if !added {
+                break;
+            }
+        }
+        out
+    }
+
+    /// The method `name` as class `sid` resolves it: its own, or inherited
+    /// from the nearest base that defines it.
+    fn effective_method(&self, sid: StructId, name: &str) -> Option<FuncId> {
+        let mut cur = Some(sid);
+        while let Some(s) = cur {
+            let info = self.prog.classes.get(&s)?;
+            if let Some(&fid) = info.methods.get(name) {
+                return Some(fid);
+            }
+            cur = info.base;
+        }
+        None
+    }
+
+    /// The call targets for a method call through a value of static class
+    /// `sid`: one `(0, func index)` when every reachable subclass resolves
+    /// to the same implementation (plain static dispatch, no overhead for
+    /// a class with no overrides), or one `(type id, func index)` per
+    /// distinct implementation otherwise, for an inline runtime dispatch.
+    fn dispatch_targets(&mut self, sid: StructId, name: &str) -> Vec<(u32, u32)> {
+        let mut raw: Vec<(StructId, FuncId)> =
+            self.class_descendants(sid).into_iter().filter_map(|d| self.effective_method(d, name).map(|f| (d, f))).collect();
+        if raw.is_empty() {
+            // The checker already verified `name` is reachable from `sid`.
+            if let Some(fid) = self.effective_method(sid, name) {
+                raw.push((sid, fid));
+            }
+        }
+        let all_same = raw.iter().all(|(_, f)| *f == raw[0].1);
+        if all_same {
+            let idx = self.func_ref(raw[0].1);
+            return vec![(0, idx)];
+        }
+        raw.into_iter()
+            .map(|(d, fid)| {
+                let idx = self.func_ref(fid);
+                (self.structs[d as usize].type_id, idx)
+            })
+            .collect()
     }
 
     fn sig_type(&mut self, ft: &crate::types::FuncType) -> u32 {
@@ -595,6 +659,13 @@ fn expr_vars(e: &TExpr, out: &mut Vec<VarId>) {
             }
             expr_vars(v, out);
         }
+        TExprKind::MethodCall(_, _, this, args) => {
+            expr_vars(this, out);
+            for a in args {
+                expr_vars(a, out);
+            }
+        }
+        TExprKind::InstanceOf(o, _) => go(o),
         _ => {}
     }
 }
@@ -1303,8 +1374,84 @@ impl FnGen {
                 }
                 self.free(th, Repr::I32);
             }
+            TExprKind::MethodCall(sid, name, this, args) => {
+                let targets = g.dispatch_targets(*sid, name);
+                if targets.len() == 1 {
+                    self.emit(I::I32Const(0));
+                    self.expr(g, this);
+                    for a in args {
+                        self.expr(g, a);
+                    }
+                    self.emit(I::Call(targets[0].1));
+                } else {
+                    let this_t = self.tmp(Repr::I32);
+                    self.expr(g, this);
+                    self.emit(I::LocalTee(this_t));
+                    self.emit(load(0, Repr::I32));
+                    let tag_t = self.tmp(Repr::I32);
+                    self.emit(I::LocalSet(tag_t));
+                    let mut arg_temps = Vec::new();
+                    for a in args {
+                        let ar = a.repr();
+                        let t = self.tmp(ar);
+                        self.expr(g, a);
+                        self.emit(I::LocalSet(t));
+                        arg_temps.push((t, ar));
+                    }
+                    self.emit_dispatch(&targets, tag_t, this_t, &arg_temps, block_type(r));
+                    self.free(this_t, Repr::I32);
+                    self.free(tag_t, Repr::I32);
+                    for (t, ar) in arg_temps {
+                        self.free(t, ar);
+                    }
+                }
+            }
+            TExprKind::InstanceOf(o, sid) => {
+                let ids: Vec<u32> = g.class_descendants(*sid).iter().map(|s| g.structs[*s as usize].type_id).collect();
+                self.expr(g, o);
+                self.emit(load(0, Repr::I32));
+                let th = self.tmp(Repr::I32);
+                self.emit(I::LocalSet(th));
+                for (i, id) in ids.iter().enumerate() {
+                    self.emit(I::LocalGet(th));
+                    self.emit(I::I32Const(*id as i32));
+                    self.emit(I::I32Eq);
+                    if i > 0 {
+                        self.emit(I::I32Or);
+                    }
+                }
+                self.free(th, Repr::I32);
+            }
             other => panic!("codegen: `lower` must remove {other:?}"),
         }
+    }
+
+    /// Emits a chain of `if type_id == … { call … } else { … }`, ending
+    /// (for the last target) in a plain call with no check (SPEC.md §4.2
+    /// v1 overriding).
+    fn emit_dispatch(&mut self, targets: &[(u32, u32)], tag_t: u32, this_t: u32, arg_temps: &[(u32, Repr)], bt: BlockType) {
+        if targets.len() == 1 {
+            self.emit(I::I32Const(0));
+            self.emit(I::LocalGet(this_t));
+            for (t, _) in arg_temps {
+                self.emit(I::LocalGet(*t));
+            }
+            self.emit(I::Call(targets[0].1));
+            return;
+        }
+        self.emit(I::LocalGet(tag_t));
+        self.emit(I::I32Const(targets[0].0 as i32));
+        self.emit(I::I32Eq);
+        self.open(I::If(bt));
+        self.emit(I::I32Const(0));
+        self.emit(I::LocalGet(this_t));
+        for (t, _) in arg_temps {
+            self.emit(I::LocalGet(*t));
+        }
+        self.emit(I::Call(targets[0].1));
+        self.emit(I::Else);
+        self.emit_dispatch(&targets[1..], tag_t, this_t, arg_temps, bt);
+        self.close();
     }
 
     fn closure(&mut self, g: &mut Codegen, fid: FuncId) {

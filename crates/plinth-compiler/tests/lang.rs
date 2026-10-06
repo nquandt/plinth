@@ -950,10 +950,171 @@ function Home() {
     assert_eq!(text_of(&tree, ControlKind::Text), "3");
 }
 
+// -- Class inheritance (SPEC.md §4.2 v1: single inheritance) --------------
+
 #[test]
-fn class_extends_is_rejected() {
-    let main = with_app("class Base { x: number = 0; constructor() {} }\nclass Derived extends Base { constructor() { super(); } }");
-    assert_eq!(codes(&main), ["PL2003"]);
+fn shapes_area_through_dynamic_dispatch() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class Shape {
+  name: string;
+  constructor(name: string) { this.name = name; }
+  area(): number { return 0; }
+}
+class Circle extends Shape {
+  r: number;
+  constructor(r: number) { super("circle"); this.r = r; }
+  area(): number { return this.r * this.r * 3; }
+}
+class Square extends Shape {
+  side: number;
+  constructor(side: number) { super("square"); this.side = side; }
+  area(): number { return this.side * this.side; }
+}
+function total(shapes: Shape[]): number {
+  let sum = 0;
+  for (const s of shapes) { sum = sum + s.area(); }
+  return sum;
+}
+function Home() {
+  const shapes: Shape[] = [new Circle(2), new Square(3)];
+  return <Screen title="Home"><Text>{total(shapes)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    // circle: 2*2*3 = 12, square: 3*3 = 9.
+    assert_eq!(text_of(&tree, ControlKind::Text), "21");
+}
+
+#[test]
+fn base_class_with_no_override_reached_through_subclass_without_area() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class Shape {
+  area(): number { return 5; }
+}
+class Named extends Shape {
+  label: string;
+  constructor(label: string) { super(); this.label = label; }
+}
+function Home() {
+  const s: Shape = new Named("x");
+  return <Screen title="Home"><Text>{s.area()}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "5");
+}
+
+#[test]
+fn super_method_call_runs_the_base_implementation() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class Animal {
+  describe(): string { return "an animal"; }
+}
+class Dog extends Animal {
+  describe(): string { return super.describe() + ", a dog"; }
+}
+function Home() {
+  const d = new Dog();
+  return <Screen title="Home"><Text>{d.describe()}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "an animal, a dog");
+}
+
+#[test]
+fn instanceof_narrows_a_base_typed_value() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class Shape {
+  area(): number { return 0; }
+}
+class Circle extends Shape {
+  r: number;
+  constructor(r: number) { super(); this.r = r; }
+  area(): number { return this.r * this.r * 3; }
+  radius(): number { return this.r; }
+}
+function describe(s: Shape): number {
+  if (s instanceof Circle) {
+    return s.radius();
+  }
+  return -1;
+}
+function Home() {
+  const s: Shape = new Circle(4);
+  return <Screen title="Home"><Text>{describe(s)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "4");
+}
+
+#[test]
+fn instanceof_is_false_for_an_unrelated_subclass() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class Shape {}
+class Circle extends Shape {}
+class Square extends Shape {}
+function Home() {
+  const s: Shape = new Square();
+  const isCircle = s instanceof Circle;
+  return <Screen title="Home"><Text>{isCircle ? "yes" : "no"}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "no");
+}
+
+#[test]
+fn extends_a_non_class_is_rejected() {
+    let main = with_app("interface I { x: number }\nclass C extends I { constructor() { super(); } }");
+    assert!(codes(&main).contains(&"PL2022"));
+}
+
+#[test]
+fn extends_cycle_is_rejected() {
+    // `B` is used before it is declared, which also catches a cycle
+    // (SPEC.md §4.2 v1): the checker never lets a class extend one that
+    // is not fully declared yet.
+    let main = with_app("class A extends B { constructor() { super(); } }\nclass B extends A { constructor() { super(); } }");
+    assert!(codes(&main).contains(&"PL2022"));
+}
+
+#[test]
+fn override_with_incompatible_signature_is_rejected() {
+    let main = with_app(
+        "class Base { m(x: number): number { return x; } }\nclass Sub extends Base { m(x: string): number { return 0; } constructor() { super(); } }",
+    );
+    assert_eq!(codes(&main), ["PL2024"]);
+}
+
+#[test]
+fn super_outside_a_subclass_is_rejected() {
+    let main = with_app("class C { constructor() { super(); } }");
+    assert_eq!(codes(&main), ["PL2023"]);
+}
+
+#[test]
+fn missing_super_call_is_rejected() {
+    let main = with_app("class Base { constructor() {} }\nclass Sub extends Base { x: number = 0; constructor() { this.x = 1; } }");
+    assert_eq!(codes(&main), ["PL2023"]);
+}
+
+#[test]
+fn super_call_not_first_statement_is_rejected() {
+    let main =
+        with_app("class Base { constructor() {} }\nclass Sub extends Base { x: number = 0; constructor() { this.x = 1; super(); } }");
+    assert!(codes(&main).contains(&"PL2023"));
 }
 
 #[test]
