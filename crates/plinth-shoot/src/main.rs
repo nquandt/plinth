@@ -52,10 +52,9 @@ fn main() -> Result<()> {
         let port = Box::new(WasmGuest { guest, _runner: runner });
         let accent = app.accent.clone();
         let window = cx.open_window(size(px(w), px(h)), move |_, cx| cx.new(|cx| PlinthRoot::new(port, commits, accent, cx)))?;
-        let screens: Vec<u32> =
-            cx.update_window(window.into(), |_, _, cx| window.read(cx).map(|r| r.tree().screens().map(|(s, _)| s).collect()))??;
+        let screens: Vec<u32> = cx.update(|cx| window.read(cx).map(|r| r.tree().screens().map(|(s, _)| s).collect()))?;
         for screen in screens {
-            cx.update_window(window.into(), |_, _, cx| window.update(cx, |root, _, cx| root.select_screen(screen, cx)))??;
+            cx.update(|cx| window.update(cx, |root, _, cx| root.select_screen(screen, cx)))?;
             cx.run_until_parked();
             let image = cx.capture_screenshot(window.into()).context("render the screen")?;
             let path = out.join(format!("screen{screen}-{class}.png"));
