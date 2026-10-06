@@ -9,7 +9,7 @@ use gpui::{
     SharedString, Subscription, Window, div, prelude::*, px,
 };
 use gpui_elements::editable_text::actions::Enter;
-use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
+use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_area, text_input};
 use plinth_protocol::{
     ControlKind, Event, NodeId, Value, Writer, axis, button_role, button_size, event, prop, text_align, text_style, tone,
 };
@@ -165,7 +165,8 @@ impl PlinthRoot {
         let mut missing = Vec::new();
         while let Some(id) = stack.pop() {
             let Some(node) = self.tree.get(id) else { continue };
-            if node.kind == Some(ControlKind::TextField) && !self.fields.contains_key(&id) {
+            let is_text_input = matches!(node.kind, Some(ControlKind::TextField) | Some(ControlKind::TextArea));
+            if is_text_input && !self.fields.contains_key(&id) {
                 missing.push((id, node.str_prop(prop::VALUE).unwrap_or("").to_owned()));
             }
             stack.extend(node.children.iter().copied());
@@ -342,6 +343,8 @@ impl PlinthRoot {
             ControlKind::Row => self.render_row(node, t, cx),
             ControlKind::Empty => self.render_empty(node, t),
             ControlKind::Group => self.render_group(node, t, cx),
+            ControlKind::Checkbox => self.render_checkbox(node, t, cx),
+            ControlKind::TextArea => self.render_text_area(node, t, cx),
         }
     }
 
@@ -609,6 +612,69 @@ impl PlinthRoot {
             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(title))
             .when_some(message, |d, m| d.child(div().text_xs().text_color(t.text_muted).child(m)))
             .into_any_element()
+    }
+
+    // -- UI API 1.2 inputs --
+
+    fn render_checkbox(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
+        let checked = node.bool_prop(prop::VALUE);
+        let disabled = node.bool_prop(prop::DISABLED) || self.stopped.is_some();
+        let id = node.id;
+        let box_el = div()
+            .id(eid("checkbox", id))
+            .flex_none()
+            .size(px(18.))
+            .rounded_sm()
+            .border_1()
+            .border_color(if checked { t.accent } else { t.border })
+            .bg(if checked { t.accent } else { t.background })
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(checked, |d| d.child(div().text_xs().text_color(t.knob).child("✓")))
+            .when(disabled, |d| d.opacity(0.5))
+            .when(!disabled, |d| {
+                d.cursor_pointer().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    let Some(node) = this.tree.get(id) else { return };
+                    let next = !node.bool_prop(prop::VALUE);
+                    let handler = node.handler(event::CHANGE);
+                    this.tree.set_local_prop(id, prop::VALUE, Value::Bool(next));
+                    match handler {
+                        Some(h) => this.fire(h, event::CHANGE, Value::Bool(next), cx),
+                        None => cx.notify(),
+                    }
+                }))
+            });
+        div().flex().items_center().gap_2().child(box_el).child(div().text_sm().text_color(t.text).child(label)).into_any_element()
+    }
+
+    fn render_text_area(&self, node: &Node, t: &Tokens, _cx: &mut Context<Self>) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
+        let placeholder = node.str_prop(prop::PLACEHOLDER).unwrap_or("").to_owned();
+        let Some(field) = self.fields.get(&node.id) else { return div().into_any_element() };
+        let id = node.id;
+        let input = div().id(eid("ta-wrap", id)).w_full().child(
+            text_area(eid("ta", id))
+                .state(field.state.downgrade())
+                .accepts_input(self.stopped.is_none())
+                .placeholder(placeholder)
+                .placeholder_color(t.text_muted)
+                .caret_color(t.text)
+                .selection_color(t.selection)
+                .caret_blink_interval_500ms()
+                .w_full()
+                .min_h(px(80.))
+                .px_3()
+                .py_2()
+                .rounded_lg()
+                .border_1()
+                .border_color(t.border)
+                .bg(t.background)
+                .text_color(t.text)
+                .text_sm(),
+        );
+        self.labelled(label, input, None, t)
     }
 }
 

@@ -119,3 +119,21 @@ export declare function Row(props: {
 }): Element;
 
 export declare function Empty(props: { title: string; message?: string }): Element;
+
+// -- UI API 1.2 inputs --
+
+export declare function Checkbox(props: {
+  label: string;
+  /** A signal binds both ways. A boolean needs `onChange`. */
+  value: Signal<boolean> | boolean;
+  onChange?: (value: boolean) => void;
+  disabled?: boolean;
+}): Element;
+
+export declare function TextArea(props: {
+  label: string;
+  /** A signal binds both ways. A string needs `onChange`. */
+  value: Signal<string> | string;
+  placeholder?: string;
+  onChange?: (value: string) => void;
+}): Element;

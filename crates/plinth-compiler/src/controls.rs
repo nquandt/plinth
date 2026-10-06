@@ -178,6 +178,29 @@ pub const CONTROLS: &[ControlSpec] = &[
         props: &[p("title", T::Str, true, P(prop::TITLE)), p("message", T::Str, false, P(prop::MESSAGE))],
         children: ChildKind::None,
     },
+    // -- UI API 1.2 inputs --
+    ControlSpec {
+        name: "Checkbox",
+        kind: ControlKind::Checkbox,
+        props: &[
+            p("label", T::Str, true, P(prop::LABEL)),
+            p("value", T::ValueBool, true, Target::Value),
+            p("onChange", T::CallbackBool, false, Ev(event::CHANGE)),
+            p("disabled", T::Bool, false, P(prop::DISABLED)),
+        ],
+        children: ChildKind::None,
+    },
+    ControlSpec {
+        name: "TextArea",
+        kind: ControlKind::TextArea,
+        props: &[
+            p("label", T::Str, true, P(prop::LABEL)),
+            p("value", T::ValueStr, true, Target::Value),
+            p("placeholder", T::Str, false, P(prop::PLACEHOLDER)),
+            p("onChange", T::CallbackStr, false, Ev(event::CHANGE)),
+        ],
+        children: ChildKind::None,
+    },
 ];
 
 pub fn by_name(name: &str) -> Option<&'static ControlSpec> {
