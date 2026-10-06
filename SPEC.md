@@ -445,6 +445,8 @@ Components are plain functions that run one time per instance. Props that are si
 
 `<List items={todos} key={t => t.id} row={t => <Row title={t.title} />} />` compiles to a keyed reconciler in `plinth-rt`. It compares the old and new key arrays and emits `insert`, `move`, and `remove` ops. Each row is its own reactive scope. The host virtualizes the list, so it requests row content only for visible rows. *(Open question Q6: guest-side or host-side virtualization.)*
 
+**Status (2026-10-06).** The reconciler finds reused rows with a sorted-key binary search, so a rebuild without reordering is O(n log n). For 10,000 rows (debug build): a change of one row takes 2 ms and an append of 100 rows takes 4 ms (`crates/plinth-compiler/tests/perf.rs`, ignored by default). A full reorder is still O(n²) in the guest and the host; a minimal-moves diff is in progress. Q6 is decided for host-side virtualization; it is in progress.
+
 ---
 
 ## 8. Guest ↔ host ABI
