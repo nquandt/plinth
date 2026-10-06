@@ -16,4 +16,5 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [dev-dependencies]
 plinth-compiler = { workspace = true }
+plinth-hub = { workspace = true }
 toml = { workspace = true }

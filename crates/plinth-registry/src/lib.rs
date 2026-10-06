@@ -3,6 +3,7 @@
 //! local folder), and the static-registry generator (`build`).
 
 pub mod build;
+pub mod serve;
 pub mod source;
 
 use serde::{Deserialize, Serialize};

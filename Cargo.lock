@@ -4916,6 +4916,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "plinth-compiler",
+ "plinth-hub",
  "plinth-link",
  "plinth-package",
  "serde",
