@@ -219,3 +219,62 @@ fn temperature_converts_both_ways_and_keeps_invalid_input() {
     assert_eq!(h.value(c), "10");
     assert_eq!(h.error(c), "");
 }
+
+#[test]
+fn flight_booker_constraints() {
+    let art = build("flight-booker");
+    let mut h = Harness::start(&art.component);
+    let start = h.field("Start date");
+    // The start date is today, so a one-way flight can be booked at once.
+    assert_eq!(h.value(start).len(), 10, "{}", h.value(start));
+    assert!(!h.disabled("Book"));
+    // One-way: no return date field.
+    assert!(h.find(ControlKind::TextField, |n| n.str_prop(prop::LABEL) == Some("Return date")).is_empty());
+
+    // An invalid start date: an error, and Book is disabled.
+    for bad in ["31.04.2027", "29.02.2027", "1.3.2027", "01-03-2027", "aa.bb.cccc", ""] {
+        h.type_text(start, bad);
+        assert_eq!(h.error(start), "Use the form DD.MM.YYYY", "{bad:?}");
+        assert!(h.disabled("Book"), "{bad:?}");
+    }
+    h.type_text(start, "29.02.2028"); // a leap day
+    assert_eq!(h.error(start), "");
+    assert!(!h.disabled("Book"));
+
+    // A return flight shows the return date field.
+    let kind = h.labeled(ControlKind::Picker, "Flight");
+    h.fire(kind, event::CHANGE, "return flight".into());
+    let back = h.field("Return date");
+    h.type_text(back, "28.02.2028");
+    assert_eq!(h.error(back), "The return date is before the start date");
+    assert!(h.disabled("Book"));
+    h.type_text(back, "29.02.2028"); // the same day is allowed
+    assert_eq!(h.error(back), "");
+    assert!(!h.disabled("Book"));
+    h.type_text(back, "01.03.2028");
+    assert!(!h.disabled("Book"));
+    h.type_text(back, "1.3.2028");
+    assert!(h.disabled("Book"));
+    h.type_text(back, "15.01.2029");
+
+    let dialog = h.one(ControlKind::Dialog, |_| true);
+    assert!(!h.node(dialog).bool_prop(prop::VALUE));
+    h.press("Book");
+    assert!(h.node(dialog).bool_prop(prop::VALUE));
+    assert_eq!(
+        h.node(dialog).str_prop(prop::MESSAGE),
+        Some("You booked a return flight on 29.02.2028, back on 15.01.2029.")
+    );
+    let ok = h.one(ControlKind::Action, |n| n.str_prop(prop::LABEL) == Some("OK"));
+    h.fire(ok, event::PRESS, Value::Null);
+    assert!(!h.node(dialog).bool_prop(prop::VALUE));
+
+    // Back to one-way: the return date does not matter any more.
+    h.type_text(back, "01.01.2000");
+    assert!(h.disabled("Book"));
+    h.fire(kind, event::CHANGE, "one-way flight".into());
+    assert!(h.find(ControlKind::TextField, |n| n.str_prop(prop::LABEL) == Some("Return date")).is_empty());
+    assert!(!h.disabled("Book"));
+    h.press("Book");
+    assert_eq!(h.node(dialog).str_prop(prop::MESSAGE), Some("You booked a one-way flight on 29.02.2028."));
+}

@@ -158,11 +158,39 @@ async function temperature() {
   assert.equal(error(c), "");
 }
 
+async function flightBooker() {
+  const h = await Harness.start("flight-booker");
+  const start = h.field("Start date");
+  assert.equal(value(start).length, 10);
+  assert.ok(!h.disabled("Book"));
+  assert.equal(h.find(ControlKind.textField, (n) => n.props.get(Prop.label) === "Return date").length, 0);
+
+  h.type(start, "31.04.2027");
+  assert.equal(error(start), "Use the form DD.MM.YYYY");
+  assert.ok(h.disabled("Book"));
+  h.type(start, "10.03.2027");
+  assert.equal(error(start), "");
+  assert.ok(!h.disabled("Book"));
+
+  h.send(h.labeled(ControlKind.picker, "Flight"), Event.change, "return flight");
+  const back = h.field("Return date");
+  h.type(back, "09.03.2027");
+  assert.equal(error(back), "The return date is before the start date");
+  assert.ok(h.disabled("Book"));
+  h.type(back, "11.03.2027");
+  assert.ok(!h.disabled("Book"));
+
+  const dialog = h.one(ControlKind.dialog);
+  assert.ok(!dialog.props.get(Prop.value));
+  h.press("Book");
+  assert.equal(dialog.props.get(Prop.value), true);
+  assert.equal(dialog.props.get(Prop.message), "You booked a return flight on 10.03.2027, back on 11.03.2027.");
+}
 
 
 
 async function main() {
-  for (const [name, test] of Object.entries({ counter, temperature })) {
+  for (const [name, test] of Object.entries({ counter, temperature, flightBooker })) {
     await test();
     console.log(`run-7guis.mjs: ${name} ok`);
   }
