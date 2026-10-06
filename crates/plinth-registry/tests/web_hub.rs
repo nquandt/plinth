@@ -64,7 +64,7 @@ fn web_hub_serves_landing_page_index_package_and_core() {
     build(&dir, &Options { with_core: true }).unwrap();
     let digest = plinth_registry::hex_digest(&bytes);
 
-    let port = serve::serve_background_with(&dir, 0, ServeOptions { web: true }).unwrap();
+    let port = serve::serve_background_with(&dir, 0, ServeOptions { web: true, trusted_keys: vec!["ed25519:test".into()] }).unwrap();
 
     let root = get(port, "/");
     assert_eq!(root.status, 302);
@@ -98,6 +98,13 @@ fn web_hub_serves_landing_page_index_package_and_core() {
     assert_eq!(module.header("Access-Control-Allow-Origin"), Some("*"));
     assert_eq!(module.header("Content-Security-Policy"), None);
     assert_eq!(get(port, "/plinth-registry.json").header("Access-Control-Allow-Origin"), None, "registry files keep the default");
+
+    // The trusted Hub keys for the page (`PLINTH_HUB_TRUSTED_KEYS`).
+    let config = get(port, "/web/hub-config.json");
+    assert_eq!((config.status, config.header("Content-Type")), (200, Some("application/json")));
+    let config: serde_json::Value = serde_json::from_slice(&config.body).unwrap();
+    assert_eq!(config["trustedKeys"], serde_json::json!(["ed25519:test"]));
+    assert_eq!(config["hub"], "dev.plinth.hub");
 
     let index = get(port, "/plinth-registry.json");
     assert_eq!((index.status, index.header("Content-Type")), (200, Some("application/json")));
@@ -143,7 +150,7 @@ fn the_package_icon_is_copied_and_the_app_list_url_resolves() {
     // Relative to `apps/index.json` (docs/REGISTRY.md §3).
     assert_eq!(list.apps[0].icon.as_deref(), Some("com.example.iconic/assets/icon.png"));
 
-    let port = serve::serve_background_with(&dir, 0, ServeOptions { web: true }).unwrap();
+    let port = serve::serve_background_with(&dir, 0, ServeOptions { web: true, trusted_keys: vec!["ed25519:test".into()] }).unwrap();
     let icon = get(port, "/apps/com.example.iconic/assets/icon.png");
     assert_eq!((icon.status, icon.header("Content-Type")), (200, Some("image/png")));
     assert_eq!(icon.body, png);

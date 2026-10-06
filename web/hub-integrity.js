@@ -21,6 +21,20 @@ function tomlString(text, key) {
   return m ? m[1] : null;
 }
 
+/** Reads the `[[capabilities]]` tables of a `.plnt` manifest: `[{ name, rationale }]`. */
+export function manifestCapabilities(manifestText) {
+  const out = [];
+  const blocks = String(manifestText).split(/^\s*\[\[capabilities\]\]\s*$/m).slice(1);
+  for (const block of blocks) {
+    const body = block.split(/^\s*\[/m)[0];
+    const name = /^\s*name\s*=\s*"((?:[^"\\]|\\.)*)"/m.exec(body)?.[1];
+    if (!name) continue;
+    const rationale = /^\s*rationale\s*=\s*"((?:[^"\\]|\\.)*)"/m.exec(body)?.[1] ?? "";
+    if (!out.some((c) => c.name === name)) out.push({ name, rationale: rationale.replace(/\\(.)/g, "$1") });
+  }
+  return out;
+}
+
 /** JSON with the object keys sorted and no white space (the `canonical_json` of `plinth-package`). */
 export function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -106,7 +120,8 @@ export async function checkSignature(zip, manifest, sigBytes, { canVerify } = {}
  * 3. the signature, if the package has one, and the signer agrees with the
  *    registry (`version.signer`).
  *
- * Returns `{ manifestText, manifest, signature }`; throws with a plain
+ * Returns `{ manifestText, manifest, signature }` (`manifest` has `id`,
+ * `name`, `version`, `publisher`, `entry`, `digest` and `capabilities`); throws with a plain
  * reason on a mismatch. `opts.canVerify` overrides the Ed25519 detection
  * (tests).
  */
@@ -121,10 +136,12 @@ export async function checkPackage(bytes, version, appId, opts = {}) {
   const manifestText = new TextDecoder().decode(await zip.read("manifest.toml"));
   const manifest = {
     id: tomlString(manifestText, "id") ?? "",
+    name: tomlString(manifestText, "name") ?? "",
     version: tomlString(manifestText, "version") ?? "",
     publisher: tomlString(manifestText, "publisher") ?? "",
     entry: tomlString(manifestText, "entry") ?? "app.wasm",
     digest: tomlString(manifestText, "digest") ?? "",
+    capabilities: manifestCapabilities(manifestText),
   };
   if (manifest.id.toLowerCase() !== String(appId).toLowerCase()) throw new Error(`the package is the app "${manifest.id}", not "${appId}"`);
   if (version.version && manifest.version !== version.version) {

@@ -6,9 +6,8 @@
 /// `(file name, bytes)`, for every file under `/web/`.
 pub const FILES: &[(&str, &[u8])] = &[
     ("hub.html", include_bytes!("../../../web/hub.html")),
-    ("hub.js", include_bytes!("../../../web/hub.js")),
-    ("hub-logic.js", include_bytes!("../../../web/hub-logic.js")),
-    ("hub-consent.js", include_bytes!("../../../web/hub-consent.js")),
+    ("registry-client.js", include_bytes!("../../../web/registry-client.js")),
+    ("hub-host.js", include_bytes!("../../../web/hub-host.js")),
     ("hub-storage.js", include_bytes!("../../../web/hub-storage.js")),
     ("hub-integrity.js", include_bytes!("../../../web/hub-integrity.js")),
     ("app-frame.html", include_bytes!("../../../web/app-frame.html")),

@@ -26,6 +26,18 @@ pub fn serve(folder: &Path, port: u16, web: bool) -> Result<()> {
     if web {
         println!("web App Hub: http://{addr}/ (Ctrl+C to stop)");
     }
-    let options = plinth_registry::serve::Options { web };
+    // The Hub keys that the web App Hub trusts: the same variable as the
+    // desktop host (`docs/HUB.md` §4.1), comma-separated key ids.
+    let trusted_keys: Vec<String> = std::env::var("PLINTH_HUB_TRUSTED_KEYS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if web && !trusted_keys.is_empty() {
+        println!("trusted Hub keys: {}", trusted_keys.join(", "));
+    }
+    let options = plinth_registry::serve::Options { web, trusted_keys };
     plinth_registry::serve::accept_loop_with(listener, folder, options).with_context(|| format!("serve {}", folder.display()))
 }

@@ -24,11 +24,22 @@ pub fn accept_loop(listener: TcpListener, folder: &Path) -> Result<()> {
 }
 
 /// What the server serves in addition to the registry folder.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Options {
     /// Also serve the web App Hub and the web host under `/web/`, and
     /// redirect `/` to `/web/hub.html` (`docs/web-hub.md`).
     pub web: bool,
+    /// The publisher key ids (`ed25519:…`) that the web App Hub trusts as
+    /// Hub keys (`docs/HUB.md` §4.1): the page gives `hub.manage` only to a
+    /// Hub package that one of them signed. Served as `/web/hub-config.json`.
+    pub trusted_keys: Vec<String>,
+}
+
+impl Options {
+    /// The web App Hub's configuration (`/web/hub-config.json`).
+    pub fn hub_config_json(&self) -> String {
+        serde_json::json!({ "schema": "plinth.web-hub/1", "hub": "dev.plinth.hub", "trustedKeys": self.trusted_keys }).to_string()
+    }
 }
 
 /// `accept_loop` with `options`.
@@ -37,8 +48,9 @@ pub fn accept_loop_with(listener: TcpListener, folder: &Path, options: Options) 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         let folder = folder.clone();
+        let options = options.clone();
         std::thread::spawn(move || {
-            let _ = handle(stream, &folder, options);
+            let _ = handle(stream, &folder, &options);
         });
     }
     Ok(())
@@ -61,7 +73,7 @@ pub fn serve_background_with(folder: &Path, port: u16, options: Options) -> Resu
     Ok(bound)
 }
 
-fn handle(mut stream: TcpStream, folder: &Path, options: Options) -> Result<()> {
+fn handle(mut stream: TcpStream, folder: &Path, options: &Options) -> Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     reader.read_line(&mut line)?;
@@ -98,6 +110,9 @@ fn handle(mut stream: TcpStream, folder: &Path, options: Options) -> Result<()> 
         const CORS: (&str, &str) = ("Access-Control-Allow-Origin", "*");
         const FRAME_CSP: (&str, &str) = ("Content-Security-Policy", "sandbox allow-scripts");
         let extra: &[(&str, &str)] = if name == "app-frame.html" { &[CORS, FRAME_CSP] } else { &[CORS] };
+        if name == "hub-config.json" {
+            return respond(&mut stream, 200, "application/json", options.hub_config_json().as_bytes(), head, &[]);
+        }
         return match crate::web_files::get(name) {
             Some(bytes) => respond(&mut stream, 200, content_type(Path::new(name)), bytes, head, extra),
             None => respond(&mut stream, 404, "text/plain", b"not found", head, &[]),

@@ -204,6 +204,7 @@ function hostImports(
     askDialog,
     completeRequest,
     clipboard = null,
+    hub = null,
   } = {},
 ) {
   // A capability is usable when the manifest declares it and the user did
@@ -358,6 +359,52 @@ function hostImports(
     v.setUint32(retptr + 8, values.length, true);
   }
 
+  // plinth:hub: the reason a call is denied, or null.
+  function hubReason() {
+    const reason = capReason("hub.manage");
+    if (reason !== null) return reason;
+    return hub ? null : DeniedReason.unsupported;
+  }
+  function hubString(retptr, call) {
+    const reason = hubReason();
+    if (reason !== null) return writeDeniedAt4(retptr, reason);
+    let value;
+    try {
+      value = call();
+    } catch {
+      return writeDeniedAt4(retptr, DeniedReason.unsupported);
+    }
+    writeOkString(retptr, value);
+  }
+  function hubUnit(retptr, call) {
+    const reason = hubReason();
+    if (reason !== null) return writeDeniedUnit(retptr, reason);
+    try {
+      call();
+    } catch {
+      return writeDeniedUnit(retptr, DeniedReason.unsupported);
+    }
+    writeOkUnit(retptr);
+  }
+  const deniedText = (reason) =>
+    reason === DeniedReason.undeclared ? "denied:undeclared" : reason === DeniedReason.refused ? "denied:refused" : "denied:unsupported";
+  /** An async hub call: `denied` is null (answer null) or "text" (answer the reason text). */
+  function hubAsync(denied, call, ok, failed) {
+    const id = nextRequest++;
+    const reason = hubReason();
+    if (reason !== null) {
+      Promise.resolve().then(() => completeRequest?.(id, denied === "text" ? deniedText(reason) : null));
+      return id;
+    }
+    Promise.resolve()
+      .then(call)
+      .then(
+        (value) => completeRequest?.(id, ok(value)),
+        (err) => completeRequest?.(id, failed(String(err?.message ?? err))),
+      );
+    return id;
+  }
+
   let nextTimer = 1;
   const timers = new Map(); // id -> JS handle
   const storeReason = kvStore ? capReason("store.kv") : DeniedReason.undeclared;
@@ -509,77 +556,79 @@ function hostImports(
         writeOkOptionString(retptr, clipboardCache);
       },
     },
-    // `plinth:hub` (`docs/HUB.md` §4.1, §12.2) is privileged and needs a
-    // real Hub backend (the library, grants, signature checks) that this
-    // early web host does not have yet (`docs/HUB.md` §11: the web Hub is
-    // H6). Every call answers "unsupported", exactly like a desktop host
-    // build with no implementation for a capability (SPEC.md §9.4); it
-    // never traps, so a trusted Hub UI app still loads and runs here, it
-    // just cannot manage the library yet.
+    // `plinth:hub` (`docs/HUB.md` §4.1, §12.2): privileged. The calls go to
+    // `hub` (`hub-host.js`), which only the web App Hub shell gives, and
+    // only to the Hub app signed by a trusted key (`hub-shell.js`). Without
+    // it every call answers "unsupported" (SPEC.md §9.4); a declared but
+    // refused `hub.manage` answers "refused". Never a trap. A backend error
+    // answers "unsupported", as on the desktop host.
     "plinth:app/hub@1.0.0": {
       "list-apps"(retptr) {
-        writeDeniedAt4(retptr, DeniedReason.unsupported);
+        hubString(retptr, () => hub.listAppsJson());
       },
-      launch(_idPtr, _idLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      launch(idPtr, idLen, retptr) {
+        hubUnit(retptr, () => hub.launch(readString(idPtr, idLen)));
       },
-      "set-grant"(_idPtr, _idLen, _capPtr, _capLen, _allowed, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      "set-grant"(idPtr, idLen, capPtr, capLen, allowed, retptr) {
+        hubUnit(retptr, () => hub.setGrant(readString(idPtr, idLen), readString(capPtr, capLen), Boolean(allowed)));
       },
-      block(_idPtr, _idLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      block(idPtr, idLen, retptr) {
+        hubUnit(retptr, () => hub.block(readString(idPtr, idLen)));
       },
-      unblock(_idPtr, _idLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      unblock(idPtr, idLen, retptr) {
+        hubUnit(retptr, () => hub.unblock(readString(idPtr, idLen)));
       },
       // Core 1.8 (`docs/HUB.md` §9.1, §5.2, H3 step 2).
       "list-groups"(retptr) {
-        writeDeniedAt4(retptr, DeniedReason.unsupported);
+        hubString(retptr, () => hub.listGroupsJson());
       },
-      "create-group"(_namePtr, _nameLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      "create-group"(namePtr, nameLen, retptr) {
+        hubUnit(retptr, () => hub.createGroup(readString(namePtr, nameLen)));
       },
-      "set-group"(_idPtr, _idLen, _groupPtr, _groupLen, _member, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      "set-group"(idPtr, idLen, groupPtr, groupLen, member, retptr) {
+        hubUnit(retptr, () => hub.setGroup(readString(idPtr, idLen), readString(groupPtr, groupLen), Boolean(member)));
       },
-      remove(_idPtr, _idLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      remove(idPtr, idLen, retptr) {
+        hubUnit(retptr, () => hub.remove(readString(idPtr, idLen)));
       },
-      // Async: a request id now, a denied completion later (null for
-      // `search`, the reason text for `install`; `wit/plinth/app.wit`).
-      search(_queryPtr, _queryLen) {
-        const id = nextRequest++;
-        Promise.resolve().then(() => completeRequest?.(id, null));
-        return id;
+      // Async: a request id now, the completion later (`wit/plinth/app.wit`).
+      // Denied: null for `search` and `check-updates`, the reason text for
+      // `install` and `update`.
+      search(queryPtr, queryLen) {
+        const query = readString(queryPtr, queryLen);
+        return hubAsync(null, () => hub.search(query), (json) => json, () => null);
       },
-      install(_idPtr, _idLen) {
-        const id = nextRequest++;
-        Promise.resolve().then(() => completeRequest?.(id, "denied:unsupported"));
-        return id;
+      install(idPtr, idLen) {
+        const app = readString(idPtr, idLen);
+        return hubAsync("text", () => hub.install(app), () => null, (e) => e);
       },
       // Core 1.9 (`docs/HUB.md` §4.1, §7.4, §9.2).
-      "app-info"(_idPtr, _idLen, retptr) {
-        writeDeniedAt4(retptr, DeniedReason.unsupported);
+      "app-info"(idPtr, idLen, retptr) {
+        hubString(retptr, () => hub.appInfoJson(readString(idPtr, idLen)));
       },
-      pin(_idPtr, _idLen, _versionPtr, _versionLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      pin(idPtr, idLen, versionPtr, versionLen, retptr) {
+        hubUnit(retptr, () => hub.pin(readString(idPtr, idLen), readString(versionPtr, versionLen)));
       },
-      "block-publisher"(_keyPtr, _keyLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      "block-publisher"(keyPtr, keyLen, retptr) {
+        hubUnit(retptr, () => hub.blockPublisher(readString(keyPtr, keyLen)));
       },
-      "unblock-publisher"(_keyPtr, _keyLen, retptr) {
-        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      "unblock-publisher"(keyPtr, keyLen, retptr) {
+        hubUnit(retptr, () => hub.unblockPublisher(readString(keyPtr, keyLen)));
       },
-      // Async, like `search` (null) and `install` (the reason text).
-      "check-updates"(_idPtr, _idLen) {
-        const id = nextRequest++;
-        Promise.resolve().then(() => completeRequest?.(id, null));
-        return id;
+      "check-updates"(idPtr, idLen) {
+        const app = readString(idPtr, idLen);
+        // A failed check still answers with JSON, so the app can tell
+        // "denied" (null) from "failed" (as the desktop host does).
+        return hubAsync(
+          null,
+          () => hub.checkUpdates(app),
+          (json) => json,
+          (e) => JSON.stringify({ updates: [], errors: [e] }),
+        );
       },
-      update(_idPtr, _idLen) {
-        const id = nextRequest++;
-        Promise.resolve().then(() => completeRequest?.(id, "denied:unsupported"));
-        return id;
+      update(idPtr, idLen) {
+        const app = readString(idPtr, idLen);
+        return hubAsync("text", () => hub.update(app), () => null, (e) => e);
       },
     },
   };
@@ -681,6 +730,7 @@ export class PlinthApp {
       completeRequest,
       capabilities,
       refused: opts.refused ?? new Set(),
+      hub: opts.hub ?? null,
       kvStore,
       onCommit: (ops) => this.onCommit(ops),
     });
