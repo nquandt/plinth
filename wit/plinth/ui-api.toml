@@ -4,7 +4,7 @@
 # enum ids. The compiler, the guest runtime and the host all generate their
 # constants from it. Never reuse or renumber an id inside one major version.
 
-version = "1.6"
+version = "1.7"
 
 [controls]
 screen = 1
@@ -100,6 +100,15 @@ weight = 61            # enum weight
 italic = 62            # bool
 mono = 63              # bool
 lines = 64             # int, the most lines of a span (0 = no limit)
+# UI API 1.7, Level 2 partial styles (phase U2). Each is a string of
+# "<prop id>:<int value>" pairs joined with ",", made by the compiler from an
+# object literal of style props; the host applies it over the props.
+hover = 65             # string, partial style while the pointer is over the element
+active = 66            # string, partial style while the element is pressed
+focus = 67             # string, partial style while the element has keyboard focus
+compact = 68           # string, partial style in the compact width class
+regular = 69           # string, partial style in the regular width class
+wide = 70              # string, partial style in the wide width class
 
 [events]
 press = 1        # value: null

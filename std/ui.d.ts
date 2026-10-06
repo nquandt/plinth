@@ -319,7 +319,8 @@ type ColorToken =
   | "selected";
 type SizeValue = number | "auto" | "full" | "1/2" | "1/3" | "2/3" | "1/4" | "3/4";
 
-interface BoxStyle {
+/** The style props of a box: also the keys of a partial style (`hover`, `compact`, ...). Partial style values must be literals. */
+interface BoxLook {
   /** The direction of the children. Default "column". */
   direction?: "row" | "column";
   wrap?: boolean;
@@ -341,14 +342,43 @@ interface BoxStyle {
   bg?: ColorToken;
   border?: ColorToken;
   radius?: "none" | "sm" | "md" | "lg" | "full";
+}
+
+interface BoxStyle extends BoxLook {
+  /** Applied while the pointer is over the element. */
+  hover?: BoxLook;
+  /** Applied while the element is pressed. */
+  active?: BoxLook;
+  /** Applied while the element has keyboard focus. */
+  focus?: BoxLook;
+  /** Applied in the compact width class (narrower than 600 px). */
+  compact?: BoxLook;
+  /** Applied in the regular width class (600 to 1199 px). */
+  regular?: BoxLook;
+  /** Applied in the wide width class (1200 px or more). */
+  wide?: BoxLook;
   children?: Children;
 }
 
 /** A layout box. `label` names it as a group for assistive technology. */
 export declare function Box(props: BoxStyle & { label?: string }): Element;
 
+interface SpanLook {
+  size?: "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
+  weight?: "regular" | "medium" | "semibold" | "bold";
+  italic?: boolean;
+  mono?: boolean;
+  fg?: ColorToken;
+  align?: Align;
+  lines?: number;
+  grow?: number;
+}
+
 /** Styled text. The children are the text. */
 export declare function Span(props: {
+  compact?: SpanLook;
+  regular?: SpanLook;
+  wide?: SpanLook;
   size?: "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
   weight?: "regular" | "medium" | "semibold" | "bold";
   italic?: boolean;

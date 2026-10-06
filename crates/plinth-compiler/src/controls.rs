@@ -60,6 +60,11 @@ pub enum PropTy {
     /// int prop (the target id), or a fraction string literal (`"1/2"`,
     /// `"full"`, `"auto"`, ...), sent as an enum prop with this id.
     Size(u16),
+    /// A Level 2 partial style (UI API 1.7): an object literal whose keys
+    /// are props of this list and whose values are literals. Encoded at
+    /// compile time into one string prop, `"<prop id>:<int>"` pairs joined
+    /// with `,` (`hover={{ bg: "hover" }}`).
+    PartialStyle(&'static [PropSpec]),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,7 +76,7 @@ pub enum Target {
     List,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PropSpec {
     pub name: &'static str,
     pub ty: PropTy,
@@ -156,10 +161,23 @@ const WEIGHTS: &[(&str, u16)] =
     &[("regular", weight::REGULAR), ("medium", weight::MEDIUM), ("semibold", weight::SEMIBOLD), ("bold", weight::BOLD)];
 const PRESSABLE_ROLES: &[(&str, u16)] = &[("button", pressable_role::BUTTON), ("link", pressable_role::LINK)];
 
-/// The style props of a Level 2 box (`Box`, `Pressable`, `Scroll`), after
-/// the props of the control itself.
+/// The props of a Level 2 box: the props of the control itself, the style
+/// props, and the partial styles (states and width classes). `@style`
+/// gives only the style props.
 macro_rules! box_props {
+    (@style) => { box_props!(@list []) };
     ($($extra:expr),* $(,)?) => {
+        box_props!(@list [
+            $($extra,)*
+            p("hover", T::PartialStyle(BOX_STYLE), false, P(prop::HOVER)),
+            p("active", T::PartialStyle(BOX_STYLE), false, P(prop::ACTIVE)),
+            p("focus", T::PartialStyle(BOX_STYLE), false, P(prop::FOCUS)),
+            p("compact", T::PartialStyle(BOX_STYLE), false, P(prop::COMPACT)),
+            p("regular", T::PartialStyle(BOX_STYLE), false, P(prop::REGULAR)),
+            p("wide", T::PartialStyle(BOX_STYLE), false, P(prop::WIDE)),
+        ])
+    };
+    (@list [$($extra:expr),* $(,)?]) => {
         &[
             $($extra,)*
             p("direction", T::Enum(DIRECTIONS), false, P(prop::AXIS)),
@@ -181,6 +199,23 @@ macro_rules! box_props {
         ]
     };
 }
+
+/// The style props of a Level 2 box (`Box`, `Pressable`, `Scroll`): the
+/// keys that a partial style (`hover`, `compact`, ...) can set.
+pub const BOX_STYLE: &[PropSpec] = box_props![@style];
+
+/// The style props of a `Span`.
+pub const SPAN_STYLE: &[PropSpec] = &[
+    p("size", T::Enum(TEXT_SIZES), false, P(prop::TEXT_SIZE)),
+    p("weight", T::Enum(WEIGHTS), false, P(prop::WEIGHT)),
+    p("italic", T::Bool, false, P(prop::ITALIC)),
+    p("mono", T::Bool, false, P(prop::MONO)),
+    p("fg", T::Enum(COLORS), false, P(prop::FG)),
+    p("align", T::Enum(ALIGNS), false, P(prop::ALIGN)),
+    p("lines", T::Int, false, P(prop::LINES)),
+    p("grow", T::Int, false, P(prop::GROW)),
+];
+
 
 const fn p(name: &'static str, ty: PropTy, required: bool, target: Target) -> PropSpec {
     PropSpec { name, ty, required, target }
@@ -502,6 +537,9 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("align", T::Enum(ALIGNS), false, P(prop::ALIGN)),
             p("lines", T::Int, false, P(prop::LINES)),
             p("grow", T::Int, false, P(prop::GROW)),
+            p("compact", T::PartialStyle(SPAN_STYLE), false, P(prop::COMPACT)),
+            p("regular", T::PartialStyle(SPAN_STYLE), false, P(prop::REGULAR)),
+            p("wide", T::PartialStyle(SPAN_STYLE), false, P(prop::WIDE)),
         ],
         children: ChildKind::Text,
     },

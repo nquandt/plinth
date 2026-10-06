@@ -1240,12 +1240,32 @@ impl PlinthRoot {
         out
     }
 
+    /// The style of a Level 2 element in the current width class, and its
+    /// state styles (`hover`, `active`, `focus`, UI API 1.7).
+    fn primitive_style(&self, node: &Node) -> primitives::Style {
+        primitives::Style::for_class(node, self.class)
+    }
+
+    /// Applies the `hover` and `active` partial styles of `node` to `d`.
+    fn state_styles<E: StatefulInteractiveElement + Styled>(&self, d: E, node: &Node, t: &Tokens) -> E {
+        let mut d = d;
+        let tokens = *t;
+        if let Some(h) = primitives::partial(node, prop::HOVER) {
+            d = d.hover(move |r| primitives::box_style(r, &h, &tokens, true));
+        }
+        if let Some(a) = primitives::partial(node, prop::ACTIVE) {
+            d = d.active(move |r| primitives::box_style(r, &a, &tokens, true));
+        }
+        d
+    }
+
     /// A layout box. Without a label it is a plain container for AccessKit;
     /// with one it is a named group.
     fn render_box(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let label = node.str_prop(prop::LABEL).map(str::to_owned);
-        let d = div().id(eid("box", node.id));
-        primitives::box_style(d, node, t)
+        let style = self.primitive_style(node);
+        let d = primitives::box_style(div().id(eid("box", node.id)), &style, t, false);
+        self.state_styles(d, node, t)
             .when_some(label, |d, l| d.role(accesskit::Role::Group).aria_label(l))
             .children(self.render_box_children(node, t, cx))
             .into_any_element()
@@ -1253,27 +1273,52 @@ impl PlinthRoot {
 
     fn render_span(&self, node: &Node, t: &Tokens) -> AnyElement {
         let text = node.text.clone().unwrap_or_default();
+        let style = self.primitive_style(node);
         let d = div().id(eid("span", node.id)).role(accesskit::Role::Label).aria_label(text.clone());
-        let d = primitives::grow(aligned(primitives::span_style(d, node, t), node), node);
-        d.child(text).into_any_element()
+        let d = primitives::span_style(d, &style, t);
+        let d = match style.enum_(prop::ALIGN) {
+            text_align::CENTER => d.text_center(),
+            text_align::END => d.text_right(),
+            _ => d,
+        };
+        primitives::grow(d, &style).child(text).into_any_element()
     }
 
     /// A box that is a button or a link: a tab stop, Enter and Space press
-    /// it, and the runtime shows hover and disabled states.
+    /// it, and the runtime shows hover and disabled states (or the app's
+    /// own `hover`, `active` and `focus` styles).
     fn render_pressable(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
         warn_if_unlabeled("Pressable", node.id, &label);
         let disabled = node.bool_prop(prop::DISABLED) || self.stopped.is_some();
         let role = if node.enum_prop(prop::ROLE) == pressable_role::LINK { accesskit::Role::Link } else { accesskit::Role::Button };
-        let own_bg = primitives::token(t, node.enum_prop(prop::BG)).is_some();
+        let style = self.primitive_style(node);
+        let own_bg = primitives::token(t, style.enum_(prop::BG)).is_some();
+        let own_hover = primitives::partial(node, prop::HOVER).is_some();
         let hover = t.hover;
         let d = div().id(eid("pressable", node.id)).role(role).aria_label(label).aria_disabled(disabled);
-        let mut d = primitives::box_style(d, node, t)
-            .children(self.render_box_children(node, t, cx))
-            .when(disabled, |d| d.opacity(0.5))
-            .when(!disabled, |d| {
-                d.cursor_pointer().hover(move |s| if own_bg { s.opacity(0.88) } else { s.bg(hover) })
-            });
+        let mut d = primitives::box_style(d, &style, t, false).children(self.render_box_children(node, t, cx));
+        if disabled {
+            d = d.opacity(0.5);
+        } else {
+            d = d.cursor_pointer();
+            d = if own_hover {
+                self.state_styles(d, node, t)
+            } else {
+                let d = d.hover(move |s| if own_bg { s.opacity(0.88) } else { s.bg(hover) });
+                match primitives::partial(node, prop::ACTIVE) {
+                    Some(a) => {
+                        let tokens = *t;
+                        d.active(move |r| primitives::box_style(r, &a, &tokens, true))
+                    }
+                    None => d,
+                }
+            };
+            if let Some(f) = primitives::partial(node, prop::FOCUS) {
+                let tokens = *t;
+                d = d.focus_visible(move |r| primitives::box_style(r, &f, &tokens, true));
+            }
+        }
         if let Some(h) = node.handler(event::PRESS).filter(|_| !disabled) {
             d = d
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.fire(h, event::PRESS, Value::Null, cx)))
@@ -1289,10 +1334,14 @@ impl PlinthRoot {
     /// A box that scrolls along its direction.
     fn render_scroll(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let label = node.str_prop(prop::LABEL).map(str::to_owned);
+        let style = self.primitive_style(node);
         let d = div().id(eid("scroll", node.id)).role(accesskit::Role::ScrollView);
-        let d = primitives::box_style(d, node, t);
-        let d = if primitives::is_row(node) { d.overflow_x_scroll() } else { d.overflow_y_scroll() };
-        d.when_some(label, |d, l| d.aria_label(l)).children(self.render_box_children(node, t, cx)).into_any_element()
+        let d = primitives::box_style(d, &style, t, false);
+        let d = if primitives::is_row(&style) { d.overflow_x_scroll() } else { d.overflow_y_scroll() };
+        self.state_styles(d, node, t)
+            .when_some(label, |d, l| d.aria_label(l))
+            .children(self.render_box_children(node, t, cx))
+            .into_any_element()
     }
 
     fn render_section(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {

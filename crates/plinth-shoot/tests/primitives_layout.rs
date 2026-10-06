@@ -77,8 +77,35 @@ fn primitives_roles_and_layout() {
     assert!(((cards[1].x0 - cards[0].x1) / scale - 12.0).abs() < 0.5, "the gap between cards is not 3 units: {cards:?}");
     assert!(cards[0].x0 >= scroll.x0 && cards[0].y0 >= scroll.y0, "the first card is not inside the scroll view");
 
+    // UI API 1.7: in the regular width class the header box is a row (the
+    // "U1" span is right of the title); its `compact` style makes it a column.
+    let title = find(Role::Label, "Styled primitives");
+    let badge = find(Role::Label, "U1");
+    assert!(badge.x0 > title.x1 && (badge.y0 - title.y0).abs() < 40.0 * scale, "regular: the header is not a row: {title:?} {badge:?}");
+
     let shots = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/shots");
     std::fs::create_dir_all(&shots).unwrap();
     let image = cx.capture_screenshot(window.into()).expect("render the primitives");
     image.save(shots.join("primitives-regular.png")).expect("write the screenshot");
+
+    // The same app in a compact window.
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let commits = guest.init(&[]).unwrap();
+    let port = Box::new(WasmGuest { guest, _runner: runner });
+    let window = cx.open_window(size(px(400.), px(1300.)), move |_, cx| cx.new(|cx| PlinthRoot::new(port, commits, "indigo", cx))).unwrap();
+    cx.update(|cx| window.update(cx, |_, window, _| window.set_a11y_forced(true))).unwrap();
+    cx.run_until_parked();
+    let tree = cx.update(|cx| window.update(cx, |_, window, _| window.a11y_tree().cloned())).unwrap().unwrap();
+    let label_bounds = |name: &str| {
+        tree.nodes
+            .iter()
+            .find(|(_, n)| n.role() == Role::Label && n.label() == Some(name))
+            .and_then(|(_, n)| n.bounds())
+            .unwrap_or_else(|| panic!("compact: no label {name:?}"))
+    };
+    let (title, badge) = (label_bounds("Styled primitives"), label_bounds("U1"));
+    assert!(badge.y0 >= title.y1, "compact: the header is not a column: {title:?} {badge:?}");
+    let image = cx.capture_screenshot(window.into()).expect("render the primitives");
+    image.save(shots.join("primitives-compact.png")).expect("write the screenshot");
 }

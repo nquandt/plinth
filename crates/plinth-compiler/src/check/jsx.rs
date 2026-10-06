@@ -1,8 +1,8 @@
 //! JSX: controls of UI API 1.0 and user components (SPEC.md §6.3, §7.2).
 
 use super::{Binding, Checker, ReactiveCtx};
-use crate::ast::{Expr, ExprKind, JsxChild, JsxElement, ObjProp};
-use crate::controls::{self, ChildKind, PropTy, Target};
+use crate::ast::{Expr, ExprKind, JsxChild, JsxElement, ObjProp, UnOp};
+use crate::controls::{self, ChildKind, PropSpec, PropTy, Target};
 use crate::diag::code;
 use crate::tir::*;
 use crate::types::{FuncType, Type};
@@ -120,6 +120,14 @@ impl Checker<'_> {
                     let sep = TExpr::new(TExprKind::Str("\u{1f}".into()), Type::String, value.span);
                     let joined = TExpr::new(TExprKind::Rt("arr_join", vec![te, sep]), Type::String, value.span);
                     props.push(TProp { target: PropTarget::Str(id), value: joined });
+                }
+                continue;
+            }
+            if let PropTy::PartialStyle(allowed) = ps.ty {
+                let Target::Prop(id) = ps.target else { unreachable!("a partial style always targets a prop") };
+                if let Some(text) = self.encode_partial_style(&value, allowed, ps.name) {
+                    let te = TExpr::new(TExprKind::Str(text), Type::String, value.span);
+                    props.push(TProp { target: PropTarget::Str(id), value: te });
                 }
                 continue;
             }
@@ -372,7 +380,7 @@ impl Checker<'_> {
                     (PropTarget::ListRow, f)
                 }
                 PropTy::Element => (PropTarget::ListEmpty, self.typed(&value, &Type::Element)),
-                PropTy::StrList | PropTy::ActionList | PropTy::ChartPoints | PropTy::ChartSeries => {
+                PropTy::StrList | PropTy::ActionList | PropTy::ChartPoints | PropTy::ChartSeries | PropTy::PartialStyle(_) => {
                     unreachable!("handled above with `continue`")
                 }
             };
@@ -435,6 +443,69 @@ impl Checker<'_> {
     /// reports the diagnostic. The `value` expressions may read signals,
     /// which keeps the resulting prop reactive through the normal JSX
     /// reactive-effect machinery, same as any other string prop.
+    /// A Level 2 partial style (UI API 1.7): `{ bg: "hover", padding: 4 }`
+    /// becomes `"56:11,42:4"` (prop id and int value). Every value must be a
+    /// literal: the style is fixed at compile time.
+    fn encode_partial_style(&mut self, value: &Expr, allowed: &[PropSpec], name: &str) -> Option<String> {
+        let ExprKind::Object(fields) = &value.kind else {
+            self.err_help(
+                code::TYPE_MISMATCH,
+                value.span,
+                format!("`{name}` must be an object literal of style props"),
+                format!("write `{name}={{{{ bg: \"hover\" }}}}`"),
+            );
+            return None;
+        };
+        let mut pairs: Vec<(u16, i64)> = Vec::new();
+        let mut ok = true;
+        for f in fields {
+            let ObjProp::Field(key, e, key_span) = f else {
+                self.err(code::TYPE_MISMATCH, value.span, format!("`{name}` cannot use a spread"));
+                ok = false;
+                continue;
+            };
+            let Some(ps) = allowed.iter().find(|p| p.name == key) else {
+                let names: Vec<&str> = allowed.iter().map(|p| p.name).collect();
+                self.err_help(code::UNKNOWN_PROP, *key_span, format!("`{key}` is not a style prop"), format!("the style props are: {}", names.join(", ")));
+                ok = false;
+                continue;
+            };
+            let Target::Prop(id) = ps.target else { continue };
+            // A negative number literal is `-` applied to a number.
+            let num = match &e.kind {
+                ExprKind::Num(n) => Some(*n),
+                ExprKind::Unary(UnOp::Neg, inner) => match inner.kind {
+                    ExprKind::Num(n) => Some(-n),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let pair = match (ps.ty, &e.kind, num) {
+                (PropTy::Enum(table), ExprKind::Str(s), _) => table.iter().find(|(n, _)| n == s).map(|(_, v)| (id, i64::from(*v))),
+                (PropTy::Size(fraction), ExprKind::Str(s), _) => {
+                    crate::controls::FRACTIONS.iter().find(|(n, _)| n == s).map(|(_, v)| (fraction, i64::from(*v)))
+                }
+                (PropTy::Int | PropTy::Size(_), _, Some(n)) if n.fract() == 0.0 && n.abs() < 1e6 => Some((id, n as i64)),
+                (PropTy::Bool, ExprKind::Bool(b), _) => Some((id, i64::from(*b))),
+                _ => None,
+            };
+            match pair {
+                Some(p) => pairs.push(p),
+                None => {
+                    let want = match ps.ty {
+                        PropTy::Enum(table) => table.iter().map(|(n, _)| format!("\"{n}\"")).collect::<Vec<_>>().join(" | "),
+                        PropTy::Size(_) => "a whole number of spacing units, or a fraction such as \"1/2\"".into(),
+                        PropTy::Bool => "true or false".into(),
+                        _ => "a whole number".into(),
+                    };
+                    self.err_help(code::TYPE_MISMATCH, e.span, format!("`{key}` in `{name}` must be a literal"), format!("use {want}"));
+                    ok = false;
+                }
+            }
+        }
+        ok.then(|| pairs.iter().map(|(k, v)| format!("{k}:{v}")).collect::<Vec<_>>().join(","))
+    }
+
     fn encode_chart_points(&mut self, value: &Expr) -> Option<TExpr> {
         let ExprKind::Array(items) = &value.kind else { return self.encode_chart_points_dyn(value) };
         let mut parts = Vec::new();

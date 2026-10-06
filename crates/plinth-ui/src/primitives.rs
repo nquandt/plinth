@@ -1,10 +1,14 @@
-//! Level 2 styled primitives (UI API 1.6, docs/UI-ADVANCED.md phase U1):
-//! the style props of `Box`, `Pressable`, `Scroll` and `Span` as gpui
-//! styles. Spaces and sizes are spacing units (one unit is 4 px, the same
-//! on every host); colors are theme tokens. The web host maps the same
-//! props in `web/dom-renderer.js`.
+//! Level 2 styled primitives (docs/UI-ADVANCED.md): the style props of
+//! `Box`, `Pressable`, `Scroll` and `Span` as gpui styles. Spaces and sizes
+//! are spacing units (one unit is 4 px, the same on every host); colors are
+//! theme tokens. The web host maps the same props in `web/dom-renderer.js`.
+//!
+//! UI API 1.6 (phase U1) gives the style props. UI API 1.7 (phase U2) adds
+//! partial styles: `hover`, `active`, `focus` and the width classes
+//! `compact`, `regular`, `wide`. Each is a string of `"<prop id>:<int>"`
+//! pairs (made by the compiler); the host applies it over the props.
 
-use crate::theme::Tokens;
+use crate::theme::{Tokens, WidthClass};
 use crate::tree::Node;
 use gpui::{FontWeight, Hsla, Length, Pixels, Styled, px, relative};
 use plinth_protocol::{Value, axis, color, cross_align, fraction, justify, prop, radius, text_size, weight};
@@ -20,8 +24,105 @@ pub fn units(n: i64) -> Pixels {
     px(n.clamp(0, MAX_UNITS) as f32 * UNIT)
 }
 
-fn int(node: &Node, id: u16) -> Option<i64> {
-    node.prop(id).and_then(Value::as_int).map(i64::from)
+/// The size props, each with its fraction prop. A style that sets one of a
+/// pair replaces the other.
+const SIZE_PAIRS: [(u16, u16); 4] = [
+    (prop::WIDTH, prop::WIDTH_FRACTION),
+    (prop::HEIGHT, prop::HEIGHT_FRACTION),
+    (prop::MAX_WIDTH, prop::MAX_WIDTH_FRACTION),
+    (prop::MAX_HEIGHT, prop::MAX_HEIGHT_FRACTION),
+];
+
+/// The style props of one element as `(prop id, int value)`: enums as their
+/// value, booleans as 0 or 1.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Style {
+    values: Vec<(u16, i64)>,
+}
+
+impl Style {
+    /// The style props of `node` (its other props are left out).
+    pub fn of(node: &Node) -> Self {
+        let values = node
+            .props
+            .iter()
+            .filter(|(id, _)| *id == prop::AXIS || *id == prop::ALIGN || (prop::WRAP..=prop::LINES).contains(id))
+            .filter_map(|(id, v)| {
+                let n = match v {
+                    Value::Int(i) => i64::from(*i),
+                    Value::Enum(e) => i64::from(*e),
+                    Value::Bool(b) => i64::from(*b),
+                    _ => return None,
+                };
+                Some((*id, n))
+            })
+            .collect();
+        Self { values }
+    }
+
+    /// The style of `node` in the width class `class`: the props, then the
+    /// partial style of that class over them.
+    pub fn for_class(node: &Node, class: WidthClass) -> Self {
+        let mut style = Self::of(node);
+        let id = match class {
+            WidthClass::Compact => prop::COMPACT,
+            WidthClass::Regular => prop::REGULAR,
+            WidthClass::Wide => prop::WIDE,
+        };
+        if let Some(text) = node.str_prop(id) {
+            style.overlay(&Self::parse(text));
+        }
+        style
+    }
+
+    /// A partial style: `"56:11,42:4"`. Malformed pairs are skipped.
+    pub fn parse(text: &str) -> Self {
+        let values = text
+            .split(',')
+            .filter_map(|pair| {
+                let (k, v) = pair.split_once(':')?;
+                Some((k.trim().parse().ok()?, v.trim().parse().ok()?))
+            })
+            .collect();
+        Self { values }
+    }
+
+    /// Sets each value of `top` over this style.
+    pub fn overlay(&mut self, top: &Style) {
+        for &(id, v) in &top.values {
+            for (a, b) in SIZE_PAIRS {
+                if id == a || id == b {
+                    let other = if id == a { b } else { a };
+                    self.values.retain(|(k, _)| *k != other);
+                }
+            }
+            match self.values.iter_mut().find(|(k, _)| *k == id) {
+                Some(slot) => slot.1 = v,
+                None => self.values.push((id, v)),
+            }
+        }
+    }
+
+    pub fn get(&self, id: u16) -> Option<i64> {
+        self.values.iter().find(|(k, _)| *k == id).map(|(_, v)| *v)
+    }
+
+    pub fn enum_(&self, id: u16) -> u16 {
+        self.get(id).and_then(|v| u16::try_from(v).ok()).unwrap_or(0)
+    }
+
+    pub fn flag(&self, id: u16) -> bool {
+        self.get(id).is_some_and(|v| v != 0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+}
+
+/// The partial style that `node` gives in its string prop `id` (`hover`, ...).
+pub fn partial(node: &Node, id: u16) -> Option<Style> {
+    node.str_prop(id).map(Style::parse).filter(|s| !s.is_empty())
 }
 
 /// A color token, or `None` for `none` and for an unknown value.
@@ -43,12 +144,12 @@ pub fn token(t: &Tokens, value: u16) -> Option<Hsla> {
     })
 }
 
-/// A size prop: spacing units if the int prop is set, else the fraction.
-pub fn size(node: &Node, units_prop: u16, fraction_prop: u16) -> Option<Length> {
-    if let Some(n) = int(node, units_prop) {
+/// A size: spacing units if the int prop is set, else the fraction.
+pub fn size(s: &Style, units_prop: u16, fraction_prop: u16) -> Option<Length> {
+    if let Some(n) = s.get(units_prop) {
         return Some(units(n).into());
     }
-    let share = match node.enum_prop(fraction_prop) {
+    let share = match s.enum_(fraction_prop) {
         fraction::AUTO => return Some(Length::Auto),
         fraction::FULL => 1.0,
         fraction::HALF => 1.0 / 2.0,
@@ -62,73 +163,82 @@ pub fn size(node: &Node, units_prop: u16, fraction_prop: u16) -> Option<Length> 
 }
 
 /// Whether the children of a box go in a row (the default is a column).
-pub fn is_row(node: &Node) -> bool {
-    node.enum_prop(prop::AXIS) == axis::ROW
+pub fn is_row(s: &Style) -> bool {
+    s.enum_(prop::AXIS) == axis::ROW
 }
 
 /// The `grow` prop of any primitive: its share of the free space in a parent box.
-pub fn grow<S: Styled>(d: S, node: &Node) -> S {
-    match int(node, prop::GROW) {
+pub fn grow<S: Styled>(d: S, s: &Style) -> S {
+    match s.get(prop::GROW) {
         Some(g) if g > 0 => d.flex_grow(g.min(100) as f32).flex_basis(px(0.)).min_w_0(),
         _ => d,
     }
 }
 
-/// The box props: direction, wrap, gap, padding, alignment, grow, sizes, background, border, radius.
-pub fn box_style<S: Styled>(d: S, node: &Node, t: &Tokens) -> S {
-    let mut d = d.flex();
-    d = if is_row(node) { d.flex_row() } else { d.flex_col() };
-    if node.bool_prop(prop::WRAP) {
+/// The box props. A `partial` style applies only the props that it sets;
+/// a full style also applies the defaults (a column that stretches its
+/// children, from the start).
+pub fn box_style<S: Styled>(d: S, s: &Style, t: &Tokens, partial: bool) -> S {
+    let has = |id: u16| s.get(id).is_some();
+    let mut d = if partial { d } else { d.flex() };
+    if !partial || has(prop::AXIS) {
+        d = if is_row(s) { d.flex_row() } else { d.flex_col() };
+    }
+    if s.flag(prop::WRAP) {
         d = d.flex_wrap();
     }
-    if let Some(g) = int(node, prop::GAP) {
+    if let Some(g) = s.get(prop::GAP) {
         d = d.gap(units(g));
     }
-    if let Some(p) = int(node, prop::PADDING) {
+    if let Some(p) = s.get(prop::PADDING) {
         d = d.p(units(p));
     }
-    if let Some(p) = int(node, prop::PADDING_X) {
+    if let Some(p) = s.get(prop::PADDING_X) {
         d = d.px(units(p));
     }
-    if let Some(p) = int(node, prop::PADDING_Y) {
+    if let Some(p) = s.get(prop::PADDING_Y) {
         d = d.py(units(p));
     }
-    d = match node.enum_prop(prop::CROSS_ALIGN) {
-        cross_align::START => d.items_start(),
-        cross_align::CENTER => d.items_center(),
-        cross_align::END => d.items_end(),
-        _ => d.items_stretch(),
-    };
-    d = match node.enum_prop(prop::JUSTIFY) {
-        justify::CENTER => d.justify_center(),
-        justify::END => d.justify_end(),
-        justify::BETWEEN => d.justify_between(),
-        _ => d.justify_start(),
-    };
-    d = grow(d, node);
+    if !partial || has(prop::CROSS_ALIGN) {
+        d = match s.enum_(prop::CROSS_ALIGN) {
+            cross_align::START => d.items_start(),
+            cross_align::CENTER => d.items_center(),
+            cross_align::END => d.items_end(),
+            _ => d.items_stretch(),
+        };
+    }
+    if !partial || has(prop::JUSTIFY) {
+        d = match s.enum_(prop::JUSTIFY) {
+            justify::CENTER => d.justify_center(),
+            justify::END => d.justify_end(),
+            justify::BETWEEN => d.justify_between(),
+            _ => d.justify_start(),
+        };
+    }
+    d = grow(d, s);
     // A size in spacing units is fixed: the element does not shrink below it.
-    if int(node, prop::WIDTH).is_some() || int(node, prop::HEIGHT).is_some() {
+    if has(prop::WIDTH) || has(prop::HEIGHT) {
         d = d.flex_shrink_0();
     }
-    if let Some(w) = size(node, prop::WIDTH, prop::WIDTH_FRACTION) {
+    if let Some(w) = size(s, prop::WIDTH, prop::WIDTH_FRACTION) {
         d = d.w(w);
     }
-    if let Some(h) = size(node, prop::HEIGHT, prop::HEIGHT_FRACTION) {
+    if let Some(h) = size(s, prop::HEIGHT, prop::HEIGHT_FRACTION) {
         d = d.h(h);
     }
-    if let Some(w) = size(node, prop::MAX_WIDTH, prop::MAX_WIDTH_FRACTION) {
+    if let Some(w) = size(s, prop::MAX_WIDTH, prop::MAX_WIDTH_FRACTION) {
         d = d.max_w(w);
     }
-    if let Some(h) = size(node, prop::MAX_HEIGHT, prop::MAX_HEIGHT_FRACTION) {
+    if let Some(h) = size(s, prop::MAX_HEIGHT, prop::MAX_HEIGHT_FRACTION) {
         d = d.max_h(h);
     }
-    if let Some(c) = token(t, node.enum_prop(prop::BG)) {
+    if let Some(c) = token(t, s.enum_(prop::BG)) {
         d = d.bg(c);
     }
-    if let Some(c) = token(t, node.enum_prop(prop::BORDER)) {
+    if let Some(c) = token(t, s.enum_(prop::BORDER)) {
         d = d.border_1().border_color(c);
     }
-    match node.enum_prop(prop::RADIUS) {
+    match s.enum_(prop::RADIUS) {
         radius::SM => d.rounded(px(4.)),
         radius::MD => d.rounded(px(8.)),
         radius::LG => d.rounded(px(12.)),
@@ -139,8 +249,8 @@ pub fn box_style<S: Styled>(d: S, node: &Node, t: &Tokens) -> S {
 
 /// The span props: size, weight, italic, mono, color, and the line limit
 /// (`align` and `grow` are applied by the caller).
-pub fn span_style<S: Styled>(d: S, node: &Node, t: &Tokens) -> S {
-    let mut d = match node.enum_prop(prop::TEXT_SIZE) {
+pub fn span_style<S: Styled>(d: S, s: &Style, t: &Tokens) -> S {
+    let mut d = match s.enum_(prop::TEXT_SIZE) {
         text_size::XS => d.text_xs(),
         text_size::MD => d.text_base(),
         text_size::LG => d.text_lg(),
@@ -148,20 +258,20 @@ pub fn span_style<S: Styled>(d: S, node: &Node, t: &Tokens) -> S {
         text_size::XXL => d.text_2xl(),
         _ => d.text_sm(),
     };
-    d = d.font_weight(match node.enum_prop(prop::WEIGHT) {
+    d = d.font_weight(match s.enum_(prop::WEIGHT) {
         weight::MEDIUM => FontWeight::MEDIUM,
         weight::SEMIBOLD => FontWeight::SEMIBOLD,
         weight::BOLD => FontWeight::BOLD,
         _ => FontWeight::NORMAL,
     });
-    if node.bool_prop(prop::ITALIC) {
+    if s.flag(prop::ITALIC) {
         d = d.italic();
     }
-    if node.bool_prop(prop::MONO) {
+    if s.flag(prop::MONO) {
         d = d.font_family("monospace");
     }
-    d = d.text_color(token(t, node.enum_prop(prop::FG)).unwrap_or(t.text));
-    match int(node, prop::LINES) {
+    d = d.text_color(token(t, s.enum_(prop::FG)).unwrap_or(t.text));
+    match s.get(prop::LINES) {
         Some(n) if n > 0 => d.line_clamp(n.min(1000) as usize),
         _ => d,
     }
@@ -176,5 +286,23 @@ mod tests {
         assert_eq!(units(3), px(12.));
         assert_eq!(units(-2), px(0.));
         assert_eq!(units(10_000), px(MAX_UNITS as f32 * UNIT));
+    }
+
+    #[test]
+    fn parse_skips_malformed_pairs() {
+        let s = Style::parse("56:11, 42:4,x:1,7,41:-2");
+        assert_eq!(s.get(prop::BG), Some(11));
+        assert_eq!(s.get(prop::PADDING), Some(4));
+        assert_eq!(s.get(prop::GAP), Some(-2));
+        assert_eq!(s.get(prop::AXIS), None);
+    }
+
+    #[test]
+    fn overlay_replaces_values_and_the_other_size_form() {
+        let mut base = Style::parse(&format!("{}:2,{}:3", prop::WIDTH_FRACTION, prop::GAP));
+        base.overlay(&Style::parse(&format!("{}:40,{}:1", prop::WIDTH, prop::GAP)));
+        assert_eq!(base.get(prop::WIDTH), Some(40));
+        assert_eq!(base.get(prop::WIDTH_FRACTION), None, "units replace the fraction");
+        assert_eq!(base.get(prop::GAP), Some(1));
     }
 }

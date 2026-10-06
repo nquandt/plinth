@@ -679,12 +679,33 @@ async function checkPrimitives(cdpPort, base) {
     for (const type of ["keyDown", "keyUp"]) await page.send("Input.dispatchKeyEvent", { type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
     await page.waitFor(`document.getElementById("app").innerText.includes("Pressed 1 times") ? true : null`, 3000);
     if ((await page.eval(`${reset}.getAttribute("tabindex")`)) !== "0") throw new Error("the Reset link is not a tab stop after a press");
+    // UI API 1.7: the hover style of a card (a generated class) colors its border.
+    const inbox = `[...document.querySelectorAll("#app [role=button]")].find((e) => e.getAttribute("aria-label") === "Inbox")`;
+    const borderOf = `getComputedStyle(${inbox}).borderTopColor`;
+    const before = await page.eval(borderOf);
+    const c = await page.eval(`(() => { const r = ${inbox}.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: c.x, y: c.y });
+    const hovered = await page.eval(borderOf);
+    const accent = await page.eval(`(() => { const d = document.createElement("div"); d.style.color = "var(--pl-accent)"; document.body.append(d); const v = getComputedStyle(d).color; d.remove(); return v; })()`);
+    if (hovered === before || hovered !== accent) {
+      const info = await page.eval(`JSON.stringify({ cls: ${inbox}.className, rules: [...(document.getElementById("pl-partial-styles")?.sheet?.cssRules ?? [])].map((r) => r.cssText), hover: ${inbox}.matches(":hover") })`);
+      throw new Error(`the hover style did not apply: ${before} -> ${hovered} (accent ${accent}) ${info}`);
+    }
+    await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 1, y: 1 });
+    // The compact width class: the header box becomes a column.
+    const direction = `getComputedStyle([...document.querySelectorAll("#app .pl-box")].find((b) => b.textContent.includes("Styled primitives") && b.textContent.includes("U1"))).flexDirection`;
+    if ((await page.eval(direction)) !== "row") throw new Error("the header box is not a row at the regular width");
+    await page.send("Emulation.setDeviceMetricsOverride", { width: 400, height: 900, deviceScaleFactor: 1, mobile: false });
+    await page.waitFor(`${direction} === "column" ? true : null`, 3000).catch(async () => {
+      throw new Error(`the compact style did not apply: ${await page.eval(direction)} at ${await page.eval("innerWidth")} px`);
+    });
+    await page.send("Emulation.clearDeviceMetricsOverride");
     if (process.env.A11Y_SHOTS) {
       await mkdir(process.env.A11Y_SHOTS, { recursive: true });
       const r = await page.send("Page.captureScreenshot", { format: "png" });
       await writeFile(path.join(process.env.A11Y_SHOTS, "primitives.png"), Buffer.from(r.data, "base64"));
     }
-    return `${layout.cards} cards in one row, Enter presses, disabled is not a tab stop`;
+    return `${layout.cards} cards in one row, Enter presses, disabled is not a tab stop, hover style, compact style`;
   } finally {
     await page.close();
   }

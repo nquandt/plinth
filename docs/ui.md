@@ -264,8 +264,15 @@ the default, or `"row"`), `wrap`, `gap`, `padding`, `paddingX`, `paddingY`,
   raw colors and no raw pixels.
 - **`.map()` children** (and a `List`) inside a primitive take part in its
   layout: mapped cards in a row `Box` are a row.
-- The runtime gives a `Pressable` its hover and disabled states. Custom
-  states (`hover={...}`), width-class styles and motion come in phase U2.
+- The runtime gives a `Pressable` its hover and disabled states.
+- **Partial styles (UI API 1.7).** `hover`, `active` and `focus` (on `Box`,
+  `Pressable`, `Scroll`) and `compact`, `regular`, `wide` (also on `Span`)
+  take an object of style props, applied over the element's props in that
+  state or width class: `hover={{ border: "accent" }}`,
+  `compact={{ direction: "column" }}`. The values must be literals; the
+  compiler encodes the object at compile time. An app `hover` replaces the
+  runtime's hover of a `Pressable`. Motion (transitions, springs) is not
+  built yet.
 
 ```tsx
 <Pressable label="Open the inbox" role="button" direction="row" gap={3} padding={3}

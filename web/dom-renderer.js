@@ -225,9 +225,10 @@ const WEIGHTS = { [EnumWeight.regular]: "400", [EnumWeight.medium]: "500", [Enum
  * `Span`) from its props: the same mapping as
  * `crates/plinth-ui/src/primitives.rs`. Returns `{ property: value }`.
  */
-export function primitiveStyle(n) {
+export function primitiveStyle(n, partial = false) {
   const p = n.props;
   const en = (prop) => p.get(prop)?.enum; // an enum prop is { enum: value }
+  const has = (prop) => p.has(prop);
   const css = {};
   const grow = p.get(Prop.grow);
   if (typeof grow === "number" && grow > 0) {
@@ -235,14 +236,16 @@ export function primitiveStyle(n) {
     css["min-width"] = "0";
   }
   if (n.kind === ControlKind.span) {
-    css["font-size"] = TEXT_SIZES[en(Prop.textSize) ?? EnumTextSize.sm] ?? TEXT_SIZES[EnumTextSize.sm];
-    css["font-weight"] = WEIGHTS[en(Prop.weight) ?? EnumWeight.regular] ?? "400";
+    if (!partial || has(Prop.textSize)) css["font-size"] = TEXT_SIZES[en(Prop.textSize) ?? EnumTextSize.sm] ?? TEXT_SIZES[EnumTextSize.sm];
+    if (!partial || has(Prop.weight)) css["font-weight"] = WEIGHTS[en(Prop.weight) ?? EnumWeight.regular] ?? "400";
     if (p.get(Prop.italic)) css["font-style"] = "italic";
+    else if (partial && has(Prop.italic)) css["font-style"] = "normal";
     if (p.get(Prop.mono)) css["font-family"] = "ui-monospace, Consolas, monospace";
-    css.color = colorVar(en(Prop.fg), true) ?? "var(--pl-text)";
+    if (!partial || has(Prop.fg)) css.color = colorVar(en(Prop.fg), true) ?? "var(--pl-text)";
     const align = en(Prop.align);
     if (align === EnumTextAlign.center) css["text-align"] = "center";
     else if (align === EnumTextAlign.end) css["text-align"] = "end";
+    else if (partial && has(Prop.align)) css["text-align"] = "start";
     const lines = p.get(Prop.lines);
     if (typeof lines === "number" && lines > 0) {
       css.display = "-webkit-box";
@@ -253,9 +256,10 @@ export function primitiveStyle(n) {
     return css;
   }
   const row = en(Prop.axis) === EnumAxis.row;
-  css.display = "flex";
-  css["flex-direction"] = row ? "row" : "column";
+  if (!partial) css.display = "flex";
+  if (!partial || has(Prop.axis)) css["flex-direction"] = row ? "row" : "column";
   if (p.get(Prop.wrap)) css["flex-wrap"] = "wrap";
+  else if (partial && has(Prop.wrap)) css["flex-wrap"] = "nowrap";
   for (const [prop, name] of [
     [Prop.gap, "gap"],
     [Prop.padding, "padding"],
@@ -267,8 +271,12 @@ export function primitiveStyle(n) {
   if (typeof px === "number") css["padding-inline"] = units(px);
   const py = p.get(Prop.paddingY);
   if (typeof py === "number") css["padding-block"] = units(py);
-  css["align-items"] = { [EnumCrossAlign.start]: "flex-start", [EnumCrossAlign.center]: "center", [EnumCrossAlign.end]: "flex-end" }[en(Prop.crossAlign)] ?? "stretch";
-  css["justify-content"] = { [EnumJustify.center]: "center", [EnumJustify.end]: "flex-end", [EnumJustify.between]: "space-between" }[en(Prop.justify)] ?? "flex-start";
+  if (!partial || has(Prop.crossAlign)) {
+    css["align-items"] = { [EnumCrossAlign.start]: "flex-start", [EnumCrossAlign.center]: "center", [EnumCrossAlign.end]: "flex-end" }[en(Prop.crossAlign)] ?? "stretch";
+  }
+  if (!partial || has(Prop.justify)) {
+    css["justify-content"] = { [EnumJustify.center]: "center", [EnumJustify.end]: "flex-end", [EnumJustify.between]: "space-between" }[en(Prop.justify)] ?? "flex-start";
+  }
   // A size in spacing units is fixed: the element does not shrink below it.
   if (typeof p.get(Prop.width) === "number" || typeof p.get(Prop.height) === "number") css["flex-shrink"] = "0";
   for (const [u, f, name] of [
@@ -282,12 +290,104 @@ export function primitiveStyle(n) {
   }
   const bg = colorVar(en(Prop.bg));
   if (bg) css.background = bg;
+  else if (partial && has(Prop.bg)) css.background = "transparent";
   const border = colorVar(en(Prop.border));
   if (border) css.border = `1px solid ${border}`;
+  else if (partial && has(Prop.border)) css.border = "0";
   const radius = { [EnumRadius.sm]: "4px", [EnumRadius.md]: "8px", [EnumRadius.lg]: "12px", [EnumRadius.full]: "9999px" }[en(Prop.radius)];
   if (radius) css["border-radius"] = radius;
-  if (n.kind === ControlKind.scroll) css[row ? "overflow-x" : "overflow-y"] = "auto";
+  else if (partial && has(Prop.radius)) css["border-radius"] = "0";
+  if (n.kind === ControlKind.scroll && !partial) css[row ? "overflow-x" : "overflow-y"] = "auto";
   return css;
+}
+
+// -- UI API 1.7: partial styles (states and width classes) ----------------------
+
+const ENUM_STYLE_PROPS = new Set([
+  Prop.axis,
+  Prop.align,
+  Prop.crossAlign,
+  Prop.justify,
+  Prop.widthFraction,
+  Prop.heightFraction,
+  Prop.maxWidthFraction,
+  Prop.maxHeightFraction,
+  Prop.bg,
+  Prop.fg,
+  Prop.border,
+  Prop.radius,
+  Prop.textSize,
+  Prop.weight,
+]);
+const BOOL_STYLE_PROPS = new Set([Prop.wrap, Prop.italic, Prop.mono]);
+
+/**
+ * A partial style string from the compiler (`"56:11,42:4"`: prop id and
+ * int value) as a props map in the wire shape (enums as `{ enum }`,
+ * booleans as booleans). Malformed pairs are skipped.
+ */
+export function parsePartialStyle(text) {
+  const props = new Map();
+  for (const pair of String(text ?? "").split(",")) {
+    const m = /^\s*(\d+)\s*:\s*(-?\d+)\s*$/.exec(pair);
+    if (!m) continue;
+    const id = Number(m[1]);
+    const v = Number(m[2]);
+    props.set(id, ENUM_STYLE_PROPS.has(id) ? { enum: v } : BOOL_STYLE_PROPS.has(id) ? v !== 0 : v);
+  }
+  return props;
+}
+
+/** The selector of each partial style prop; `%` is the generated class. */
+const PARTIAL_RULES = {
+  [Prop.hover]: (c) => `.${c}:hover`,
+  [Prop.active]: (c) => `.${c}:active`,
+  [Prop.focus]: (c) => `.${c}:focus-visible`,
+  // The width classes of style.css (SPEC.md §6.1): compact < 600px <= regular < 1200px <= wide.
+  [Prop.compact]: (c) => ["@media (max-width: 599.98px)", `.${c}`],
+  [Prop.regular]: (c) => ["@media (min-width: 600px) and (max-width: 1199.98px)", `.${c}`],
+  [Prop.wide]: (c) => ["@media (min-width: 1200px)", `.${c}`],
+};
+export const PARTIAL_STYLE_PROPS = Object.keys(PARTIAL_RULES).map(Number);
+
+/**
+ * The CSS rule text of one partial style for the class `cls`. The
+ * declarations are `!important`, so they win over the inline style of the
+ * element (its props). Returns null for an empty style.
+ */
+export function partialRule(kind, propId, text, cls) {
+  const css = primitiveStyle({ kind, props: parsePartialStyle(text) }, true);
+  const decls = Object.entries(css).map(([k, v]) => `${k}: ${v} !important;`).join(" ");
+  if (!decls) return null;
+  const sel = PARTIAL_RULES[propId](cls);
+  return Array.isArray(sel) ? `${sel[0]} { ${sel[1]} { ${decls} } }` : `${sel} { ${decls} }`;
+}
+
+/** One generated class for each distinct partial style, in one style element of the document. */
+class PartialStyles {
+  constructor(doc) {
+    this.doc = doc;
+    this.classes = new Map(); // "kind|prop|text" -> class name
+    this.sheet = null;
+  }
+
+  classFor(kind, propId, text) {
+    const key = `${kind}|${propId}|${text}`;
+    if (this.classes.has(key)) return this.classes.get(key);
+    const cls = `pl-st-${this.classes.size + 1}`;
+    const rule = partialRule(kind, propId, text, cls);
+    if (rule) {
+      if (!this.sheet) {
+        const style = this.doc.createElement("style");
+        style.id = "pl-partial-styles";
+        this.doc.head.append(style);
+        this.sheet = style.sheet;
+      }
+      this.sheet.insertRule(rule, this.sheet.cssRules.length);
+    }
+    this.classes.set(key, cls);
+    return cls;
+  }
 }
 
 /** Applies `css` to `e`, changing only the properties that differ from `last` (the previous call). */
@@ -867,10 +967,24 @@ export class DomRenderer {
    * Enter and Space press it (Space only for a button, as in HTML). A
    * Scroll is a tab stop too, so the keyboard can scroll it.
    */
+  /** The generated classes of the partial styles of `n` (states and width classes) on `e`; returns them. */
+  partialClasses(e, n, previous) {
+    this.partialStyles ??= new PartialStyles(e.ownerDocument);
+    const now = [];
+    for (const propId of PARTIAL_STYLE_PROPS) {
+      const text = n.props.get(propId);
+      if (typeof text === "string" && text) now.push(this.partialStyles.classFor(n.kind, propId, text));
+    }
+    for (const c of previous) if (!now.includes(c)) e.classList.remove(c);
+    for (const c of now) if (!previous.includes(c)) e.classList.add(c);
+    return now;
+  }
+
   primitiveBoxView(kname) {
     const e = el("div", `pl-${kname}`);
     let id = 0;
     let last = {};
+    let partials = [];
     let disabled = false;
     let link = false;
     if (kname === "pressable") {
@@ -892,6 +1006,7 @@ export class DomRenderer {
       update: (n) => {
         id = n.id;
         last = applyStyle(e, primitiveStyle(n), last);
+        partials = this.partialClasses(e, n, partials);
         const label = n.props.get(Prop.label) ?? null;
         if (kname === "pressable") {
           link = n.props.get(Prop.role)?.enum === EnumPressableRole.link;
@@ -900,7 +1015,9 @@ export class DomRenderer {
           setAttr(e, "aria-label", label);
           setAttr(e, "aria-disabled", disabled ? "true" : null);
           setAttr(e, "tabindex", disabled ? null : "0");
-          e.classList.toggle("pl-pressable-plain", !colorVar(n.props.get(Prop.bg)?.enum));
+          // The runtime's hover, unless the app gives a background or its own hover.
+          e.classList.toggle("pl-pressable-plain", !colorVar(n.props.get(Prop.bg)?.enum) && !n.props.get(Prop.hover));
+          e.classList.toggle("pl-pressable-own-hover", !!n.props.get(Prop.hover));
         } else {
           setAttr(e, "role", label ? "group" : null);
           setAttr(e, "aria-label", label);
@@ -914,10 +1031,12 @@ export class DomRenderer {
   spanView() {
     const e = el("span", "pl-span");
     let last = {};
+    let partials = [];
     return {
       el: e,
       update: (n) => {
         last = applyStyle(e, primitiveStyle(n), last);
+        partials = this.partialClasses(e, n, partials);
         setText(e, n.text ?? "");
       },
     };

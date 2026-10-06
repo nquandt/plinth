@@ -14,7 +14,7 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { PlinthApp, readPlnt } from "../plinth-web.js";
-import { Tree, primitiveStyle, colorVar, UNIT } from "../dom-renderer.js";
+import { Tree, primitiveStyle, colorVar, UNIT, parsePartialStyle, partialRule } from "../dom-renderer.js";
 import { ControlKind, Prop, Event, EnumAxis, EnumColor, EnumFraction, EnumRadius, EnumCrossAlign, EnumJustify, EnumTextSize, EnumWeight } from "../ui-api.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -82,6 +82,28 @@ assert.equal(span.color, "var(--pl-accent-fg)");
 assert.equal(span["-webkit-line-clamp"], "2");
 assert.equal(primitiveStyle(node(ControlKind.span, {})).color, "var(--pl-text)");
 
+// -- Partial styles (UI API 1.7) ----------------------------------------------
+const parsed = parsePartialStyle(`${Prop.bg}:${EnumColor.hover}, ${Prop.padding}:4,bad,${Prop.wrap}:1,${Prop.gap}:-1`);
+assert.deepEqual([...parsed], [
+  [Prop.bg, { enum: EnumColor.hover }],
+  [Prop.padding, 4],
+  [Prop.wrap, true],
+  [Prop.gap, -1],
+]);
+// A partial style sets only what it names: no display, no default direction.
+assert.deepEqual(primitiveStyle({ kind: ControlKind.box, props: parsePartialStyle(`${Prop.border}:${EnumColor.accent}`) }, true), {
+  border: "1px solid var(--pl-accent)",
+});
+assert.equal(
+  partialRule(ControlKind.pressable, Prop.hover, `${Prop.bg}:${EnumColor.hover}`, "pl-st-1"),
+  ".pl-st-1:hover { background: var(--pl-hover) !important; }",
+);
+assert.equal(
+  partialRule(ControlKind.box, Prop.compact, `${Prop.axis}:${EnumAxis.column}`, "pl-st-2"),
+  "@media (max-width: 599.98px) { .pl-st-2 { flex-direction: column !important; } }",
+);
+assert.equal(partialRule(ControlKind.box, Prop.wide, "garbage", "pl-st-3"), null);
+
 // -- The example app -----------------------------------------------------------
 const pkg = new Uint8Array(readFileSync(path.join(root, "examples/primitives/dist/primitives.plnt")));
 const core = new Uint8Array(readFileSync(path.join(root, "target/core.wasm")));
@@ -112,6 +134,11 @@ assert.equal(inbox.props.get(Prop.bg)?.enum, EnumColor.surface);
 app.onEvent({ kind: "ui", handler: inbox.listeners.get(Event.press), event: Event.press, value: null });
 assert.equal(pressable("Inbox").props.get(Prop.bg)?.enum, EnumColor.selected);
 assert.ok([...tree.nodes.values()].some((n) => n.text === "Chosen: Inbox"));
+
+// The compiler encodes the partial styles of the app.
+assert.equal(pressable("Inbox").props.get(Prop.hover), `${Prop.border}:${EnumColor.accent}`);
+const header = [...tree.nodes.values()].find((n) => n.kind === ControlKind.box && n.props.get(Prop.compact));
+assert.equal(header.props.get(Prop.compact), `${Prop.axis}:${EnumAxis.column},${Prop.crossAlign}:${EnumCrossAlign.start}`);
 
 // The style of real nodes (the wire form of each prop type: enum, int, bool).
 const scroll = [...tree.nodes.values()].find((n) => n.kind === ControlKind.scroll);

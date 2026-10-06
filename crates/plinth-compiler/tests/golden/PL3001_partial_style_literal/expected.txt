@@ -1,0 +1,4 @@
+app/main.tsx(3,70): error PL3001: `padding` in `hover` must be a literal
+  function Home() { return <Screen title="Home"><Box hover={{ padding: n() }} /></Screen>; }
+                                                                       ^^^
+  help: use a whole number

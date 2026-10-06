@@ -1,5 +1,7 @@
 // Level 2 styled primitives (UI API 1.6, docs/UI-ADVANCED.md phase U1):
-// Box, Span, Pressable and Scroll inside a semantic Screen and Section.
+// Box, Span, Pressable and Scroll inside a semantic Screen and Section,
+// with state styles (`hover`, `focus`) and a width-class style (`compact`,
+// UI API 1.7).
 // Spaces and sizes are spacing units (4 px); colors are theme tokens.
 import { app, signal, Screen, Section, Box, Span, Pressable, Scroll } from "plinth:ui";
 
@@ -21,7 +23,7 @@ function Gallery() {
   return (
     <Screen title="Primitives">
       <Section title="Box and Span">
-        <Box direction="row" gap={3} align="center" padding={3} bg="surface.alt" radius="md">
+        <Box direction="row" gap={3} align="center" padding={3} bg="surface.alt" radius="md" compact={{ direction: "column", align: "start" }}>
           <Box width={10} height={10} radius="full" bg="accent" />
           <Box grow={1} gap={1}>
             <Span size="lg" weight="semibold">Styled primitives</Span>
@@ -49,7 +51,19 @@ function Gallery() {
       <Section title="Scroll">
         <Scroll label="Cards" direction="row" gap={3} paddingY={1}>
           {CARDS.map((card) => (
-            <Pressable label={card.title} role="button" width={40} padding={3} gap={1} radius="md" border="border" bg={chosen() === card.title ? "selected" : "surface"} onPress={() => chosen.set(card.title)}>
+            <Pressable
+              label={card.title}
+              role="button"
+              width={40}
+              padding={3}
+              gap={1}
+              radius="md"
+              border="border"
+              bg={chosen() === card.title ? "selected" : "surface"}
+              hover={{ border: "accent" }}
+              focus={{ border: "accent" }}
+              onPress={() => chosen.set(card.title)}
+            >
               <Span weight="semibold">{card.title}</Span>
               <Span size="sm" fg="text.muted" lines={2}>{card.body}</Span>
             </Pressable>

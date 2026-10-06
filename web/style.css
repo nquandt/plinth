@@ -643,7 +643,7 @@ body {
 .pl-pressable-plain:not([aria-disabled="true"]):hover {
   background: var(--pl-hover);
 }
-.pl-pressable:not(.pl-pressable-plain):not([aria-disabled="true"]):hover {
+.pl-pressable:not(.pl-pressable-plain):not(.pl-pressable-own-hover):not([aria-disabled="true"]):hover {
   opacity: 0.88;
 }
 .pl-pressable:focus-visible,

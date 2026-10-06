@@ -1,0 +1,4 @@
+app/main.tsx(2,63): error PL4002: `colour` is not a style prop
+  function Home() { return <Screen title="Home"><Box compact={{ colour: "accent" }} /></Screen>; }
+                                                                ^^^^^^^^^^^^^^^^
+  help: the style props are: direction, wrap, gap, padding, paddingX, paddingY, align, justify, grow, width, height, maxWidth, maxHeight, bg, border, radius
