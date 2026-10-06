@@ -33,7 +33,7 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 3] = *b"1.3";
+static CORE_VERSION: [u8; 3] = *b"1.4";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;
@@ -448,6 +448,15 @@ abi! {
     fn __plinth_rt_dialog_prompt(thunk: i32, env: i32, message: i32) {
         host::dialog_prompt(Callable { thunk: thunk as u32, env: env as u32 }, message)
     }
+
+    // -- plinth:net (SPEC.md §8.4, §8.5, §11) ---------------------------------
+    fn __plinth_rt_net_fetch(thunk: i32, env: i32, url: i32, method: i32, headers: i32, body: i32) {
+        host::net_fetch(Callable { thunk: thunk as u32, env: env as u32 }, url, method, headers, body)
+    }
+    fn __plinth_rt_net_result_ok() -> i32 { host::net_result_ok() }
+    fn __plinth_rt_net_result_status() -> f64 { host::net_result_status() }
+    fn __plinth_rt_net_result_text() -> i32 { host::net_result_text() }
+    fn __plinth_rt_net_result_error() -> i32 { host::net_result_error() }
 }
 
 // Hot reload (SPEC.md §13): a dev-only ABI function, not declared with the
