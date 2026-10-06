@@ -71,6 +71,19 @@ jobs:
       - name: cargo test -p plinth-host-desktop
         working-directory: plinth
         run: cargo test -p plinth-host-desktop
+      - name: cargo test -p plinth-hub
+        working-directory: plinth
+        run: cargo test -p plinth-hub
+
+      - name: Web host tests (node)
+        working-directory: plinth
+        shell: bash
+        run: |
+          set -e
+          cargo build -p plinth-cli
+          ./target/debug/plinth core export target/core.wasm
+          for app in counter todo timer notes gallery; do ./target/debug/plinth build examples/$app; done
+          for t in web/test/run-*.mjs; do node "$t"; done
 
       - name: tsc check of every example
         working-directory: plinth
@@ -86,7 +99,7 @@ jobs:
           done
 
   linux:
-    name: Linux (best effort, not yet verified)
+    name: Linux (no GUI run)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout plinth
@@ -117,28 +130,33 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev libfontconfig-dev
 
-      # Only Windows is tested so far (HANDOFF.md). Keep this job green-ish
-      # but non-blocking until Linux rendering is actually verified.
+      # The compiler, the cores, the linker and the runner are tested here.
+      # The GUI host builds (cargo check) but no window is opened.
       - name: cargo check (workspace)
         working-directory: plinth
-        continue-on-error: true
         run: cargo check --workspace
 
       - name: cargo test -p plinth-protocol
         working-directory: plinth
-        continue-on-error: true
         run: cargo test -p plinth-protocol
       - name: cargo test -p plinth-package
         working-directory: plinth
-        continue-on-error: true
         run: cargo test -p plinth-package
       - name: cargo test -p plinth-compiler
         working-directory: plinth
-        continue-on-error: true
         run: cargo test -p plinth-compiler
+      - name: cargo test -p plinth-rt
+        working-directory: plinth
+        run: cargo test -p plinth-rt
+      - name: cargo test -p plinth-runner-wasmtime
+        working-directory: plinth
+        run: cargo test -p plinth-runner-wasmtime
+      - name: cargo test -p plinth-hub
+        working-directory: plinth
+        run: cargo test -p plinth-hub
 
   macos:
-    name: macOS (best effort, not yet verified)
+    name: macOS (no GUI run)
     runs-on: macos-latest
     steps:
       - name: Checkout plinth
@@ -163,22 +181,27 @@ jobs:
         with:
           workspaces: plinth -> target
 
-      # Only Windows is tested so far (HANDOFF.md). Keep this job green-ish
-      # but non-blocking until macOS rendering is actually verified.
+      # The compiler, the cores, the linker and the runner are tested here.
+      # The GUI host builds (cargo check) but no window is opened.
       - name: cargo check (workspace)
         working-directory: plinth
-        continue-on-error: true
         run: cargo check --workspace
 
       - name: cargo test -p plinth-protocol
         working-directory: plinth
-        continue-on-error: true
         run: cargo test -p plinth-protocol
       - name: cargo test -p plinth-package
         working-directory: plinth
-        continue-on-error: true
         run: cargo test -p plinth-package
       - name: cargo test -p plinth-compiler
         working-directory: plinth
-        continue-on-error: true
         run: cargo test -p plinth-compiler
+      - name: cargo test -p plinth-rt
+        working-directory: plinth
+        run: cargo test -p plinth-rt
+      - name: cargo test -p plinth-runner-wasmtime
+        working-directory: plinth
+        run: cargo test -p plinth-runner-wasmtime
+      - name: cargo test -p plinth-hub
+        working-directory: plinth
+        run: cargo test -p plinth-hub
