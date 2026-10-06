@@ -59,12 +59,15 @@ pub fn blocking_fetch(url: &str, method: &str, headers: &[(String, String)], bod
         // runner does not re-check the policy on each hop yet, so it
         // disables redirects outright rather than follow one blindly.
         .max_redirects(0)
+        // `fetch` reports a non-2xx status through `response.status`, not
+        // as a transport error (SPEC.md §8.5).
+        .http_status_as_error(false)
         .build();
     let agent = ureq::Agent::new_with_config(config);
     match run(&agent, url, method, headers, body) {
         Ok((status, text)) => {
             let ok = (200..300).contains(&status);
-            Value::List(vec![Value::Bool(ok), Value::Int(status), Value::Str(text), Value::Str(String::new())])
+            Value::List(vec![Value::Bool(ok), Value::Int(status), Value::Str(text), Value::Null])
         }
         Err(e) => Value::List(vec![Value::Bool(false), Value::Int(0), Value::Str(String::new()), Value::Str(format!("network: {e}"))]),
     }
