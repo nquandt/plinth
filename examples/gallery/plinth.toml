@@ -1,0 +1,4 @@
+id = "dev.plinth.examples.gallery"
+name = "Gallery"
+version = "0.1.0"
+publisher = "plinth"

@@ -2,7 +2,7 @@
 //! behave the same as the M0 hand-written guests (SPEC.md §15, M1 exit).
 
 use plinth_compiler::driver::DiskFs;
-use plinth_protocol::{ControlKind, Event, NodeId, Value, Writer, event, prop};
+use plinth_protocol::{ControlKind, Event, NodeId, Value, Writer, aspect, event, prop};
 use plinth_runner_wasmtime::{Guest, Limits, Runner};
 use plinth_ui::tree::{Node, Tree};
 use std::path::PathBuf;
@@ -431,4 +431,21 @@ fn timer_starts_ticks_and_stops() {
 
     h.fire(h.label("Reset"), event::PRESS, Value::Null);
     assert_eq!(h.text_of(heading), "0.0s");
+}
+
+#[test]
+fn gallery_image_nodes_carry_src_alt_and_aspect() {
+    let art = build("gallery");
+    let h = Harness::start(&art.component);
+    let mountain = h.one(ControlKind::Image, |n| n.str_prop(prop::SRC) == Some("mountain.png"));
+    assert_eq!(h.tree.get(mountain).unwrap().str_prop(prop::ALT), Some("A mountain range at dusk"));
+    assert_eq!(h.tree.get(mountain).unwrap().enum_prop(prop::ASPECT), aspect::SQUARE);
+
+    let banner = h.one(ControlKind::Image, |n| n.str_prop(prop::SRC) == Some("banner.png"));
+    assert_eq!(h.tree.get(banner).unwrap().str_prop(prop::ALT), Some("A wide green banner"));
+    assert_eq!(h.tree.get(banner).unwrap().enum_prop(prop::ASPECT), aspect::WIDE);
+
+    let badge = h.one(ControlKind::Image, |n| n.str_prop(prop::SRC) == Some("badge.png"));
+    assert_eq!(h.tree.get(badge).unwrap().str_prop(prop::ALT), Some("A red badge"));
+    assert_eq!(h.tree.get(badge).unwrap().enum_prop(prop::ASPECT), aspect::TALL);
 }

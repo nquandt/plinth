@@ -14,7 +14,7 @@ fn render(f: &plinth_compiler::driver::Frontend) -> String {
 
 #[test]
 fn examples_check_clean() {
-    for name in ["counter", "todo", "timer"] {
+    for name in ["counter", "todo", "timer", "gallery"] {
         let f = frontend(&example(name));
         assert!(f.diags.is_empty(), "{name}:\n{}", render(&f));
         assert!(f.program.is_some());
@@ -75,6 +75,43 @@ fn checkbox_and_text_area() {
         .to_owned()
         + APP;
     assert_eq!(codes(&bad), ["PL4003", "PL4002"]);
+}
+
+#[test]
+fn image_control() {
+    // Good usage: `src` names a real asset and `alt` is not empty.
+    let fs = MemFs::default()
+        .with(
+            "app/main.tsx",
+            &("import { app, Screen, Image } from \"plinth:ui\";\n\
+               function Home() { return <Screen title=\"Home\"><Image src=\"logo.png\" alt=\"Company logo\" aspect=\"wide\" /></Screen>; }"
+                .to_owned()
+                + APP),
+        )
+        .with("assets/logo.png", "");
+    let f = frontend(&fs);
+    assert!(f.diags.is_empty(), "{}", render(&f));
+    assert!(f.program.is_some());
+
+    // Missing asset: a stable code with a help that lists the assets.
+    let missing_main = "import { app, Screen, Image } from \"plinth:ui\";\n\
+                         function Home() { return <Screen title=\"Home\"><Image src=\"missing.png\" alt=\"x\" /></Screen>; }"
+        .to_owned()
+        + APP;
+    assert_eq!(codes(&missing_main), ["PL4008"]);
+
+    // Empty `alt`: a stable code (SPEC.md §6.3 a11y).
+    let fs = MemFs::default()
+        .with(
+            "app/main.tsx",
+            &("import { app, Screen, Image } from \"plinth:ui\";\n\
+               function Home() { return <Screen title=\"Home\"><Image src=\"logo.png\" alt=\"\" /></Screen>; }"
+                .to_owned()
+                + APP),
+        )
+        .with("assets/logo.png", "");
+    let f = frontend(&fs);
+    assert_eq!(f.diags.iter().map(|d| d.code).collect::<Vec<_>>(), ["PL4009"]);
 }
 
 #[test]
