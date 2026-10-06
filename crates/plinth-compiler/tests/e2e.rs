@@ -246,3 +246,29 @@ fn notes_add_select_and_search() {
     h.fire(search, event::CHANGE, "zzzz-no-match".into());
     assert!(h.row_titles().is_empty());
 }
+
+#[test]
+fn settings_gallery_checkbox_and_text_area() {
+    let art = build("settings-gallery");
+    let mut h = Harness::start(&art.component);
+
+    let checkbox = h.one(ControlKind::Checkbox, |n| n.str_prop(prop::LABEL) == Some("Email notifications"));
+    assert!(h.tree.get(checkbox).unwrap().bool_prop(prop::VALUE));
+    let note = h.one(ControlKind::Text, |n| n.text.as_deref() == Some("You will get emails."));
+    assert_eq!(h.text_of(note), "You will get emails.");
+
+    // Toggling the checkbox flips its own signal (no `onChange` is given).
+    // The host sets the displayed value at once, as a real click would (SPEC.md §8.4).
+    h.tree.set_local_prop(checkbox, prop::VALUE, Value::Bool(false));
+    h.fire(checkbox, event::CHANGE, Value::Bool(false));
+    assert!(!h.tree.get(checkbox).unwrap().bool_prop(prop::VALUE));
+    let note = h.one(ControlKind::Text, |_| true);
+    assert_eq!(h.text_of(note), "Emails are off.");
+
+    // The text area is a two-way `value` binding, like TextField.
+    let bio = h.one(ControlKind::TextArea, |_| true);
+    assert_eq!(h.tree.get(bio).unwrap().str_prop(prop::PLACEHOLDER), Some("Tell us about yourself"));
+    h.tree.set_local_prop(bio, prop::VALUE, "Loves Rust".into());
+    h.fire(bio, event::CHANGE, "Loves Rust".into());
+    assert_eq!(h.tree.get(bio).unwrap().str_prop(prop::VALUE), Some("Loves Rust"));
+}

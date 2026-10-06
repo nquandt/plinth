@@ -59,6 +59,23 @@ fn jsx_errors() {
 }
 
 #[test]
+fn checkbox_and_text_area() {
+    // Good usage: both controls check clean.
+    let good = "import { app, Screen, Checkbox, TextArea, signal } from \"plinth:ui\";\n\
+                function Home() {\n  const on = signal(false);\n  const notes = signal(\"\");\n  return <Screen title=\"Home\">\n    <Checkbox label=\"Notify\" value={on} />\n    <TextArea label=\"Notes\" value={notes} placeholder=\"...\" />\n  </Screen>;\n}"
+        .to_owned()
+        + APP;
+    assert_eq!(codes(&good), Vec::<&str>::new());
+
+    // Bad usage: missing required value, and an unknown prop.
+    let bad = "import { app, Screen, Checkbox, TextArea } from \"plinth:ui\";\n\
+               function Home() { return <Screen title=\"Home\"><Checkbox label=\"x\" /><TextArea label=\"y\" value=\"\" rows={4} /></Screen>; }"
+        .to_owned()
+        + APP;
+    assert_eq!(codes(&bad), ["PL4003", "PL4002"]);
+}
+
+#[test]
 fn missing_app() {
     assert_eq!(codes("const x = 1;"), ["PL1006"]);
 }
