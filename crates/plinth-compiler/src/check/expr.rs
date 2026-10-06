@@ -924,6 +924,27 @@ impl Checker<'_> {
             return TExpr::new(TExprKind::IsNull(bx(other)), Type::Bool, span);
         }
         let (lt, rt) = (self.widen(a.ty.clone()), self.widen(b.ty.clone()));
+        // `T | null` with `T`: false when the nullable side is null.
+        let null_kind = |c: &Self, n: &Type, t: &Type| -> Option<EqKind> {
+            let Type::Nullable(inner) = n else { return None };
+            match (c.widen((**inner).clone()), t) {
+                (Type::String, Type::String) => Some(EqKind::NullStr),
+                (Type::Number, Type::Number) => Some(EqKind::NullF64),
+                (x, y) if x == *y && x.repr() == crate::types::Repr::Ref => Some(EqKind::Ref),
+                _ => None,
+            }
+        };
+        if let Some(k) = null_kind(self, &lt, &rt) {
+            return TExpr::new(TExprKind::Cmp(CmpOp::Eq, k, bx(a), bx(b)), Type::Bool, span);
+        }
+        if let Some(k) = null_kind(self, &rt, &lt) {
+            // The nullable side must come first; keep the evaluation order
+            // with a temporary for the left side.
+            let tmp = self.temp(a.ty.clone());
+            let read = TExpr::new(TExprKind::Var(tmp), a.ty.clone(), a.span);
+            let cmp = TExpr::new(TExprKind::Cmp(CmpOp::Eq, k, bx(b), bx(read)), Type::Bool, span);
+            return TExpr::new(TExprKind::Block(vec![TStmt::Let(tmp, Some(a))], bx(cmp)), Type::Bool, span);
+        }
         let eq = match (&lt, &rt) {
             (Type::Number, Type::Number) => EqKind::F64,
             (Type::Bool, Type::Bool) | (Type::Element, Type::Element) => EqKind::I32,

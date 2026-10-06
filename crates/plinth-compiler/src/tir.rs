@@ -151,6 +151,10 @@ pub enum EqKind {
     Str,
     /// Reference identity (also used for `=== null`).
     Ref,
+    /// `string | null` (first) with `string`: false when the first is null.
+    NullStr,
+    /// `number | null` (first, boxed) with `number`.
+    NullF64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

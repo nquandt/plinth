@@ -968,12 +968,33 @@ pub(crate) fn always_exits(stmts: &[TStmt]) -> bool {
         TStmt::Return(_) | TStmt::Throw(_) => true,
         TStmt::If(_, a, b) => always_exits(a) && always_exits(b),
         TStmt::Block(b) => always_exits(b),
-        TStmt::Switch { cases, .. } => {
-            cases.iter().any(|(t, _)| t.is_none()) && cases.iter().all(|(_, b)| b.is_empty() || always_exits(b))
+        TStmt::Switch { disc, cases, .. } => {
+            (cases.iter().any(|(t, _)| t.is_none()) || covers_all(disc, cases))
+                && cases.iter().all(|(_, b)| b.is_empty() || always_exits(b))
+                && cases.last().is_some_and(|(_, b)| always_exits(b))
         }
         TStmt::Loop { cond: None, body, .. } => !contains_break(body),
         _ => false,
     })
+}
+
+/// True if the cases name every member of a string literal union.
+fn covers_all(disc: &TExpr, cases: &[(Option<TExpr>, Vec<TStmt>)]) -> bool {
+    let Type::StrLits(lits) = &disc.ty else { return false };
+    let labels: Vec<&str> = cases
+        .iter()
+        .filter_map(|(t, _)| {
+            let mut e = t.as_ref()?;
+            while let TExprKind::Coerce(Coercion::Retag, inner) = &e.kind {
+                e = inner;
+            }
+            match &e.kind {
+                TExprKind::Str(s) => Some(s.as_str()),
+                _ => None,
+            }
+        })
+        .collect();
+    lits.iter().all(|l| labels.contains(&l.as_str()))
 }
 
 fn contains_break(stmts: &[TStmt]) -> bool {

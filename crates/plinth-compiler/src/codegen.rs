@@ -986,11 +986,35 @@ impl FnGen {
         self.close();
     }
 
+    /// Compares the two values on the stack.
     fn eq(&mut self, g: &Codegen, eq: EqKind) {
         match eq {
             EqKind::F64 => self.emit(I::F64Eq),
             EqKind::I32 | EqKind::Ref => self.emit(I::I32Eq),
             EqKind::Str => self.rt(g, "str_eq"),
+            EqKind::NullStr | EqKind::NullF64 => {
+                // a !== null && unwrap(a) === b
+                let br = if eq == EqKind::NullF64 { Repr::F64 } else { Repr::I32 };
+                let (ta, tb) = (self.tmp(Repr::I32), self.tmp(br));
+                self.emit(I::LocalSet(tb));
+                self.emit(I::LocalTee(ta));
+                self.open(I::If(BlockType::Result(ValType::I32)));
+                self.emit(I::LocalGet(ta));
+                if eq == EqKind::NullF64 {
+                    self.rt(g, "unbox_f64");
+                }
+                self.emit(I::LocalGet(tb));
+                if eq == EqKind::NullF64 {
+                    self.emit(I::F64Eq);
+                } else {
+                    self.rt(g, "str_eq");
+                }
+                self.emit(I::Else);
+                self.emit(I::I32Const(0));
+                self.close();
+                self.free(ta, Repr::I32);
+                self.free(tb, br);
+            }
         }
     }
 
@@ -1078,8 +1102,8 @@ impl FnGen {
                         CmpOp::Gt => I::F64Gt,
                         CmpOp::Ge => I::F64Ge,
                     }),
-                    EqKind::Str => {
-                        self.rt(g, "str_eq");
+                    EqKind::Str | EqKind::NullStr | EqKind::NullF64 => {
+                        self.eq(g, *kind);
                         if *op == CmpOp::Ne {
                             self.emit(I::I32Eqz);
                         }

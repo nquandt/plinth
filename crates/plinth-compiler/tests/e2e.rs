@@ -187,3 +187,59 @@ fn todo_behaves_like_m0() {
     h.fire(h.label("Back to tasks"), event::PRESS, Value::Null);
     assert_eq!(h.tree.current_screen, 0);
 }
+
+#[test]
+fn calculator_computes() {
+    let art = build("calculator");
+    let mut h = Harness::start(&art.component);
+    let display = h.one(ControlKind::Heading, |_| true);
+    let press = |h: &mut Harness, label: &str| {
+        let b = h.label(label);
+        h.fire(b, event::PRESS, Value::Null);
+    };
+    for k in ["1", "2", "+", "3", "="] {
+        press(&mut h, k);
+    }
+    assert_eq!(h.text_of(display), "15");
+    // An exhaustive switch (no default) and division by zero.
+    for k in ["÷", "0", "="] {
+        press(&mut h, k);
+    }
+    assert_eq!(h.text_of(display), "Error");
+    press(&mut h, "C");
+    for k in ["7", ".", "5", "×", "2", "="] {
+        press(&mut h, k);
+    }
+    assert_eq!(h.text_of(display), "15");
+    assert_eq!(h.row_titles().len(), 3, "history has one row per calculation");
+}
+
+#[test]
+fn notes_add_select_and_search() {
+    let art = build("notes");
+    let mut h = Harness::start(&art.component);
+    let before = h.row_titles().len();
+    // Add a note.
+    let fields = h.find(ControlKind::TextField, |n| n.str_prop(prop::PLACEHOLDER) == Some("Note title"));
+    let title = fields[0];
+    h.tree.set_local_prop(title, prop::VALUE, "Groceries".into());
+    h.fire(title, event::CHANGE, "Groceries".into());
+    h.fire(h.label("Add note"), event::PRESS, Value::Null);
+    assert_eq!(h.row_titles().len(), before + 1);
+    // Selecting a note shows the edit section (a region that reads a signal).
+    assert!(h.find(ControlKind::Section, |n| n.str_prop(prop::TITLE) == Some("Edit note")).is_empty());
+    let row = h.find(ControlKind::Row, |n| n.str_prop(prop::TITLE) == Some("Groceries"))[0];
+    h.fire(row, event::PRESS, Value::Null);
+    assert_eq!(h.find(ControlKind::Section, |n| n.str_prop(prop::TITLE) == Some("Edit note")).len(), 1);
+    // Deleting the selected note (`selected() === id` on `number | null`) hides it again.
+    let row = h.find(ControlKind::Row, |n| n.str_prop(prop::TITLE) == Some("Groceries"))[0];
+    let delete = h.tree.get(row).unwrap().children[0];
+    h.fire(delete, event::PRESS, Value::Null);
+    assert_eq!(h.row_titles().len(), before);
+    assert!(h.find(ControlKind::Section, |n| n.str_prop(prop::TITLE) == Some("Edit note")).is_empty());
+    // Search filters the list.
+    let search = h.one(ControlKind::TextField, |n| n.str_prop(prop::LABEL) == Some("Search"));
+    h.tree.set_local_prop(search, prop::VALUE, "zzzz-no-match".into());
+    h.fire(search, event::CHANGE, "zzzz-no-match".into());
+    assert!(h.row_titles().is_empty());
+}

@@ -217,11 +217,17 @@ impl Checker<'_> {
             }
             StmtKind::Switch(disc, cases) => {
                 let d = self.expr(disc, None);
-                let d_ty = self.widen(d.ty.clone());
+                // A null discriminant matches no case, so it goes to `default`.
+                let (d_ty, case_ty) = match &d.ty {
+                    Type::Nullable(inner) => (Type::Nullable(Box::new(self.widen((**inner).clone()))), (**inner).clone()),
+                    t => (self.widen(t.clone()), t.clone()),
+                };
                 let eq = match &d_ty {
                     Type::Number => EqKind::F64,
                     Type::Bool | Type::Enum(_) => EqKind::I32,
                     Type::String => EqKind::Str,
+                    Type::Nullable(inner) if **inner == Type::String => EqKind::NullStr,
+                    Type::Nullable(inner) if **inner == Type::Number => EqKind::NullF64,
                     Type::Error => EqKind::I32,
                     other => {
                         let msg = format!("`switch` works on numbers, strings and enums, not `{}`", self.show(other));
@@ -233,8 +239,12 @@ impl Checker<'_> {
                 self.push_scope();
                 for (test, body) in cases {
                     let t = test.as_ref().map(|t| {
-                        let te = self.expr(t, Some(&d.ty));
-                        self.coerce(te, &d_ty)
+                        let te = self.expr(t, Some(&case_ty));
+                        let target = match &d_ty {
+                            Type::Nullable(inner) => (**inner).clone(),
+                            t => t.clone(),
+                        };
+                        self.coerce(te, &target)
                     });
                     let b = self.block_stmts(body);
                     out_cases.push((t, b));
