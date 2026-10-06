@@ -637,8 +637,7 @@ fn eid(prefix: &'static str, id: impl Into<u64>) -> ElementId {
 
 // -- Chart (SPEC.md §6.3, UI API 1.5) ----------------------------------------
 
-/// One label/value pair.
-type ChartPoints = Vec<(String, f64)>;
+use crate::chart::ChartPoints;
 
 /// Decodes `data`/`series` (wire format in `wit/plinth/ui-api.toml`) into
 /// `(series name, points)`. A single-series `data` gets one entry with an
@@ -679,11 +678,10 @@ fn chart_description(series: &[(String, ChartPoints)]) -> String {
         .join(". ")
 }
 
-/// Draws a bar chart (one column of grouped bars per label) or, when
-/// `connect` is true, a line chart approximated as thin bars with a
-/// rounded top marker (SPEC.md §6.3: the runtime, not the app, picks how
-/// the line reads). Height is proportional to `value / max(|value|)`.
-fn render_line_or_bars(series: &[(String, ChartPoints)], t: &Tokens, height: f32, connect: bool) -> AnyElement {
+/// Draws a bar chart: one column of grouped bars per label (SPEC.md
+/// §6.3). Height is proportional to `value / max(|value|)`. Line and pie
+/// charts are path-based (`crate::chart`).
+fn render_bars(series: &[(String, ChartPoints)], t: &Tokens, height: f32) -> AnyElement {
     let palette = t.chart_palette();
     let max = series
         .iter()
@@ -706,8 +704,7 @@ fn render_line_or_bars(series: &[(String, ChartPoints)], t: &Tokens, height: f32
                     div()
                         .w_full()
                         .h(gpui::relative(frac.max(0.02)))
-                        .when(connect, |d| d.rounded_t_full())
-                        .when(!connect, |d| d.rounded_t_sm())
+                        .rounded_t_sm()
                         .bg(color),
                 )
                 .into_any_element()
@@ -729,28 +726,6 @@ fn render_line_or_bars(series: &[(String, ChartPoints)], t: &Tokens, height: f32
         .items_end()
         .h(px(height))
         .child(div().flex().gap_2().items_end().flex_1().h_full().children(columns))
-        .into_any_element()
-}
-
-/// Draws a pie as a proportional horizontal segmented bar (SPEC.md §6.3):
-/// each wedge's share of the whole, colored from the chart palette. Values
-/// are made non-negative shares; a pie with no positive values renders as
-/// one neutral segment.
-fn render_pie(points: &ChartPoints, t: &Tokens, height: f32) -> AnyElement {
-    let palette = t.chart_palette();
-    let total: f64 = points.iter().map(|(_, v)| v.abs()).sum();
-    let total = if total <= 0.0 { 1.0 } else { total };
-    let segs = points.iter().enumerate().map(|(i, (_, v))| {
-        let frac = (v.abs() / total) as f32;
-        div().h_full().w(gpui::relative(frac.max(0.001))).bg(palette[i % palette.len()]).into_any_element()
-    });
-    div()
-        .flex()
-        .w_full()
-        .h(px(height.min(28.)))
-        .rounded_full()
-        .overflow_hidden()
-        .children(segs)
         .into_any_element()
 }
 
@@ -2097,22 +2072,21 @@ impl PlinthRoot {
 
         let desc = chart_description(&series);
         let chart_h = match self.class { WidthClass::Compact => 160., _ => 220. };
+        let compact = self.class == WidthClass::Compact;
         let body = match kind {
-            chart_kind::PIE => render_pie(&series[0].1, t, chart_h),
-            chart_kind::LINE => render_line_or_bars(&series, t, chart_h, true),
-            _ => render_line_or_bars(&series, t, chart_h, false),
+            // The pie draws its own legend (with each share) beside it,
+            // or below it at compact width.
+            chart_kind::PIE => crate::chart::render_pie(&series[0].1, t, if compact { 150. } else { 180. }, compact),
+            chart_kind::LINE => {
+                let max_x_labels = match self.class { WidthClass::Compact => 6, WidthClass::Regular => 10, _ => 14 };
+                crate::chart::render_line(&series, t, chart_h, max_x_labels)
+            }
+            _ => render_bars(&series, t, chart_h),
         };
-        let show_legend = series.len() > 1 || (kind == chart_kind::PIE && series[0].1.len() > 1);
-        let legend = if show_legend {
-            let names: Vec<String> = if kind == chart_kind::PIE {
-                series[0].1.iter().map(|(l, _)| l.clone()).collect()
-            } else {
-                series.iter().map(|(n, _)| n.clone()).collect()
-            };
-            Some(render_legend(&names, t))
-        } else {
-            None
-        };
+        let legend = (kind != chart_kind::PIE && series.len() > 1).then(|| {
+            let names: Vec<String> = series.iter().map(|(n, _)| n.clone()).collect();
+            render_legend(&names, t)
+        });
 
         div()
             .id(id)
