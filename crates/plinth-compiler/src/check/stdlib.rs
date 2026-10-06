@@ -23,6 +23,7 @@ pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", 
 pub const TIME_NAMES: &[&str] = &["now", "monotonicNow", "setTimeout", "setInterval", "clearTimeout", "clearInterval"];
 pub const STORE_NAMES: &[&str] = &["kv"];
 pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
+pub const DIALOG_NAMES: &[&str] = &["alert", "confirm", "prompt"];
 
 /// The `store.kv` capability (SPEC.md §11), needed by every `plinth:store`
 /// call.
@@ -50,6 +51,12 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "writeText" => Binding::Std(StdFn::ClipboardWriteText),
             "readText" => Binding::Std(StdFn::ClipboardReadText),
             "lastError" => Binding::Std(StdFn::ClipboardLastError),
+            _ => return None,
+        }),
+        StdModule::Dialog => Some(match name {
+            "alert" => Binding::Std(StdFn::DialogAlert),
+            "confirm" => Binding::Std(StdFn::DialogConfirm),
+            "prompt" => Binding::Std(StdFn::DialogPrompt),
             _ => return None,
         }),
         StdModule::Ui => Some(match name {
@@ -249,6 +256,36 @@ impl Checker<'_> {
                     self.err(code::ARG_COUNT, span, "`lastError` takes no arguments");
                 }
                 TExpr::new(TExprKind::Rt("clipboard_last_error", Vec::new()), Type::String.nullable(), span)
+            }
+            StdFn::DialogAlert => {
+                if args.len() != 2 {
+                    self.err(code::ARG_COUNT, span, "`alert` takes a message and a done callback");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let message = self.expr_with(&args[0], &Type::String);
+                let message = self.coerce(message, &Type::String);
+                let (cb, _) = self.callback(&args[1], &[], Some(Type::Void));
+                TExpr::new(TExprKind::DialogCall("dialog_alert", Box::new(message), Box::new(cb)), Type::Void, span)
+            }
+            StdFn::DialogConfirm => {
+                if args.len() != 2 {
+                    self.err(code::ARG_COUNT, span, "`confirm` takes a message and a done callback");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let message = self.expr_with(&args[0], &Type::String);
+                let message = self.coerce(message, &Type::String);
+                let (cb, _) = self.callback(&args[1], &[Type::Bool], Some(Type::Void));
+                TExpr::new(TExprKind::DialogCall("dialog_confirm", Box::new(message), Box::new(cb)), Type::Void, span)
+            }
+            StdFn::DialogPrompt => {
+                if args.len() != 2 {
+                    self.err(code::ARG_COUNT, span, "`prompt` takes a message and a done callback");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let message = self.expr_with(&args[0], &Type::String);
+                let message = self.coerce(message, &Type::String);
+                let (cb, _) = self.callback(&args[1], &[Type::String.nullable()], Some(Type::Void));
+                TExpr::new(TExprKind::DialogCall("dialog_prompt", Box::new(message), Box::new(cb)), Type::Void, span)
             }
         }
     }

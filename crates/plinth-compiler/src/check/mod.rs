@@ -24,6 +24,7 @@ pub enum StdModule {
     Time,
     Store,
     Clipboard,
+    Dialog,
 }
 
 impl StdModule {
@@ -34,6 +35,7 @@ impl StdModule {
             "plinth:time" => Some(StdModule::Time),
             "plinth:store" => Some(StdModule::Store),
             "plinth:clipboard" => Some(StdModule::Clipboard),
+            "plinth:dialog" => Some(StdModule::Dialog),
             _ => None,
         }
     }
@@ -72,6 +74,9 @@ pub enum StdFn {
     ClipboardReadText,
     Int,
     ClipboardLastError,
+    DialogAlert,
+    DialogConfirm,
+    DialogPrompt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

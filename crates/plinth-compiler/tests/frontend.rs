@@ -157,7 +157,7 @@ fn missing_app() {
 /// names the compiler knows (SPEC.md §4.7).
 #[test]
 fn std_typings_match() {
-    use plinth_compiler::check::stdlib::{CLIPBOARD_NAMES, CORE_NAMES, STORE_NAMES, TIME_NAMES, UI_NAMES};
+    use plinth_compiler::check::stdlib::{CLIPBOARD_NAMES, CORE_NAMES, DIALOG_NAMES, STORE_NAMES, TIME_NAMES, UI_NAMES};
     let std_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../std");
     let exports = |file: &str| -> Vec<String> {
         let text = std::fs::read_to_string(std_dir.join(file)).unwrap();
@@ -183,6 +183,7 @@ fn std_typings_match() {
     assert_eq!(exports("time.d.ts"), sorted(TIME_NAMES), "std/time.d.ts and check::stdlib::TIME_NAMES differ");
     assert_eq!(exports("store.d.ts"), sorted(STORE_NAMES), "std/store.d.ts and check::stdlib::STORE_NAMES differ");
     assert_eq!(exports("clipboard.d.ts"), sorted(CLIPBOARD_NAMES), "std/clipboard.d.ts and check::stdlib::CLIPBOARD_NAMES differ");
+    assert_eq!(exports("dialog.d.ts"), sorted(DIALOG_NAMES), "std/dialog.d.ts and check::stdlib::DIALOG_NAMES differ");
     for c in plinth_compiler::controls::CONTROLS {
         assert!(UI_NAMES.contains(&c.name), "control {} is not in UI_NAMES", c.name);
     }

@@ -253,7 +253,7 @@ fn resolve(fs: &dyn FileSystem, from: &str, spec: &str) -> Result<Target, DiagFn
                 let name = name.to_owned();
                 Err(Box::new(move |span| {
                     Diagnostic::error(code::UNKNOWN_STD_MODULE, span, format!("`plinth:{name}` is not a Plinth module yet"))
-                        .help("available modules: plinth:ui, plinth:core, plinth:time, plinth:store, plinth:clipboard")
+                        .help("available modules: plinth:ui, plinth:core, plinth:time, plinth:store, plinth:clipboard, plinth:dialog")
                 }))
             }
         };

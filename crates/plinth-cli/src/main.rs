@@ -41,6 +41,7 @@ const TYPINGS: &[(&str, &str)] = &[
     ("time.d.ts", include_str!("../../../std/time.d.ts")),
     ("store.d.ts", include_str!("../../../std/store.d.ts")),
     ("clipboard.d.ts", include_str!("../../../std/clipboard.d.ts")),
+    ("dialog.d.ts", include_str!("../../../std/dialog.d.ts")),
 ];
 
 fn main() -> ExitCode {
