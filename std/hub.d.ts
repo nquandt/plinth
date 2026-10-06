@@ -60,3 +60,42 @@ export declare function install(id: string, done: (error: string | null) => void
  * `"denied:undeclared"`, `"denied:refused"`, `"denied:unsupported"`, or
  * `null` if the last call was not denied. */
 export declare function lastError(): string | null;
+
+// -- Core 1.9 (`docs/HUB.md` §4.1, §7.4, §9.2) -------------------------------
+
+/** One library app as a JSON string: the fields of a `listApps` element.
+ * Every element of `listApps` and the result of `appInfo` also has
+ * `publisherBlocked: boolean`, `pinned: string` (`""` if not pinned),
+ * `versions: Array<{ version: string, signer: string, capabilities:
+ * string[] }>` (newest first), `update: string` (the newer version that the
+ * last update check found, or `""`) and `updateCapabilities: string[]` (the
+ * capabilities that the update adds). Returns `null` if denied or if `id` is
+ * not in the library. Core 1.9. */
+export declare function appInfo(id: string): string | null;
+
+/** Pins app `id` to the installed `version`; `""` removes the pin, and the
+ * newest version runs again (`docs/HUB.md` §9.2). A no-op if denied. */
+export declare function pin(id: string, version: string): void;
+
+/** Blocks a publisher key (`"ed25519:…"`, the `signer` of an app): no app
+ * that it signed runs or installs (`docs/HUB.md` §7.4). A no-op if
+ * denied. */
+export declare function blockPublisher(key: string): void;
+
+/** Reverses `blockPublisher`. A no-op if denied. */
+export declare function unblockPublisher(key: string): void;
+
+/** Checks the source of app `id` (of every library app if `id` is `""`)
+ * for a newer version, off the UI thread (`docs/HUB.md` §9.2). `done` gets
+ * a JSON string `{ updates: Array<{ id: string, name: string, current:
+ * string, version: string, source: string, newCapabilities: string[],
+ * pinned: string }>, errors: string[] }`, or `null` if denied. The host
+ * keeps the result, so `listApps` and `appInfo` show it too. Core 1.9. */
+export declare function checkUpdates(id: string, done: (json: string | null) => void): void;
+
+/** Installs the newest version of library app `id` from its source, off
+ * the UI thread. The new version runs after the user decides its new
+ * capabilities (`docs/HUB.md` §7.3); a pin stays. `done` gets `null` on
+ * success (also when `id` is up to date), or the error text
+ * (`"denied:<reason>"` if denied). Core 1.9. */
+export declare function update(id: string, done: (error: string | null) => void): void;

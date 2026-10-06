@@ -33,7 +33,7 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 3] = *b"1.8";
+static CORE_VERSION: [u8; 3] = *b"1.9";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;
@@ -448,6 +448,17 @@ abi! {
     }
     fn __plinth_rt_hub_install(thunk: i32, env: i32, id: i32) {
         host::hub_install(Callable { thunk: thunk as u32, env: env as u32 }, id)
+    }
+    // -- plinth:hub, core 1.9 (`docs/HUB.md` §4.1, §7.4, §9.2) ------------------
+    fn __plinth_rt_hub_app_info(id: i32) -> i32 { host::hub_app_info(id) }
+    fn __plinth_rt_hub_pin(id: i32, version: i32) { host::hub_pin(id, version) }
+    fn __plinth_rt_hub_block_publisher(key: i32) { host::hub_block_publisher(key) }
+    fn __plinth_rt_hub_unblock_publisher(key: i32) { host::hub_unblock_publisher(key) }
+    fn __plinth_rt_hub_check_updates(thunk: i32, env: i32, id: i32) {
+        host::hub_check_updates(Callable { thunk: thunk as u32, env: env as u32 }, id)
+    }
+    fn __plinth_rt_hub_update(thunk: i32, env: i32, id: i32) {
+        host::hub_update(Callable { thunk: thunk as u32, env: env as u32 }, id)
     }
 
     // -- JSON (plinth:core, SPEC.md §4.7) --------------------------------------

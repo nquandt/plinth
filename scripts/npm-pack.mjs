@@ -15,7 +15,7 @@
 // defaults to target/release/<exe> for the current platform.
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 const version = readFileSync(join(root, "Cargo.toml"), "utf8").match(/^version = "(.+)"/m)[1];
@@ -56,6 +56,13 @@ if (!metaOnly) {
   checkVersion(`cli-${platform}`);
 
   copyFileSync(binary, join(platformDir, exe));
+  // Windows: `plinthw.exe` runs `plinth.exe` with no console window, for
+  // shortcuts and plinth:// links (docs/HUB.md §10).
+  if (platform.startsWith("win32")) {
+    const launcher = join(dirname(binary), "plinthw.exe");
+    if (!existsSync(launcher)) throw new Error(`build first: cargo build --release -p plinth-cli (${launcher} is missing)`);
+    copyFileSync(launcher, join(platformDir, "plinthw.exe"));
+  }
   pack(`cli-${platform}`);
   console.log(`packed npm/cli-${platform} (binary: ${binary}) -> ${out}`);
 }

@@ -198,6 +198,7 @@ Running it again is safe: the output for the same input is the same (stable orde
 - `plinth hub search <text>` searches all sources.
 - `plinth hub install <id>[@<version>] [--source <name>]` downloads, checks, and adds the app to the library. The library records the source of each app.
 - `plinth hub update [<id>]` installs newer versions (with the consent rules of `docs/HUB.md` §7.3).
+- `plinth hub pin <id> <version>` keeps an app on an installed version; `plinth hub pin <id> --latest` removes the pin. The Hub UI does the same with `plinth:hub` (`checkUpdates`, `update`, `pin`; `docs/HUB.md` §9.2).
 
 The Hub caches the service index and the app documents and uses HTTP caching headers. It works offline with the cached data.
 

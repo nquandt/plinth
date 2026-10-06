@@ -276,4 +276,20 @@ impl plinth_hub::SourceClient for HubSources {
         let Some(latest) = doc.latest() else { return Ok(None) };
         Ok(Some(source.package(id, &latest.version)?))
     }
+
+    fn latest_version(&self, base: &str, id: &str) -> anyhow::Result<Option<plinth_hub::SourceVersion>> {
+        let source = source::Source::open(base)?;
+        if !source.apps()?.iter().any(|a| a.id == id) {
+            return Ok(None);
+        }
+        let doc = source.app(id)?;
+        Ok(doc.latest().map(|v| plinth_hub::SourceVersion {
+            version: v.version.clone(),
+            capabilities: v.capabilities.iter().map(|c| c.name.clone()).collect(),
+        }))
+    }
+
+    fn package(&self, base: &str, id: &str, version: &str) -> anyhow::Result<Vec<u8>> {
+        source::Source::open(base)?.package(id, version)
+    }
 }

@@ -29,13 +29,20 @@ fn load_error(app: &[u8]) -> String {
     format!("{:#}", split::load_app(rt, &layout, app).err().expect("the load must fail"))
 }
 
-/// Sets the `MAJOR.MINOR` that an app module needs.
+/// Sets the `MAJOR.MINOR` that an app module needs. The version text can
+/// change its length: the custom section's size byte is fixed up (the
+/// section is small, so its size is one LEB128 byte).
 fn needing(mut app: Vec<u8>, version: &str) -> Vec<u8> {
     let (major, minor) = split::app_core_version(&app).unwrap();
     let have = format!("{major}.{minor}");
-    assert_eq!(have.len(), version.len(), "keep the length so the section size stays valid");
-    let at = app.windows(have.len() + 11).position(|w| w == format!("plinth-core{have}").as_bytes()).unwrap() + 11;
-    app[at..at + version.len()].copy_from_slice(version.as_bytes());
+    let name = app.windows(have.len() + 11).position(|w| w == format!("plinth-core{have}").as_bytes()).unwrap();
+    assert_eq!(app[name - 1], 11, "the section name length");
+    let size = name - 2;
+    let new_size = 1 + 11 + version.len();
+    assert!(app[size] < 0x80 && new_size < 0x80, "a one-byte section size");
+    app[size] = new_size as u8;
+    let data = name + 11;
+    app.splice(data..data + have.len(), version.bytes());
     app
 }
 
@@ -61,7 +68,7 @@ fn the_counter_app_module_holds_only_app_code() {
 
 #[test]
 fn a_newer_minor_or_another_major_is_rejected_by_this_core() {
-    assert!(load_error(&needing(counter().app, "1.9")).contains(&format!("needs core 1.9, but this core is {}", split::core_needed())));
+    assert!(load_error(&needing(counter().app, "1.99")).contains(&format!("needs core 1.99, but this core is {}", split::core_needed())));
     assert!(load_error(&needing(counter().app, "2.0")).contains("needs core 2.0"));
 }
 
@@ -110,7 +117,7 @@ fn install_and_link_through_the_cores_directory() {
     cores::install(link::runtime()).unwrap();
     assert!(cores::install(b"\0asm\x01\0\0\0").is_err());
     assert!(cores::link_app(&counter().app).is_ok());
-    let err = format!("{:#}", cores::link_app(&needing(counter().app, "1.9")).unwrap_err());
+    let err = format!("{:#}", cores::link_app(&needing(counter().app, "1.99")).unwrap_err());
     assert!(err.contains("plinth core install"), "{err}");
     std::fs::remove_dir_all(&dir).unwrap();
 }

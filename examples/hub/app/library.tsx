@@ -1,8 +1,24 @@
 // The library screen (`docs/HUB.md` §9.1): every app, filtered by group
 // and by text, and a sheet to make a new group.
-import { signal, navigate, Screen, Section, Tabs, TextField, List, Row, Empty, Text, Sheet, Button, Action } from "plinth:ui";
+import { signal, navigate, Screen, Section, Tabs, TextField, List, Row, Empty, Text, Sheet, Button, Action, Badge } from "plinth:ui";
 import { createGroup } from "plinth:hub";
-import { reload, loadError, groupTabs, groupFilter, filterText, visibleApps, apps, selectedId, appSubtitle, appRisk, riskLabel } from "./model";
+import {
+  reload,
+  loadError,
+  groupTabs,
+  groupFilter,
+  filterText,
+  visibleApps,
+  apps,
+  selectedId,
+  appSubtitle,
+  appRisk,
+  riskLabel,
+  updateCount,
+  updateStatus,
+  checkingUpdates,
+  checkForUpdates,
+} from "./model";
 
 function openApp(id: string): void {
   selectedId.set(id);
@@ -20,8 +36,10 @@ function countText(): string {
 
 export default function Library() {
   // Components run one time (SPEC.md §5.1): this is the first load. The
-  // Refresh action and every change reload again.
+  // Refresh action and every change reload again. The Hub checks for
+  // updates when it starts (`docs/HUB.md` §9.2).
   reload();
+  checkForUpdates();
 
   const newGroupOpen = signal(false);
   const newGroupName = signal("");
@@ -43,10 +61,13 @@ export default function Library() {
       title="Library"
       actions={[
         <Action label="Refresh" icon="refresh" onPress={reload} />,
+        <Action label="Check for updates" icon="download" onPress={checkForUpdates} />,
         <Action label="New group" icon="plus" onPress={() => newGroupOpen.set(true)} />,
       ]}
     >
       {loadError() !== "" ? <Text tone="danger">{loadError()}</Text> : null}
+      {updateCount() > 0 ? <Badge label={updateCount() === 1 ? "1 update available" : `${updateCount()} updates available`} tone="success" /> : null}
+      {updateStatus() !== "" ? <Text tone="muted">{checkingUpdates() ? "Checking for updates…" : updateStatus()}</Text> : null}
       <Tabs items={groupTabs()} value={groupFilter} />
       <TextField label="Find in library" placeholder="App name" value={filterText} />
       <Section title="Apps" footer={countText()}>
@@ -57,7 +78,7 @@ export default function Library() {
             <Row
               title={a.name}
               subtitle={appSubtitle(a)}
-              icon={a.blocked ? "lock" : appRisk(a) === "high" ? "warning" : "star"}
+              icon={a.blocked || a.publisherBlocked ? "lock" : a.update !== "" ? "download" : appRisk(a) === "high" ? "warning" : "star"}
               trailing={riskLabel(appRisk(a))}
               onPress={() => openApp(a.id)}
             />

@@ -1,15 +1,24 @@
 # Plinth Hub UI
 
 The Hub UI (`docs/HUB.md` §4.1, §15 phase H3) as a Plinth app. It uses the
-privileged `plinth:hub` module (core 1.8) and has three screens:
+privileged `plinth:hub` module (core 1.9) and has three screens:
 
 - **Library**: every app in the library, with group tabs, a text filter,
   and the highest risk of each app. The **New group** action makes a group.
+  When the Hub starts, it checks the source of each app for a newer
+  version (`docs/HUB.md` §9.2). A badge shows the number of updates, and
+  the row of each app with an update shows "Update available".
+  **Check for updates** checks again.
 - **App** (push it from a library row): the publisher and the signature,
   the capability label (`docs/HUB.md` §7.2) with a risk level, the reason
   of the app and a toggle for each grant, the text "This app cannot …",
   the groups of the app, and **Open**, **Block**/**Unblock** and
-  **Remove from library**.
+  **Remove from library**. If the app is signed, **Block publisher**
+  blocks every app of that publisher key. If an update is available,
+  **Update to <version>** installs it and shows the capabilities that it
+  adds; the Hub asks for them before the new version opens. The
+  **Versions** list shows the installed versions: select one to pin the
+  app to it, and **Run the newest version** removes the pin.
 - **Discover**: a search across every configured source
   (`plinth hub source add`). Select a result to install it, or to show it
   if it is in the library.

@@ -21,9 +21,31 @@ struct FakeApp {
     id: String,
     name: String,
     blocked: bool,
+    publisher_blocked: bool,
     groups: Vec<String>,
     /// (name, risk, description, decided, allowed)
     caps: Vec<(String, String, String, bool, bool)>,
+    /// Installed versions, oldest first; the last one is the newest.
+    versions: Vec<String>,
+    pinned: String,
+    /// The update that the last check found, or "".
+    update: String,
+}
+
+impl FakeApp {
+    fn new(id: &str, name: &str, groups: Vec<String>, caps: Vec<(String, String, String, bool, bool)>) -> Self {
+        FakeApp {
+            id: id.into(),
+            name: name.into(),
+            blocked: false,
+            publisher_blocked: false,
+            groups,
+            caps,
+            versions: vec!["1.0.0".into()],
+            pinned: String::new(),
+            update: String::new(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -33,32 +55,37 @@ struct Library {
     launches: Vec<String>,
 }
 
+/// The source lists Notes 1.1.0, which adds one capability.
+const NOTES_UPDATE: &str = "1.1.0";
+
+fn sync_capability() -> (String, String, String, bool, bool) {
+    ("net:sync.example.com".into(), "medium".into(), "connect to sync.example.com".into(), false, false)
+}
+
 fn notes() -> FakeApp {
-    FakeApp {
-        id: "com.example.notes".into(),
-        name: "Notes".into(),
-        blocked: false,
-        groups: vec!["Work".into()],
-        caps: vec![
+    FakeApp::new(
+        "com.example.notes",
+        "Notes",
+        vec!["Work".into()],
+        vec![
             ("store.kv".into(), "low".into(), "save data on this device".into(), true, true),
             ("clipboard.read".into(), "medium".into(), "read the clipboard".into(), false, false),
         ],
-    }
+    )
 }
 
 fn weather() -> FakeApp {
-    FakeApp {
-        id: "com.example.weather".into(),
-        name: "Weather".into(),
-        blocked: false,
-        groups: Vec::new(),
-        caps: vec![("net:api.example.com".into(), "medium".into(), "connect to api.example.com".into(), true, true)],
-    }
+    FakeApp::new(
+        "com.example.weather",
+        "Weather",
+        Vec::new(),
+        vec![("net:api.example.com".into(), "medium".into(), "connect to api.example.com".into(), true, true)],
+    )
 }
 
 /// The source catalog: `com.example.timer` can be installed.
 fn timer() -> FakeApp {
-    FakeApp { id: "com.example.timer".into(), name: "Timer".into(), blocked: false, groups: Vec::new(), caps: Vec::new() }
+    FakeApp::new("com.example.timer", "Timer", Vec::new(), Vec::new())
 }
 
 struct FakeHub(Arc<Mutex<Library>>);
@@ -71,9 +98,14 @@ fn app_json(a: &FakeApp) -> serde_json::Value {
             json!({ "name": name, "risk": risk, "description": description, "rationale": "", "decided": decided, "allowed": allowed, "byDefault": false })
         })
         .collect();
+    let running = if a.pinned.is_empty() { a.versions.last().unwrap().clone() } else { a.pinned.clone() };
+    let versions: Vec<_> = a.versions.iter().rev().map(|v| json!({ "version": v, "signer": "ed25519:abc", "capabilities": [] })).collect();
+    let update_caps: Vec<String> = if a.update.is_empty() { Vec::new() } else { vec![sync_capability().0] };
     json!({
-        "id": a.id, "name": a.name, "version": "1.0.0", "publisher": "Example", "signer": "ed25519:abc",
-        "source": "", "blocked": a.blocked, "groups": a.groups, "capabilities": caps,
+        "id": a.id, "name": a.name, "version": running, "publisher": "Example", "signer": "ed25519:abc",
+        "source": "main", "blocked": a.blocked, "publisherBlocked": a.publisher_blocked, "groups": a.groups,
+        "capabilities": caps, "pinned": a.pinned, "versions": versions, "update": a.update,
+        "updateCapabilities": update_caps,
     })
 }
 
@@ -136,6 +168,60 @@ impl HubBackend for FakeHub {
                 .map(|a| json!({ "id": a.id, "name": a.name, "version": "1.0.0", "description": "An app", "source": "main" }))
                 .collect();
             Ok(json!({ "hits": hits, "errors": ["broken: cannot reach the source"] }).to_string())
+        })
+    }
+    fn app_info_json(&self, id: &str) -> Result<String, String> {
+        let lib = self.0.lock().unwrap();
+        let app = lib.apps.iter().find(|a| a.id == id).ok_or("no app")?;
+        Ok(app_json(app).to_string())
+    }
+    fn pin(&mut self, id: &str, version: &str) -> Result<(), String> {
+        let mut lib = self.0.lock().unwrap();
+        let app = lib.apps.iter_mut().find(|a| a.id == id).ok_or("no app")?;
+        if !version.is_empty() && !app.versions.iter().any(|v| v == version) {
+            return Err("no such version".into());
+        }
+        app.pinned = version.to_owned();
+        Ok(())
+    }
+    fn block_publisher(&mut self, key: &str) -> Result<(), String> {
+        assert_eq!(key, "ed25519:abc");
+        self.0.lock().unwrap().apps.iter_mut().for_each(|a| a.publisher_blocked = true);
+        Ok(())
+    }
+    fn unblock_publisher(&mut self, key: &str) -> Result<(), String> {
+        assert_eq!(key, "ed25519:abc");
+        self.0.lock().unwrap().apps.iter_mut().for_each(|a| a.publisher_blocked = false);
+        Ok(())
+    }
+    fn check_updates(&self, id: &str) -> HubJob {
+        assert_eq!(id, "", "the Hub UI checks every app");
+        let lib = self.0.clone();
+        Box::new(move || {
+            let mut lib = lib.lock().unwrap();
+            let mut updates = Vec::new();
+            for app in lib.apps.iter_mut() {
+                if app.id == "com.example.notes" && !app.versions.iter().any(|v| v == NOTES_UPDATE) {
+                    app.update = NOTES_UPDATE.into();
+                    updates.push(json!({ "id": app.id, "name": app.name, "current": "1.0.0", "version": NOTES_UPDATE,
+                        "source": "main", "newCapabilities": [sync_capability().0], "pinned": app.pinned }));
+                }
+            }
+            Ok(json!({ "updates": updates, "errors": [] }).to_string())
+        })
+    }
+    fn update(&self, id: &str) -> HubJob {
+        let lib = self.0.clone();
+        let id = id.to_owned();
+        Box::new(move || {
+            let mut lib = lib.lock().unwrap();
+            let app = lib.apps.iter_mut().find(|a| a.id == id).ok_or("no app")?;
+            if app.update.is_empty() {
+                return Ok(String::new());
+            }
+            app.versions.push(std::mem::take(&mut app.update));
+            app.caps.push(sync_capability());
+            Ok(NOTES_UPDATE.to_owned())
         })
     }
     fn install(&self, id: &str) -> HubJob {
@@ -284,9 +370,17 @@ impl Harness {
 fn the_hub_ui_manages_the_library() {
     let lib = Arc::new(Mutex::new(Library { apps: vec![notes(), weather()], groups: vec!["Work".into()], launches: Vec::new() }));
     let mut h = Harness::start(lib.clone());
+    // The Hub checks for updates when it starts (`docs/HUB.md` §9.2).
+    h.deliver_completions(1);
 
-    // The library: every app, with its highest risk as the trailing text.
+    // The library: every app, with its highest risk as the trailing text,
+    // and the number of updates.
     assert_eq!(h.screen_title(), "Library");
+    let badge = h.one(ControlKind::Badge, |_| true);
+    assert_eq!(h.tree.get(badge).unwrap().str_prop(prop::LABEL), Some("1 update available"));
+    assert!(h.texts().iter().any(|t| t == "1 update is available."), "{:?}", h.texts());
+    let notes_row = h.row("Notes");
+    assert!(h.tree.get(notes_row).unwrap().str_prop(prop::SUBTITLE).unwrap().ends_with("· Update available: 1.1.0"));
     assert_eq!(h.row_titles(), ["Notes", "Weather"]);
     let notes_row = h.row("Notes");
     assert_eq!(h.tree.get(notes_row).unwrap().str_prop(prop::TRAILING), Some("Medium risk"));
@@ -321,6 +415,41 @@ fn the_hub_ui_manages_the_library() {
     let clip = h.row("Read the clipboard");
     let subtitle = h.tree.get(clip).unwrap().str_prop(prop::SUBTITLE).unwrap().to_owned();
     assert!(subtitle.contains("· Allowed"), "{subtitle}");
+
+    // Update: the app page shows it with the capability that it adds.
+    assert!(
+        h.texts().iter().any(|t| t.starts_with("Version 1.1.0 is available from main. It also asks for: net:sync.example.com.")),
+        "{:?}",
+        h.texts()
+    );
+    h.fire(h.labeled(ControlKind::Button, "Update to 1.1.0"), event::PRESS, Value::Null);
+    h.deliver_completions(1);
+    assert!(h.texts().iter().any(|t| t == "Version 1.1.0 is installed."), "{:?}", h.texts());
+    assert!(h.find(ControlKind::Button, |n| n.str_prop(prop::LABEL) == Some("Update to 1.1.0")).is_empty());
+    // The new capability is not decided yet: the Hub asks at the next open.
+    let sync = h.row("Connect to sync.example.com");
+    let subtitle = h.tree.get(sync).unwrap().str_prop(prop::SUBTITLE).unwrap().to_owned();
+    assert!(subtitle.starts_with("Medium risk · net:sync.example.com · Not decided yet"), "{subtitle}");
+
+    // Versions: pin the old one, then run the newest again.
+    let v1 = h.row("Version 1.0.0");
+    assert_eq!(h.tree.get(v1).unwrap().str_prop(prop::SUBTITLE), Some("Installed · no capabilities"));
+    assert_eq!(h.tree.get(h.row("Version 1.1.0")).unwrap().str_prop(prop::SUBTITLE), Some("Runs now · no capabilities"));
+    h.fire(v1, event::PRESS, Value::Null);
+    assert_eq!(lib.lock().unwrap().apps[0].pinned, "1.0.0");
+    assert_eq!(h.tree.get(h.row("Version 1.0.0")).unwrap().str_prop(prop::TRAILING), Some("Pinned"));
+    assert!(h.texts().iter().any(|t| t == "Version 1.0.0 · From the source main · com.example.notes"), "{:?}", h.texts());
+    h.fire(h.labeled(ControlKind::Button, "Run the newest version"), event::PRESS, Value::Null);
+    assert_eq!(lib.lock().unwrap().apps[0].pinned, "");
+    assert!(h.find(ControlKind::Button, |n| n.str_prop(prop::LABEL) == Some("Run the newest version")).is_empty());
+
+    // Block the publisher: Open is disabled; unblock it again.
+    h.fire(h.labeled(ControlKind::Button, "Block publisher"), event::PRESS, Value::Null);
+    assert!(lib.lock().unwrap().apps.iter().all(|a| a.publisher_blocked));
+    assert!(h.tree.get(h.labeled(ControlKind::Button, "Open")).unwrap().bool_prop(prop::DISABLED));
+    h.fire(h.labeled(ControlKind::Button, "Unblock publisher"), event::PRESS, Value::Null);
+    assert!(!lib.lock().unwrap().apps[0].publisher_blocked);
+    assert!(!h.tree.get(h.labeled(ControlKind::Button, "Open")).unwrap().bool_prop(prop::DISABLED));
 
     // Launch: the host drains the request (`take_hub_launches`).
     h.fire(h.labeled(ControlKind::Button, "Open"), event::PRESS, Value::Null);

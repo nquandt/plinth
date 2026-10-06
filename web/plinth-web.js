@@ -515,6 +515,30 @@ function hostImports(
         Promise.resolve().then(() => completeRequest?.(id, "denied:unsupported"));
         return id;
       },
+      // Core 1.9 (`docs/HUB.md` §4.1, §7.4, §9.2).
+      "app-info"(_idPtr, _idLen, retptr) {
+        writeDeniedAt4(retptr, DeniedReason.unsupported);
+      },
+      pin(_idPtr, _idLen, _versionPtr, _versionLen, retptr) {
+        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      },
+      "block-publisher"(_keyPtr, _keyLen, retptr) {
+        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      },
+      "unblock-publisher"(_keyPtr, _keyLen, retptr) {
+        writeDeniedUnit(retptr, DeniedReason.unsupported);
+      },
+      // Async, like `search` (null) and `install` (the reason text).
+      "check-updates"(_idPtr, _idLen) {
+        const id = nextRequest++;
+        Promise.resolve().then(() => completeRequest?.(id, null));
+        return id;
+      },
+      update(_idPtr, _idLen) {
+        const id = nextRequest++;
+        Promise.resolve().then(() => completeRequest?.(id, "denied:unsupported"));
+        return id;
+      },
     },
   };
 }

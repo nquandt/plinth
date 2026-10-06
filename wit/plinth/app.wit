@@ -177,6 +177,32 @@ interface hub {
   /// `completion` result is null on success, or an error string (for a
   /// denied call, `"denied:<reason>"`).
   install: func(id: string) -> u32;
+
+  // -- Core 1.9 (`docs/HUB.md` §4.1, §7.4, §9.2) ----------------------------
+
+  /// One library app, as a JSON object: the fields of a `list-apps`
+  /// element. An error if `id` is not in the library.
+  app-info: func(id: string) -> result<string, host-error>;
+  /// Pins `id` to the installed `version` (`docs/HUB.md` §9.2); an empty
+  /// `version` removes the pin, and the newest version runs again.
+  pin: func(id: string, version: string) -> result<_, host-error>;
+  /// Blocks the publisher key `key` (`ed25519:…`): no app that it signed
+  /// runs or installs (`docs/HUB.md` §7.4).
+  block-publisher: func(key: string) -> result<_, host-error>;
+  /// Reverses `block-publisher`.
+  unblock-publisher: func(key: string) -> result<_, host-error>;
+  /// Checks the source of `id` (of every library app if `id` is empty) for
+  /// a newer version, on a worker thread (`docs/HUB.md` §9.2). Returns a
+  /// request id at once; the `completion` result is a JSON string `{
+  /// "updates": [{ id, name, current, version, source, newCapabilities,
+  /// pinned }], "errors": [string] }`, or null if the call is denied.
+  check-updates: func(id: string) -> u32;
+  /// Installs the newest version of library app `id` from its source, on a
+  /// worker thread. The new version runs after the user decides its new
+  /// capabilities (`docs/HUB.md` §7.3 step 3). Returns a request id at
+  /// once; the `completion` result is null on success (also when `id` is
+  /// up to date), or an error string (`"denied:<reason>"` if denied).
+  update: func(id: string) -> u32;
 }
 
 world app {
