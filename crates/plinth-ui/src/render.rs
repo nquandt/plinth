@@ -125,6 +125,7 @@ impl PlinthRoot {
     /// stays; the guest state starts again.
     pub fn reload(&mut self, guest: Box<dyn GuestPort>, init: Result<Vec<Vec<u8>>, String>, cx: &mut Context<Self>) {
         let screen = self.tree.current_screen;
+        let stacks = self.tree.stacks_snapshot();
         self.guest = guest;
         self.tree = Tree::new();
         self.fields.clear();
@@ -138,6 +139,9 @@ impl PlinthRoot {
         if self.tree.screens().any(|(s, _)| s == screen) {
             self.tree.current_screen = screen;
         }
+        // SPEC.md §13: the selected screen and the navigation stack survive
+        // a reload when the screens still exist.
+        self.tree.restore_stacks(stacks);
         cx.notify();
     }
 

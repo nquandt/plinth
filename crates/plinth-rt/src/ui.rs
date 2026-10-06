@@ -137,6 +137,13 @@ pub fn take_ops() -> Vec<u8> {
     with(|u| u.ops.take())
 }
 
+/// Dev builds only (SPEC.md §13): queues the hot-reload snapshot as an
+/// `Op::Snapshot`, so the host gets it back in the next commit.
+#[cfg(feature = "dev")]
+pub fn push_snapshot_op(bytes: alloc::vec::Vec<u8>) {
+    with(|u| u.ops.op(&plinth_protocol::Op::Snapshot { bytes }));
+}
+
 fn val_to_value(v: Val) -> Value {
     match v {
         Val::None => Value::Null,
