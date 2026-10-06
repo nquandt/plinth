@@ -43,9 +43,42 @@ These rules stop one app from reading or changing the data of another app.
 1. **The host derives every location.** The app gives only a space name and a relative path. The host rejects `..`, absolute paths, empty segments, NUL, and encoded forms of these, after Unicode normalization. Then it adds the space's root.
 2. **Identity is (publisher key, app id).** The private space of an app is keyed to its publisher key and its id, not to the id alone. Otherwise, another publisher could ship a package with the same id. An unsigned app gets a key from its package digest, and the Hub warns about it.
 3. **Defense in depth with scoped credentials.** Where the provider supports it, the host makes a credential for each grant that works only on that grant's location: an S3 STS session policy on the prefix, or an Azure SAS token on the container or directory. Then a defect in the host's path checks cannot cross partitions. Where the provider does not support it, use one bucket or container for each space.
-4. **Only the user shares.** Data moves between apps only through a grant to a shared space (S5), or through a one-time share that the user starts (S8). An app cannot ask the host for another app's space by name.
+4. **No data crosses between apps without an explicit grant.** Data moves between apps only in three ways: a grant to a shared space (S5), a one-time share that the user starts (S8), or a cross-app data capability (§3.1). In each case, the user approves it. There is no default access, and two apps from the same publisher also get no default access.
 5. **A grant is visible and can be removed.** The Hub lists every grant. When the user removes a grant, the host closes the app's handles. When the user removes an app, the host asks if it should also delete the app's private space (S13).
 6. **Denied calls never trap.** As for every host API, a denied call returns an error value.
+
+### 3.1 Cross-app data capability
+
+One registered app (the **reader**) can ask for access to the data of another registered app (the **owner**). The host allows it only if all of these conditions are true:
+
+1. **The owner exports the data.** The owner's manifest declares what it lets other apps read, for example `exports = [{ name = "notes", space = "private", path = "notes/", mode = "read", reason = "Your notes as Markdown files" }]`. Data that the owner does not export can never be read by another app.
+2. **The reader asks by full identity.** The reader's manifest declares a capability such as `data.read:<owner publisher key>/<owner app id>/notes`, with a reason. The app id alone is not enough, so a package with the same id from another publisher cannot take the place of the owner.
+3. **The user approves it.** The consent screen names both apps, both publishers and the exported data. The Hub shows the grant on both apps' pages, and the user can remove it at any time.
+4. **Read is the default.** Write access needs `mode = "read-write"` in the owner's export and a separate approval at a higher risk level.
+5. **The host does every access.** The reader gets a handle to the exported path only, with the same path checks and scoped credentials as any grant. The reader never gets the owner's root or the owner's other data.
+6. **The grant follows identity changes.** If the owner's publisher key changes (a key rotation or a different publisher), or the owner removes the export in an update, the host stops the grant until the user approves it again.
+
+The owner learns, through an event, that a reader has a grant. The owner cannot see what the reader reads.
+
+**Status: deferred.** §3.2 lists the risks. The first slice (§6) does not build this capability. It uses only user-owned spaces and one-time shares.
+
+### 3.2 Risks of cross-app access, and mitigations
+
+Even with the conditions in §3.1, a lasting grant between apps is risky:
+
+| Risk | Example | Mitigation |
+|---|---|---|
+| Exfiltration | The reader also has `net:*` and sends the notes to its server. | The consent screen shows the combination ("can read your notes AND send data to the internet") at the highest risk level. A host policy can refuse the combination. |
+| Consent fatigue and social engineering | An app asks for access with a false reason, and the user approves without reading. | Prefer one-time shares (S8), where the user picks each item. A lasting grant is an advanced setting, not a normal prompt. |
+| Exports that are too broad | The owner exports its whole space by mistake. | An export names one path and one mode. The Hub shows the size and the number of files in an export. |
+| Chains | App A grants to B, and B gives the data to C. | A reader cannot export data that it got through a grant. The host can enforce this at the handle level (granted handles cannot be re-exported); it cannot stop a reader that copies the data into its own private space. Treat this as a residual risk, and show it. |
+| A confused deputy | The reader tricks the owner into a write through the owner's own UI or links. | Read is the default. Write needs a separate approval. Links (`plinth://`) never carry data access. |
+| Silent long-term access | A grant that the user forgot. | Grants expire (for example after 30 days without use) and the Hub shows the last access. An access log in the Hub. |
+| Identity changes | A new owner key after a sale of the app. | §3.1 rule 6: the grant stops until the user approves it again. |
+
+The exfiltration and consent risks also apply to a grant to a shared space (S5): an app with a grant to the user's vault and with network access can send the vault out. So the "data plus network" warning applies to every grant, not only to §3.1.
+
+The safest default is: **no lasting access between apps.** Data moves only through spaces that the user owns and grants (S5) or through one-time shares (S8). Build the lasting capability only if a real app needs it, and only with the mitigations above.
 
 ## 4. Scenarios mapped to the model
 
@@ -58,7 +91,7 @@ These rules stop one app from reading or changing the data of another app.
 | S5 | One user space with grants to several apps. |
 | S6 | A space on the local provider that points to an existing folder. Other tools can change the files, so `watch` events are necessary. |
 | S7 | `fs.pick` (SPEC.md §11): the user picks a file, and the app gets a token for that file only. |
-| S8 | A share action that the user starts. The host copies the data into the target app's private space or gives a one-time token. |
+| S8 | A share action that the user starts. The host copies the data into the target app's private space or gives a one-time token. For lasting access, the cross-app data capability (§3.1). |
 | S9 | A space with members. The provider's access control is the source of truth. This needs more design. |
 | S10 | A host policy that limits which providers can hold spaces, like the Hub's global policy. |
 | S11 | A space policy: the host encrypts before the data leaves the device and keeps the key in the keychain. |
@@ -84,5 +117,6 @@ The Obsidian-like notes app is the first user of this design. The slice builds o
 3. The sync engine for one space, with two remote providers: S3-compatible (tested against rustfs in Docker) and Azure Blob (tested against Azurite in Docker). Conflicts keep both versions.
 4. The Hub: configure a provider, make a space, grant it, remove a grant. The consent screen shows the space requests.
 5. Isolation tests: a second app cannot reach the vault without a grant; path tricks fail; scoped credentials where rustfs and Azurite support them.
+6. Not in this slice: the cross-app data capability (§3.1, deferred). A second app tests the walls instead: without a grant it cannot read the notes app's private space or the vault; a package with the same id from another publisher gets nothing; removing a space grant closes the handle.
 
 Editor: Markdown source in a `TextArea`, with a new `Markdown` display control for the reading view (headings, lists, links, `[[wiki links]]`, code). A rich-text control is a later decision.
