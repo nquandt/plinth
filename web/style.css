@@ -7,9 +7,29 @@
   --pl-text: #e7e9ec;
   --pl-muted: #9aa0a8;
   --pl-accent: #5b8cff;
+  --pl-accent-text: #ffffff;
   --pl-danger: #e5484d;
   --pl-border: #262a31;
+  color-scheme: dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* Light mode: the desktop host's light theme tokens (SPEC.md §3). Only
+   applied when the OS/browser prefers light AND the page has not been
+   forced dark some other way, matching how the desktop theme follows the
+   system setting. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --pl-bg: #f5f6f8;
+    --pl-surface: #ffffff;
+    --pl-text: #1b1d21;
+    --pl-muted: #5b6168;
+    --pl-accent: #3b6bf5;
+    --pl-accent-text: #ffffff;
+    --pl-danger: #c62828;
+    --pl-border: #d8dbe0;
+    color-scheme: light;
+  }
 }
 
 body {
@@ -105,7 +125,9 @@ body {
   color: var(--pl-muted);
   margin-bottom: 4px;
 }
-.pl-input {
+.pl-input,
+.pl-select,
+.pl-textarea {
   width: 100%;
   box-sizing: border-box;
   background: var(--pl-surface);
@@ -113,6 +135,14 @@ body {
   border: 1px solid var(--pl-border);
   border-radius: 6px;
   padding: 8px 10px;
+  font: inherit;
+  color-scheme: inherit;
+}
+
+.pl-checkbox,
+.pl-slider {
+  accent-color: var(--pl-accent);
+  color-scheme: inherit;
 }
 
 .pl-toggle {
@@ -196,9 +226,7 @@ body {
   gap: 8px;
 }
 .pl-textarea {
-  width: 100%;
   min-height: 72px;
-  font: inherit;
 }
 .pl-slider-field,
 .pl-progress-field {
@@ -206,8 +234,7 @@ body {
   flex-direction: column;
   gap: 4px;
 }
-.pl-slider,
-.pl-select {
+.pl-slider {
   width: 100%;
 }
 .pl-segmented {
@@ -221,10 +248,23 @@ body {
   text-align: center;
   padding: 6px 8px;
   cursor: pointer;
+  color: var(--pl-text);
 }
 .pl-segment-input {
   position: absolute;
   opacity: 0;
+}
+/* Selected segment: accent background with contrasting text, as the
+   desktop host shows the selected Picker option (SPEC.md §6.3). Updates
+   live because the renderer rebuilds the segment markup on every op-stream
+   commit, including the `value` change the app sends back after `change`. */
+.pl-segment:has(.pl-segment-input:checked) {
+  background: var(--pl-accent);
+  color: var(--pl-accent-text);
+}
+.pl-segment-input:focus-visible ~ .pl-segment-label {
+  outline: 2px solid var(--pl-accent);
+  outline-offset: 2px;
 }
 .pl-badge {
   display: inline-block;
@@ -294,5 +334,91 @@ body {
 @media (min-width: 1024px) {
   .pl-grid {
     grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* Width classes (SPEC.md §6.1): compact < 600px <= regular < 1200px <= wide.
+   Compact: a bottom tab bar. Regular: a narrow icon/label rail. Wide: a
+   full sidebar (the default styles above already give this). */
+@media (max-width: 599.98px) {
+  #app {
+    flex-direction: column;
+  }
+  .pl-nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    flex-direction: row;
+    justify-content: space-around;
+    align-items: stretch;
+    gap: 0;
+    padding: 4px;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+    border-right: none;
+    border-top: 1px solid var(--pl-border);
+    background: var(--pl-bg);
+    order: 2;
+  }
+  .pl-nav-item {
+    flex: 1;
+    text-align: center;
+    font-size: 0.8rem;
+  }
+  .pl-screen {
+    order: 1;
+    /* Leave room above the fixed bottom tab bar. */
+    padding-bottom: 72px;
+  }
+}
+
+@media (min-width: 600px) and (max-width: 1199.98px) {
+  .pl-nav {
+    min-width: 72px;
+    padding: 12px 6px;
+  }
+  .pl-nav-item {
+    text-align: center;
+    font-size: 0.78rem;
+    padding: 8px 4px;
+  }
+}
+
+/* Fields (SPEC.md §6.4): label above the input on compact, beside it on
+   regular/wide. */
+@media (min-width: 600px) {
+  .pl-field:not(.pl-slider-field) {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+  .pl-field:not(.pl-slider-field) .pl-field-label {
+    flex: 0 0 160px;
+    margin-bottom: 0;
+    text-align: right;
+  }
+  .pl-field .pl-input,
+  .pl-field .pl-select,
+  .pl-field .pl-textarea,
+  .pl-field .pl-segmented {
+    flex: 1;
+  }
+  .pl-picker-field .pl-segmented {
+    flex: 1;
+  }
+  /* The slider field has its own column layout (label above the track) so
+     the value stays readable; put its label beside the track instead,
+     matching every other field (SPEC.md §6.4). */
+  .pl-slider-field {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+  }
+  .pl-slider-field .pl-field-label {
+    flex: 0 0 160px;
+    margin-bottom: 0;
+    text-align: right;
   }
 }
