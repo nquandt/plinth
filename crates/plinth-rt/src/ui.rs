@@ -45,7 +45,7 @@ struct Bind {
     synced: Option<Val>,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum Key {
     Num(u64),
     Str(String),
@@ -468,10 +468,20 @@ fn run_list(id: u32) {
     // The nodes of reused rows. A new row can get the id of a removed row,
     // so the order below must not match on ids alone.
     let mut kept: Vec<NodeId> = Vec::new();
+    // A sorted index of (key, position in `old`) for O(log n) reuse lookup
+    // instead of a linear scan: scanning `old` per new item made init,
+    // filter and append O(n^2) for large lists (SPEC.md §7.3, Q6).
+    let mut old_index: Vec<(Key, usize)> =
+        old.iter().enumerate().map(|(i, r)| (r.as_ref().unwrap().key.clone(), i)).collect();
+    old_index.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     reactive::untracked(|| {
         for item in items {
             let key = to_key(invoke(key_c, item));
-            let reuse = old.iter().position(|r| r.as_ref().is_some_and(|r| r.key == key));
+            let reuse = old_index
+                .binary_search_by(|(k, _)| k.cmp(&key))
+                .ok()
+                .map(|found| old_index[found].1)
+                .filter(|i| old[*i].is_some());
             match reuse.and_then(|i| old[i].take()) {
                 // The same key and the same item: keep the row.
                 Some(r) if r.item.same(&item) => {
@@ -502,7 +512,10 @@ fn run_list(id: u32) {
     }
 
     // Put the row nodes in order with insert and move ops.
-    let mut current: Vec<NodeId> = prev_order.into_iter().filter(|n| kept.contains(n)).collect();
+    let mut kept_sorted = kept.clone();
+    kept_sorted.sort_unstable();
+    let mut current: Vec<NodeId> =
+        prev_order.into_iter().filter(|n| kept_sorted.binary_search(n).is_ok()).collect();
     with(|u| {
         for (i, r) in rows.iter().enumerate() {
             if current.get(i) == Some(&r.node) {
