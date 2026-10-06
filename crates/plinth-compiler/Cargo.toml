@@ -11,6 +11,13 @@ anyhow.workspace = true
 wasm-encoder.workspace = true
 wasmparser.workspace = true
 wit-component.workspace = true
+oxc_allocator = "0.153"
+oxc_ast = "0.153"
+oxc_parser = "0.153"
+oxc_span = "0.153"
+oxc_syntax = "0.153"
+toml.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 plinth-runner-wasmtime.workspace = true

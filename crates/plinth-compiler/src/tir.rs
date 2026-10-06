@@ -1,0 +1,316 @@
+//! The typed IR. The checker produces it, `lower` rewrites JSX and the
+//! reactive primitives in it into runtime calls, and `codegen` emits Wasm.
+//!
+//! Every conversion is explicit (`Coerce`), so codegen never infers one.
+
+use crate::diag::Span;
+use crate::types::{EnumDef, Repr, StructDef, StructId, Type};
+use plinth_protocol::ControlKind;
+
+pub type VarId = u32;
+pub type FuncId = u32;
+pub type LoopId = u32;
+
+#[derive(Debug, Clone)]
+pub struct VarInfo {
+    pub name: String,
+    pub ty: Type,
+    pub owner: FuncId,
+    pub mutable: bool,
+    /// A module variable lives in the module environment (a rooted global).
+    pub module: Option<u32>,
+    /// The innermost loop in `owner` that declares the variable. A captured
+    /// variable in a loop body gets a new environment for each iteration.
+    pub in_loop: Option<LoopId>,
+    /// Set by the capture analysis: a function other than `owner` uses it.
+    pub captured: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FuncKind {
+    /// A top-level function declaration. Its environment is always 0.
+    TopLevel,
+    /// An arrow function, a function expression, or a nested declaration.
+    Closure,
+    /// The top-level statements of one module.
+    ModuleInit(u32),
+}
+
+#[derive(Debug, Clone)]
+pub struct FuncDef {
+    pub name: String,
+    pub kind: FuncKind,
+    pub params: Vec<VarId>,
+    pub ret: Type,
+    pub body: Vec<TStmt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Screen {
+    pub name: String,
+    pub icon: Option<String>,
+    pub component: FuncId,
+}
+
+#[derive(Debug, Default)]
+pub struct Program {
+    pub funcs: Vec<FuncDef>,
+    pub vars: Vec<VarInfo>,
+    pub structs: Vec<StructDef>,
+    pub enums: Vec<EnumDef>,
+    /// Module init functions in dependency order.
+    pub module_inits: Vec<FuncId>,
+    pub module_count: u32,
+    pub screens: Vec<Screen>,
+    pub accent: Option<String>,
+    pub loop_count: u32,
+}
+
+impl Program {
+    pub fn new_var(&mut self, info: VarInfo) -> VarId {
+        self.vars.push(info);
+        (self.vars.len() - 1) as VarId
+    }
+
+    pub fn new_func(&mut self, def: FuncDef) -> FuncId {
+        self.funcs.push(def);
+        (self.funcs.len() - 1) as FuncId
+    }
+
+    pub fn new_loop(&mut self) -> LoopId {
+        self.loop_count += 1;
+        self.loop_count - 1
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum TStmt {
+    /// Declares a variable. `None` initializes it to the zero value.
+    Let(VarId, Option<TExpr>),
+    Expr(TExpr),
+    If(TExpr, Vec<TStmt>, Vec<TStmt>),
+    /// `while`, `for` and `do…while` all lower to this loop.
+    /// `cond` runs before each iteration unless `test_after`; `update` runs
+    /// after each iteration and after `continue`.
+    Loop { id: LoopId, cond: Option<TExpr>, test_after: bool, update: Option<TExpr>, body: Vec<TStmt> },
+    /// `for (const x of arr)`. `var` is set for each element.
+    ForOf { id: LoopId, var: VarId, arr: TExpr, body: Vec<TStmt> },
+    Return(Option<TExpr>),
+    Break,
+    Continue,
+    /// The discriminant and the cases; the case values are already checked
+    /// for type, `eq` compares them.
+    Switch { disc: TExpr, eq: EqKind, cases: Vec<(Option<TExpr>, Vec<TStmt>)> },
+    Throw(TExpr),
+    Block(Vec<TStmt>),
+}
+
+#[derive(Debug, Clone)]
+pub struct TExpr {
+    pub kind: TExprKind,
+    pub ty: Type,
+    pub span: Span,
+}
+
+impl TExpr {
+    pub fn new(kind: TExprKind, ty: Type, span: Span) -> Self {
+        Self { kind, ty, span }
+    }
+
+    pub fn repr(&self) -> Repr {
+        self.ty.repr()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Pow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CmpOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+/// How two values compare for equality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EqKind {
+    F64,
+    I32,
+    Str,
+    /// Reference identity (also used for `=== null`).
+    Ref,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Coercion {
+    /// number → number | null
+    BoxNum,
+    /// number | null → number (traps on null)
+    UnboxNum,
+    NumToStr,
+    BoolToStr,
+    /// An enum or another i32 to a number.
+    I32ToNum,
+    /// number → i32 (truncates)
+    NumToI32,
+    /// Any value to a boolean (JS truthiness).
+    Truthy,
+    /// A value of the same representation with a new static type.
+    Retag,
+    /// Drops the value.
+    Discard,
+}
+
+#[derive(Debug, Clone)]
+pub enum Place {
+    Var(VarId),
+    Field(Box<TExpr>, StructId, u32),
+    Index(Box<TExpr>, Box<TExpr>),
+}
+
+/// Array methods that take a callback. Codegen emits an inline loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrayHof {
+    Map,
+    Filter,
+    Find,
+    FindIndex,
+    Some,
+    Every,
+    ForEach,
+}
+
+#[derive(Debug, Clone)]
+pub enum TExprKind {
+    Num(f64),
+    Bool(bool),
+    Str(String),
+    /// `null` of a reference type, or "no element".
+    Null,
+    Var(VarId),
+    Assign(Place, Box<TExpr>),
+    Field(Box<TExpr>, StructId, u32),
+    Index(Box<TExpr>, Box<TExpr>),
+    /// A direct call of a top-level function.
+    Call(FuncId, Vec<TExpr>),
+    /// A call of a closure value.
+    CallClosure(Box<TExpr>, Vec<TExpr>),
+    /// A closure value for a function.
+    Closure(FuncId),
+    Num2(NumOp, Box<TExpr>, Box<TExpr>),
+    Neg(Box<TExpr>),
+    Not(Box<TExpr>),
+    Cmp(CmpOp, EqKind, Box<TExpr>, Box<TExpr>),
+    /// String comparison for `<`, `<=`, `>`, `>=`.
+    StrCmp(CmpOp, Box<TExpr>, Box<TExpr>),
+    Concat(Box<TExpr>, Box<TExpr>),
+    And(Box<TExpr>, Box<TExpr>),
+    Or(Box<TExpr>, Box<TExpr>),
+    Cond(Box<TExpr>, Box<TExpr>, Box<TExpr>),
+    IsNull(Box<TExpr>),
+    Coerce(Coercion, Box<TExpr>),
+    /// Statements, then a value.
+    Block(Vec<TStmt>, Box<TExpr>),
+    ArrayLit(Vec<(bool, TExpr)>),
+    StructLit(StructId, Vec<TExpr>),
+    ArrayHof { kind: ArrayHof, arr: Box<TExpr>, f: Box<TExpr>, arity: usize },
+    /// `includes` and `indexOf`.
+    ArraySearch { index: bool, eq: EqKind, arr: Box<TExpr>, value: Box<TExpr> },
+    /// A runtime function call (`rt_abi::FUNCTIONS`).
+    Rt(&'static str, Vec<TExpr>),
+    /// A Wasm instruction on f64 values.
+    MathOp(MathOp, Vec<TExpr>),
+
+    // -- Reactive and UI forms. `lower` replaces all of these. -------------
+    SignalNew(Box<TExpr>),
+    SignalGet(Box<TExpr>),
+    SignalPeek(Box<TExpr>),
+    SignalSet(Box<TExpr>, Box<TExpr>),
+    ComputedNew(Box<TExpr>),
+    ComputedGet(Box<TExpr>),
+    EffectNew(Box<TExpr>),
+    Jsx(Box<TJsx>),
+    /// `navigate("name")`. The screen index is resolved after the app config.
+    Navigate(String),
+
+    // -- Forms that only `lower` makes. ------------------------------------
+    /// The table index of the thunk adapter for a closure signature.
+    ThunkOf(ThunkSig),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathOp {
+    Floor,
+    Ceil,
+    Trunc,
+    Abs,
+    Sqrt,
+    Min,
+    Max,
+}
+
+/// The signature of a closure that the runtime calls through a thunk.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ThunkSig {
+    pub params: Vec<Repr>,
+    pub ret: Repr,
+}
+
+// -- JSX (checked, not lowered) -------------------------------------------
+
+#[derive(Debug, Clone)]
+pub enum TJsx {
+    Control { kind: ControlKind, props: Vec<TProp>, children: TChildren, span: Span },
+    /// A user component: a direct call with one optional props object.
+    Component { func: FuncId, props: Option<TExpr>, span: Span },
+}
+
+#[derive(Debug, Clone)]
+pub struct TProp {
+    pub target: PropTarget,
+    pub value: TExpr,
+}
+
+#[derive(Debug, Clone)]
+pub enum PropTarget {
+    Str(u16),
+    Num(u16),
+    Int(u16),
+    Bool(u16),
+    /// A string literal union mapped to enum ids.
+    Enum(u16, Vec<(String, u16)>),
+    Event(u16),
+    /// A two-way binding to a signal (`value={sig}`).
+    Bind { is_bool: bool },
+    ListItems,
+    ListKey,
+    ListRow,
+    ListEmpty,
+}
+
+#[derive(Debug, Clone)]
+pub enum TChildren {
+    None,
+    /// Text content: string parts, concatenated.
+    Text(Vec<TExpr>),
+    Nodes(Vec<TChild>),
+}
+
+#[derive(Debug, Clone)]
+pub enum TChild {
+    Element(TJsx),
+    /// An expression of type `Element` (0 means none).
+    Expr(TExpr),
+}

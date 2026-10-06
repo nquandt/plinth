@@ -114,7 +114,7 @@ Plinth TS is a strict, statically typed subset of TypeScript. **Every valid Plin
 
 The closed world is enforced at three levels:
 
-1. **The editor.** `plinth new` writes a `tsconfig.json` with `"lib": []`, `"types": []`, `"noLib": true` and `paths` that map `plinth:*` to the framework `.d.ts` files. `document`, `window`, `process`, `fetch`, and all other ambient globals do not exist, so they show as errors.
+1. **The editor.** `plinth new` writes a `tsconfig.json` with `"types": []`, `"noLib": true` and `paths` that map `plinth:*` to the framework `.d.ts` files. `document`, `window`, `process`, `fetch`, and all other ambient globals do not exist, so they show as errors.
 2. **The compiler.** Only two forms of import specifier are valid:
    - relative paths (`./x`, `../y`) inside the app,
    - `plinth:<module>` (framework modules) and, later, `hub:<publisher>/<lib>` (hub libraries compiled from Plinth TS).

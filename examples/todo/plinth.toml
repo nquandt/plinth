@@ -1,0 +1,4 @@
+id = "dev.plinth.examples.todo"
+name = "Todo"
+version = "0.1.0"
+publisher = "plinth"
