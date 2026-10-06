@@ -669,6 +669,16 @@ The stub finds its payload through a footer: the magic bytes `PLNTH\0`, the offs
 | `plinth publish` | Sign and upload to the hub. |
 | `plinth shoot <file.plnt>` | Render each screen headless to PNGs (for review and tests). |
 
+### 13.1 Distribution through npm
+
+The developer experience must be as simple as `npm create vite` or `npx sv create`.
+
+- **Start a project:** `npm create plinth@latest my-app` (or `npx plinth new my-app`) writes a "hello world" app, the closed-world `tsconfig.json`, and a `package.json`.
+- **Daily commands** are npm scripts: `npm run dev`, `npm run build`, `npm run check`. Each script calls the `plinth` binary.
+- **The `plinth` package** gives the CLI binary and the `plinth:*` typings. The binary comes in one optional package for each platform (as `esbuild` and `@biomejs/biome` do), so `npm install` gets no build step and needs no Rust toolchain.
+- **One self-contained binary.** The `plinth` binary contains the compiler, the prebuilt `plinth-rt`, the typings, and the desktop dev host. It never reads `node_modules` to compile. Only the editor reads the typings there.
+- **The project tsconfig** maps `plinth:*` to `node_modules/plinth/types/*`. Without npm, `plinth new` writes the typings to `.plinth/types/` instead.
+
 **Project layout (an app):**
 
 ```

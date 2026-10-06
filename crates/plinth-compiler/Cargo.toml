@@ -1,0 +1,17 @@
+[package]
+name = "plinth-compiler"
+description = "The Plinth TS compiler: parse, check, lower JSX and reactivity, codegen, link plinth-rt (SPEC.md §5)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+plinth-protocol.workspace = true
+anyhow.workspace = true
+wasm-encoder.workspace = true
+wasmparser.workspace = true
+wit-component.workspace = true
+
+[dev-dependencies]
+plinth-runner-wasmtime.workspace = true
+plinth-ui.workspace = true

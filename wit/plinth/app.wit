@@ -10,8 +10,15 @@ interface ui {
   commit: func(ops: list<u8>);
 }
 
+/// Development output. `console.log` in `plinth:core` uses it. Release
+/// builds of the host can drop the messages.
+interface dev {
+  log: func(msg: string);
+}
+
 world app {
   import ui;
+  import dev;
 
   /// Builds the initial tree.
   export init: func(args: list<u8>);

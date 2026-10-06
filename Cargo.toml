@@ -7,6 +7,8 @@ members = [
   "crates/plinth-host-desktop",
   "crates/plinth-cli",
   "crates/plinth-guest",
+  "crates/plinth-rt",
+  "crates/plinth-compiler",
   "examples/counter-rs",
   "examples/todo-rs",
 ]
@@ -17,6 +19,7 @@ default-members = [
   "crates/plinth-runner-wasmtime",
   "crates/plinth-host-desktop",
   "crates/plinth-cli",
+  "crates/plinth-compiler",
 ]
 
 [workspace.package]
@@ -29,6 +32,7 @@ plinth-protocol = { path = "crates/plinth-protocol" }
 plinth-ui = { path = "crates/plinth-ui" }
 plinth-runner-wasmtime = { path = "crates/plinth-runner-wasmtime" }
 plinth-guest = { path = "crates/plinth-guest" }
+plinth-compiler = { path = "crates/plinth-compiler" }
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
@@ -38,6 +42,7 @@ wasmtime = { version = "46.0.3", default-features = false, features = ["componen
 wit-bindgen = { version = "0.57.1", default-features = false, features = ["macros", "realloc"] }
 wit-component = "0.251"
 wasmparser = "0.251"
+wasm-encoder = "0.251"
 gpui = { path = "../gpui-ce/crates/gpui", package = "gpui-ce" }
 gpui_platform = { path = "../gpui-ce/crates/gpui_platform", package = "gpui_ce_platform" }
 gpui_elements = { path = "../gpui-ce/crates/gpui_elements", package = "gpui_ce_elements" }

@@ -4463,6 +4463,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "plinth-compiler"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "plinth-protocol",
+ "plinth-runner-wasmtime",
+ "plinth-ui",
+ "wasm-encoder 0.251.0",
+ "wasmparser 0.251.0",
+ "wit-component 0.251.0",
+]
+
+[[package]]
 name = "plinth-guest"
 version = "0.1.0"
 dependencies = [
@@ -4490,6 +4503,14 @@ name = "plinth-protocol"
 version = "0.1.0"
 dependencies = [
  "toml 0.8.23",
+]
+
+[[package]]
+name = "plinth-rt"
+version = "0.1.0"
+dependencies = [
+ "plinth-protocol",
+ "wit-bindgen",
 ]
 
 [[package]]

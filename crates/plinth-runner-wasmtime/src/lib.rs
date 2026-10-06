@@ -43,12 +43,21 @@ const EPOCH_TICK: Duration = Duration::from_millis(10);
 
 struct HostState {
     commits: Vec<Vec<u8>>,
+    /// Messages from `dev.log`, kept for tests and the dev tools.
+    logs: Vec<String>,
     limits: StoreLimits,
 }
 
 impl bindings::plinth::app::ui::Host for HostState {
     fn commit(&mut self, ops: Vec<u8>) {
         self.commits.push(ops);
+    }
+}
+
+impl bindings::plinth::app::dev::Host for HostState {
+    fn log(&mut self, msg: String) {
+        log::info!(target: "plinth::app", "{msg}");
+        self.logs.push(msg);
     }
 }
 
@@ -91,6 +100,7 @@ impl Runner {
 
         let state = HostState {
             commits: Vec::new(),
+            logs: Vec::new(),
             limits: StoreLimitsBuilder::new().memory_size(limits.memory_bytes).instances(4).build(),
         };
         let mut store = Store::new(&self.engine, state);
@@ -135,6 +145,11 @@ pub struct Guest {
 }
 
 impl Guest {
+    /// Returns the `dev.log` messages since the last call.
+    pub fn take_logs(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.store.data_mut().logs)
+    }
+
     /// Calls `init` and returns the op buffers that the guest committed.
     pub fn init(&mut self, args: &[u8]) -> Result<Vec<Vec<u8>>> {
         self.call(|app, store| app.call_init(store, args))
