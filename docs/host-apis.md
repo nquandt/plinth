@@ -26,6 +26,28 @@ import { now, monotonicNow, setTimeout, setInterval, clearTimeout, clearInterval
 The desktop host polls timers every 15 ms and delivers one firing per
 poll; it does not catch up missed ticks.
 
+### Date and time (docs/GAPS.md gap #5)
+
+```ts
+import { timezoneOffset, dateParts, makeDate, formatDate, toISOString, parseDate } from "plinth:time";
+```
+
+| Function | Notes |
+|---|---|
+| `timezoneOffset(ms)` | The local time zone's offset from UTC, in minutes east of UTC, at the instant `ms`. From the OS (desktop) or `-Date.getTimezoneOffset()` (web). |
+| `dateParts(ms, utc?)` | Breaks `ms` into `{ year, month, day, hour, minute, second, millisecond, weekday }`. `month` is 1-12; `weekday` is 0 (Sunday) to 6. Local time unless `utc` is true. |
+| `makeDate(year, month, day, hour?, minute?, second?)` | The inverse of `dateParts`: local wall-clock fields to `ms`. `hour`/`minute`/`second` default to 0. |
+| `formatDate(ms, pattern, utc?)` | A small pattern language: `YYYY MM M DD D HH H hh h mm ss SSS ddd dddd MMM MMMM A`; any other character passes through. English names only — locale-aware formatting is `plinth:locale` (SPEC.md §4.7), later. |
+| `toISOString(ms)` | `ms` as a UTC ISO-8601 string, like JS's `Date.prototype.toISOString`. |
+| `parseDate(text)` | Parses `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM[:SS[.sss]][Z\|±HH:MM]`. No `Z`/offset means local time. Returns `null` on no match. The same format `DatePicker` stores. |
+
+The local offset is looked up at the naive ("as if UTC") instant for the
+date being converted, so it can be off by the DST delta for a wall-clock
+time that falls inside a transition — the same approximation most host
+platforms make. The desktop runner's offset source is injectable for
+tests (`Guest::set_fake_timezone_offset`); real-host tests only check
+that it is a multiple of 15 minutes.
+
 ## `plinth:store`
 
 A per-app key-value store. Needs the `store.kv` capability.
