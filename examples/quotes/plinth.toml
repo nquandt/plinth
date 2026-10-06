@@ -1,0 +1,8 @@
+id = "dev.plinth.examples.quotes"
+name = "Quotes"
+version = "0.1.0"
+publisher = "plinth"
+
+[[capabilities]]
+name = "net:api.quotable.io"
+rationale = "Fetch a random quote to show."
