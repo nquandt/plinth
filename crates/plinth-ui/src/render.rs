@@ -6,7 +6,7 @@ use crate::theme::{Tokens, WidthClass, icon_glyph, with_alpha};
 use crate::tree::{Node, Tree};
 use gpui::{
     AnyElement, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FontWeight, IntoElement, KeyDownEvent,
-    MouseButton, Pixels, Render, SharedString, Stateful, Subscription, Window, div, prelude::*, px, relative,
+    MouseButton, Pixels, Render, SharedString, Stateful, Subscription, Window, div, prelude::*, px,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -1663,10 +1663,10 @@ impl PlinthRoot {
         };
         let cells = self.render_children(node, t, cx);
         div()
-            .flex()
-            .flex_wrap()
+            .grid()
+            .grid_cols(columns as u16)
             .gap_3()
-            .children(cells.into_iter().map(|c| div().w(relative(1. / columns as f32)).min_w_0().child(c)))
+            .children(cells.into_iter().map(|c| div().min_w_0().child(c)))
             .into_any_element()
     }
 }

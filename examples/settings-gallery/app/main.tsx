@@ -11,7 +11,18 @@ import {
   Picker,
   Progress,
   Badge,
+  Grid,
 } from "plinth:ui";
+
+type Shortcut = { id: number; label: string };
+
+const shortcuts: Shortcut[] = [
+  { id: 1, label: "Profile" },
+  { id: 2, label: "Billing" },
+  { id: 3, label: "Security" },
+  { id: 4, label: "Devices" },
+  { id: 5, label: "Support" },
+];
 
 function Settings() {
   const notifications = signal(true);
@@ -23,6 +34,9 @@ function Settings() {
 
   return (
     <Screen title="Settings">
+      <Section title="Shortcuts">
+        <Grid items={shortcuts} key={(s) => s.id} cell={(s) => <Text>{s.label}</Text>} />
+      </Section>
       <Section title="Notifications" footer="Choose what you want to hear about.">
         <Checkbox label="Email notifications" value={notifications} />
         <Text tone="muted">{notifications() ? "You will get emails." : "Emails are off."}</Text>
