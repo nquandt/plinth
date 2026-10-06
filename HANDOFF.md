@@ -106,7 +106,7 @@ A host: `cores::link_app(app)` picks the installed core (same major, highest min
 ## 9. Next steps (suggested order)
 
 1. **Web host (M5) early spike:** export the core's table; JS glue that instantiates the core and then `app.wasm` with the core's exports, memory, table and `table_base` (no static link needed in a browser); JS implementations of the core's WIT imports at the core-module level; a minimal DOM renderer for the op buffer, or gpui-ce's web backend.
-2. **Hot reload:** keep component-local signals (key by component and declaration order) and arrays/objects.
+2. **Hot reload:** keep signals with array and object values (component-local and row signals are kept now).
 3. **Host APIs:** consent UI (today a declared capability is granted), `dialog`, `net` (async with `completion` events; needs callbacks or `async`/`await`).
 4. **Controls:** `DatePicker`, `Image` (asset tokens), `Canvas`, arguments for `navigate.push`, animated indeterminate `Progress`.
 5. **Compiler v1:** generic interfaces, classes, `JSON`, `async`/`await`, `try`/`catch` (SPEC §5.6).
