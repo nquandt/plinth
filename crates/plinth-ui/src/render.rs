@@ -5,9 +5,11 @@
 use crate::theme::{Tokens, WidthClass, icon_glyph, with_alpha};
 use crate::tree::{Node, Tree};
 use gpui::{
-    AnyElement, ClickEvent, Context, ElementId, Entity, FontWeight, IntoElement, KeyDownEvent, Render,
-    SharedString, Stateful, Subscription, Window, div, prelude::*, px, relative,
+    AnyElement, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FontWeight, IntoElement, KeyDownEvent,
+    MouseButton, Pixels, Render, SharedString, Stateful, Subscription, Window, div, prelude::*, px, relative,
 };
+use std::cell::Cell;
+use std::rc::Rc;
 use gpui::accesskit;
 use gpui_elements::editable_text::actions::Enter;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_area, text_input};
@@ -52,6 +54,49 @@ struct Field {
 /// `.0` for whole numbers (SPEC.md §6.3).
 fn format_num(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
+}
+
+/// Snaps a raw `Slider` value to the nearest multiple of `step` from `min`,
+/// clamped to `[min, max]` (SPEC.md §8.4).
+fn snap_slider_value(raw: f64, min: f64, max: f64, step: f64) -> f64 {
+    let snapped = if step > 0.0 { min + ((raw - min) / step).round() * step } else { raw };
+    snapped.clamp(min, max)
+}
+
+#[cfg(test)]
+mod slider_snap_tests {
+    use super::snap_slider_value;
+
+    #[test]
+    fn snaps_to_nearest_step() {
+        assert_eq!(snap_slider_value(23.0, 0.0, 100.0, 10.0), 20.0);
+        assert_eq!(snap_slider_value(27.0, 0.0, 100.0, 10.0), 30.0);
+    }
+
+    #[test]
+    fn clamps_to_min_and_max() {
+        assert_eq!(snap_slider_value(-50.0, 0.0, 100.0, 10.0), 0.0);
+        assert_eq!(snap_slider_value(500.0, 0.0, 100.0, 10.0), 100.0);
+    }
+
+    #[test]
+    fn zero_step_passes_through() {
+        assert_eq!(snap_slider_value(42.3, 0.0, 100.0, 0.0), 42.3);
+    }
+}
+
+/// Drag payload for a `Slider` track being dragged (SPEC.md §8.4). `gpui-ce`
+/// identifies an in-progress drag by this entity, so each slider carries its
+/// own node id to tell its drag apart from any other slider's.
+#[derive(Clone)]
+struct SliderDrag {
+    id: NodeId,
+}
+
+impl Render for SliderDrag {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        gpui::Empty
+    }
 }
 
 /// A destructive action waiting for the user to confirm it (SPEC.md §6.4,
@@ -1019,6 +1064,28 @@ impl PlinthRoot {
         }
     }
 
+    /// Sets a `Slider`'s value from a raw pointer position, snapped to
+    /// `step` and clamped to `min`/`max` (SPEC.md §8.4). Only sets the
+    /// local prop and fires `onChange` when the snapped value actually
+    /// changes, so a drag that stays within one step is a no-op.
+    fn set_slider_value(&mut self, id: NodeId, raw: f64, cx: &mut Context<Self>) {
+        let Some(node) = self.tree.get(id) else { return };
+        let min = node.num_prop(prop::MIN).unwrap_or(0.0);
+        let max = node.num_prop(prop::MAX).unwrap_or(1.0);
+        let step = node.num_prop(prop::STEP).unwrap_or(((max - min) / 20.0).max(0.000_1));
+        let current = node.num_prop(prop::VALUE).unwrap_or(min).clamp(min, max);
+        let next = snap_slider_value(raw, min, max, step);
+        if next == current {
+            return;
+        }
+        let handler = node.handler(event::CHANGE);
+        self.tree.set_local_prop(id, prop::VALUE, Value::Number(next));
+        match handler {
+            Some(h) => self.fire(h, event::CHANGE, Value::Number(next), cx),
+            None => cx.notify(),
+        }
+    }
+
     fn step_button(&self, id: NodeId, label: &'static str, delta: f64, disabled: bool, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id(eid(if delta < 0.0 { "step-down" } else { "step-up" }, id))
@@ -1057,13 +1124,15 @@ impl PlinthRoot {
             .aria_numeric_value(value)
             .aria_numeric_value_step(step)
             .aria_disabled(disabled)
+            .relative()
             .flex_1()
             .h(px(8.))
             .rounded_full()
             .bg(t.track)
             .child(div().h_full().rounded_full().bg(t.accent).w(gpui::relative(frac as f32)));
+        let track_bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
         let track = if disabled {
-            track
+            div().w_full().child(track)
         } else {
             let inc = move |this: &mut Self, cx: &mut Context<Self>| this.step_value(id, step, cx);
             let dec = move |this: &mut Self, cx: &mut Context<Self>| this.step_value(id, -step, cx);
@@ -1077,7 +1146,7 @@ impl PlinthRoot {
                     move |_, _, cx| entity.update(cx, |this, cx| dec(this, cx))
                 });
             let entity = cx.entity();
-            track.tab_index(0).on_key_down(move |ev: &KeyDownEvent, _window, cx| {
+            let track = track.tab_index(0).on_key_down(move |ev: &KeyDownEvent, _window, cx| {
                 let delta = match ev.keystroke.key.as_str() {
                     "right" | "up" => Some(step),
                     "left" | "down" => Some(-step),
@@ -1087,7 +1156,36 @@ impl PlinthRoot {
                     let entity = entity.clone();
                     entity.update(cx, |this, cx| this.step_value(id, d, cx));
                 }
-            })
+            });
+            // Pointer drag on the track (SPEC.md §8.4): a click or drag at
+            // position `x` maps to a value by `x`'s fraction across the
+            // track's painted bounds, which `on_children_prepainted` caches.
+            let value_from_x = move |x: Pixels, bounds: Bounds<Pixels>| -> f64 {
+                let offset = (x - bounds.left()).clamp(px(0.), bounds.size.width);
+                let frac = if bounds.size.width > px(0.) { (offset / bounds.size.width) as f64 } else { 0.0 };
+                min + (max - min) * frac
+            };
+            let down_bounds = track_bounds.clone();
+            let down_entity = cx.entity();
+            let track = track.on_mouse_down(MouseButton::Left, move |ev, _window, app| {
+                if let Some(bounds) = down_bounds.get() {
+                    let raw = value_from_x(ev.position.x, bounds);
+                    let entity = down_entity.clone();
+                    entity.update(app, |this, cx| this.set_slider_value(id, raw, cx));
+                }
+            });
+            let drag_entity = cx.entity();
+            let track = track
+                .on_drag(SliderDrag { id }, |drag, _, _, cx| cx.new(|_| drag.clone()))
+                .on_drag_move(move |ev: &DragMoveEvent<SliderDrag>, _window, app| {
+                    if ev.drag(app).id != id {
+                        return;
+                    }
+                    let raw = value_from_x(ev.event.position.x, ev.bounds);
+                    let entity = drag_entity.clone();
+                    entity.update(app, |this, cx| this.set_slider_value(id, raw, cx));
+                });
+            div().w_full().on_children_prepainted(move |bounds, _window, _cx| track_bounds.set(bounds.first().copied())).child(track)
         };
         let row = div()
             .flex()
