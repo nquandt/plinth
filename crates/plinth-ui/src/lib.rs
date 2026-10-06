@@ -5,7 +5,7 @@ mod render;
 mod theme;
 pub mod tree;
 
-pub use render::{GuestPort, PlinthRoot};
+pub use render::{DialogKind, GuestPort, PendingDialog, PlinthRoot};
 pub use theme::{Tokens, WidthClass};
 
 /// Registers the key bindings that the controls need. Call it one time at

@@ -41,6 +41,38 @@ pub trait GuestPort {
         let _ = now;
         Ok(Vec::new())
     }
+
+    /// `plinth:dialog` requests the guest opened that no answer has closed
+    /// yet (SPEC.md §8.4, §8.5). The default (no dialog host API access)
+    /// has none.
+    fn pending_dialogs(&self) -> Vec<PendingDialog> {
+        Vec::new()
+    }
+
+    /// Answers a dialog request by id, delivering a `completion` event to
+    /// the guest and returning the op buffers it committed. The default is
+    /// a no-op (there is nothing to answer).
+    fn answer_dialog(&mut self, id: u32, value: Value) -> anyhow::Result<Vec<Vec<u8>>> {
+        let _ = (id, value);
+        Ok(Vec::new())
+    }
+}
+
+/// Which `plinth:dialog` call opened a pending dialog request (mirrors
+/// `plinth_runner_wasmtime::DialogKind` without a dependency on that crate).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DialogKind {
+    Alert,
+    Confirm,
+    Prompt,
+}
+
+/// A dialog request the guest opened that the host has not answered yet.
+#[derive(Clone, Debug)]
+pub struct PendingDialog {
+    pub id: u32,
+    pub kind: DialogKind,
+    pub message: String,
 }
 
 /// Host-side state of one `TextField`, `TextArea` or `NumberField`.
@@ -122,6 +154,17 @@ struct PendingConfirm {
     handler: Option<u32>,
 }
 
+/// A `plinth:dialog` request shown as a modal overlay (SPEC.md §8.4, §8.5).
+/// At most one is shown at a time; `sync_dialog` picks up the next one once
+/// this one is answered.
+struct ActiveDialog {
+    id: u32,
+    kind: DialogKind,
+    message: String,
+    /// The text input state for a `prompt` dialog.
+    input: Option<Entity<EditableTextState>>,
+}
+
 pub struct PlinthRoot {
     tree: Tree,
     guest: Box<dyn GuestPort>,
@@ -135,6 +178,8 @@ pub struct PlinthRoot {
     open_menus: HashSet<NodeId>,
     /// The destructive action the host is confirming, if any.
     confirm: Option<PendingConfirm>,
+    /// The `plinth:dialog` request shown right now, if any.
+    dialog: Option<ActiveDialog>,
     /// Holds keyboard focus so `on_key_down` (Escape to close a menu or go
     /// back) fires without depending on a focusable child being focused.
     focus: FocusHandle,
@@ -172,11 +217,13 @@ impl PlinthRoot {
             class: WidthClass::Wide,
             open_menus: HashSet::new(),
             confirm: None,
+            dialog: None,
             focus: cx.focus_handle(),
             focused_once: false,
             assets,
         };
         root.apply_commits(initial_commits);
+        root.sync_dialog(cx);
         root
     }
 
@@ -191,6 +238,7 @@ impl PlinthRoot {
             class: WidthClass::Wide,
             open_menus: HashSet::new(),
             confirm: None,
+            dialog: None,
             focus: cx.focus_handle(),
             focused_once: false,
             assets: Arc::new(HashMap::new()),
@@ -229,6 +277,7 @@ impl PlinthRoot {
         self.stopped = None;
         self.open_menus.clear();
         self.confirm = None;
+        self.dialog = None;
         match init {
             Ok(commits) => self.apply_commits(commits),
             Err(e) => self.stopped = Some(e),
@@ -239,6 +288,7 @@ impl PlinthRoot {
         // SPEC.md §13: the selected screen and the navigation stack survive
         // a reload when the screens still exist.
         self.tree.restore_stacks(stacks);
+        self.sync_dialog(cx);
         cx.notify();
     }
 
@@ -299,6 +349,7 @@ impl PlinthRoot {
             }
         }
         self.sync_fields(cx);
+        self.sync_dialog(cx);
         cx.notify();
     }
 
@@ -326,6 +377,7 @@ impl PlinthRoot {
             }
         }
         self.sync_fields(cx);
+        self.sync_dialog(cx);
         cx.notify();
     }
 
@@ -400,6 +452,135 @@ impl PlinthRoot {
             self.fields.insert(id, Field { state, last_synced: value, numeric, _subscription: subscription });
         }
     }
+
+    /// Shows the next unanswered `plinth:dialog` request as a modal
+    /// overlay, if none is already shown (SPEC.md §8.4, §8.5). Called
+    /// after every guest call that could have opened one.
+    fn sync_dialog(&mut self, cx: &mut Context<Self>) {
+        if self.dialog.is_some() {
+            return;
+        }
+        let Some(next) = self.guest.pending_dialogs().into_iter().next() else { return };
+        let input = (next.kind == DialogKind::Prompt)
+            .then(|| cx.new(|cx| EditableTextState::new(StringStorage::from(String::new()), cx)));
+        self.dialog = Some(ActiveDialog { id: next.id, kind: next.kind, message: next.message, input });
+    }
+
+    /// Answers the dialog shown right now with `value`, applies what the
+    /// guest commits, and shows the next pending dialog, if any.
+    fn answer_dialog(&mut self, value: Value, cx: &mut Context<Self>) {
+        let Some(dialog) = self.dialog.take() else { return };
+        match self.guest.answer_dialog(dialog.id, value) {
+            Ok(commits) => self.apply_commits(commits),
+            Err(e) => {
+                log::error!("the app stopped: {e:#}");
+                self.stopped = Some(format!("{e:#}"));
+            }
+        }
+        self.sync_dialog(cx);
+        cx.notify();
+    }
+
+    /// The standard modal for a `plinth:dialog` request (SPEC.md §8.4,
+    /// §8.5), styled like `render_confirm_overlay`.
+    fn render_host_dialog_overlay(&self, t: &Tokens, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let dialog = self.dialog.as_ref()?;
+        let message = dialog.message.clone();
+        let kind = dialog.kind;
+        let input_field = dialog.input.clone();
+        let input_row = input_field.clone().map(|state| {
+            text_input(eid("dlg", dialog.id))
+                .state(state.downgrade())
+                .accepts_input(true)
+                .caret_color(t.text)
+                .selection_color(t.selection)
+                .caret_blink_interval_500ms()
+                .w_full()
+                .px_3()
+                .py_2()
+                .rounded_lg()
+                .border_1()
+                .border_color(t.border)
+                .bg(t.background)
+                .text_color(t.text)
+                .text_sm()
+                .min_h_auto()
+        });
+
+        let mut buttons = div().flex().justify_end().gap_2();
+        if kind != DialogKind::Alert {
+            buttons = buttons.child(
+                div()
+                    .id("dialog-cancel")
+                    .cursor_pointer()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .text_sm()
+                    .child("Cancel")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        let cancel = match this.dialog.as_ref().map(|d| d.kind) {
+                            Some(DialogKind::Confirm) => Value::Bool(false),
+                            _ => Value::Null,
+                        };
+                        this.answer_dialog(cancel, cx);
+                    })),
+            );
+        }
+        buttons = buttons.child(
+            div()
+                .id("dialog-ok")
+                .cursor_pointer()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(t.accent)
+                .text_color(t.on_accent)
+                .text_sm()
+                .child("OK")
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    let value = match this.dialog.as_ref() {
+                        Some(d) if d.kind == DialogKind::Confirm => Value::Bool(true),
+                        Some(d) if d.kind == DialogKind::Prompt => {
+                            let text = d.input.as_ref().map(|s| s.read(cx).as_str().to_owned()).unwrap_or_default();
+                            Value::Str(text)
+                        }
+                        _ => Value::Null,
+                    };
+                    this.answer_dialog(value, cx);
+                })),
+        );
+
+        let panel = div()
+            .id("dialog-panel")
+            .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
+            .role(accesskit::Role::Dialog)
+            .aria_label(message.clone())
+            .w(px(320.))
+            .p_5()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .rounded_xl()
+            .bg(t.surface)
+            .border_1()
+            .border_color(t.border)
+            .child(div().text_sm().text_color(t.text).child(message))
+            .children(input_row)
+            .child(buttons);
+        Some(
+            div()
+                .id("dialog-backdrop")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(t.backdrop)
+                .child(panel)
+                .into_any_element(),
+        )
+    }
 }
 
 fn eid(prefix: &'static str, id: impl Into<u64>) -> ElementId {
@@ -466,6 +647,7 @@ impl Render for PlinthRoot {
         let overlay_ids = self.tree.current_root().map(|root| self.overlay_ids(root.id)).unwrap_or_default();
         let mut overlays: Vec<AnyElement> = overlay_ids.into_iter().map(|id| self.render_overlay(id, &t, cx)).collect();
         overlays.extend(self.render_confirm_overlay(&t, cx));
+        overlays.extend(self.render_host_dialog_overlay(&t, cx));
 
         let screens: Vec<(u32, NodeId)> = self.tree.primary_screens().collect();
         let shell = div()
@@ -487,18 +669,47 @@ impl Render for PlinthRoot {
             .on_key_down({
                 let entity = cx.entity();
                 move |ev: &gpui::KeyDownEvent, _, cx| {
-                    let back = ev.keystroke.key == "escape"
-                        || (ev.keystroke.key == "left" && ev.keystroke.modifiers.alt);
-                    if back {
+                    let key = ev.keystroke.key.as_str();
+                    if key == "escape" {
                         entity.update(cx, |this, cx| {
-                            if !this.open_menus.is_empty() {
+                            if this.dialog.is_some() {
+                                let cancel = match this.dialog.as_ref().map(|d| d.kind) {
+                                    Some(DialogKind::Confirm) => Value::Bool(false),
+                                    _ => Value::Null,
+                                };
+                                this.answer_dialog(cancel, cx);
+                            } else if !this.open_menus.is_empty() {
                                 this.open_menus.clear();
+                                cx.notify();
                             } else if this.confirm.is_some() {
                                 this.confirm = None;
+                                cx.notify();
                             } else {
                                 this.tree.go_back();
+                                cx.notify();
                             }
-                            cx.notify();
+                        });
+                    } else if key == "left" && ev.keystroke.modifiers.alt {
+                        entity.update(cx, |this, cx| {
+                            if this.dialog.is_none() && this.open_menus.is_empty() && this.confirm.is_none() {
+                                this.tree.go_back();
+                                cx.notify();
+                            }
+                        });
+                    } else if key == "enter" {
+                        entity.update(cx, |this, cx| {
+                            if this.dialog.is_some() {
+                                let value = match this.dialog.as_ref() {
+                                    Some(d) if d.kind == DialogKind::Confirm => Value::Bool(true),
+                                    Some(d) if d.kind == DialogKind::Prompt => {
+                                        let text =
+                                            d.input.as_ref().map(|s| s.read(cx).as_str().to_owned()).unwrap_or_default();
+                                        Value::Str(text)
+                                    }
+                                    _ => Value::Null,
+                                };
+                                this.answer_dialog(value, cx);
+                            }
                         });
                     }
                 }

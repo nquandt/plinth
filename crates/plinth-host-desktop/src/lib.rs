@@ -138,6 +138,28 @@ impl GuestPort for WasmGuest {
         print_logs(&mut self.guest);
         r
     }
+
+    fn pending_dialogs(&self) -> Vec<plinth_ui::PendingDialog> {
+        self.guest
+            .pending_dialogs()
+            .iter()
+            .map(|d| plinth_ui::PendingDialog {
+                id: d.id,
+                kind: match d.kind {
+                    plinth_runner_wasmtime::DialogKind::Alert => plinth_ui::DialogKind::Alert,
+                    plinth_runner_wasmtime::DialogKind::Confirm => plinth_ui::DialogKind::Confirm,
+                    plinth_runner_wasmtime::DialogKind::Prompt => plinth_ui::DialogKind::Prompt,
+                },
+                message: d.message.clone(),
+            })
+            .collect()
+    }
+
+    fn answer_dialog(&mut self, id: u32, value: plinth_protocol::Value) -> Result<Vec<Vec<u8>>> {
+        let r = self.guest.answer_dialog(id, value);
+        print_logs(&mut self.guest);
+        r
+    }
 }
 
 fn print_logs(guest: &mut Guest) {
