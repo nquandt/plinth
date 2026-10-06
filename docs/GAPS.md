@@ -33,15 +33,8 @@ small local change), per the dogfooding task's scope.
   plain array is still not possible: no tuple/array-of-pairs type exists to
   return it as (the `for…of ([k, v] of m)` form still works).
 - `Array` methods beyond the common set (gap batch 3 item 3 added
-  `concat`/`reduce`; see "Fixed in this pass"): `sort` (with a comparator),
-  `splice`, `fill` and `flat` are still not implemented. `sort` in
-  particular would need a comparator-calling loop generated in
-  `codegen.rs` (the same shape `ArrayHof` already uses for `map`/`filter`/
-  etc., extended with an in-place swap), which was not done here for lack
-  of time; `reduce`'s existing checker-level loop
-  (`check/expr.rs::array_method`) is not a template for it, since a sort
-  needs `O(n log n)` comparisons between elements, not one callback per
-  element.
+  `concat`/`reduce`; `sort` fixed in this pass, see "Fixed in this pass"):
+  `splice`, `fill` and `flat` are still not implemented.
 
 ## Fixed in this pass
 
@@ -211,6 +204,35 @@ small local change), per the dogfooding task's scope.
   `array_reduce_on_an_empty_array_returns_the_initial_value`,
   `array_reduce_with_index_builds_a_string`,
   `array_reduce_without_an_initial_value_is_rejected`.
+- **Array `sort` (gap "Larger items" #1, this pass).** `arr.sort(compare?)`
+  sorts in place and returns the same array (JS semantics), and is stable
+  (equal keys keep their original order, required since ES2019). Lowered
+  to a generated insertion sort in `check/expr.rs::array_sort` — a plain
+  index loop with an inner shift loop, the same TIR shapes `reduce` and
+  `kv_delete`'s shift loop already use (`Let`/`Loop`/`CallClosure`/
+  `Assign(Place::Index, ..)`), so no new runtime function or codegen
+  support. Insertion sort is `O(n^2)`, not `O(n log n)`; accepted because
+  Plinth arrays are form-sized app state (SPEC.md §4.2), not bulk data —
+  a 10,000-element sort still completes well within a test's time budget.
+  Without a comparator, elements must be `string`, `number` or `boolean`
+  (anything else is `PL3006: 'sort' needs a comparator for this element
+  type`); `string`/`boolean` compare via the existing `TExprKind::StrCmp`
+  node, and `number` also compares as a string (exact JS default-sort
+  behavior, including its surprising order, e.g. `[10, 2, 1].sort()` →
+  `[1, 10, 2]`) but additionally emits a new lint, `PL2025` (`sort()
+  without a comparator compares numbers as strings; pass (a, b) => a -
+  b`). `std/lib.d.ts`'s `Array<T>` gained `sort`. Tests in
+  `crates/plinth-compiler/tests/lang.rs`: `array_sort_numbers_with_a_comparator`,
+  `array_sort_returns_the_same_array_mutated_in_place`,
+  `array_sort_numbers_without_a_comparator_compares_as_strings_and_warns`,
+  `array_sort_strings_without_a_comparator`, `array_sort_structs_by_a_key`,
+  `array_sort_is_stable_for_equal_keys`,
+  `array_sort_on_empty_and_one_element_arrays`,
+  `array_sort_ten_thousand_elements`, `array_sort_survives_gc_stress`,
+  `array_sort_without_a_comparator_on_an_unsupported_element_errors`.
+  `splice`, `fill` and `flat` are still not implemented — see "Larger
+  items"; `Map.entries()` as a plain array is also still not implemented
+  — see "Larger items" above.
 
 ## Found later
 

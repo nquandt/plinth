@@ -69,6 +69,9 @@ pub mod code {
     /// A method override's signature is not compatible with the base
     /// class's method.
     pub const OVERRIDE: &str = "PL2024";
+    /// `arr.sort()` with a numeric element and no comparator: JS compares
+    /// the elements' string forms, which is almost never what was meant.
+    pub const SORT_DEFAULT_COMPARE: &str = "PL2025";
     // 3xxx: types.
     pub const TYPE_MISMATCH: &str = "PL3001";
     pub const UNKNOWN_NAME: &str = "PL3002";

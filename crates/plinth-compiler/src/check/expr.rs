@@ -1273,11 +1273,154 @@ impl Checker<'_> {
                 ];
                 TExpr::new(TExprKind::Block(prelude, bx(acc_r)), acc_ty, span)
             }
+            // `arr.sort(compare?)`: a generated stable insertion sort (a
+            // plain index loop, like `reduce`/`kv_delete`'s shift loop), not
+            // a new runtime function (GAPS.md "Larger items"). Insertion
+            // sort is stable (equal keys never cross) and small to generate;
+            // `O(n^2)` is accepted here since Plinth arrays are form-sized
+            // state, not bulk data (SPEC.md §4.2).
+            "sort" => self.array_sort(o, elem, args, span),
             _ => {
                 self.err(code::NO_PROPERTY, prop_span, format!("arrays have no method `{prop}` in Plinth TS"));
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
         }
+    }
+
+    /// `arr.sort(compare?)`. In place, returns the same array (JS
+    /// semantics). Without a comparator, JS compares the elements' string
+    /// forms; only `string`/`number`/`boolean` elements support that
+    /// fallback (a `number` fallback also gets a lint, since comparing
+    /// numbers as strings is almost never intended), anything else needs an
+    /// explicit comparator.
+    fn array_sort(&mut self, o: TExpr, elem: Type, args: &[Expr], span: Span) -> TExpr {
+        if args.len() > 1 {
+            self.err(code::ARG_COUNT, span, "`sort` takes at most one comparator");
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        let arr_ty = Type::Array(Box::new(elem.clone()));
+
+        enum Cmp {
+            Closure(VarId, usize, Type),
+            Str,
+            NumAsStr,
+            BoolAsStr,
+        }
+
+        let mut prelude: Vec<TStmt> = Vec::new();
+        let cmp = if let Some(cmp_arg) = args.first() {
+            let (f, arity) = self.callback(cmp_arg, &[elem.clone(), elem.clone()], Some(Type::Number));
+            let f_ty = f.ty.clone();
+            let f_v = self.temp(f_ty.clone());
+            prelude.push(TStmt::Let(f_v, Some(f)));
+            Cmp::Closure(f_v, arity, f_ty)
+        } else {
+            match self.widen(elem.clone()) {
+                Type::String => Cmp::Str,
+                Type::Number => {
+                    self.diags.push(crate::diag::Diagnostic::warning(
+                        code::SORT_DEFAULT_COMPARE,
+                        span,
+                        "sort() without a comparator compares numbers as strings; pass (a, b) => a - b",
+                    ));
+                    Cmp::NumAsStr
+                }
+                Type::Bool => Cmp::BoolAsStr,
+                _ => {
+                    self.err_help(
+                        code::ARG_COUNT,
+                        span,
+                        "`sort` needs a comparator for this element type",
+                        "pass `(a, b) => ...` returning a negative, zero or positive number",
+                    );
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+            }
+        };
+
+        // `cmp_gt(a, b)`: true when `a` must sort after `b`.
+        let cmp_gt = |a: TExpr, b: TExpr| -> TExpr {
+            match &cmp {
+                Cmp::Closure(f_v, arity, f_ty) => {
+                    let f_r = TExpr::new(TExprKind::Var(*f_v), f_ty.clone(), span);
+                    let mut call_args = vec![a, b];
+                    call_args.truncate(*arity);
+                    let call = TExpr::new(TExprKind::CallClosure(bx(f_r), call_args), Type::Number, span);
+                    TExpr::new(
+                        TExprKind::Cmp(CmpOp::Gt, EqKind::F64, bx(call), bx(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
+                        Type::Bool,
+                        span,
+                    )
+                }
+                Cmp::Str => TExpr::new(TExprKind::StrCmp(CmpOp::Gt, bx(a), bx(b)), Type::Bool, span),
+                Cmp::NumAsStr => {
+                    let a = TExpr::new(TExprKind::Coerce(Coercion::NumToStr, bx(a)), Type::String, span);
+                    let b = TExpr::new(TExprKind::Coerce(Coercion::NumToStr, bx(b)), Type::String, span);
+                    TExpr::new(TExprKind::StrCmp(CmpOp::Gt, bx(a), bx(b)), Type::Bool, span)
+                }
+                Cmp::BoolAsStr => {
+                    let a = TExpr::new(TExprKind::Coerce(Coercion::BoolToStr, bx(a)), Type::String, span);
+                    let b = TExpr::new(TExprKind::Coerce(Coercion::BoolToStr, bx(b)), Type::String, span);
+                    TExpr::new(TExprKind::StrCmp(CmpOp::Gt, bx(a), bx(b)), Type::Bool, span)
+                }
+            }
+        };
+
+        let arr_v = self.temp(arr_ty.clone());
+        let arr_r = TExpr::new(TExprKind::Var(arr_v), arr_ty.clone(), span);
+        let n_v = self.temp(Type::Number);
+        let n_r = TExpr::new(TExprKind::Var(n_v), Type::Number, span);
+        let i_v = self.temp(Type::Number);
+        let i_r = TExpr::new(TExprKind::Var(i_v), Type::Number, span);
+        let j_v = self.temp(Type::Number);
+        let j_r = TExpr::new(TExprKind::Var(j_v), Type::Number, span);
+        let key_v = self.temp(elem.clone());
+        let key_r = TExpr::new(TExprKind::Var(key_v), elem.clone(), span);
+
+        let one = || TExpr::new(TExprKind::Num(1.0), Type::Number, span);
+        let zero = || TExpr::new(TExprKind::Num(0.0), Type::Number, span);
+
+        // `key = arr[i]; j = i - 1;`
+        let assign_key =
+            TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(key_v), bx(self.arr_get_at(arr_r.clone(), i_r.clone(), elem.clone(), span))), elem.clone(), span));
+        let j_init = TExpr::new(TExprKind::Num2(NumOp::Sub, bx(i_r.clone()), bx(one())), Type::Number, span);
+        let assign_j = TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(j_v), bx(j_init)), Type::Number, span));
+
+        // Inner loop: `while (j >= 0 && cmp_gt(arr[j], key)) { arr[j+1] = arr[j]; j--; }`
+        let j_plus_1 = TExpr::new(TExprKind::Num2(NumOp::Add, bx(j_r.clone()), bx(one())), Type::Number, span);
+        let ge0 = TExpr::new(TExprKind::Cmp(CmpOp::Ge, EqKind::F64, bx(j_r.clone()), bx(zero())), Type::Bool, span);
+        let shift_needed = cmp_gt(self.arr_get_at(arr_r.clone(), j_r.clone(), elem.clone(), span), key_r.clone());
+        let inner_cond =
+            TExpr::new(TExprKind::Cond(bx(ge0), bx(shift_needed), bx(TExpr::new(TExprKind::Bool(false), Type::Bool, span))), Type::Bool, span);
+        let shift = self.arr_set_at(arr_r.clone(), j_plus_1.clone(), self.arr_get_at(arr_r.clone(), j_r.clone(), elem.clone(), span), span);
+        let j_dec = TExpr::new(TExprKind::Num2(NumOp::Sub, bx(j_r.clone()), bx(one())), Type::Number, span);
+        let assign_j_dec = TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(j_v), bx(j_dec)), Type::Number, span));
+        let inner_id = self.prog.new_loop();
+        let inner_loop = TStmt::Loop { id: inner_id, cond: Some(inner_cond), test_after: false, update: None, body: vec![shift, assign_j_dec] };
+
+        // `arr[j+1] = key;`
+        let place_final = self.arr_set_at(arr_r.clone(), j_plus_1, key_r.clone(), span);
+
+        let outer_cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(n_r.clone())), Type::Bool, span);
+        let i_inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r.clone()), bx(one())), Type::Number, span);
+        let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(i_inc)), Type::Number, span);
+        let outer_id = self.prog.new_loop();
+        let outer_loop = TStmt::Loop {
+            id: outer_id,
+            cond: Some(outer_cond),
+            test_after: false,
+            update: Some(update),
+            body: vec![assign_key, assign_j, inner_loop, place_final],
+        };
+
+        prelude.push(TStmt::Let(arr_v, Some(o)));
+        prelude.push(TStmt::Let(n_v, Some(self.arr_len_of(arr_r.clone(), span))));
+        prelude.push(TStmt::Let(key_v, None));
+        prelude.push(TStmt::Let(j_v, None));
+        prelude.push(TStmt::Let(i_v, Some(one())));
+        prelude.push(outer_loop);
+
+        TExpr::new(TExprKind::Block(prelude, bx(arr_r)), arr_ty, span)
     }
 
     // -- `Map` / `Set` (HANDOFF.md item 5) ---------------------------------
