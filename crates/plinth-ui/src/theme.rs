@@ -1,6 +1,6 @@
 //! Runtime-owned theme tokens (SPEC.md §6.5) and width classes (SPEC.md §6.1).
 
-use gpui::{Hsla, Pixels, WindowAppearance, px, rgb, rgb_to_hsla};
+use gpui::{Hsla, Pixels, WindowAppearance, hsla, px, rgb, rgb_to_hsla};
 
 /// The window width class. Compact < 600 px ≤ regular < 1200 px ≤ wide.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +115,27 @@ impl Tokens {
                 backdrop: with_alpha(c(0x000000), 0.35),
             }
         }
+    }
+}
+
+impl Tokens {
+    /// The theme's chart palette (SPEC.md §6.3, UI API 1.5): colors derived
+    /// from the app's accent and the neutral tokens, distinguishable from
+    /// each other in both light and dark. Apps never pick chart colors.
+    pub fn chart_palette(&self) -> [Hsla; 6] {
+        let a = self.accent;
+        let h = a.color.hue.into_positive_degrees() / 360.0;
+        let s = a.color.saturation;
+        let l = a.color.lightness;
+        let shift = |d: f32| (h + d).rem_euclid(1.0);
+        [
+            a,
+            hsla(shift(0.5), s, l, 1.0),
+            hsla(shift(0.12), s, l, 1.0),
+            hsla(shift(0.62), s * 0.8, (l + 0.1).min(0.85), 1.0),
+            hsla(shift(0.3), s * 0.75, l, 1.0),
+            self.text_muted,
+        ]
     }
 }
 

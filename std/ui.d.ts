@@ -270,3 +270,30 @@ export declare function DatePicker(props: {
   mode?: "date" | "time" | "datetime";
   onChange?: (value: string) => void;
 }): Element;
+
+// -- UI API 1.5 -----------------------------------------------------------
+
+export interface ChartPoint {
+  label: string;
+  value: number;
+}
+
+export interface ChartSeriesDef {
+  name: string;
+  points: ChartPoint[];
+}
+
+/** A data-driven chart (SPEC.md §6.3). The runtime chooses the colors (from
+ * the theme's chart palette), the height, axis ticks, value labels, and a
+ * legend when one is needed; apps never set pixels or colors. `data` and
+ * each `points` array must be an array literal of `{ label, value }`
+ * objects; the `value` expressions can read signals, so the chart updates
+ * like any other reactive prop. `series` draws several series over `data`
+ * (bar and line only); `data` stays the fallback a host without `series`
+ * support can show. */
+export declare function Chart(props: {
+  label: string;
+  kind: "bar" | "line" | "pie";
+  data: ChartPoint[];
+  series?: ChartSeriesDef[];
+}): Element;
