@@ -98,6 +98,7 @@ impl Checker<'_> {
                     return TExpr::new(TExprKind::Null, Type::Error, span);
                 }
                 let ret = type_args.first().map(|t| self.resolve_type(t));
+                self.pending_reactive = true;
                 let (f, _) = self.callback(&args[0], &[], ret.clone());
                 let inner = match (&ret, &f.ty) {
                     (Some(r), _) => r.clone(),
@@ -113,6 +114,7 @@ impl Checker<'_> {
                 if !one_arg(self, "effect") {
                     return TExpr::new(TExprKind::Null, Type::Error, span);
                 }
+                self.pending_reactive = true;
                 let (f, _) = self.callback(&args[0], &[], Some(Type::Void));
                 TExpr::new(TExprKind::EffectNew(Box::new(f)), Type::Void, span)
             }

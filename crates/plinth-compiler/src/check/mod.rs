@@ -85,6 +85,21 @@ struct Scope {
     narrow: HashMap<VarId, Type>,
 }
 
+/// Where a signal/computed read happens, for the "not reactive" lint
+/// (HANDOFF.md §6: a read outside JSX, `computed` or `effect` does not
+/// re-run when the signal changes).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ReactiveCtx {
+    /// Plain statements in a function body: a signal read here runs once
+    /// and never again, which is usually a bug.
+    Plain,
+    /// Inside JSX (a prop or child expression), or inside `computed`/`effect`.
+    Reactive,
+    /// Inside an event handler or other callback: reads are intentional
+    /// (they see the current value when the callback runs), so no warning.
+    Callback,
+}
+
 /// The state of the function that the checker is in.
 struct FnCx {
     func: FuncId,
@@ -94,6 +109,7 @@ struct FnCx {
     ret: Option<Type>,
     /// The inferred return type so far.
     inferred: Option<Type>,
+    reactive: ReactiveCtx,
 }
 
 struct PendingFunc {
@@ -118,6 +134,9 @@ pub struct Checker<'d> {
     /// The screen names that `navigate` refers to, checked after the app.
     pub navigations: Vec<(String, Span)>,
     app_seen: bool,
+    /// Set just before checking a `computed`/`effect` callback body, so the
+    /// new closure's `FnCx` starts in `Reactive` instead of `Callback`.
+    pending_reactive: bool,
 }
 
 /// Checks all modules. `modules` must be in dependency order (dependencies
@@ -130,7 +149,7 @@ pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>) ->
         defaults: vec![None; modules.len()],
         module_scopes: vec![HashMap::new(); modules.len()],
         module: 0,
-        fx: FnCx { func: 0, scopes: Vec::new(), loops: Vec::new(), ret: None, inferred: None },
+        fx: FnCx { func: 0, scopes: Vec::new(), loops: Vec::new(), ret: None, inferred: None, reactive: ReactiveCtx::Plain },
         pending: HashMap::new(),
         in_progress: HashSet::new(),
         aliases: vec![Vec::new(); modules.len()],
@@ -138,6 +157,7 @@ pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>) ->
         anon_structs: HashMap::new(),
         navigations: Vec::new(),
         app_seen: false,
+        pending_reactive: false,
     };
     c.prog.module_count = modules.len() as u32;
     for (i, m) in modules.iter().enumerate() {
@@ -190,7 +210,8 @@ impl Checker<'_> {
             span: Span::new(src.file, 0, 0),
         });
         self.prog.module_inits.push(init);
-        self.fx = FnCx { func: init, scopes: Vec::new(), loops: Vec::new(), ret: Some(Type::Void), inferred: None };
+        self.fx =
+            FnCx { func: init, scopes: Vec::new(), loops: Vec::new(), ret: Some(Type::Void), inferred: None, reactive: ReactiveCtx::Plain };
 
         // 1. Imports.
         let mut import_index = 0;
@@ -801,7 +822,14 @@ impl Checker<'_> {
         let declared = (p.decl.ret.is_some()).then(|| self.prog.funcs[fid as usize].ret.clone());
         let saved_fx = std::mem::replace(
             &mut self.fx,
-            FnCx { func: fid, scopes: vec![Scope::default()], loops: Vec::new(), ret: declared.clone(), inferred: None },
+            FnCx {
+                func: fid,
+                scopes: vec![Scope::default()],
+                loops: Vec::new(),
+                ret: declared.clone(),
+                inferred: None,
+                reactive: ReactiveCtx::Plain,
+            },
         );
         let params = self.prog.funcs[fid as usize].params.clone();
         let mut prologue = Vec::new();
@@ -935,10 +963,9 @@ impl Checker<'_> {
             Some(r) => Some(self.resolve_type(r)),
             None => expected.map(|e| e.ret.clone()).filter(|t| *t == Type::Void || !t.is_error()),
         };
-        let mut saved = std::mem::replace(
-            &mut self.fx,
-            FnCx { func: fid, scopes: Vec::new(), loops: Vec::new(), ret: declared.clone(), inferred: None },
-        );
+        let reactive = if std::mem::take(&mut self.pending_reactive) { ReactiveCtx::Reactive } else { ReactiveCtx::Callback };
+        let mut saved =
+            std::mem::replace(&mut self.fx, FnCx { func: fid, scopes: Vec::new(), loops: Vec::new(), ret: declared.clone(), inferred: None, reactive });
         // A closure sees the scopes of the enclosing function: move them in
         // for the body, then give them back.
         self.fx.scopes = std::mem::take(&mut saved.scopes);

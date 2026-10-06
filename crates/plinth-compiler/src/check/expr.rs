@@ -1,6 +1,6 @@
 //! Expressions.
 
-use super::{Binding, Checker, StdObj};
+use super::{Binding, Checker, ReactiveCtx, StdObj};
 use crate::ast::{self, BinOp, Expr, ExprKind, LogicOp, ObjProp, UnOp};
 use crate::diag::{Span, code};
 use crate::tir::*;
@@ -12,6 +12,22 @@ fn bx(e: TExpr) -> Box<TExpr> {
 }
 
 impl Checker<'_> {
+    /// The "not reactive" lint (HANDOFF.md §6): a signal/computed read
+    /// outside JSX, `computed` or `effect`, but inside a component body,
+    /// runs once and never again. Reads inside event handlers are fine.
+    fn check_reactive_read(&mut self, span: Span) {
+        if self.fx.reactive == ReactiveCtx::Plain {
+            self.diags.push(
+                crate::diag::Diagnostic::warning(
+                    code::SIGNAL_NOT_REACTIVE,
+                    span,
+                    "this signal read is not reactive: it runs once and will not update",
+                )
+                .help("move the read into the JSX or a `computed`"),
+            );
+        }
+    }
+
     pub(crate) fn expr(&mut self, e: &Expr, expected: Option<&Type>) -> TExpr {
         let span = e.span;
         match &e.kind {
@@ -327,10 +343,12 @@ impl Checker<'_> {
         match c.ty.clone() {
             Type::Signal(t) => {
                 self.no_args(args, span);
+                self.check_reactive_read(span);
                 TExpr::new(TExprKind::SignalGet(bx(c)), *t, span)
             }
             Type::Computed(t) => {
                 self.no_args(args, span);
+                self.check_reactive_read(span);
                 TExpr::new(TExprKind::ComputedGet(bx(c)), *t, span)
             }
             Type::Func(ft) => {
@@ -450,7 +468,16 @@ impl Checker<'_> {
                         self.err(code::ARG_COUNT, span, "`set` takes one argument");
                         return TExpr::new(TExprKind::Null, Type::Void, span);
                     }
+                    // The argument runs once, synchronously, right here (like
+                    // `update`'s callback): a signal read in it is the normal
+                    // "read current value(s), compute the next one" pattern,
+                    // not the "not reactive" bug, so do not lint it.
+                    let saved = self.fx.reactive;
+                    if saved == ReactiveCtx::Plain {
+                        self.fx.reactive = ReactiveCtx::Callback;
+                    }
                     let v = self.expr_with(&args[0], &t);
+                    self.fx.reactive = saved;
                     let v = self.coerce(v, &t);
                     TExpr::new(TExprKind::SignalSet(bx(o), bx(v)), Type::Void, span)
                 }

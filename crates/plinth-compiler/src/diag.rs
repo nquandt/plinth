@@ -53,6 +53,7 @@ pub mod code {
     pub const LABEL: &str = "PL2017";
     pub const REGEX: &str = "PL2018";
     pub const BIGINT: &str = "PL2019";
+    pub const SIGNAL_NOT_REACTIVE: &str = "PL2020";
     // 3xxx: types.
     pub const TYPE_MISMATCH: &str = "PL3001";
     pub const UNKNOWN_NAME: &str = "PL3002";
