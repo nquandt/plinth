@@ -3,13 +3,23 @@
 //! `__plinth_rt_*` ABI (i32/f64 values, heap string pointers) and the
 //! `wit-bindgen`-generated `bindings::plinth::app::*` calls.
 //!
-//! A denied call (`host-error.denied`) never traps (SPEC.md §8.5): it is
-//! reported to the app as a thrown `PlinthError` by the compiler's
-//! lowering of these calls (see `plinth-compiler`'s `lower.rs`), using
-//! `__plinth_rt_throw`.
+//! SPEC.md §8.5 says a denied host call "never traps": the host returns
+//! `error.denied(reason)` instead. This milestone's guest-side lowering
+//! does not yet have a catchable error type for host calls (Plinth TS
+//! has no `try`/`catch` or `Result` yet, M3's job per `HANDOFF.md` §9.3),
+//! so `host_denied_trap` traps the guest with a clear message instead.
+//! That is an observable difference from the spec text; the final report
+//! calls it out as the next thing to fix once errors exist.
+
+// The non-wasm32 (host test) build of each wrapper below ignores its
+// arguments; only wasm32 apps ever call them for real.
+#![cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
 
 use crate::global::Global;
-use crate::{Callable, Val, invoke, strings};
+use crate::{Callable, Val, invoke};
+#[cfg(target_arch = "wasm32")]
+use crate::strings;
+#[cfg(target_arch = "wasm32")]
 use alloc::string::String;
 use alloc::vec::Vec;
 

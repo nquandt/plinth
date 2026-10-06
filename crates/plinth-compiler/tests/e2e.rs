@@ -68,6 +68,18 @@ impl Harness {
         start.elapsed()
     }
 
+    /// Fires every timer due by `now` and applies what the guest commits.
+    fn fire_timers(&mut self, now: Instant) {
+        let commits = self.guest.fire_due_timers(now).unwrap();
+        for log in self.guest.take_logs() {
+            eprintln!("guest: {log}");
+        }
+        for commit in commits {
+            let errors = self.tree.apply(&commit).unwrap();
+            assert!(errors.is_empty(), "op errors: {errors:?}");
+        }
+    }
+
     fn find(&self, kind: ControlKind, pred: impl Fn(&Node) -> bool) -> Vec<NodeId> {
         let mut found = Vec::new();
         let mut stack: Vec<NodeId> = self.tree.screens().map(|(_, id)| id).collect();
@@ -260,4 +272,34 @@ fn notes_add_select_and_search() {
     h.tree.set_local_prop(search, prop::VALUE, "zzzz-no-match".into());
     h.fire(search, event::CHANGE, "zzzz-no-match".into());
     assert!(h.row_titles().is_empty());
+}
+
+/// `plinth:time`'s setInterval/clearInterval (SPEC.md §8.5), needing no
+/// capability.
+#[test]
+fn timer_starts_ticks_and_stops() {
+    let art = build("timer");
+    let mut h = Harness::start(&art.component);
+    let heading = h.one(ControlKind::Heading, |_| true);
+    assert_eq!(h.text_of(heading), "0.0s");
+    assert!(h.guest.next_timer_deadline().is_none(), "no timer until Start is pressed");
+
+    h.fire(h.label("Start"), event::PRESS, Value::Null);
+    assert!(h.guest.next_timer_deadline().is_some());
+
+    let t0 = Instant::now();
+    h.fire_timers(t0 + Duration::from_millis(100));
+    assert_eq!(h.text_of(heading), "0.1s");
+    // A `TimerQueue` delivers one firing per poll (even when the poll is
+    // late) and reschedules from its own due time, not from `now`.
+    h.fire_timers(t0 + Duration::from_millis(250));
+    assert_eq!(h.text_of(heading), "0.2s");
+
+    h.fire(h.label("Stop"), event::PRESS, Value::Null);
+    assert!(h.guest.next_timer_deadline().is_none(), "clearInterval cancels the pending timer");
+    h.fire_timers(t0 + Duration::from_secs(5));
+    assert_eq!(h.text_of(heading), "0.2s", "stopped: no more ticks");
+
+    h.fire(h.label("Reset"), event::PRESS, Value::Null);
+    assert_eq!(h.text_of(heading), "0.0s");
 }

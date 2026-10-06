@@ -14,7 +14,7 @@ fn render(f: &plinth_compiler::driver::Frontend) -> String {
 
 #[test]
 fn examples_check_clean() {
-    for name in ["counter", "todo"] {
+    for name in ["counter", "todo", "timer"] {
         let f = frontend(&example(name));
         assert!(f.diags.is_empty(), "{name}:\n{}", render(&f));
         assert!(f.program.is_some());
