@@ -132,6 +132,9 @@ struct HostState {
     /// it never touches `HostState`/the wasmtime `Store`, which are not
     /// `Send` across the call.
     net_results: std::sync::Arc<std::sync::Mutex<Vec<(u32, plinth_protocol::Value)>>>,
+    /// Overrides `timezone-offset` with a fixed value (minutes east of
+    /// UTC), for tests. `None` uses the real OS offset.
+    fake_timezone_offset_minutes: Option<i32>,
 }
 
 impl bindings::plinth::app::ui::Host for HostState {
@@ -165,6 +168,15 @@ impl bindings::plinth::app::time::Host for HostState {
 
     fn cancel_timer(&mut self, timer: u32) {
         self.timers.cancel(timer);
+    }
+
+    fn timezone_offset(&mut self, ms: i64) -> i32 {
+        if let Some(fake) = self.fake_timezone_offset_minutes {
+            return fake;
+        }
+        let secs = ms.div_euclid(1000);
+        let dt = time::OffsetDateTime::from_unix_timestamp(secs).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+        time::UtcOffset::local_offset_at(dt).map(|o| o.whole_minutes() as i32).unwrap_or(0)
     }
 }
 
@@ -310,6 +322,7 @@ impl Runner {
             requests: RequestQueue::new(),
             dialogs: Vec::new(),
             net_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            fake_timezone_offset_minutes: None,
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
@@ -366,6 +379,12 @@ impl Guest {
     /// Calls `on-event` and returns the op buffers that the guest committed.
     pub fn on_event(&mut self, events: &[u8]) -> Result<Vec<Vec<u8>>> {
         self.call(|app, store| app.call_on_event(store, events))
+    }
+
+    /// Overrides `timezone-offset` with a fixed value (minutes east of
+    /// UTC) for tests, instead of the real OS offset.
+    pub fn set_fake_timezone_offset(&mut self, minutes: i32) {
+        self.store.data_mut().fake_timezone_offset_minutes = Some(minutes);
     }
 
     /// The soonest time a timer is due, if any is pending. The desktop

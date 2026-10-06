@@ -33,11 +33,12 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 3] = *b"1.5";
+static CORE_VERSION: [u8; 3] = *b"1.7";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;
 pub mod arrays;
+mod datetime;
 mod global;
 pub mod gc;
 mod host;
@@ -471,6 +472,28 @@ abi! {
     fn __plinth_rt_net_result_status() -> f64 { host::net_result_status() }
     fn __plinth_rt_net_result_text() -> i32 { host::net_result_text() }
     fn __plinth_rt_net_result_error() -> i32 { host::net_result_error() }
+
+    // -- plinth:time date/time additions (SPEC.md §8.5, docs/GAPS.md gap #5) --
+    fn __plinth_rt_tz_offset_minutes(ms: f64) -> f64 { host::timezone_offset(ms as i64) as f64 }
+    fn __plinth_rt_date_field(ms: f64, utc: i32, field: i32) -> f64 {
+        datetime::field(ms, utc != 0, |at| host::timezone_offset(at), field)
+    }
+    fn __plinth_rt_make_date(year: f64, month: f64, day: f64, hour: f64, minute: f64, second: f64) -> f64 {
+        datetime::make_date(year, month, day, hour, minute, second, |at| host::timezone_offset(at))
+    }
+    fn __plinth_rt_format_date(ms: f64, pattern: i32, utc: i32) -> i32 {
+        strings::from_str(&datetime::format_date(ms, strings::as_str(ptr(pattern)), utc != 0, |at| host::timezone_offset(at))) as i32
+    }
+    fn __plinth_rt_parse_date(text: i32) -> i32 {
+        match datetime::parse_date(strings::as_str(ptr(text)), |at| host::timezone_offset(at)) {
+            Some(ms) => {
+                let p = gc::alloc(gc::T_BOX_F64, 16);
+                unsafe { *((p + 8) as *mut f64) = ms };
+                p as i32
+            }
+            None => 0,
+        }
+    }
 }
 
 // Hot reload (SPEC.md §13): a dev-only ABI function, not declared with the

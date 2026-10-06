@@ -147,6 +147,12 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("net_result_status", &[], &[F64]),
     ("net_result_text", &[], &[I32]),
     ("net_result_error", &[], &[I32]),
+    // -- plinth:time date/time additions (gap #5) ---------------------------
+    ("tz_offset_minutes", &[F64], &[F64]),
+    ("date_field", &[F64, I32, I32], &[F64]),
+    ("make_date", &[F64, F64, F64, F64, F64, F64], &[F64]),
+    ("format_date", &[F64, I32, I32], &[I32]),
+    ("parse_date", &[I32], &[I32]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -198,13 +204,18 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("net_result_status", 5),
     ("net_result_text", 5),
     ("net_result_error", 5),
+    ("tz_offset_minutes", 7),
+    ("date_field", 7),
+    ("make_date", 7),
+    ("format_date", 7),
+    ("parse_date", 7),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).
 pub fn added_in(name: &str) -> u32 {
     ADDED_IN.iter().find(|(n, _)| *n == name).map_or(0, |(_, m)| *m)
 }
-pub const CORE_MINOR: u32 = 5;
+pub const CORE_MINOR: u32 = 7;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;
