@@ -784,3 +784,55 @@ function Home() {
     let tree = run(&main);
     assert_eq!(text_of(&tree, ControlKind::Text), "0");
 }
+
+// -- Generic type aliases of object types (HANDOFF.md item 1) --------------
+
+#[test]
+fn generic_type_alias_used_in_function_signature() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+type Pair<A, B> = { first: A; second: B };
+function swap(p: Pair<number, string>): Pair<string, number> {
+  return { first: p.second, second: p.first };
+}
+function Home() {
+  const p: Pair<number, string> = { first: 1, second: "a" };
+  const q = swap(p);
+  return <Screen title="Home"><Text>{q.first + "-" + q.second}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "a-1");
+}
+
+#[test]
+fn generic_type_alias_in_variable_annotation() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+type Box<T> = { value: T };
+function Home() {
+  const b: Box<string> = { value: "hi" };
+  return <Screen title="Home"><Text>{b.value}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "hi");
+}
+
+#[test]
+fn distinct_generic_alias_instantiations_are_distinct_types() {
+    // `Pair<number, string>` and `Pair<string, number>` must not be
+    // confused with each other (field order/types differ).
+    let main = with_app(
+        "type Pair<A, B> = { first: A; second: B };\nconst a: Pair<number, string> = { first: 1, second: \"x\" };\nconst b: Pair<string, number> = a;",
+    );
+    assert_eq!(codes(&main)[0], "PL3001");
+}
+
+#[test]
+fn generic_type_alias_wrong_type_argument_count() {
+    let main = with_app("type Pair<A, B> = { first: A; second: B };\nconst a: Pair<number> = { first: 1, second: 2 };");
+    assert_eq!(codes(&main), ["PL3006"]);
+}

@@ -140,12 +140,23 @@ impl Cx<'_> {
                 None
             }
             D::TSTypeAliasDeclaration(t) => {
-                if t.type_parameters.is_some() {
-                    self.err(code::GENERIC_USER, t.span, "generic type aliases come in v1");
-                    return None;
+                let mut type_params = Vec::new();
+                if let Some(tp) = &t.type_parameters {
+                    for p in &tp.params {
+                        if p.constraint.is_some() || p.default.is_some() {
+                            self.err_help(
+                                code::GENERIC_USER,
+                                p.span,
+                                "a constrained or defaulted type parameter is not supported yet",
+                                "use a plain type parameter: `<T>`",
+                            );
+                            return None;
+                        }
+                        type_params.push(p.name.name.to_string());
+                    }
                 }
                 let ty = self.ty(&t.type_annotation)?;
-                Some(Item::TypeAlias(TypeAlias { name: t.id.name.to_string(), ty, exported, span: self.span(t.span) }))
+                Some(Item::TypeAlias(TypeAlias { name: t.id.name.to_string(), ty, exported, span: self.span(t.span), type_params }))
             }
             D::TSInterfaceDeclaration(i) => {
                 if i.type_parameters.is_some() {

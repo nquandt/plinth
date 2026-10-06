@@ -57,6 +57,9 @@ pub struct TypeAlias {
     pub ty: TypeAnn,
     pub exported: bool,
     pub span: Span,
+    /// Names of `<A, B, …>` type parameters (generic type aliases,
+    /// monomorphized per distinct type arguments; HANDOFF.md item 1).
+    pub type_params: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

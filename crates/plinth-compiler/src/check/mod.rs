@@ -174,6 +174,10 @@ pub struct Checker<'d> {
     /// Instantiations so far: `(template index, type arguments) -> FuncId`.
     /// Linear (there are only ever a handful) so `Type` need not be `Hash`.
     instantiations: Vec<(usize, Vec<Type>, FuncId)>,
+    /// Instantiations of generic type aliases so far:
+    /// `(module, alias index, type arguments) -> resolved type`. Linear for
+    /// the same reason as `instantiations`.
+    alias_instantiations: Vec<(usize, usize, Vec<Type>, Type)>,
 }
 
 struct GenericTemplate {
@@ -205,6 +209,7 @@ pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>, ca
         generics: Vec::new(),
         generic_bindings: HashMap::new(),
         instantiations: Vec::new(),
+        alias_instantiations: Vec::new(),
     };
     c.prog.module_count = modules.len() as u32;
     for (i, m) in modules.iter().enumerate() {
@@ -696,7 +701,7 @@ impl Checker<'_> {
                 }
                 t
             }
-            Some(Binding::Alias(m, idx)) => self.resolve_alias(m, idx, span),
+            Some(Binding::Alias(m, idx)) => self.resolve_alias(m, idx, args, span),
             Some(Binding::Enum(e)) => Type::Enum(e),
             _ => {
                 self.err(code::UNKNOWN_TYPE, span, format!("unknown type `{name}`"));
@@ -705,7 +710,40 @@ impl Checker<'_> {
         }
     }
 
-    fn resolve_alias(&mut self, m: usize, idx: usize, span: Span) -> Type {
+    fn resolve_alias(&mut self, m: usize, idx: usize, args: &[TypeAnn], span: Span) -> Type {
+        let type_params = self.aliases[m][idx].type_params.clone();
+        if type_params.is_empty() {
+            if !args.is_empty() {
+                self.err(code::GENERIC_USER, span, format!("`{}` is not generic", self.aliases[m][idx].name));
+            }
+            return self.resolve_alias_body(m, idx, span);
+        }
+        if args.len() != type_params.len() {
+            self.err(code::ARG_COUNT, span, format!("`{}` takes {} type argument(s)", self.aliases[m][idx].name, type_params.len()));
+            return Type::Error;
+        }
+        // Type arguments resolve in the *caller's* scope, before switching
+        // to the alias's own module/bindings.
+        let bound: Vec<Type> = args.iter().map(|a| self.resolve_type(a)).collect();
+        if bound.iter().any(Type::is_error) {
+            return Type::Error;
+        }
+        if let Some((_, _, _, t)) = self.alias_instantiations.iter().find(|(am, ai, b, _)| *am == m && *ai == idx && *b == bound) {
+            return t.clone();
+        }
+        let saved_bindings = std::mem::take(&mut self.generic_bindings);
+        for (n, t) in type_params.iter().zip(&bound) {
+            self.generic_bindings.insert(n.clone(), t.clone());
+        }
+        let t = self.resolve_alias_body(m, idx, span);
+        self.generic_bindings = saved_bindings;
+        self.alias_instantiations.push((m, idx, bound, t.clone()));
+        t
+    }
+
+    /// Resolves a (possibly generic) alias's body annotation, with
+    /// `self.generic_bindings` already set for a generic alias.
+    fn resolve_alias_body(&mut self, m: usize, idx: usize, span: Span) -> Type {
         if !self.resolving_alias.insert((m, idx)) {
             self.err(code::ADVANCED_TYPE, span, "recursive type aliases are not supported");
             return Type::Error;
