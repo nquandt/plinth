@@ -304,12 +304,20 @@ pub fn run_from_hub(hub: &plinth_hub::Hub, app_id: &str) -> Result<()> {
     if hub.is_blocked(app_id)? {
         anyhow::bail!("{app_id} is blocked; it will not run");
     }
-    let bytes = hub.package(app_id)?;
-    let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("read the package for {app_id}"))?;
+    let entry = hub.get(app_id)?.with_context(|| format!("{app_id} is not in the library"))?;
+    // The candidate to try is the pinned-or-latest version: if it declares
+    // a capability with no decision yet, consent is asked for it
+    // (`docs/HUB.md` §7.3 step 3), not silently skipped in favor of an
+    // older version.
+    let candidate = entry.active_version().with_context(|| format!("{app_id} has no versions"))?.clone();
+    let candidate_bytes = hub.version_bytes(app_id, &candidate.version)?;
+    let pkg = plinth_package::Package::read(&candidate_bytes).with_context(|| format!("read the package for {app_id}"))?;
     let declared: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
 
     let pending = hub.needs_consent(app_id, &declared)?;
-    if !pending.is_empty() {
+    let pkg = if pending.is_empty() {
+        pkg
+    } else {
         let publisher = pkg.manifest.publisher.clone();
         let with_reasons: Vec<(String, String)> = pending
             .iter()
@@ -318,21 +326,38 @@ pub fn run_from_hub(hub: &plinth_hub::Hub, app_id: &str) -> Result<()> {
                 (c.clone(), why)
             })
             .collect();
-        let Some(decisions) = consent::show(&pkg.manifest.name, &publisher, &with_reasons) else {
-            eprintln!("[plinth] consent cancelled; {app_id} will not run");
-            return Ok(());
-        };
-        for (capability, allowed) in decisions {
-            let decision = if allowed { plinth_hub::Decision::Allowed } else { plinth_hub::Decision::Refused };
-            hub.set_grant(app_id, &capability, decision, &pkg.manifest.version)?;
+        match consent::show(&pkg.manifest.name, &publisher, &with_reasons) {
+            Some(decisions) => {
+                for (capability, allowed) in decisions {
+                    let decision = if allowed { plinth_hub::Decision::Allowed } else { plinth_hub::Decision::Refused };
+                    hub.set_grant(app_id, &capability, decision, &candidate.version)?;
+                }
+                pkg
+            }
+            None => {
+                // Cancelled: the new capability is still undecided, so run
+                // the newest fully-decided version instead, if there is
+                // one (`docs/HUB.md` §7.3 step 3).
+                let fallback = hub.runnable_version(app_id)?;
+                if fallback.version == candidate.version {
+                    eprintln!("[plinth] consent cancelled; {app_id} will not run");
+                    return Ok(());
+                }
+                eprintln!("[plinth] consent cancelled; running the previous version {} of {app_id}", fallback.version);
+                let bytes = hub.version_bytes(app_id, &fallback.version)?;
+                plinth_package::Package::read(&bytes).with_context(|| format!("read version {} of {app_id}", fallback.version))?
+            }
         }
-    }
+    };
 
+    let declared: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
     let policy = hub.policy_for(app_id, &declared)?;
+    let title = pkg.manifest.name;
+    let accent = pkg.manifest.accent.unwrap_or_else(|| "teal".into());
     let component = with_runtime(pkg.component, &declared)?;
     let assets: std::collections::HashMap<String, Vec<u8>> =
         pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
-    run_with_policy(component, pkg.manifest.name, pkg.manifest.accent.unwrap_or_else(|| "teal".into()), app_id.to_owned(), policy, assets)
+    run_with_policy(component, title, accent, app_id.to_owned(), policy, assets)
 }
 
 /// Opens the app window with a policy the caller already built (`Policy`
