@@ -497,8 +497,6 @@ export class DomRenderer {
     this.navButtons = [];
     this.main = el("main", "pl-screen");
     this.shown = null; // the root view in `main`
-    // Statistics for tests and measurements (`render-stats` in run-a11y.mjs).
-    this.stats = { renders: 0, created: 0, updated: 0, lastMs: 0 };
     tree.onChange = () => this.render();
   }
 
@@ -540,7 +538,6 @@ export class DomRenderer {
 
   /** Applies the tree's changes since the last render to the DOM. */
   render() {
-    const t0 = performance.now();
     const ch = this.tree.takeChanges();
     for (const id of ch.removed) this.views.delete(id);
     for (const id of ch.created) this.views.delete(id); // an id used again
@@ -553,8 +550,6 @@ export class DomRenderer {
       if (v) this.placeChildren(v);
     }
     this.renderShell(ch.nav);
-    this.stats.renders++;
-    this.stats.lastMs = performance.now() - t0;
   }
 
   /** Local navigation (nav bar, back button): no op from the guest. */
@@ -578,7 +573,6 @@ export class DomRenderer {
     v.kind = n.kind;
     v.el.dataset.plId = String(n.id);
     this.views.set(n.id, v);
-    this.stats.created++;
     v.update(n);
     this.placeChildren(v);
     return v;
@@ -594,7 +588,6 @@ export class DomRenderer {
       if (this.shown === v) this.shown = fresh;
       return;
     }
-    this.stats.updated++;
     v.update(n);
   }
 
@@ -649,6 +642,9 @@ export class DomRenderer {
     if (view !== this.shown || (view && view.el.parentNode !== this.main)) {
       this.main.replaceChildren(...(view ? [view.el] : []));
       this.shown = view;
+      // A Sheet or Dialog can open only in the document: open the ones of
+      // a screen that comes back.
+      if (view) for (const d of view.el.querySelectorAll("dialog")) d._plSync?.();
     }
     if (navChanged && view) view.update(this.node(rootId)); // the back button
     if (navChanged) {
@@ -1308,12 +1304,12 @@ export class DomRenderer {
     };
     dialog.addEventListener("close", closedByUser);
     dialog.addEventListener("cancel", closedByUser); // Escape
-    const sync = () => {
+    const sync = (dialog._plSync = () => {
       const open = !!this.node(id)?.props.get(Prop.value);
       if (!dialog.isConnected) return;
       if (open && !dialog.open) dialog.showModal();
       if (!open && dialog.open) dialog.close();
-    };
+    });
     return {
       el: dialog,
       slot: dialog,
