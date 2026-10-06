@@ -318,6 +318,8 @@ export default app({
 
 Every control is a typed JSX intrinsic from `plinth:ui`. Props in **bold** are required.
 
+> The tables below are the target vocabulary. `std/ui.d.ts` and `docs/ui.md` describe what exists today. Not built yet: `DatePicker`, `Icon` as a control (rows take an `icon` name), `Row.leading`/`trailing`, `Canvas`, `Image` with URL tokens, and `Action.shortcut`.
+
 **Structure**
 
 | Control | Props | Notes |
