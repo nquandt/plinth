@@ -33,7 +33,7 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 3] = *b"1.1";
+static CORE_VERSION: [u8; 3] = *b"1.2";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;
@@ -41,6 +41,7 @@ pub mod arrays;
 mod global;
 pub mod gc;
 mod host;
+mod json;
 mod reactive;
 pub mod strings;
 mod ui;
@@ -415,6 +416,23 @@ abi! {
     // -- JSON (plinth:core, SPEC.md §4.7) --------------------------------------
     fn __plinth_rt_json_num_str(v: f64) -> i32 { strings::from_str(&strings::json_number_to_string(v)) as i32 }
     fn __plinth_rt_json_quote_str(a: i32) -> i32 { strings::from_str(&strings::json_quote(strings::as_str(ptr(a)))) as i32 }
+
+    // -- JSON.parse (SPEC.md §4.7) ---------------------------------------------
+    fn __plinth_rt_json_begin(text: i32) { json::begin(ptr(text)) }
+    fn __plinth_rt_json_ok() -> i32 { json::ok() }
+    fn __plinth_rt_json_finish() -> i32 { json::finish() }
+    fn __plinth_rt_json_fail() { json::fail_now() }
+    fn __plinth_rt_json_peek_kind() -> i32 { json::peek_kind() }
+    fn __plinth_rt_json_read_null() { json::read_null() }
+    fn __plinth_rt_json_read_bool() -> i32 { json::read_bool() }
+    fn __plinth_rt_json_read_num() -> f64 { json::read_num() }
+    fn __plinth_rt_json_read_int() -> i32 { json::read_int() }
+    fn __plinth_rt_json_read_str() -> i32 { json::read_str() as i32 }
+    fn __plinth_rt_json_skip_value() { json::skip_value() }
+    fn __plinth_rt_json_arr_begin() { json::arr_begin() }
+    fn __plinth_rt_json_arr_next() -> i32 { json::arr_next() }
+    fn __plinth_rt_json_obj_begin() { json::obj_begin() }
+    fn __plinth_rt_json_obj_next_key() -> i32 { json::obj_next_key() }
 }
 
 // Hot reload (SPEC.md §13): a dev-only ABI function, not declared with the
