@@ -27,11 +27,11 @@ large enough to write real apps; see the examples in `examples/`.
 | `[A, B]` (tuples) | A fixed-length tuple. It is a struct at run time. Read an element with a number literal index (`t[0]`) or with destructuring (`const [a, b] = t`). A computed index is an error (`PL2011`). Optional and rest elements are not supported. `JSON.stringify` writes a tuple as a JSON array; `JSON.parse` does not accept a tuple type. |
 | `T \| null` | Supported for every type except signals. `undefined` exists only as "absent" for optional properties and parameters; it is otherwise the same value as `null`. |
 | interfaces, object types | A GC-allocated struct with a fixed layout. |
-| classes | Single inheritance: fields, one constructor, methods, `new`, `extends`, `super(...)` as the first statement, `super.m()`, overriding, `instanceof` with narrowing. A base class must be declared before its subclasses. A method reference without a call (`arr.map(obj.method)`) is the error `PL2021`; write `() => obj.method()` instead. |
+| classes | Single inheritance: fields, one constructor, methods (also `async` methods), `new`, `extends`, `super(...)` as the first statement, `super.m()`, overriding, `instanceof` with narrowing. A base class must be declared before its subclasses. A method reference without a call (`arr.map(obj.method)`) is the error `PL2021`; write `() => obj.method()` instead. |
 | union types | Tagged. Narrow with `typeof`, a discriminant field, `instanceof`, or `=== null`. |
 | enums, string literal unions | Compile to `i32`/interned ids. |
 | generics | Monomorphized: functions, interfaces, and type aliases. No constraints, no defaults, no conditional or mapped types. |
-| `Promise<T>` | The result of an `async` function, or of a host call without a `done` callback. Read it with `await`. There is no `then`, `catch`, `new Promise` or `Promise.all` yet. See "Async functions and `await`". |
+| `Promise<T>` | The result of an `async` function, of a host call without a `done` callback, or of `new Promise<T>(...)`. Read it with `await` or `then`. See "Async functions and `await`" and "The `Promise` API". |
 
 **Status (current).** Implemented: `int`; `T | null` everywhere except
 signals; discriminated unions with narrowing; generic functions,
@@ -39,7 +39,7 @@ interfaces, and type aliases; `Map`/`Set`; classes with single
 inheritance and `instanceof`; `JSON.stringify`/`JSON.parse<T>`;
 `try`/`catch`/`finally`/`throw` (see "Errors and exceptions");
 `async`/`await` (see "Async functions and `await`"). **Not yet:** static
-members, getters/setters, generic classes, async methods, `Promise.all`.
+members, getters/setters, generic classes, `Promise.race`/`any`/`allSettled`.
 
 ## Supported syntax
 
@@ -110,7 +110,7 @@ members, getters/setters, generic classes, async methods, `Promise.all`.
   types the checker cannot relate this way, is still rejected with
   `PL2006`.
 
-Planned for a later compiler version: `Promise.all`, async methods.
+>>>
 
 ## Async functions and `await`
 
@@ -149,16 +149,21 @@ Rules:
   `async` function expressions. Write the return type as `Promise<T>`, or
   let the compiler infer it. An `async` arrow function where the context
   expects a function that returns `void` (an event handler, a `forEach`
-  callback) returns nothing: its promise is detached. Async class methods
-  and generators are the error `PL2009`.
+  callback) returns nothing: its promise is detached.
+- **`async` methods.** A class method can be `async`. Its body can use
+  `this` after an `await` and can `await` other methods, also
+  `super.m()`. An override of an `async` method must also return a
+  `Promise` of the same type. Generator methods are the error `PL2009`.
 - **Where `await` can be.** In any expression of an `async` function,
-  also inside `if`, `while`, `for`, `for…of`, blocks and `try`/`catch`.
-  The compiler keeps the order of evaluation: the parts of an expression
-  before an `await` are evaluated before it waits, and the right side of
-  `&&`, `||` or `?:` waits only if it runs. `await` inside `switch`,
-  `do…while` or `try`/`finally` is the error `PL2009` (use `if`, `while`,
-  or `try`/`catch`). `await` outside an `async` function is `PL2009` (at
-  the top level of a module) or a syntax error (`PL1000`).
+  also inside `if`, `while`, `do…while`, `for`, `for…of`, `switch`,
+  blocks and `try`/`catch`/`finally`. The compiler keeps the order of
+  evaluation: the parts of an expression before an `await` are evaluated
+  before it waits, and the right side of `&&`, `||` or `?:` waits only if
+  it runs. A `finally` block runs after an `await` in the `try` or
+  `catch` block, also when they `return`, `throw`, `break` or
+  `continue`. `await` in a `case` value is the error `PL2009` (compute
+  the value before the `switch`). `await` outside an `async` function is
+  `PL2009` (at the top level of a module) or a syntax error (`PL1000`).
 - **Errors.** A `throw` in an `async` function rejects its promise.
   `await` of a rejected promise throws its error, so `try`/`catch` works
   around `await`. A rejected promise that nothing awaits is reported to
@@ -183,10 +188,71 @@ generated app code. The runtime only calls the queue's drain function
 after each event (core 1.10: `set_drain`, `report`), so an app without
 `async` code pays nothing.
 
+A `switch` with an `await` becomes `if` statements that select the case
+and run the case bodies with fall-through. A `do…while` with an `await`
+becomes a `while` loop with a flag. A `finally` block with an `await`
+becomes a closure; the end of the `try` and `catch` blocks, an
+exception, and a `return`, `break` or `continue` that leaves them call
+it, and then it completes what was pending.
+
 **Cost.** Each `async` function allocates a promise and a few closures
-per call, and the first use of each `Promise<T>` type adds three small
-functions to the app. `examples/dialogs` grew from about 3 KB to 6 KB of
-app code when it changed to `await`.
+per call. All promise types share one `then`, `reject` and `settle`
+function; the first use of each `Promise<T>` type adds one small
+`resolve` function. `examples/dialogs` has 5673 B of app code (6075 B
+with one set of helpers for each promise type).
+
+## The `Promise` API
+
+```ts
+// Run three requests at the same time; the values keep the order.
+const pages = await Promise.all(urls.map((u) => fetch(u, null)));
+// Promises of different types give a tuple.
+const [n, name] = await Promise.all([count(), prompt("Name?")]);
+
+// A promise from a callback API.
+function delay(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+}
+
+load()
+  .then((items) => items.length)
+  .catch((e) => -1)
+  .finally(() => busy.set(false));
+```
+
+- **`p.then(onFulfilled, onRejected?)`** returns a new promise. Each
+  callback can return a value or a promise (the new promise then waits
+  for it). Without `onRejected`, a rejection goes to the new promise.
+  `onRejected` gets an `Error` and must return the same type as
+  `onFulfilled`.
+- **`p.catch(onRejected)`** returns a `Promise<T>` of the same `T`, so
+  `onRejected` must return a `T` (or a `Promise<T>`; anything for
+  `Promise<void>`).
+- **`p.finally(f)`** runs `f` when `p` settles, then gives the same
+  value or error. If `f` returns a promise, the result waits for it; a
+  rejection of that promise replaces the result.
+- An exception in a callback rejects the new promise.
+- **`new Promise<T>((resolve, reject) => { ... })`.** The executor runs
+  at once. For `Promise<void>`, `resolve` takes no argument. `reject`
+  takes an `Error`. The first call of `resolve` or `reject` settles the
+  promise; later calls do nothing. An exception in the executor rejects
+  the promise. Write `<T>`, or use `new Promise` where the type is known
+  (a `return` of a function with a `Promise<T>` return type, or a
+  variable with a type); otherwise it is the error `PL3007`.
+- **`Promise.all(ps)`.** For an array of `Promise<T>`, a
+  `Promise<T[]>` with the values in the order of the array; for
+  `Promise<void>[]`, a `Promise<void>`. For an array literal of promises
+  of different types, a promise of a tuple (`[A, B]`); a `Promise<void>`
+  cannot be in such a tuple. The result rejects with the first
+  rejection. An empty array gives an empty array at once.
+- **`Promise.resolve(v)`** gives a fulfilled promise (`Promise.resolve()`
+  gives a `Promise<void>`); a promise argument is returned as it is.
+  **`Promise.reject(e)`** gives a rejected promise; `e` is an `Error` or
+  a string (`new Error(e)`). Write `Promise.reject<T>(e)` for a type
+  other than `Promise<void>`.
+- Not supported: `Promise.race`, `Promise.any`, `Promise.allSettled`
+  (`PL3004`), and a `then` callback that takes a rejection reason of a
+  type other than `Error`.
 
 ## Errors and exceptions
 
@@ -390,7 +456,7 @@ Rules:
 - **`await` and microtasks.** The code after an `await` runs as a
   microtask, as in JavaScript. A continuation of a loop iteration that
   did not really wait also starts the next iteration as a microtask, not
-  at once. There is no `Promise.all`, `then` or `new Promise`.
+  at once. A rejection reason is always an `Error`.
 - **Errors.** `throw` takes only an `Error` (or a subclass); a thrown
   string becomes an `Error`. A `catch` variable is an `Error`, not
   `unknown`, and you cannot assign to it. Runtime errors (null
@@ -449,7 +515,7 @@ Codes are grouped by range:
 | Range | Meaning |
 |---|---|
 | `PL1000`–`PL1007` | Modules and the closed world (SPEC.md §4.1): parse errors, the import graph (bare imports, missing modules, cycles), unknown std modules, a missing `app/main.tsx`, and undeclared capabilities (SPEC.md §11). |
-| `PL2000`–`PL2024` | Rejected language features (SPEC.md §4.4): TypeScript/JavaScript syntax Plinth does not support yet or ever — `any`, classes (restricted subset), `this`, non-null assertions, type assertions, `for…in`, `delete`, async methods, generators and unsupported `await` places, a typed or destructured `catch` variable, computed member access, advanced types, namespaces, `var`, user generics, getters/setters, labels, regular expressions, `BigInt`, non-reactive signal reads, unbound methods, and the class `extends`/`super`/`override` rules. |
+| `PL2000`–`PL2024` | Rejected language features (SPEC.md §4.4): TypeScript/JavaScript syntax Plinth does not support yet or ever — `any`, classes (restricted subset), `this`, non-null assertions, type assertions, `for…in`, `delete`, generators and `await` in a `case` value, a typed or destructured `catch` variable, computed member access, advanced types, namespaces, `var`, user generics, getters/setters, labels, regular expressions, `BigInt`, non-reactive signal reads, unbound methods, and the class `extends`/`super`/`override` rules. |
 | `PL3000`–`PL3013` | Types (SPEC.md §4, §4.3): the structural type checker — mismatches, unknown names/types, missing properties or fields, uncallable values, wrong argument counts, uninferable types, assigning to `const`, nullability, duplicate definitions, and missing `return`s. (`PL3011`, struct layout, is reserved but not emitted by any check today.) |
 | `PL4000`–`PL4009` | JSX and the UI API (SPEC.md §6, §7.2): unknown controls, props, and children; missing required props; bad two-way bindings; the `app({...})` config; `navigate` targets; and image assets (missing, or an empty `alt`). |
 
