@@ -167,9 +167,18 @@ fn collect_if_needed() {
 struct Rt;
 
 impl bindings::Guest for Rt {
-    fn init(_args: Vec<u8>) {
+    fn init(args: Vec<u8>) {
+        #[cfg(not(feature = "dev"))]
+        let _ = &args;
         let Some(main) = MAIN.get() else { trap("the artifact has no app entry point") };
         invoke(Callable { thunk: main, env: 0 }, Val::None);
+        // Hot reload (SPEC.md §13, dev builds only): restore the
+        // module-level signals that `plinth dev` snapshotted from the
+        // previous instance, before the first render.
+        #[cfg(feature = "dev")]
+        if !args.is_empty() {
+            reactive::sig_restore(&args);
+        }
         reactive::flush();
         commit();
         collect_if_needed();
@@ -186,6 +195,10 @@ impl bindings::Guest for Rt {
                 plinth_protocol::Event::Timer { timer } => {
                     host::dispatch_timer(timer);
                     reactive::flush();
+                }
+                #[cfg(feature = "dev")]
+                plinth_protocol::Event::SnapshotRequest => {
+                    ui::push_snapshot_op(reactive::sig_snapshot());
                 }
                 _ => {}
             }
@@ -394,4 +407,16 @@ abi! {
     fn __plinth_rt_clipboard_read_text() -> i32 { host::clipboard_read_text() }
     fn __plinth_rt_kv_last_error() -> i32 { host::kv_last_error() }
     fn __plinth_rt_clipboard_last_error() -> i32 { host::clipboard_last_error() }
+}
+
+// Hot reload (SPEC.md §13): a dev-only ABI function, not declared with the
+// `abi!` macro above because it must not exist at all in a release build
+// (the macro cannot carry a `#[cfg(...)]` into its repetition). `lower.rs`
+// emits a call to it only when compiling in dev mode, and only a dev build
+// of `plinth-rt` (the `dev` feature) exports it, so a release app artifact
+// never references, and never contains, this function.
+#[cfg(feature = "dev")]
+#[unsafe(no_mangle)]
+pub extern "C" fn __plinth_rt_sig_register(id: i32, key: i32, shape: i32) {
+    reactive::sig_register(id as u32, key, shape);
 }

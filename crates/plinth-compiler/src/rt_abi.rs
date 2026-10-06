@@ -113,6 +113,13 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("clipboard_last_error", &[], &[I32]),
 ];
 
+/// Hot reload (SPEC.md §13): functions that only a dev build of
+/// `plinth-rt` exports (the `dev` cargo feature). `lower.rs` emits calls
+/// to them only when compiling with `dev: true`, and `link::layout` only
+/// requires them from the dev runtime blob, so a release app artifact
+/// never references, and never contains, this code.
+pub const DEV_FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[("sig_register", &[I32, I32, I32], &[])];
+
 pub const PREFIX: &str = "__plinth_rt_";
 
 /// The core version that this compiler targets. An app module declares it

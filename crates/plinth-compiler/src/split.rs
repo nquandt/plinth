@@ -65,11 +65,13 @@ pub struct AppLayout {
     imports: Vec<(&'static str, u32)>,
 }
 
-pub fn app_layout() -> AppLayout {
+/// `extra` adds functions after `rt_abi::FUNCTIONS` (the dev functions of
+/// `plinth dev`).
+pub fn app_layout(extra: &[(&'static str, &'static [ValType], &'static [ValType])]) -> AppLayout {
     let mut import_types: Vec<(Vec<ValType>, Vec<ValType>)> = Vec::new();
     let mut imports = Vec::new();
     let mut rt_funcs = HashMap::new();
-    for (i, &(name, params, results)) in rt_abi::FUNCTIONS.iter().enumerate() {
+    for (i, &(name, params, results)) in rt_abi::FUNCTIONS.iter().chain(extra.iter()).enumerate() {
         let key = (params.to_vec(), results.to_vec());
         let ty = match import_types.iter().position(|t| *t == key) {
             Some(t) => t as u32,

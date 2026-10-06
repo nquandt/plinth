@@ -383,6 +383,141 @@ fn run_effect(id: RId) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Hot reload (SPEC.md §13, dev builds only)
+//
+// Each module-level `signal(...)` gets a stable key (a hash of its module
+// index and declaration name, computed at compile time) and a shape code
+// (a small integer that identifies the value's wire shape: f64, int,
+// bool or string). `lower.rs` emits a `sig_register` call for it right
+// after `sig_new`, but only when compiling in dev mode, so this registry
+// and the code below never run in a release build. Component-local
+// signals (inside a component function, a loop, or a closure) are never
+// registered, so they always start fresh after a reload.
+#[cfg(feature = "dev")]
+mod hotreload {
+    use super::{RId, Val, signal_peek, signal_set};
+    use alloc::vec::Vec;
+
+    struct Entry {
+        key: u32,
+        shape: u32,
+        id: RId,
+    }
+
+    static REGISTRY: crate::global::Global<Vec<Entry>> = crate::global::Global::new(Vec::new());
+
+    pub fn register(id: RId, key: i32, shape: i32) {
+        REGISTRY.with(|r| r.push(Entry { key: key as u32, shape: shape as u32, id }));
+    }
+
+    /// Writes `(count, then one (key, shape, tag, payload) per entry)`.
+    /// Only f64, i32 (bool/int) and string values are written; other
+    /// shapes are not registered in the first place (see `shape_code` in
+    /// `lower.rs`).
+    pub fn snapshot() -> Vec<u8> {
+        REGISTRY.with(|r| {
+            let mut out = Vec::new();
+            out.extend_from_slice(&(r.len() as u32).to_le_bytes());
+            for e in r.iter() {
+                out.extend_from_slice(&e.key.to_le_bytes());
+                out.extend_from_slice(&e.shape.to_le_bytes());
+                write_val(&mut out, signal_peek(e.id));
+            }
+            out
+        })
+    }
+
+    fn write_val(out: &mut Vec<u8>, v: Val) {
+        match v {
+            Val::None => out.push(0),
+            Val::F64(f) => {
+                out.push(1);
+                out.extend_from_slice(&f.to_le_bytes());
+            }
+            Val::I32(i) => {
+                out.push(2);
+                out.extend_from_slice(&i.to_le_bytes());
+            }
+            Val::Ref(p) => {
+                // Only strings are registered (shape_code rejects other
+                // ref-repr types), so this is always a string object.
+                out.push(3);
+                let s = crate::strings::as_str(p);
+                out.extend_from_slice(&(s.len() as u32).to_le_bytes());
+                out.extend_from_slice(s.as_bytes());
+            }
+        }
+    }
+
+    /// Restores every registered signal whose key and shape match an
+    /// entry in `buf`. A mismatch (missing key, or a shape that changed)
+    /// is skipped silently; dev builds log it (SPEC.md §13).
+    pub fn restore(buf: &[u8]) {
+        let Some(mut p) = Reader::new(buf) else { return };
+        let Some(count) = p.u32() else { return };
+        for _ in 0..count {
+            let (Some(key), Some(shape)) = (p.u32(), p.u32()) else { return };
+            let Some(tag) = p.u8() else { return };
+            let val = match tag {
+                0 => Some(Val::None),
+                1 => p.f64().map(Val::F64),
+                2 => p.i32().map(Val::I32),
+                3 => p.str_val(),
+                _ => None,
+            };
+            let Some(val) = val else { return };
+            let found = REGISTRY.with(|r| r.iter().find(|e| e.key == key && e.shape == shape).map(|e| e.id));
+            match found {
+                Some(id) => signal_set(id, val),
+                None => crate::log("hot reload: a signal's key or shape changed; it did not restore"),
+            }
+        }
+    }
+
+    /// A tiny cursor, separate from `plinth_protocol::Reader` (which does
+    /// not expose raw string bytes), since this format is private to the
+    /// runtime and the dev CLI.
+    struct Reader<'a> {
+        buf: &'a [u8],
+        pos: usize,
+    }
+
+    impl<'a> Reader<'a> {
+        fn new(buf: &'a [u8]) -> Option<Self> {
+            Some(Self { buf, pos: 0 })
+        }
+        fn u8(&mut self) -> Option<u8> {
+            let b = *self.buf.get(self.pos)?;
+            self.pos += 1;
+            Some(b)
+        }
+        fn u32(&mut self) -> Option<u32> {
+            let s = self.buf.get(self.pos..self.pos + 4)?;
+            self.pos += 4;
+            Some(u32::from_le_bytes(s.try_into().unwrap()))
+        }
+        fn f64(&mut self) -> Option<f64> {
+            let s = self.buf.get(self.pos..self.pos + 8)?;
+            self.pos += 8;
+            Some(f64::from_le_bytes(s.try_into().unwrap()))
+        }
+        fn i32(&mut self) -> Option<i32> {
+            self.u32().map(|v| v as i32)
+        }
+        fn str_val(&mut self) -> Option<Val> {
+            let len = self.u32()? as usize;
+            let bytes = self.buf.get(self.pos..self.pos + len)?;
+            self.pos += len;
+            let s = core::str::from_utf8(bytes).ok()?;
+            Some(Val::Ref(crate::strings::from_str(s)))
+        }
+    }
+}
+
+#[cfg(feature = "dev")]
+pub use hotreload::{register as sig_register, restore as sig_restore, snapshot as sig_snapshot};
+
 /// Runs the dirty effects until no effect is dirty.
 pub fn flush() {
     let mut runs = 0;

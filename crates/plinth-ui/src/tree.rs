@@ -154,6 +154,26 @@ impl Tree {
         std::mem::take(&mut self.removed)
     }
 
+    /// A copy of the navigation stacks, for hot reload (SPEC.md §13): the
+    /// host keeps the stack across a reload if the screens still exist.
+    pub fn stacks_snapshot(&self) -> BTreeMap<u32, Vec<u32>> {
+        self.stacks.clone()
+    }
+
+    /// Restores navigation stacks saved with `stacks_snapshot`, keeping
+    /// only the tabs and screens that still exist in this (reloaded) tree.
+    pub fn restore_stacks(&mut self, stacks: BTreeMap<u32, Vec<u32>>) {
+        for (tab, stack) in stacks {
+            if !self.roots.contains_key(&tab) {
+                continue;
+            }
+            let stack: Vec<u32> = stack.into_iter().filter(|s| self.roots.contains_key(s)).collect();
+            if stack.len() > 1 {
+                self.stacks.insert(tab, stack);
+            }
+        }
+    }
+
     /// The host-side half of a two-way binding: the host shows the new value
     /// at once, before the guest sees the event (SPEC.md §8.4).
     pub fn set_local_prop(&mut self, id: NodeId, prop: u16, value: Value) {
@@ -279,6 +299,11 @@ impl Tree {
                 };
                 Ok(())
             }
+            // Dev-only (SPEC.md §13): a hot-reload snapshot reply. It
+            // carries no tree mutation; the host that asked for it reads
+            // the raw op buffer directly (see `plinth_protocol::decode_ops`
+            // in `plinth-host-desktop`), so the tree ignores it here.
+            Op::Snapshot { .. } => Ok(()),
         }
     }
 
@@ -491,6 +516,32 @@ mod tests {
         // `back` at the bottom of the stack is a no-op.
         commit(&mut t, &[Op::Navigate { kind: nav_kind::BACK, screen: 0, args: Value::Null }]);
         assert_eq!(t.current_root().unwrap().id, 1);
+    }
+
+    #[test]
+    fn stacks_snapshot_restores_only_surviving_screens() {
+        // Hot reload (SPEC.md §13): the host keeps the navigation stack
+        // across a reload when the screens still exist.
+        let mut t = Tree::new();
+        screen(&mut t, 1, 0);
+        screen(&mut t, 2, 1);
+        commit(&mut t, &[Op::Navigate { kind: nav_kind::MARK_PRIMARY, screen: 0, args: Value::Null }]);
+        commit(&mut t, &[Op::Navigate { kind: nav_kind::PUSH, screen: 1, args: Value::Null }]);
+        assert!(t.can_go_back());
+        let saved = t.stacks_snapshot();
+
+        // The screen reappears with the same index after the reload.
+        let mut reloaded = Tree::new();
+        screen(&mut reloaded, 1, 0);
+        screen(&mut reloaded, 2, 1);
+        reloaded.restore_stacks(saved.clone());
+        assert!(reloaded.can_go_back());
+
+        // A screen that no longer exists after the reload is dropped.
+        let mut shrunk = Tree::new();
+        screen(&mut shrunk, 1, 0);
+        shrunk.restore_stacks(saved);
+        assert!(!shrunk.can_go_back());
     }
 
     #[test]

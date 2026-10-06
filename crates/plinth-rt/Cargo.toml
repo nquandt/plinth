@@ -9,8 +9,16 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = []
+# Hot reload (SPEC.md §13): registers module-level signals by key and
+# shape, and answers `Event::SnapshotRequest`. Off by default so a release
+# build of `plinth-rt` never contains this code (release app artifacts must
+# not grow). `plinth dev` builds a second rt.wasm with this feature on.
+dev = []
+
 [dependencies]
 plinth-protocol = { path = "../plinth-protocol", default-features = false }
 wit-bindgen.workspace = true
 ryu = { version = "1", features = ["small"] }
-libm = "0.2" 
+libm = "0.2"

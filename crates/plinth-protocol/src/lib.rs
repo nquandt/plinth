@@ -37,6 +37,9 @@ pub mod opcode {
     pub const SET_ROOT: u8 = 0x08;
     pub const NAVIGATE: u8 = 0x09;
     pub const TEXT: u8 = 0x0A;
+    /// Dev-only (SPEC.md §13): carries a hot-reload signal snapshot back to
+    /// the host. Only a dev build of `plinth-rt` ever emits this.
+    pub const SNAPSHOT: u8 = 0x0B;
 }
 
 /// Event codes (SPEC.md §8.4).
@@ -46,6 +49,10 @@ pub mod event_code {
     pub const TIMER: u8 = 0x03;
     pub const LIFECYCLE: u8 = 0x04;
     pub const VISIBLE_ROWS: u8 = 0x05;
+    /// Dev-only (SPEC.md §13): asks a dev build to serialize its preserved
+    /// module-level signals. The guest replies with an `Op::Snapshot` in
+    /// its next commit.
+    pub const SNAPSHOT_REQUEST: u8 = 0x06;
 }
 
 /// `kind` values of the `navigate` op.
@@ -162,6 +169,9 @@ pub enum Op {
     SetRoot { screen: u32, id: NodeId },
     Navigate { kind: u8, screen: u32, args: Value },
     Text { id: NodeId, value: Value },
+    /// Dev-only (SPEC.md §13): a hot-reload signal snapshot, sent in
+    /// response to `Event::SnapshotRequest`.
+    Snapshot { bytes: Vec<u8> },
 }
 
 /// One decoded event.
@@ -172,6 +182,8 @@ pub enum Event {
     Timer { timer: u32 },
     Lifecycle { kind: u8 },
     VisibleRows { list: u32, from: u32, to: u32 },
+    /// Dev-only (SPEC.md §13): asks for a hot-reload signal snapshot.
+    SnapshotRequest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -320,6 +332,11 @@ impl Writer {
                 self.u32(*id);
                 self.value(value);
             }
+            Op::Snapshot { bytes } => {
+                self.u8(opcode::SNAPSHOT);
+                self.u32(bytes.len() as u32);
+                self.buf.extend_from_slice(bytes);
+            }
         }
     }
 
@@ -349,6 +366,9 @@ impl Writer {
                 self.u32(*list);
                 self.u32(*from);
                 self.u32(*to);
+            }
+            Event::SnapshotRequest => {
+                self.u8(event_code::SNAPSHOT_REQUEST);
             }
         }
     }
@@ -449,6 +469,10 @@ impl<'a> Reader<'a> {
             opcode::SET_ROOT => Op::SetRoot { screen: self.u32()?, id: self.u32()? },
             opcode::NAVIGATE => Op::Navigate { kind: self.u8()?, screen: self.u32()?, args: self.value()? },
             opcode::TEXT => Op::Text { id: self.u32()?, value: self.value()? },
+            opcode::SNAPSHOT => {
+                let len = self.u32()? as usize;
+                Op::Snapshot { bytes: self.bytes(len)?.to_vec() }
+            }
             _ => return Err(DecodeError { offset: start, message: "unknown opcode" }),
         })
     }
@@ -463,6 +487,7 @@ impl<'a> Reader<'a> {
             event_code::VISIBLE_ROWS => {
                 Event::VisibleRows { list: self.u32()?, from: self.u32()?, to: self.u32()? }
             }
+            event_code::SNAPSHOT_REQUEST => Event::SnapshotRequest,
             _ => return Err(DecodeError { offset: start, message: "unknown event code" }),
         })
     }
@@ -512,6 +537,7 @@ mod tests {
             Op::Move { parent: 1, id: 2, before: 0 },
             Op::Unlisten { id: 2, event: event::PRESS },
             Op::Remove { id: 2 },
+            Op::Snapshot { bytes: vec![1, 2, 3, 0, 255] },
         ];
         let mut w = Writer::new();
         for op in &ops {
@@ -528,6 +554,7 @@ mod tests {
             Event::Timer { timer: 2 },
             Event::Lifecycle { kind: 1 },
             Event::VisibleRows { list: 5, from: 0, to: 20 },
+            Event::SnapshotRequest,
         ];
         let mut w = Writer::new();
         for ev in &events {

@@ -88,6 +88,13 @@ fn sections(bytes: &[u8]) -> Result<RtSections<'_>> {
 
 /// Reads the index spaces and the runtime function indices.
 pub fn layout(rt: &[u8]) -> Result<Layout> {
+    layout_with(rt, &[])
+}
+
+/// Like `layout`, but `missing` also lists the functions of `extra` that
+/// the core lacks (hot reload, SPEC.md §13: `rt_abi::DEV_FUNCTIONS`, for the
+/// dev core).
+pub fn layout_with(rt: &[u8], extra: &[(&'static str, &'static [ValType], &'static [ValType])]) -> Result<Layout> {
     let mut types: Vec<wasmparser::FuncType> = Vec::new();
     let mut func_types: Vec<u32> = Vec::new();
     let (mut global_count, mut table_size, mut data_count, mut rt_start) = (0, 0, 0, None);
@@ -157,7 +164,7 @@ pub fn layout(rt: &[u8]) -> Result<Layout> {
     }
     let mut rt_funcs = HashMap::new();
     let mut missing = Vec::new();
-    for &(name, params, results) in rt_abi::FUNCTIONS {
+    for &(name, params, results) in rt_abi::FUNCTIONS.iter().chain(extra.iter()) {
         match abi_exports.get(name) {
             Some((idx, p, r)) if p.as_slice() == params && r.as_slice() == results => {
                 rt_funcs.insert(name, *idx);
@@ -511,7 +518,14 @@ pub fn componentize(core: &[u8]) -> Result<Vec<u8>> {
         .context("encode the component")
 }
 
-/// The runtime module that this compiler was built with.
+/// The release runtime module that this compiler was built with.
 pub fn runtime() -> &'static [u8] {
     include_bytes!(concat!(env!("OUT_DIR"), "/plinth_rt.wasm"))
+}
+
+/// The dev runtime module (SPEC.md §13): also registers module-level
+/// signals and answers hot-reload snapshot requests. `plinth dev` links
+/// this blob instead of `runtime()`.
+pub fn runtime_dev() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/plinth_rt_dev.wasm"))
 }

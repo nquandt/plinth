@@ -725,6 +725,8 @@ A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version i
 | `plinth publish` | Sign and upload to the hub. |
 | `plinth shoot <file.plnt>` | Render each screen headless to PNGs (for review and tests). Today this is the separate dev tool `plinth-shoot <file.plnt> <out-dir>`, because it needs the `test-support` features of gpui-ce. It uses the headless WGPU renderer and writes one PNG for each screen and each width class. |
 
+**Hot reload (status).** `plinth dev` builds with a dev core (`plinth-rt` with its `dev` feature). Each module-level `signal(...)` gets a stable key (module and name) and a shape code (`number`, `int`, `boolean`, `string`, or one of these with `| null`). Before the host starts a new build, it sends a snapshot request through `on-event`, and the old instance answers with a `snapshot` op. The host gives the snapshot to `init(args)` of the new instance, which restores each signal whose key and shape match. Other signals start with their new initial values. Component-local signals, arrays, objects, `Map` and `Set` are not kept yet. The selected screen and the navigation stack of each primary tab stay when their screens still exist. Release builds contain none of this code.
+
 ### 13.1 Distribution through npm
 
 The developer experience must be as simple as `npm create vite` or `npx sv create`.

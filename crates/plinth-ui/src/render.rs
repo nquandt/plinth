@@ -14,7 +14,8 @@ use gpui::accesskit;
 use gpui_elements::editable_text::actions::Enter;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_area, text_input};
 use plinth_protocol::{
-    ControlKind, Event, NodeId, Value, Writer, axis, button_role, button_size, event, prop, text_align, text_style, tone,
+    ControlKind, Event, NodeId, Op, Value, Writer, axis, button_role, button_size, decode_ops, event, prop, text_align,
+    text_style, tone,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -167,10 +168,22 @@ impl PlinthRoot {
         cx.notify();
     }
 
-    /// Replaces the guest with a new build (hot reload). The selected screen
-    /// stays; the guest state starts again.
-    pub fn reload(&mut self, guest: Box<dyn GuestPort>, init: Result<Vec<Vec<u8>>, String>, cx: &mut Context<Self>) {
+    /// Replaces the guest with a new build (hot reload, SPEC.md §13). Before
+    /// swapping, it asks the old guest for a snapshot of its module-level
+    /// signals (a dev build answers with an `Op::Snapshot`; a release build,
+    /// or a guest that already stopped, gives nothing and the new instance
+    /// just starts fresh) and passes the bytes to `make` as `init`'s `args`.
+    /// The selected screen and the navigation stack stay, if the screens
+    /// still exist.
+    pub fn reload(
+        &mut self,
+        make: impl FnOnce(&[u8]) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>),
+        cx: &mut Context<Self>,
+    ) {
         let screen = self.tree.current_screen;
+        let stacks = self.tree.stacks_snapshot();
+        let snapshot = self.request_snapshot();
+        let (guest, init) = make(&snapshot);
         self.guest = guest;
         self.tree = Tree::new();
         self.fields.clear();
@@ -184,7 +197,32 @@ impl PlinthRoot {
         if self.tree.screens().any(|(s, _)| s == screen) {
             self.tree.current_screen = screen;
         }
+        // SPEC.md §13: the selected screen and the navigation stack survive
+        // a reload when the screens still exist.
+        self.tree.restore_stacks(stacks);
         cx.notify();
+    }
+
+    /// Dev-only (SPEC.md §13): asks the current guest for a hot-reload
+    /// snapshot and returns its bytes, or an empty buffer if it did not
+    /// answer (a release build, or a guest that already stopped).
+    fn request_snapshot(&mut self) -> Vec<u8> {
+        if self.stopped.is_some() {
+            return Vec::new();
+        }
+        let mut w = Writer::new();
+        w.event(&Event::SnapshotRequest);
+        let Ok(commits) = self.guest.dispatch(w.as_bytes()) else { return Vec::new() };
+        for commit in commits {
+            if let Ok(ops) = decode_ops(&commit) {
+                for op in ops {
+                    if let Op::Snapshot { bytes } = op {
+                        return bytes;
+                    }
+                }
+            }
+        }
+        Vec::new()
     }
 
     fn apply_commits(&mut self, commits: Vec<Vec<u8>>) {

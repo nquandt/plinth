@@ -331,9 +331,17 @@ struct Built {
 }
 
 fn compile(dir: &Path) -> Result<Option<Built>> {
+    compile_ex(dir, false)
+}
+
+/// `dev` selects hot reload support (SPEC.md §13): the artifact registers
+/// its module-level signals and answers snapshot requests. `plinth dev`
+/// passes `true`; every other command passes `false` so release
+/// artifacts never contain that code.
+fn compile_ex(dir: &Path, dev: bool) -> Result<Option<Built>> {
     let config = ensure_project(dir)?;
     let caps: Vec<String> = config.capabilities.iter().map(|c| c.name.clone()).collect();
-    let (front, artifact) = plinth_compiler::compile_with_capabilities(&DiskFs { root: dir.to_path_buf() }, &caps)?;
+    let (front, artifact) = plinth_compiler::compile_ex(&DiskFs { root: dir.to_path_buf() }, &caps, dev)?;
     let (e, w) = print_diags(&front);
     match artifact {
         Some(a) => {
@@ -455,7 +463,7 @@ fn dev(dir: &Path) -> Result<ExitCode> {
     // Wait for the first good build, so the window opens with a working app.
     let mut stamp = sources_stamp(dir);
     let first = loop {
-        if let Some(b) = compile(dir)? {
+        if let Some(b) = compile_ex(dir, true)? {
             break b;
         }
         println!("[plinth] fix the errors; waiting for changes...");
@@ -477,7 +485,7 @@ fn dev(dir: &Path) -> Result<ExitCode> {
             }
             last = now;
             println!("[plinth] change detected; building...");
-            match compile(&watch_dir) {
+            match compile_ex(&watch_dir, true) {
                 Ok(Some(b)) => {
                     if tx.send(b.component).is_err() {
                         return;
