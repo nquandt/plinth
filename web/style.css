@@ -6,7 +6,7 @@
   --pl-surface: #15171c;
   --pl-text: #e7e9ec;
   --pl-muted: #9aa0a8;
-  --pl-accent: #5b8cff;
+  --pl-accent: #3b63d1;
   --pl-accent-text: #ffffff;
   --pl-danger: #e5484d;
   --pl-border: #262a31;
@@ -24,7 +24,7 @@
     --pl-surface: #ffffff;
     --pl-text: #1b1d21;
     --pl-muted: #5b6168;
-    --pl-accent: #3b6bf5;
+    --pl-accent: #2f54c7;
     --pl-accent-text: #ffffff;
     --pl-danger: #c62828;
     --pl-border: #d8dbe0;
@@ -69,6 +69,17 @@ body {
 
 *, *::before, *::after {
   box-sizing: border-box;
+}
+
+/* Visible keyboard focus on every interactive element (SPEC.md §6: keyboard
+   parity with the desktop host). */
+:focus-visible {
+  outline: 2px solid var(--pl-accent);
+  outline-offset: 2px;
+}
+
+.pl-row-pressable {
+  cursor: pointer;
 }
 
 .pl-screen {
