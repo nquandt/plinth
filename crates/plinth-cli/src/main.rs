@@ -715,7 +715,11 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
             for app in apps {
                 let version = app.active_version().map(|v| v.version.as_str()).unwrap_or("-");
                 let pin = if app.pinned.is_some() { " (pinned)" } else { "" };
-                println!("{}  {}  {}{}", app.id, app.name, version, pin);
+                let signer = match app.active_version().and_then(|v| v.signer.as_deref()) {
+                    Some(key) => format!("signed by {key}"),
+                    None => "unverified publisher".to_owned(),
+                };
+                println!("{}  {}  {}{}  [{signer}]", app.id, app.name, version, pin);
             }
         }
         Some("run") => {
