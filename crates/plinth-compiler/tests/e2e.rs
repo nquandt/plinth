@@ -350,6 +350,36 @@ fn settings_gallery_slider_number_picker_progress_badge() {
     assert_eq!(h.tree.get(working).unwrap().num_prop(prop::VALUE), None);
 }
 
+// -- UI API 1.4: DatePicker --------------------------------------------------
+
+#[test]
+fn settings_gallery_date_picker() {
+    use plinth_protocol::prop::MODE;
+
+    let art = build("settings-gallery");
+    let mut h = Harness::start(&art.component);
+
+    // Default mode is "date"; the value is the ISO text the app set.
+    let due = h.one(ControlKind::DatePicker, |n| n.str_prop(prop::LABEL) == Some("Due"));
+    assert_eq!(h.tree.get(due).unwrap().str_prop(prop::VALUE), Some("2026-10-06"));
+    assert_eq!(h.tree.get(due).unwrap().enum_prop(MODE), plinth_protocol::date_picker_mode::DATE);
+
+    // A `change` event is a two-way `Signal<string>` binding, like
+    // `TextField` (SPEC.md §8.4: the host sets its value first, then
+    // sends `change`, with no echo from the guest).
+    h.tree.set_local_prop(due, prop::VALUE, "2026-12-25".into());
+    h.fire(due, event::CHANGE, "2026-12-25".into());
+    assert_eq!(h.tree.get(due).unwrap().str_prop(prop::VALUE), Some("2026-12-25"));
+
+    // `mode="time"` carries an "HH:MM" value.
+    let reminder = h.one(ControlKind::DatePicker, |n| n.str_prop(prop::LABEL) == Some("Reminder"));
+    assert_eq!(h.tree.get(reminder).unwrap().enum_prop(MODE), plinth_protocol::date_picker_mode::TIME);
+    assert_eq!(h.tree.get(reminder).unwrap().str_prop(prop::VALUE), Some("09:00"));
+    h.tree.set_local_prop(reminder, prop::VALUE, "17:45".into());
+    h.fire(reminder, event::CHANGE, "17:45".into());
+    assert_eq!(h.tree.get(reminder).unwrap().str_prop(prop::VALUE), Some("17:45"));
+}
+
 // -- UI API 1.2: structure and stack navigation -----------------------------
 
 #[test]
