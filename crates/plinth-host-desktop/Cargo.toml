@@ -1,0 +1,23 @@
+[package]
+name = "plinth-host-desktop"
+description = "The Plinth desktop host for Windows, macOS and Linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "plinth-host"
+path = "src/main.rs"
+
+[dependencies]
+plinth-ui.workspace = true
+plinth-runner-wasmtime.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
+
+[dev-dependencies]
+plinth-protocol.workspace = true
+wat = "1"

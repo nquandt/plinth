@@ -1,0 +1,56 @@
+# UI API id table (SPEC.md §8.2).
+#
+# This file is the single source of truth for control kind, prop, event and
+# enum ids. The compiler, the guest runtime and the host all generate their
+# constants from it. Never reuse or renumber an id inside one major version.
+
+version = "1.0"
+
+[controls]
+screen = 1
+section = 2
+text = 3
+heading = 4
+button = 5
+text-field = 6
+toggle = 7
+list = 8
+row = 9
+empty = 10
+
+[props]
+title = 1        # string
+subtitle = 2     # string
+label = 3        # string
+value = 4        # string (text-field) | bool (toggle)
+placeholder = 5  # string
+role = 6         # enum button-role
+style = 7        # enum text-style
+tone = 8         # enum tone
+level = 9        # int (1..=3)
+disabled = 10    # bool
+icon = 11        # string, a name from the runtime icon set
+message = 12     # string
+footer = 13      # string
+error = 14       # string
+
+[events]
+press = 1        # value: null
+change = 2       # value: the new value
+submit = 3       # value: the current value
+
+[enums.button-role]
+default = 0
+primary = 1
+destructive = 2
+
+[enums.text-style]
+body = 0
+caption = 1
+mono = 2
+
+[enums.tone]
+default = 0
+muted = 1
+danger = 2
+success = 3

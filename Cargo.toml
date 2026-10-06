@@ -1,0 +1,53 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/plinth-protocol",
+  "crates/plinth-ui",
+  "crates/plinth-runner-wasmtime",
+  "crates/plinth-host-desktop",
+  "crates/plinth-cli",
+  "crates/plinth-guest",
+  "examples/counter-rs",
+  "examples/todo-rs",
+]
+# Guest crates build only for wasm32-unknown-unknown (see `plinth example`).
+default-members = [
+  "crates/plinth-protocol",
+  "crates/plinth-ui",
+  "crates/plinth-runner-wasmtime",
+  "crates/plinth-host-desktop",
+  "crates/plinth-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+plinth-protocol = { path = "crates/plinth-protocol" }
+plinth-ui = { path = "crates/plinth-ui" }
+plinth-runner-wasmtime = { path = "crates/plinth-runner-wasmtime" }
+plinth-guest = { path = "crates/plinth-guest" }
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+wasmtime = { version = "46.0.3", default-features = false, features = ["component-model", "cranelift", "runtime", "std", "parallel-compilation", "addr2line", "anyhow"] }
+wit-bindgen = { version = "0.57.1", default-features = false, features = ["macros", "realloc"] }
+wit-component = "0.251"
+wasmparser = "0.251"
+gpui = { path = "../gpui-ce/crates/gpui", package = "gpui-ce" }
+gpui_platform = { path = "../gpui-ce/crates/gpui_platform", package = "gpui_ce_platform" }
+gpui_elements = { path = "../gpui-ce/crates/gpui_elements", package = "gpui_ce_elements" }
+
+[profile.release]
+lto = true
+
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+codegen-units = 1
+panic = "abort"
+strip = true

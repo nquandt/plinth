@@ -1,0 +1,13 @@
+[package]
+name = "plinth-ui"
+description = "The Plinth semantic tree, op decoder, adaptive shell and controls on gpui-ce"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+plinth-protocol.workspace = true
+anyhow.workspace = true
+log.workspace = true
+gpui.workspace = true
+gpui_elements.workspace = true

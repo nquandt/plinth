@@ -1,0 +1,13 @@
+[package]
+name = "counter-rs"
+description = "M0 hand-written guest (SPEC.md §15)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+plinth-guest.workspace = true

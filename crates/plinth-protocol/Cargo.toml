@@ -1,0 +1,11 @@
+[package]
+name = "plinth-protocol"
+description = "Op buffer and event encoding for the Plinth guest/host ABI, with ids generated from ui-api.toml"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[build-dependencies]
+toml.workspace = true

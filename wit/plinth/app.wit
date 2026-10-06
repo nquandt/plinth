@@ -1,0 +1,20 @@
+// Plinth guest <-> host contract (SPEC.md §8).
+//
+// M0 contains only the UI interface. The host API interfaces (store, fs,
+// net, time, clipboard, notify, dialog, locale, canvas) come in M2.
+package plinth:app@1.0.0;
+
+interface ui {
+  /// Applies one batched op buffer (SPEC.md §8.2). The host applies each
+  /// commit atomically.
+  commit: func(ops: list<u8>);
+}
+
+world app {
+  import ui;
+
+  /// Builds the initial tree.
+  export init: func(args: list<u8>);
+  /// Handles one or more batched events (SPEC.md §8.4).
+  export on-event: func(ev: list<u8>);
+}

@@ -1,0 +1,10 @@
+[package]
+name = "plinth-guest"
+description = "A hand-written guest SDK for Plinth apps in Rust (M0 test guests; the compiler replaces it in M1)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+plinth-protocol.workspace = true
+wit-bindgen.workspace = true

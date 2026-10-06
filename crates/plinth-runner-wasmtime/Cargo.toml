@@ -1,0 +1,11 @@
+[package]
+name = "plinth-runner-wasmtime"
+description = "Runs Plinth app components with wasmtime (desktop and Android)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+wasmtime.workspace = true
