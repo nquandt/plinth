@@ -1,0 +1,85 @@
+// The app frame of the web App Hub (docs/web-hub.md §4): `app-frame.html`
+// runs in `<iframe sandbox="allow-scripts">`, so it has an opaque origin.
+// It cannot read the storage, the cookies or the DOM of the hub page or of
+// a different app. The hub page sends the package, the core, the kv snapshot
+// of this app and the refused capabilities in one `start` message; the frame
+// sends kv writes, clipboard and dialog requests back (`hub-storage.js`).
+
+import { PlinthApp, readPlnt } from "./plinth-web.js";
+import { Tree, DomRenderer } from "./dom-renderer.js";
+import { CHANNEL, frameKvStore } from "./hub-storage.js";
+
+const container = document.getElementById("app");
+const embedded = window.parent !== window;
+let parentOrigin = null;
+let started = false;
+let nextId = 1;
+const pending = new Map(); // request id -> resolve
+
+function send(msg) {
+  // Before `start`, the frame does not know the origin of the hub page; the
+  // first message (`ready`) carries no data.
+  window.parent.postMessage({ channel: CHANNEL, ...msg }, parentOrigin ?? "*");
+}
+
+function ask(type, fields) {
+  const id = nextId++;
+  return new Promise((resolve) => {
+    pending.set(id, resolve);
+    send({ type, id, ...fields });
+  });
+}
+
+function showError(text) {
+  const pre = document.createElement("pre");
+  pre.className = "pl-frame-error";
+  pre.textContent = text;
+  container.replaceChildren(pre);
+}
+
+async function start(msg) {
+  const { appWasm, manifestText, assets } = await readPlnt(new Uint8Array(msg.pkg));
+  const kvStore = frameKvStore(msg.kv, msg.quota, (m) => send(m));
+  const app = new PlinthApp();
+  const tree = new Tree();
+  app.onCommit = (ops) => tree.apply(ops);
+  await app.load(new Uint8Array(msg.core), appWasm, {
+    log: (s) => console.log("[app]", s),
+    manifestText,
+    kvStore,
+    refused: new Set(Array.isArray(msg.refused) ? msg.refused : []),
+    askDialog: (kind, message) => ask("dialog", { kind, message: String(message) }),
+    clipboard: {
+      writeText: (text) => send({ type: "clipboard-write", text }),
+      readText: () => ask("clipboard-read", {}),
+    },
+  });
+  new DomRenderer(tree, container, app, assets);
+  app.init([]);
+  // For tests (web/test/run-a11y.mjs): how many kv entries the start message had.
+  document.body.dataset.kvEntries = String(Object.keys(msg.kv ?? {}).length);
+}
+
+window.addEventListener("message", (event) => {
+  if (event.source !== window.parent) return;
+  const msg = event.data;
+  if (!msg || msg.channel !== CHANNEL) return;
+  if (msg.type === "start" && !started) {
+    started = true;
+    parentOrigin = event.origin;
+    start(msg)
+      .then(() => send({ type: "started" }))
+      .catch((err) => {
+        console.error(err);
+        showError(String(err?.stack ?? err));
+        send({ type: "failed", message: String(err?.message ?? err) });
+      });
+  } else if (msg.type === "answer" && event.origin === parentOrigin && pending.has(msg.id)) {
+    const resolve = pending.get(msg.id);
+    pending.delete(msg.id);
+    resolve(msg.value ?? null);
+  }
+});
+
+if (embedded) send({ type: "ready" });
+else showError("This page runs one app for the web App Hub. Open the hub (hub.html) to run an app.");

@@ -88,6 +88,17 @@ fn web_hub_serves_landing_page_index_package_and_core() {
     }
     assert_eq!(get(port, "/web/test/run-a11y.mjs").status, 404, "tests are not embedded");
 
+    // The sandboxed app frame (opaque origin) loads the modules with CORS,
+    // and its own page is sandboxed by its header.
+    let frame = get(port, "/web/app-frame.html");
+    assert_eq!(frame.status, 200);
+    assert_eq!(frame.header("Content-Security-Policy"), Some("sandbox allow-scripts"));
+    assert_eq!(frame.header("Access-Control-Allow-Origin"), Some("*"));
+    let module = get(port, "/web/app-frame.js");
+    assert_eq!(module.header("Access-Control-Allow-Origin"), Some("*"));
+    assert_eq!(module.header("Content-Security-Policy"), None);
+    assert_eq!(get(port, "/plinth-registry.json").header("Access-Control-Allow-Origin"), None, "registry files keep the default");
+
     let index = get(port, "/plinth-registry.json");
     assert_eq!((index.status, index.header("Content-Type")), (200, Some("application/json")));
     let apps = get(port, "/apps/index.json?x=1");

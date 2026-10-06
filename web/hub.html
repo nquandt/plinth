@@ -259,6 +259,97 @@
         color: var(--pl-danger);
         white-space: pre-wrap;
       }
+      .hub-nav {
+        margin-left: auto;
+        color: var(--pl-accent);
+      }
+      @media (prefers-color-scheme: dark) {
+        .hub-nav {
+          color: #8fb0ff;
+        }
+      }
+      .hub-main-wide {
+        max-width: none;
+        padding: 0;
+      }
+      .hub-run-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 4px 16px;
+        padding: 4px 16px 0;
+      }
+      .hub-main .hub-run-title {
+        font-size: 1.1rem;
+        margin: 0;
+        flex: 1;
+      }
+      .hub-run-note {
+        padding: 0 16px 6px;
+        margin: 0;
+        border-bottom: 1px solid var(--pl-border);
+      }
+      .hub-frame {
+        display: block;
+        width: 100%;
+        height: calc(100vh - 120px);
+        height: calc(100dvh - 120px);
+        min-height: 320px;
+        border: 0;
+        background: var(--pl-bg);
+      }
+      fieldset.hub-cap {
+        margin: 0;
+        min-width: 0;
+      }
+      .hub-cap-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 8px;
+        align-items: baseline;
+        padding: 0 4px;
+      }
+      .hub-chip-new {
+        border-color: var(--pl-accent);
+      }
+      .hub-choices {
+        display: flex;
+        gap: 20px;
+        margin: 8px 0 0;
+      }
+      .hub-choice {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 32px;
+        cursor: pointer;
+      }
+      .hub-choice input {
+        width: 18px;
+        height: 18px;
+        accent-color: var(--pl-accent);
+      }
+      .hub-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 16px;
+        margin: 12px 0 0;
+      }
+      .hub-button {
+        border: none;
+        font: inherit;
+        cursor: pointer;
+      }
+      .hub-select-label {
+        display: block;
+        font-size: 0.85rem;
+        color: var(--pl-muted);
+        margin: 8px 0 4px;
+      }
+      .hub-select {
+        max-width: 240px;
+      }
       .hub-visually-hidden {
         position: absolute;
         width: 1px;
@@ -273,6 +364,7 @@
     <header class="hub-header">
       <a class="hub-brand" href="#/">Plinth apps</a>
       <span class="hub-registry" id="hub-registry"></span>
+      <a class="hub-nav" href="#/manage">Manage</a>
     </header>
     <main class="hub-main" id="hub-main" tabindex="-1">
       <p>Loading&hellip;</p>

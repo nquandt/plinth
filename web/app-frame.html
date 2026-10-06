@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plinth app</title>
+    <link rel="stylesheet" href="style.css" />
+    <style>
+      .pl-frame-error {
+        padding: 24px;
+        color: var(--pl-danger);
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- The web App Hub runs this page in <iframe sandbox="allow-scripts">
+         (docs/web-hub.md §4). The server also sends
+         "Content-Security-Policy: sandbox allow-scripts" for it. -->
+    <div id="app">Loading&hellip;</div>
+    <script type="module" src="app-frame.js"></script>
+  </body>
+</html>
