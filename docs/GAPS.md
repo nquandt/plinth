@@ -71,3 +71,8 @@ small local change), per the dogfooding task's scope.
   `CORE_MINOR`/`CORE_VERSION` bumped to 1.4. Tests: a new "Strings" section
   in `crates/plinth-compiler/tests/lang.rs` (includes a non-ASCII
   `split("")` case and a non-ASCII `charAt` case).
+
+## Found later
+
+- **Narrowing on member expressions (medium).** `r.subtitle ?? undefined` and `r.subtitle === null ? undefined : r.subtitle` still have the type `string | null` (PL3001), because `??` and null narrowing work on local variables only. Workaround: `const subtitle = r.subtitle;` then `if (subtitle === null) { … }`. Found while building `examples/big-list` (rows.tsx).
+
