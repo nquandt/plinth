@@ -1,6 +1,6 @@
 # Handoff: Plinth
 
-This file gives a new agent what it needs to continue the work. Read it first. Then read `SPEC.md` (the design), `docs/HUB.md` (the app hub), `docs/REGISTRY.md` (registries), and `CONTRIBUTING.md` (commands). `docs/GAPS.md` lists the known language gaps.
+This file gives a new agent what it needs to continue the work. Read it first. Then read `SPEC.md` (the design), `docs/HUB.md` (the app hub), `docs/REGISTRY.md` (registries), and `CONTRIBUTING.md` (commands). `docs/GAPS.md` lists the known language gaps. `docs/VALIDATION.md` is the plan for apps that test Plinth.
 
 ## 0. Read this first: the push rule
 
@@ -114,6 +114,7 @@ Test crates must run **one at a time** on Windows (linker errors LNK1318/LNK1201
 1. **Push the local commits** (§0) when CI minutes are available again and the owner agrees. CI run `37517664495` (commit `38004ef`) was still running at handoff; check it first.
 2. **Open decisions for the owner:** the license (Cargo.toml says Apache-2.0; there is no LICENSE file yet; "MIT OR Apache-2.0" is the Rust norm), and whether to use a self-hosted CI runner.
 3. **Hub, after H3 step 3:** a Plinth project Hub key (the owner's decision; so the Hub UI needs no `PLINTH_HUB_TRUSTED_KEYS`), first-use prompts (H5; the design needs an answer to `docs/HUB.md` H-Q4 first, and a synchronous call such as `clipboard.readText` cannot wait for a prompt), `addShortcut` from the Hub UI, automatic or daily update checks, and a live GUI check of the Hub UI by a person (the tests are headless; a `.lnk` shortcut was opened by hand once and started the app through `plinthw` with no console window).
+3a. **Validation apps (SPEC M9, `docs/VALIDATION.md`):** V1 7GUIs (`examples/7guis/`; Cells and Circle drawer need Grid virtualization and a `Canvas` control), then V2 a flagship notes app (rich text decision first), then V3 several apps in one host (lifecycle, crash isolation, sharing, fairness, permissions, start time and memory). Do this before new features that no app asks for.
 4. **Compiler:** `Promise.all`; async class methods; `await` inside `switch`, `do…while` and `try`/`finally` (now `PL2009`); a smaller `async` code size (one shared `then`/`resolve`/`reject` set instead of one per `Promise<T>`); a host UI for `error.report` (the desktop host only logs it now); `Chart` `series` as a non-literal expression, tuples with optional or rest elements, `flat(depth > 1)`. Note: `tests/e2e.rs` now limits the *linked runtime* of the counter (core module less app code) to 60 KiB, the SPEC §5.5 wording; master was already at 61366 B of the old whole-module limit of 61440 B.
 5. **Platforms:** open a GUI window on Linux and macOS and fix what breaks; then mobile (SPEC Q1, Q3).
 6. **Distribution:** publish the npm packages and a first registry; Hub H2 (signed indexes, transparency log); key rotation.

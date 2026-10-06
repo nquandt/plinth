@@ -863,6 +863,10 @@ Each milestone has exit criteria. Work in this order. Windows is the first platf
 - The browse mode, the app cache, and chunked artifacts (§18).
 - **Exit:** a user opens a hub app from a link, uses it, and the host evicts it later. A large app shows its first screen before all of its chunks load.
 
+### M9: Validation apps
+- Real apps test the UX and the architecture. The plan is in `docs/VALIDATION.md`. It has three phases: V1, the 7GUIs tasks; V2, a flagship notes app; V3, a suite of apps that run together in one host, to test lifecycle, crash isolation, communication between apps, resource fairness, permissions, start time and memory.
+- **Exit:** the exit criteria of V1, V2 and V3 in `docs/VALIDATION.md`.
+
 ---
 
 ## 16. Risks
