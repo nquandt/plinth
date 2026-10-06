@@ -4812,6 +4812,7 @@ dependencies = [
  "plinth-hub",
  "plinth-package",
  "plinth-protocol",
+ "plinth-registry",
  "wasmparser 0.251.0",
  "wit-component 0.251.0",
 ]

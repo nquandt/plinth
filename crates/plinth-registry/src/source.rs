@@ -50,12 +50,23 @@ impl Loc {
         }
         match self {
             Loc::Url(base) => {
-                // Strip the query/fragment and the last path segment of the
-                // base, then append `rel`. The base URLs this crate joins
-                // against are always "directory-like" document URLs (the
-                // service index, or an app document), so this simple scheme
-                // join is enough: it does not need to handle `..`.
-                let dir = base.rsplit_once('/').map(|(d, _)| d).unwrap_or(base.as_str());
+                // Strip the last path segment of `base` (after its
+                // scheme://authority), then append `rel`. The base URLs this
+                // crate joins against are always "directory-like" document
+                // URLs (the service index, or an app document), so this
+                // simple scheme join is enough: it does not need to handle
+                // `..`.
+                let scheme_end = base.find("://").map(|i| i + 3).unwrap_or(0);
+                let dir = match base[scheme_end..].find('/') {
+                    Some(i) => {
+                        let path_start = scheme_end + i;
+                        match base[path_start..].rfind('/') {
+                            Some(j) => &base[..path_start + j],
+                            None => &base[..path_start],
+                        }
+                    }
+                    None => base.as_str(),
+                };
                 Ok(Loc::Url(format!("{dir}/{rel}")))
             }
             Loc::Path(base) => {

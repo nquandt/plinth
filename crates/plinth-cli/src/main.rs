@@ -9,6 +9,7 @@ use std::sync::mpsc;
 use std::time::{Duration, SystemTime};
 
 mod dev_tools;
+mod registry_cmd;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -40,6 +41,16 @@ usage:
                                    block or unblock an app
   plinth hub groups [create <name> | add <app id> <name>]
                                    list, or manage, library groups
+  plinth hub source add <name> <base> | list | remove <name>
+                                   manage registry sources (docs/REGISTRY.md)
+  plinth hub search <text>         search configured registry sources
+  plinth hub install <id>[@version] [--source <name>]
+                                   download and add an app to the library
+  plinth hub update [<id>]         install newer versions from the app's source
+  plinth registry build <folder> [--with-core]
+                                   generate a static registry from .plnt files
+  plinth registry serve <folder> [--port N]
+                                   serve a static registry on 127.0.0.1
 
 The project directory defaults to the current directory.";
 
@@ -139,7 +150,8 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Some("hub") => hub_command(&positional[1..]),
+        Some("hub") => hub_command(&positional[1..], &args[1..]),
+        Some("registry") => registry_command(&positional[1..], &args[1..]),
         Some("validate") => {
             let file = positional.get(1).context("usage: plinth validate <file>")?;
             dev_tools::validate_file(Path::new(file))?;
@@ -545,8 +557,86 @@ fn dev(dir: &Path) -> Result<ExitCode> {
 /// `plinth hub …` (`docs/HUB.md` §4.3, §9, §15 phase H0 part 4): a thin CLI
 /// over `plinth-hub`, for testing the library, grants and consent flow
 /// without the Hub UI (which comes in H3).
-fn hub_command(args: &[&str]) -> Result<ExitCode> {
+fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
     let hub = plinth_hub::Hub::open_default()?;
+    match args.first().copied() {
+        Some("source") => {
+            match args.get(1).copied() {
+                Some("add") => {
+                    let name = args.get(2).context("usage: plinth hub source add <name> <base>")?;
+                    let base = args.get(3).context("usage: plinth hub source add <name> <base>")?;
+                    hub.source_add(name, base)?;
+                    println!("added source {name} ({base})");
+                }
+                Some("list") | None => {
+                    for (name, base) in hub.sources()? {
+                        println!("{name}  {base}");
+                    }
+                }
+                Some("remove") => {
+                    let name = args.get(2).context("usage: plinth hub source remove <name>")?;
+                    hub.source_remove(name)?;
+                    println!("removed source {name}");
+                }
+                Some(other) => bail!("unknown `plinth hub source {other}`; use add, list or remove"),
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some("search") => {
+            let text = args.get(1).context("usage: plinth hub search <text>")?;
+            for (name, base) in hub.sources()? {
+                let source = plinth_registry::source::Source::open(&base).with_context(|| format!("open source {name} ({base})"))?;
+                for app in source.search(text)? {
+                    println!("{}  {}  {}  [{name}]", app.id, app.name, app.latest);
+                }
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some("install") => {
+            let spec = args.get(1).context("usage: plinth hub install <id>[@version] [--source <name>]")?;
+            let (id, version) = spec.split_once('@').map(|(i, v)| (i, Some(v.to_owned()))).unwrap_or((spec, None));
+            let source_flag = raw.iter().position(|a| *a == "--source").and_then(|i| raw.get(i + 1)).copied();
+            let (name, base) = resolve_source(&hub, id, source_flag)?;
+            let source = plinth_registry::source::Source::open(&base).with_context(|| format!("open source {name} ({base})"))?;
+            let doc = source.app(id)?;
+            let version = version.unwrap_or_else(|| doc.latest().map(|v| v.version.clone()).unwrap_or_default());
+            if version.is_empty() {
+                bail!("{id} has no installable version in source {name}");
+            }
+            let bytes = source.package(id, &version)?;
+            let added = hub.add_package(&bytes)?;
+            hub.set_registry(&added, &name, &base)?;
+            println!("installed {added}@{version} from {name}");
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some("update") => {
+            let only = args.get(1).copied();
+            for entry in hub.list()? {
+                if let Some(only) = only
+                    && entry.id != only
+                {
+                    continue;
+                }
+                let Some(reg) = entry.registry.clone() else { continue };
+                let source = plinth_registry::source::Source::open(&reg.base).with_context(|| format!("open source {} ({})", reg.name, reg.base))?;
+                let doc = source.app(&entry.id)?;
+                let Some(latest) = doc.latest() else { continue };
+                let current = entry.active_version().map(|v| v.version.clone()).unwrap_or_default();
+                if !plinth_registry::is_newer(&latest.version, &current) {
+                    continue;
+                }
+                let bytes = source.package(&entry.id, &latest.version)?;
+                hub.add_package(&bytes)?;
+                hub.set_registry(&entry.id, &reg.name, &reg.base)?;
+                println!("updated {} to {} (from {})", entry.id, latest.version, reg.name);
+                if !latest.capabilities.is_empty() {
+                    println!("  note: review capabilities before running; `plinth hub grants {}` decides consent per capability", entry.id);
+                }
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
+        _ => {}
+    }
     match args.first().copied() {
         Some("add") => {
             let file = args.get(1).context("usage: plinth hub add <app.plnt>")?;
@@ -627,4 +717,42 @@ fn hub_command(args: &[&str]) -> Result<ExitCode> {
         Some(other) => bail!("unknown `plinth hub {other}`; see `plinth --help`"),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Picks the registry source for `hub install`/`update`: the `--source`
+/// flag if given, else the only configured source, else an error naming
+/// the choices (`docs/REGISTRY.md` §9).
+fn resolve_source(hub: &plinth_hub::Hub, _id: &str, flag: Option<&str>) -> Result<(String, String)> {
+    let sources = hub.sources()?;
+    if let Some(name) = flag {
+        let base = sources.get(name).with_context(|| format!("no source named `{name}`; see `plinth hub source list`"))?;
+        return Ok((name.to_owned(), base.clone()));
+    }
+    match sources.len() {
+        0 => bail!("no registry sources are configured; add one with `plinth hub source add <name> <base>`"),
+        1 => {
+            let (name, base) = sources.into_iter().next().unwrap();
+            Ok((name, base))
+        }
+        _ => bail!("more than one registry source is configured; pick one with --source <name> (`plinth hub source list`)"),
+    }
+}
+
+/// `plinth registry build|serve` (`docs/REGISTRY.md` §8).
+fn registry_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
+    match args.first().copied() {
+        Some("build") => {
+            let folder = args.get(1).context("usage: plinth registry build <folder> [--with-core]")?;
+            registry_cmd::build(Path::new(folder), raw.iter().any(|a| *a == "--with-core"))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some("serve") => {
+            let folder = args.get(1).context("usage: plinth registry serve <folder> [--port N]")?;
+            let port: u16 = raw.iter().position(|a| *a == "--port").and_then(|i| raw.get(i + 1)).and_then(|p| p.parse().ok()).unwrap_or(8080);
+            registry_cmd::serve(Path::new(folder), port)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(other) => bail!("unknown `plinth registry {other}`; use build or serve"),
+        None => bail!("usage: plinth registry build|serve <folder>"),
+    }
 }

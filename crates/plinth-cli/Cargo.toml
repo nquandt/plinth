@@ -15,6 +15,7 @@ plinth-package.workspace = true
 plinth-host-desktop.workspace = true
 plinth-protocol.workspace = true
 plinth-hub.workspace = true
+plinth-registry.workspace = true
 anyhow.workspace = true
 wit-component.workspace = true
 wasmparser.workspace = true
