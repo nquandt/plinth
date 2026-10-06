@@ -235,7 +235,14 @@ const FRAME_TYPES = {
   dialog: { id: "number", kind: "string", message: "string" },
   "net-fetch": { id: "number", url: "string", method: "string" },
   size: { height: "number" },
+  // Only from the frame of the Hub app (the page gave it a `plinth:hub` snapshot).
+  "hub-save": { state: "object" },
+  "hub-launch": { id: "string" },
+  "hub-call": { id: "number", method: "string" },
 };
+
+/** The `hub-call` methods (`REMOTE_HUB_CALLS` in hub-host.js). */
+const HUB_CALLS = ["search", "install", "checkUpdates", "update"];
 
 /**
  * Checks a message from an app frame. The frame is not trusted: it runs
@@ -256,6 +263,11 @@ export function checkFrameMessage(data) {
     if (!headersOk || (data.body !== null && typeof data.body !== "string")) return null;
   }
   if (data.type === "size" && !(Number.isFinite(data.height) && data.height >= 0)) return null;
+  if (data.type === "hub-save" && (data.state === null || Array.isArray(data.state))) return null;
+  if (data.type === "hub-call") {
+    if (!HUB_CALLS.includes(data.method)) return null;
+    if (!Array.isArray(data.args) || data.args.length > 1 || !data.args.every((a) => typeof a === "string")) return null;
+  }
   return data;
 }
 
@@ -280,8 +292,9 @@ export function applyKvMessage(store, id, msg, quota = KV_QUOTA) {
 /**
  * The `start` message to an app frame: the package and the core (as
  * `ArrayBuffer`s, transferred), the kv snapshot of this app only, the quota,
- * and the capabilities that the user refused.
+ * the capabilities that the user refused, and for the Hub app only, the
+ * `plinth:hub` snapshot (`HubHost.snapshot()`), else null.
  */
-export function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA }) {
-  return { channel: CHANNEL, type: "start", pkg, core, kv: store.kvSnapshot(id), quota, refused: [...refused] };
+export function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA, hub = null }) {
+  return { channel: CHANNEL, type: "start", pkg, core, kv: store.kvSnapshot(id), quota, refused: [...refused], hub };
 }

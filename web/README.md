@@ -77,7 +77,7 @@ itself, not in a sandboxed frame: use it for tests and development only.
 | `hub-integrity.js` | Package checks with WebCrypto: SHA-256 against the registry, the manifest, the Ed25519 signature (`signature.json`), the core digest. No DOM. |
 | `registry-client.js` | Reads a registry (`docs/REGISTRY.md`): the service index, the app list, app documents, cores, search. No DOM. |
 | `hub-host.js` | The `plinth:hub` backend (`HubHost`): browse mode (the library is the registry listing), grants, blocks, pins, groups and updates in IndexedDB, the JSON of the desktop `HubService`. No DOM. |
-| `hub.html`, `hub-shell.js` | The web App Hub (`docs/web-hub.md`): a thin bootstrap that runs the signed Hub app (`examples/hub`) from the registry with `hub-host.js`, plus the host consent window and the app window (an `AppFrame`). |
+| `hub.html`, `hub-shell.js` | The web App Hub (`docs/web-hub.md`): a thin bootstrap that runs the signed Hub app (`examples/hub`) from the registry in its own sandboxed frame with `hub-host.js` (`FrameHub` in the frame), plus the host consent window and the app window (an `AppFrame`). |
 | `test/run-*.mjs` | Node 22 tests (same `WebAssembly` API as the browser) that exercise `plinth-web.js`, `protocol.js`, the bridge, the package checks and the Hub backend directly, with no DOM (`run-hub-host.mjs` also runs the Hub app). `scripts/ci-local.sh` runs all of them except `run-a11y.mjs`. |
 | `test/run-a11y.mjs` | By hand (needs Edge and the axe-core CDN): axe-core on 5 apps and on the web App Hub in headless Edge, over the DevTools protocol; the Hub app, the consent window, apps in the sandboxed frame, kv isolation, the digest check, typing and the stopwatch in the frame; plus the in-place renderer checks (typing, a held click during timer ticks, hover and text selection across ticks, a TextArea selection across a commit, row identity in todo, and one changed row of big-list's 10,000 with its time). `--hub-only` checks only the hub; `--typing-only` runs only the renderer checks; `--export-only` checks only the web export (notes from a plain static server, todo as a single file from disk); `A11Y_SHOTS=<folder>` saves screenshots of the hub. |
 
@@ -111,12 +111,16 @@ Frame to page:
 | `dialog` | `id`, `kind` (`alert`/`confirm`/`prompt`), `message` | Shows a page dialog; `answer` with null, true/false, or the text/null. |
 | `net-fetch` | `id`, `url`, `method`, `headers` (`[[name, value]]`), `body` (string or null) | Checks `net:` again, makes the request, `answer` with `[ok, status, text, error]` (`error` is `"denied:<reason>"` or `"network: …"`). |
 | `size` | `height` | The content height in CSS pixels; the page sizes the iframe if `autoHeight`. |
+| `hub-save` | `state` | Hub app only (`hub.manage` and the `hub` option): the new `plinth:hub` state of the frame's copy; the page stores it. |
+| `hub-launch` | `id` | Hub app only: opens the app (consent window, app window). |
+| `hub-call` | `id`, `method` (`search`, `install`, `checkUpdates`, `update`), `args` | Hub app only: the page runs the call; `answer` with `{ ok, value, error, snapshot }`. |
 
 Page to frame:
 
 | `type` | Fields |
 |---|---|
-| `start` | `pkg` and `core` (`ArrayBuffer`, transferred), `kv` (this app's kv data), `quota` (characters), `refused` (capability names). |
+| `start` | `pkg` and `core` (`ArrayBuffer`, transferred), `kv` (this app's kv data), `quota` (characters), `refused` (capability names), `hub` (the `plinth:hub` snapshot for the Hub app, else null). |
+| `hub-state` | `state`: the page changed the `plinth:hub` state (for example the consent window). |
 | `answer` | `id`, `value`: the answer to a request with that `id`. |
 
 `AppFrame` options (`frame-host.js`): `appId`, `title`, `pkg`, `core`, `declared`, `refused`, `store` (a `HubStore`), `quota`, `src` or `srcdoc`, `autoHeight`, `askDialog`, `fetchImpl`, `onStarted`, `onFailed`. The page decides the grants; the pair only applies them.

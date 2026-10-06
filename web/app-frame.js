@@ -5,7 +5,7 @@
 // of this app and the refused capabilities in one `start` message; the frame
 // sends kv writes, clipboard and dialog requests back (`hub-storage.js`).
 
-import { PlinthApp, readPlnt } from "./plinth-web.js";
+import { PlinthApp, readPlnt, parseManifest } from "./plinth-web.js";
 import { Tree, DomRenderer } from "./dom-renderer.js";
 import { CHANNEL, frameKvStore } from "./hub-storage.js";
 
@@ -14,6 +14,7 @@ const embedded = window.parent !== window;
 let parentOrigin = null;
 let started = false;
 let nextId = 1;
+let hub = null; // the `plinth:hub` copy of the Hub app (`FrameHub`), else null
 const pending = new Map(); // request id -> resolve
 
 function send(msg) {
@@ -40,6 +41,14 @@ function showError(text) {
 async function start(msg) {
   const { appWasm, manifestText, assets } = await readPlnt(new Uint8Array(msg.pkg));
   const kvStore = frameKvStore(msg.kv, msg.quota, (m) => send(m));
+  // For tests: which app this frame runs.
+  document.body.dataset.appId = parseManifest(manifestText).id;
+  if (msg.hub) {
+    // Only the Hub app gets a snapshot. A web export (plinth.js) never
+    // does, so the bundle never loads this module.
+    const { FrameHub } = await import("./hub-host.js");
+    hub = new FrameHub(msg.hub, { send, ask });
+  }
   const app = new PlinthApp();
   const tree = new Tree();
   app.onCommit = (ops) => tree.apply(ops);
@@ -56,6 +65,7 @@ async function start(msg) {
     // The parent page makes each request (it checks the capability again),
     // so a request carries the page's origin, not "null".
     netFetch: (url, method, headers, body) => ask("net-fetch", { url, method, headers, body }),
+    hub,
   });
   new DomRenderer(tree, container, app, assets);
   app.init([]);
@@ -94,6 +104,12 @@ window.addEventListener("message", (event) => {
     const resolve = pending.get(msg.id);
     pending.delete(msg.id);
     resolve(msg.value ?? null);
+  } else if (msg.type === "hub-state" && hub && (parentOrigin === "*" || event.origin === parentOrigin)) {
+    try {
+      hub.applySnapshot({ state: msg.state });
+    } catch (err) {
+      console.error(err);
+    }
   }
 });
 

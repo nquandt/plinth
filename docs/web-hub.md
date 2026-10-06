@@ -58,7 +58,7 @@ The page uses HTTPS through the tunnel. A browser gives the clipboard and WebCry
 2. It downloads the latest version of the Hub app (`hub.json` `hub`, normally `dev.plinth.hub`) and a core that can run it (`SPEC.md` §10.5).
 3. It checks the package and the core (§4.3).
 4. It gives `hub.manage` to the Hub app only if the signature is correct and a key in `hub.json` `trustedKeys` made it (`docs/HUB.md` §4.1). If not, the page shows the reason and does not run the Hub. A browser that cannot check Ed25519 cannot trust the Hub app.
-5. It runs the Hub app in the page with the `plinth:hub` backend (`hub-host.js`).
+5. It runs the Hub app in a sandboxed frame (`#hub-frame`, the same `AppFrame` as every app) with the `plinth:hub` backend (`hub-host.js`). The frame runs `plinth:hub` on a copy (`FrameHub`): a snapshot at the start, each change to the page (`hub-save`), launches to the page (`hub-launch`), the registry calls in the page (`hub-call`), and the page's changes back to the frame (`hub-state`). See `web/README.md`, "The app-frame bridge".
 
 ### 3.1 Browse mode: the library is the registry
 

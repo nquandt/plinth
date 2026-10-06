@@ -602,6 +602,15 @@ export class DomRenderer {
     }
     if (v.place) v.place(children);
     else reconcile(v.slot, children.map((c) => c.el));
+    // A List with no rows (only an EmptyState, or nothing) is not a list
+    // for assistive technology: role="list" needs listitem children.
+    if (v.kind === ControlKind.list) {
+      const items = children.some((c) => c.el.getAttribute("role") === "listitem");
+      if (items !== v.el.hasAttribute("role")) {
+        if (items) v.el.setAttribute("role", "list");
+        else v.el.removeAttribute("role");
+      }
+    }
   }
 
   /** The nav bar, the shown screen and the page title. */

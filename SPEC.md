@@ -699,7 +699,7 @@ The page uses one loader script and one custom element:
 - A web export works like a native export (`plinth native`): there is no Hub and no consent screen, because the developer publishes the app on their own site. The host still gives only the declared capabilities. App storage belongs to the site's origin. `net` calls need CORS on the target server.
 - The web App Hub uses the same loader: `hub.html` is a page with a `<plinth-app>` for the Hub package.
 
-**Status (2026-10-06):** the export is done: `web/plinth.js` (generated from the files in `web/` by `scripts/gen-plinth-js.mjs`; `web/test/run-bundle.mjs` fails if it is not up to date), `web/plinth-app.js` (the element), and `plinth build --target web [--single-file] [--out <path>]`. `run-a11y.mjs` loads the folder form from a plain static server and the single file from disk in headless Edge. Not done: `hub.html` on `<plinth-app>` (the frame needs the `plinth:hub` bridge first); a minified `plinth.js` (136 KiB now).
+**Status (2026-10-06):** the export is done: `web/plinth.js` (generated from the files in `web/` by `scripts/gen-plinth-js.mjs`; `web/test/run-bundle.mjs` fails if it is not up to date), `web/plinth-app.js` (the element), and `plinth build --target web [--single-file] [--out <path>]`. `run-a11y.mjs` loads the folder form from a plain static server and the single file from disk in headless Edge. The web App Hub runs the Hub app in the same sandboxed `AppFrame` as every app, with a `plinth:hub` bridge (`FrameHub`); its page is not a literal `<plinth-app>` tag, because the page checks the package and keeps the Hub state. Not done: a minified `plinth.js` (139 KiB now).
 
 ### 10.4 App modules and the runtime
 

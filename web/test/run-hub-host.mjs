@@ -27,7 +27,7 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { loadRegistry, searchApps, pickCore } from "../registry-client.js";
-import { HubHost, memoryPersist, riskOf, isNewer } from "../hub-host.js";
+import { HubHost, FrameHub, memoryPersist, riskOf, isNewer } from "../hub-host.js";
 import { PlinthApp, readPlnt } from "../plinth-web.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -284,6 +284,45 @@ async function main() {
     await hubUi.press("Notes");
     await hubUi.press("Open");
     await waitFor(() => launches.length === 2 && launches[1] === "dev.plinth.examples.notes", "Open asks the host to launch notes");
+
+    // The Hub app in a sandboxed frame (web/app-frame.js): `FrameHub` on a
+    // snapshot, with the bridge of frame-host.js done by hand here.
+    let applying = false;
+    const frameHub = new FrameHub(host.snapshot(), {
+      send: (msg) => {
+        if (msg.type === "hub-save") {
+          applying = true;
+          host.applySnapshot({ state: structuredClone(msg.state) });
+          host.save();
+          applying = false;
+        } else if (msg.type === "hub-launch") host.launch(msg.id);
+      },
+      ask: async (type, { method, args }) => {
+        assert.equal(type, "hub-call");
+        try {
+          return { ok: true, value: await host[method](...args), snapshot: host.snapshot() };
+        } catch (err) {
+          return { ok: false, error: err.message, snapshot: host.snapshot() };
+        }
+      },
+    });
+    host.onChange = () => {
+      if (!applying) frameHub.applySnapshot({ state: host.snapshot().state });
+    };
+    const framed = await runApp(coreBytes, hubPlnt, { hub: frameHub });
+    await waitFor(() => framed.allText().includes("Notes") && framed.allText().includes("Utility"), "the framed Hub app lists the apps");
+    await waitFor(() => /up to date|update/i.test(framed.allText()), "the update check through the page");
+    frameHub.block("dev.plinth.examples.utility");
+    assert.ok(host.isAppBlocked("dev.plinth.examples.utility"), "a block in the frame reaches the page");
+    host.unblock("dev.plinth.examples.utility");
+    assert.ok(!frameHub.isAppBlocked("dev.plinth.examples.utility"), "a change in the page reaches the frame");
+    assert.match(await frameHub.search("util"), /dev\.plinth\.examples\.utility/);
+    await assert.rejects(frameHub.install("dev.plinth.examples.nothing"), /no configured source/);
+    const before = launches.length;
+    await framed.press("Notes");
+    await framed.press("Open");
+    await waitFor(() => launches.length === before + 1 && launches.at(-1) === "dev.plinth.examples.notes", "Open in the frame launches through the page");
+    host.onChange = () => {};
 
     // Without the backend, or with hub.manage refused: denied, no trap.
     const denied = await runApp(coreBytes, hubPlnt, {});

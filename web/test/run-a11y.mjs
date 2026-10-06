@@ -158,27 +158,37 @@ async function openPage(cdpPort) {
   await send("Page.enable");
   await send("Runtime.enable");
   await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
-  /** Evaluates `expression` in the newest app frame (undefined if there is none or it fails). */
-  const frameEval = async (expression) => {
-    const sessionId = frames.at(-1);
-    const contextId = sessionId ? undefined : childContexts.at(-1);
-    if (!sessionId && contextId === undefined) return undefined;
+  /** One frame: a CDP session (out of process) or an execution context (in the page process). */
+  const evalIn = async (t, expression) => {
     let res;
     try {
-      res = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true, contextId }, sessionId);
+      res = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true, contextId: t.contextId }, t.sessionId);
     } catch {
       return undefined; // the frame is not ready yet, or it was replaced
     }
     if (res.exceptionDetails) throw new Error(res.exceptionDetails.exception?.description ?? res.exceptionDetails.text);
     return res.result?.value;
   };
+  /**
+   * Evaluates `expression` in the newest app frame (undefined if there is
+   * none or it fails). `match(appId)`: only a frame whose app (the
+   * `data-app-id` of its body) passes.
+   */
+  const frameEval = async (expression, match) => {
+    const targets = [...frames.map((sessionId) => ({ sessionId })), ...childContexts.map((contextId) => ({ contextId }))].reverse();
+    for (const t of targets) {
+      if (match && !match(await evalIn(t, `document.body?.dataset.appId ?? ""`).catch(() => undefined))) continue;
+      return evalIn(t, expression);
+    }
+    return undefined;
+  };
   return {
     frameEval,
     /** Polls `expression` in the app frame until it is not undefined/null, or throws. */
-    async frameWaitFor(expression, timeoutMs, intervalMs = 200) {
+    async frameWaitFor(expression, timeoutMs, intervalMs = 200, match = undefined) {
       const deadline = Date.now() + timeoutMs;
       for (;;) {
-        const v = await frameEval(expression).catch(() => undefined);
+        const v = await frameEval(expression, match).catch(() => undefined);
         if (v !== undefined && v !== null) return v;
         if (Date.now() > deadline) throw new Error(`timed out waiting in the app frame for: ${expression}`);
         await new Promise((r) => setTimeout(r, intervalMs));
@@ -380,11 +390,11 @@ async function main() {
 function pageSurface(page) {
   return { eval: (e) => page.eval(e), waitFor: (e, t) => page.waitFor(e, t), offset: async () => ({ x: 0, y: 0 }) };
 }
-function frameSurface(page) {
+function frameSurface(page, match = undefined, selector = ".host-frame") {
   return {
-    eval: (e) => page.frameEval(e),
-    waitFor: (e, t) => page.frameWaitFor(e, t),
-    offset: () => page.eval(`(() => { const r = document.querySelector(".host-frame").getBoundingClientRect(); return { x: r.x, y: r.y }; })()`),
+    eval: (e) => page.frameEval(e, match),
+    waitFor: (e, t) => page.frameWaitFor(e, t, 200, match),
+    offset: () => page.eval(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x, y: r.y }; })()`),
   };
 }
 
@@ -778,7 +788,11 @@ async function checkHub(cdpPort) {
   const { child, base } = await startHubServer(exe, reg);
   const results = [];
   const page = await openPage(cdpPort);
-  const frame = frameSurface(page);
+  // The Hub app runs in its own sandboxed frame (#hub-frame); a launched
+  // app runs in the frame of the host's app window.
+  const HUB = ID("hub");
+  const hub = frameSurface(page, (id) => id === HUB, "#hub-frame");
+  const frame = frameSurface(page, (id) => Boolean(id) && id !== HUB, "#host-app .host-frame");
   try {
     // A11Y_SHOTS=<folder>: also save a PNG of each view, to look at by eye.
     const shot = async (name) => {
@@ -787,34 +801,37 @@ async function checkHub(cdpPort) {
       const r = await page.send("Page.captureScreenshot", { format: "png" });
       await writeFile(path.join(process.env.A11Y_SHOTS, `hub-${name}.png`), Buffer.from(r.data, "base64"));
     };
-    const hubAxe = async (view) => results.push({ view, violations: await axeRun(page, undefined, { iframes: false }) });
-    const appText = () => page.eval(`document.getElementById("app").innerText`);
+    // The host page (without frames: dialogs, the app window) and the Hub app frame.
+    const hubAxe = async (view) =>
+      results.push({ view, violations: [...(await axeRun(page, undefined, { iframes: false })), ...(await axeRun(page, hub.eval))] });
+    const appText = () => hub.eval(`document.getElementById("app").innerText`);
     const button = (label) => `[...document.querySelectorAll("#app button")].find((b) => b.textContent.trim() === ${JSON.stringify(label)})`;
+    /** Clicks in the Hub app. */
     const click = async (expr, what) => {
-      await page.waitFor(`${expr} ? true : null`, 10000).catch(() => {
+      await hub.waitFor(`${expr} ? true : null`, 10000).catch(() => {
         throw new Error(`no ${what}`);
       });
-      await page.eval(`${expr}.click()`);
+      await hub.eval(`${expr}.click()`);
     };
     const running = (id) =>
       `document.body.dataset.running === ${JSON.stringify(id)} ? true : (document.body.dataset.notice || document.body.dataset.failed ? (() => { throw new Error("the app did not open: " + (document.body.dataset.notice || document.body.dataset.failed)); })() : null)`;
     const waitRunning = async (id) => {
       await page.waitFor(running(id), 20000).catch(async (err) => {
         const state = await page.eval(`JSON.stringify({ data: { ...document.body.dataset }, windows: document.querySelectorAll("#host-app").length, frames: document.querySelectorAll("iframe").length, last: document.querySelector("iframe")?.dataset.last, consent: !!document.getElementById("host-consent") })`);
-        const inFrame = await page.frameEval(`JSON.stringify({ text: document.body.innerText.slice(0, 200), data: { ...document.body.dataset } })`).catch((e) => String(e));
+        const inFrame = await frame.eval(`JSON.stringify({ text: document.body.innerText.slice(0, 200), data: { ...document.body.dataset } })`).catch((e) => String(e));
         throw new Error(`${id} did not start: ${state} frame: ${inFrame} (${err.message.slice(0, 60)})`);
       });
     };
     const library = async () => {
-      if (await page.eval(`!!document.querySelector("#app .pl-back")`)) await page.eval(`document.querySelector("#app .pl-back").click()`);
+      if (await hub.eval(`!!document.querySelector("#app .pl-back")`)) await hub.eval(`document.querySelector("#app .pl-back").click()`);
       await click(`[...document.querySelectorAll("#app .pl-nav-item")].find((b) => b.textContent === "Library")`, "Library tab");
-      await page.waitFor(`document.querySelector("#app .pl-row") ? true : null`, 10000);
+      await hub.waitFor(`document.querySelector("#app .pl-row") ? true : null`, 10000);
     };
     /** Selects the app in the Hub app's library and presses Open. */
     const openApp = async (name) => {
       await library();
       await click(`[...document.querySelectorAll("#app .pl-row")].find((r) => r.querySelector(".pl-row-title")?.textContent === ${JSON.stringify(name)})`, `row ${name}`);
-      await page.waitFor(`document.querySelector("#app h1")?.textContent.includes(${JSON.stringify(name)}) ? true : null`, 10000);
+      await hub.waitFor(`document.querySelector("#app h1")?.textContent.includes(${JSON.stringify(name)}) ? true : null`, 10000);
       await click(button("Open"), "Open button");
     };
     const closeApp = async () => {
@@ -828,8 +845,9 @@ async function checkHub(cdpPort) {
       await page.waitFor(`document.body.dataset.ready === "true" || document.body.dataset.startError ? true : null`, 20000);
       const startError = await page.eval(`document.body.dataset.startError ?? ""`);
       if (startError) throw new Error(`the Hub did not start: ${startError}`);
-      await page.waitFor(`document.querySelectorAll("#app .pl-row").length > 0 ? true : null`, 10000);
-      const rows = await page.eval(`[...document.querySelectorAll("#app .pl-row-title")].map((t) => t.textContent).join(",")`);
+      if ((await page.eval(`document.getElementById("hub-frame")?.getAttribute("sandbox")`)) !== "allow-scripts") throw new Error("the Hub app is not in a sandboxed frame");
+      await hub.waitFor(`document.querySelectorAll("#app .pl-row").length > 0 ? true : null`, 10000);
+      const rows = await hub.eval(`[...document.querySelectorAll("#app .pl-row-title")].map((t) => t.textContent).join(",")`);
       if (rows !== "Calculator,Counter,Notes,Stopwatch,Todo,Utility,Budget".split(",").sort().join(",")) {
         throw new Error(`the Hub library shows ${rows}`);
       }
@@ -840,17 +858,17 @@ async function checkHub(cdpPort) {
 
     // Discover: search the registry.
     await click(`[...document.querySelectorAll("#app .pl-nav-item")].find((b) => b.textContent === "Discover")`, "Discover tab");
-    await page.waitFor(`document.querySelector("#app input[type=text]") ? true : null`, 10000);
-    await page.eval(`(() => { const i = document.querySelector("#app input[type=text]"); i.value = "util"; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    await hub.waitFor(`document.querySelector("#app input[type=text]") ? true : null`, 10000);
+    await hub.eval(`(() => { const i = document.querySelector("#app input[type=text]"); i.value = "util"; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
     await click(button("Search"), "Search button");
-    await page.waitFor(`document.getElementById("app").innerText.includes("1 app found.") ? true : null`, 10000);
+    await hub.waitFor(`document.getElementById("app").innerText.includes("1 app found.") ? true : null`, 10000);
     if (!(await appText()).includes("Utility")) throw new Error(`search "util" does not find Utility:\n${await appText()}`);
     await hubAxe("hub discover");
 
     // Counter (no capabilities): it opens at once, in the sandboxed frame.
     await openApp("Counter");
     await waitRunning(ID("counter"));
-    const sandbox = await page.eval(`document.querySelector(".host-frame").getAttribute("sandbox")`);
+    const sandbox = await page.eval(`document.querySelector("#host-app .host-frame").getAttribute("sandbox")`);
     if (sandbox !== "allow-scripts") throw new Error(`the app frame has sandbox="${sandbox}"`);
     await frame.waitFor(`document.querySelector("#app button") ? true : null`, 20000);
     // The frame has an opaque origin: no storage, no cookies, no hub DOM.
@@ -897,7 +915,7 @@ async function checkHub(cdpPort) {
     await library();
     await click(`[...document.querySelectorAll("#app .pl-action")].find((b) => b.textContent === "Refresh")`, "Refresh action");
     await click(`[...document.querySelectorAll("#app .pl-row")].find((r) => r.querySelector(".pl-row-title")?.textContent === "Utility")`, "row Utility");
-    await page.waitFor(`document.getElementById("app").innerText.includes("Not allowed") ? true : null`, 5000).catch(async () => {
+    await hub.waitFor(`document.getElementById("app").innerText.includes("Not allowed") ? true : null`, 5000).catch(async () => {
       throw new Error(`the Hub app does not show the refused grant:\n${await appText()}`);
     });
 
@@ -931,8 +949,8 @@ async function checkHub(cdpPort) {
     await closeApp();
 
     // The Hub app turns store.kv off for notes: notes runs and reads nothing.
-    await page.eval(`[...document.querySelectorAll("#app label.pl-toggle")].find((l) => l.textContent.includes("Allow store.kv")).querySelector("input").click()`);
-    await page.waitFor(`document.getElementById("app").innerText.includes("Not allowed") ? true : null`, 5000);
+    await hub.eval(`[...document.querySelectorAll("#app label.pl-toggle")].find((l) => l.textContent.includes("Allow store.kv")).querySelector("input").click()`);
+    await hub.waitFor(`document.getElementById("app").innerText.includes("Not allowed") ? true : null`, 5000);
     await click(button("Open"), "Open button");
     await waitRunning(ID("notes"));
     await frame.waitFor(`document.querySelector("#app button") ? true : null`, 10000);
@@ -944,7 +962,7 @@ async function checkHub(cdpPort) {
     await page.waitFor(`document.body.dataset.notice ? true : null`, 10000);
     const notice = await page.eval(`document.body.dataset.notice`);
     if (!notice.includes("does not match the registry digest")) throw new Error(`no digest message: ${notice}`);
-    if (await page.eval(`document.querySelector(".host-frame") !== null`)) throw new Error("a refused package has an app frame");
+    if (await page.eval(`document.querySelector("#host-app .host-frame") !== null`)) throw new Error("a refused package has an app frame");
     await hubAxe("notice (digest)");
     await page.eval(`document.querySelector(".host-dialog button").click()`);
     await page.eval(`delete document.body.dataset.notice`);
@@ -977,7 +995,10 @@ async function checkHub(cdpPort) {
     // (their clicks then miss).
     await page.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 800, deviceScaleFactor: 2, mobile: true });
     await library();
-    const overflow = await page.eval(`document.documentElement.scrollWidth - window.innerWidth`);
+    const overflow = Math.max(
+      await page.eval(`document.documentElement.scrollWidth - window.innerWidth`),
+      await hub.eval(`document.documentElement.scrollWidth - window.innerWidth`),
+    );
     if (overflow > 0) throw new Error(`the Hub scrolls sideways by ${overflow}px at 390px`);
     await hubAxe("hub library (phone)");
     await shot("library-phone");

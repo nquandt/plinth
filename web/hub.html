@@ -174,6 +174,13 @@
         padding: 24px 16px;
         font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
       }
+      /* The Hub app runs in its own sandboxed frame, over the whole page. */
+      #hub-frame {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
       .host-visually-hidden {
         position: absolute;
         width: 1px;
@@ -186,8 +193,8 @@
   </head>
   <body>
     <!-- The Hub UI is the Plinth app examples/hub; hub-shell.js loads it
-         from the registry and runs it with the plinth:hub backend
-         (docs/web-hub.md). -->
+         from the registry and runs it in a sandboxed frame with the
+         plinth:hub backend (docs/web-hub.md). -->
     <div id="app"><p style="padding: 24px">Loading the Hub&hellip;</p></div>
     <div class="host-visually-hidden" id="host-status" role="status" aria-live="polite"></div>
     <script type="module" src="hub-shell.js"></script>

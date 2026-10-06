@@ -101,6 +101,17 @@ function protocolChecks() {
   assert.equal(checkFrameMessage({ ...fetchMsg, body: 5 }), null);
   assert.ok(checkFrameMessage({ channel: CHANNEL, type: "size", height: 480 }));
   assert.equal(checkFrameMessage({ channel: CHANNEL, type: "size", height: -1 }), null);
+  // The plinth:hub bridge of the Hub app frame.
+  assert.ok(checkFrameMessage({ channel: CHANNEL, type: "hub-save", state: { schema: "x" } }));
+  assert.equal(checkFrameMessage({ channel: CHANNEL, type: "hub-save", state: null }), null);
+  assert.equal(checkFrameMessage({ channel: CHANNEL, type: "hub-save", state: [] }), null);
+  assert.ok(checkFrameMessage({ channel: CHANNEL, type: "hub-launch", id: "a.b" }));
+  assert.ok(checkFrameMessage({ channel: CHANNEL, type: "hub-call", id: 3, method: "search", args: ["util"] }));
+  assert.ok(checkFrameMessage({ channel: CHANNEL, type: "hub-call", id: 3, method: "checkUpdates", args: [] }));
+  assert.equal(checkFrameMessage({ channel: CHANNEL, type: "hub-call", id: 3, method: "packageBytes", args: [] }), null, "only the registry calls");
+  assert.equal(checkFrameMessage({ channel: CHANNEL, type: "hub-call", id: 3, method: "constructor", args: [] }), null);
+  assert.equal(checkFrameMessage({ channel: CHANNEL, type: "hub-call", id: 3, method: "search", args: [1] }), null);
+  assert.equal(checkFrameMessage({ channel: CHANNEL, type: "hub-call", id: 3, method: "search", args: ["a", "b"] }), null);
   const declared = new Set(["net:api.example.com", "net.local"]);
   assert.equal(netDenied("https://api.example.com/x", declared), null);
   assert.equal(netDenied("https://other.example.com/x", declared), "denied:undeclared");

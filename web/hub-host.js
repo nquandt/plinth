@@ -149,6 +149,27 @@ export class HubHost {
     this.catalog = new Map();
     this.sourceErrors = [];
     this.saving = Promise.resolve();
+    /** Called after each change of the state (`save`), for example to tell the Hub app frame. */
+    this.onChange = () => {};
+  }
+
+  /**
+   * The state and the catalog as plain data, for the Hub app frame
+   * (`FrameHub`): a sandboxed frame cannot read IndexedDB or ask the
+   * registries itself.
+   */
+  snapshot() {
+    return { state: structuredClone(this.state), catalog: [...this.catalog.values()], sourceErrors: [...this.sourceErrors] };
+  }
+
+  /** Takes a snapshot (each field is optional). The state must have the current schema. */
+  applySnapshot({ state, catalog, sourceErrors } = {}) {
+    if (state !== undefined) {
+      if (!state || typeof state !== "object" || state.schema !== emptyState().schema) throw new Error("the Hub state has an unknown schema");
+      this.state = { ...emptyState(), ...structuredClone(state) };
+    }
+    if (Array.isArray(catalog)) this.catalog = new Map(catalog.map((e) => [e.id, e]));
+    if (Array.isArray(sourceErrors)) this.sourceErrors = sourceErrors.map(String);
   }
 
   /** Reads the stored state and the registries. Call it before the Hub app starts. */
@@ -163,6 +184,7 @@ export class HubHost {
   save() {
     const snapshot = structuredClone(this.state);
     this.saving = this.saving.then(() => this.persist.save(snapshot)).catch((err) => console.error("the Hub cannot save its state:", err));
+    this.onChange();
     return this.saving;
   }
 
@@ -545,5 +567,67 @@ export class HubHost {
     this.grantLowRisk(id, newest);
     this.save();
     return newest.version;
+  }
+}
+
+/** The calls of `plinth:hub` that read the registries: the Hub app frame asks the page for them. */
+export const REMOTE_HUB_CALLS = ["search", "install", "checkUpdates", "update"];
+
+/**
+ * The `plinth:hub` backend inside the sandboxed frame of the Hub app
+ * (`app-frame.js`). The frame has an opaque origin, so it cannot read
+ * IndexedDB or ask the registries (no CORS for the origin "null"), and the
+ * synchronous calls of the app cannot wait for the page. Thus the frame
+ * keeps a copy of the page's `HubHost`: the page sends a `snapshot()` at
+ * the start; the synchronous calls run on the copy and send each new state
+ * to the page (`hub-save`); `launch` goes to the page (`hub-launch`); the
+ * calls that read the registries run in the page (`hub-call`), which
+ * answers with the result and a new snapshot. When the page changes the
+ * state (the consent window), it sends `hub-state`.
+ */
+export class FrameHub extends HubHost {
+  /** `send(msg)` posts to the page; `ask(type, fields)` posts and resolves with the answer. */
+  constructor(snapshot, { send, ask }) {
+    super({
+      persist: memoryPersist(),
+      onLaunch: (id) => send({ type: "hub-launch", id }),
+      fetchImpl: () => Promise.reject(new Error("the Hub app frame does not read the registries")),
+    });
+    this.send = send;
+    this.ask = ask;
+    this.applySnapshot(snapshot);
+  }
+
+  /** Sends the state at once, so that the page has it before a later `launch` or `hub-call`. */
+  save() {
+    this.send({ type: "hub-save", state: structuredClone(this.state) });
+    return this.saving;
+  }
+
+  async remote(method, args) {
+    const answer = await this.ask("hub-call", { method, args });
+    if (answer?.snapshot) this.applySnapshot(answer.snapshot);
+    if (!answer?.ok) throw new Error(answer?.error ?? "the Hub page did not answer");
+    return answer.value;
+  }
+
+  search(query) {
+    return this.remote("search", [String(query)]);
+  }
+
+  install(id) {
+    return this.remote("install", [String(id)]);
+  }
+
+  checkUpdates(only = "") {
+    return this.remote("checkUpdates", [String(only)]);
+  }
+
+  update(id) {
+    return this.remote("update", [String(id)]);
+  }
+
+  refresh() {
+    return Promise.resolve(this.sourceErrors);
   }
 }

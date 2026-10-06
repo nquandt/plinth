@@ -128,7 +128,7 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 
 ## 9. Next steps (in order)
 
-1. **Web export, rest:** make `web/hub.html` a `<plinth-app>` page (the frame first needs a `plinth:hub` bridge to `hub-host.js` in the page); minify `plinth.js` (136 KiB).
+1. (Done 2026-10-06: the web Hub app runs in its own sandboxed frame with the `plinth:hub` bridge. Small rest: minify `plinth.js`.) **Do not spend most time on the web host** (owner, 2026-10-06): the next steps are mostly outside `web/`.
 2. **7GUIs, tasks 1–5** (`docs/VALIDATION.md` V1) in `examples/7guis/`, on both hosts, with tests; record the numbers in VALIDATION §6.
 3. **Level 2 UI, phase U1** (`docs/UI-ADVANCED.md`): `Box`, `Span`, `Pressable`, `Scroll` with typed props and tokens, on gpui and the DOM, a gallery, screenshot tests.
 4. **Storage, first slice** (`docs/STORAGE.md` §6): `plinth:files` on a private space and a granted `vault` space, local folder and OPFS providers, host sync to rustfs and Azurite in Docker, Hub UI for spaces, isolation tests. Editor: Markdown source plus a `Markdown` display control. Then the notes app (VALIDATION V2).

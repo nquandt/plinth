@@ -246,8 +246,8 @@ body {
   cursor: pointer;
 }
 .pl-action-destructive {
-  color: #e5484d;
-  border-color: #e5484d;
+  color: var(--pl-danger);
+  border-color: var(--pl-danger);
 }
 .pl-checkbox-field,
 .pl-toggle {

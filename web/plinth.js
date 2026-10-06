@@ -9,7 +9,7 @@
 
 function plinthBundle(mode, baseUrl) {
   "use strict";
-  const STYLE_CSS = "/* Minimal, runtime-owned look for the web host spike (SPEC.md §3: apps\n   declare intent, the runtime owns layout, spacing and color). */\n\n/* The renderer hides optional parts (an empty label, the back button) with\n   the `hidden` attribute; a class's `display` must not show them again. */\n[hidden] {\n  display: none !important;\n}\n\n:root {\n  --pl-bg: #0b0c0f;\n  --pl-surface: #15171c;\n  --pl-text: #e7e9ec;\n  --pl-muted: #9aa0a8;\n  --pl-accent: #3b63d1;\n  --pl-accent-text: #ffffff;\n  --pl-danger: #e5484d;\n  --pl-border: #262a31;\n  color-scheme: dark;\n  font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif;\n}\n\n/* Light mode: the desktop host's light theme tokens (SPEC.md §3). Only\n   applied when the OS/browser prefers light AND the page has not been\n   forced dark some other way, matching how the desktop theme follows the\n   system setting. */\n@media (prefers-color-scheme: light) {\n  :root {\n    --pl-bg: #f5f6f8;\n    --pl-surface: #ffffff;\n    --pl-text: #1b1d21;\n    --pl-muted: #5b6168;\n    --pl-accent: #2f54c7;\n    --pl-accent-text: #ffffff;\n    --pl-danger: #c62828;\n    --pl-border: #d8dbe0;\n    color-scheme: light;\n  }\n}\n\nbody {\n  margin: 0;\n  background: var(--pl-bg);\n  color: var(--pl-text);\n}\n\n#app {\n  display: flex;\n  min-height: 100vh;\n}\n\n.pl-nav {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  padding: 12px;\n  border-right: 1px solid var(--pl-border);\n  min-width: 160px;\n}\n\n.pl-nav-item {\n  text-align: left;\n  background: transparent;\n  color: var(--pl-text);\n  border: none;\n  border-radius: 6px;\n  padding: 8px 10px;\n  cursor: pointer;\n}\n.pl-nav-item:disabled {\n  background: var(--pl-surface);\n  color: var(--pl-accent);\n  cursor: default;\n}\n\n*, *::before, *::after {\n  box-sizing: border-box;\n}\n\n/* Visible keyboard focus on every interactive element (SPEC.md §6: keyboard\n   parity with the desktop host). */\n:focus-visible {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n\n.pl-row-pressable {\n  cursor: pointer;\n}\n\n.pl-screen {\n  flex: 1;\n  min-width: 0;\n  padding: 24px;\n  max-width: 640px;\n}\n\n.pl-title {\n  font-size: 1.5rem;\n  margin: 0 0 16px;\n}\n\n.pl-section {\n  /* A fieldset is min-content wide by default; let it shrink on compact. */\n  min-width: 0;\n  border: 1px solid var(--pl-border);\n  border-radius: 10px;\n  padding: 12px 16px 16px;\n  margin: 0 0 16px;\n}\n\n.pl-section-title {\n  color: var(--pl-muted);\n  font-size: 0.8rem;\n  text-transform: uppercase;\n  letter-spacing: 0.04em;\n  padding: 0 4px;\n}\n\n.pl-text {\n  margin: 4px 0;\n}\n\n.pl-heading {\n  margin: 8px 0;\n}\n\n.pl-button {\n  background: var(--pl-accent);\n  color: #fff;\n  border: none;\n  border-radius: 6px;\n  padding: 8px 14px;\n  cursor: pointer;\n  margin: 4px 4px 4px 0;\n}\n.pl-button:disabled {\n  opacity: 0.5;\n  cursor: default;\n}\n\n.pl-field {\n  display: block;\n  margin: 8px 0;\n}\n.pl-field-label {\n  display: block;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n  margin-bottom: 4px;\n}\n.pl-input,\n.pl-select,\n.pl-textarea {\n  width: 100%;\n  box-sizing: border-box;\n  background: var(--pl-surface);\n  color: var(--pl-text);\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  padding: 8px 10px;\n  font: inherit;\n  color-scheme: inherit;\n}\n\n.pl-checkbox,\n.pl-slider {\n  accent-color: var(--pl-accent);\n  color-scheme: inherit;\n}\n\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin: 8px 0;\n}\n\n.pl-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.pl-row {\n  display: flex;\n  justify-content: space-between;\n  align-items: center;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  padding: 10px 12px;\n}\n.pl-row-header {\n  display: flex;\n  flex-direction: column;\n}\n.pl-row-title {\n  font-weight: 600;\n}\n.pl-row-subtitle {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-row-trailing {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n  flex: none;\n  white-space: nowrap;\n}\n.pl-row-actions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.pl-empty {\n  color: var(--pl-muted);\n  text-align: center;\n  padding: 24px;\n}\n\n/* UI API 1.2 controls (SPEC.md §6.3) */\n.pl-screen-header {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n}\n.pl-back {\n  border: none;\n  background: transparent;\n  color: var(--pl-accent, #3b7);\n  cursor: pointer;\n  font-size: 0.95rem;\n}\n.pl-toolbar {\n  display: flex;\n  gap: 8px;\n  margin-bottom: 12px;\n}\n.pl-action {\n  border: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n  border-radius: 6px;\n  padding: 6px 10px;\n  cursor: pointer;\n}\n.pl-action-destructive {\n  color: #e5484d;\n  border-color: #e5484d;\n}\n.pl-checkbox-field,\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.pl-textarea {\n  min-height: 72px;\n}\n.pl-slider-field,\n.pl-progress-field {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.pl-slider {\n  width: 100%;\n}\n.pl-segmented {\n  display: flex;\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  overflow: hidden;\n}\n.pl-segment {\n  flex: 1;\n  text-align: center;\n  padding: 6px 8px;\n  cursor: pointer;\n  color: var(--pl-text);\n}\n.pl-segment-input {\n  position: absolute;\n  opacity: 0;\n}\n/* Selected segment: accent background with contrasting text, as the\n   desktop host shows the selected Picker option (SPEC.md §6.3). Updates\n   live because the renderer rebuilds the segment markup on every op-stream\n   commit, including the `value` change the app sends back after `change`. */\n.pl-segment:has(.pl-segment-input:checked) {\n  background: var(--pl-accent);\n  color: var(--pl-accent-text);\n}\n.pl-segment-input:focus-visible ~ .pl-segment-label {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n.pl-badge {\n  display: inline-block;\n  background: var(--pl-accent, #3b7);\n  color: white;\n  border-radius: 999px;\n  padding: 2px 8px;\n  font-size: 0.8rem;\n}\n.pl-image {\n  width: 100%;\n  overflow: hidden;\n  border-radius: 8px;\n}\n.pl-image-img {\n  width: 100%;\n  height: 100%;\n  object-fit: cover;\n  display: block;\n}\n/* Regular/wide: cap the image height and center it horizontally, keeping\n   the aspect ratio (SPEC.md §6.3). Compact keeps the full-width default. */\n@media (min-width: 600px) {\n  .pl-image-square,\n  .pl-image-tall {\n    width: auto;\n    max-width: 100%;\n    max-height: 360px;\n    margin: 0 auto;\n  }\n  .pl-image-wide {\n    width: auto;\n    max-width: 100%;\n    max-height: 280px;\n    margin: 0 auto;\n  }\n}\n.pl-image-placeholder {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: var(--pl-surface-alt, #eee);\n  border: 1px solid var(--pl-border, #ccc);\n  color: var(--pl-text-muted, #666);\n  font-size: 0.8rem;\n  text-align: center;\n  padding: 8px;\n}\n\n/* <Chart> (SPEC.md §6.3, UI API 1.5): the app never picks these colors.\n   The chart palette is derived from the accent, hue-rotated with the CSS\n   relative color syntax, so it stays distinguishable in light and dark\n   without the app or this file naming a single fixed hex value. */\n.pl-chart {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.pl-chart-empty {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  height: 120px;\n  border-radius: 8px;\n  background: var(--pl-surface-alt, #eee);\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-chart-svg {\n  width: 100%;\n  height: 160px;\n}\n.pl-chart-axis-label {\n  font-size: 7px;\n  fill: var(--pl-muted);\n}\n/* `fill: none` here, not as an SVG attribute: the palette class below sets\n   `fill`, and CSS wins over presentation attributes. */\n.pl-chart-line {\n  stroke-width: 2;\n  stroke: currentColor;\n  fill: none !important;\n}\n.pl-chart-c0 { fill: var(--pl-accent); color: var(--pl-accent); stroke: var(--pl-accent); }\n.pl-chart-c1 { fill: hsl(from var(--pl-accent) calc(h + 180) s l); color: hsl(from var(--pl-accent) calc(h + 180) s l); }\n.pl-chart-c2 { fill: hsl(from var(--pl-accent) calc(h + 45) s l); color: hsl(from var(--pl-accent) calc(h + 45) s l); }\n.pl-chart-c3 { fill: hsl(from var(--pl-accent) calc(h + 223) s l); color: hsl(from var(--pl-accent) calc(h + 223) s l); }\n.pl-chart-c4 { fill: hsl(from var(--pl-accent) calc(h + 108) s l); color: hsl(from var(--pl-accent) calc(h + 108) s l); }\n.pl-chart-c5 { fill: var(--pl-muted); color: var(--pl-muted); }\n.pl-chart-legend {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 4px 12px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n}\n.pl-chart-legend-item {\n  display: flex;\n  align-items: center;\n  gap: 4px;\n}\n.pl-chart-legend-swatch {\n  width: 10px;\n  height: 10px;\n  border-radius: 2px;\n  background: currentColor;\n}\n.pl-chart-legend-label {\n  color: var(--pl-text);\n}\n.pl-chart-legend-value {\n  color: var(--pl-muted);\n}\n/* The zero line of bar and line charts: negative values go below it. */\n.pl-chart-zero {\n  stroke: var(--pl-muted);\n  stroke-width: 1;\n}\n/* An all-zero pie: a neutral disc, as on the desktop. */\n.pl-chart-track {\n  fill: var(--pl-border);\n}\n/* Visually hidden but still reachable by a screen reader: the Chart's\n   exact-value data table (SPEC.md §6.3). */\n.pl-sr-only {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n.pl-icon {\n  display: inline-block;\n  color: var(--pl-text);\n}\n.pl-icon.pl-tone-muted {\n  color: var(--pl-muted);\n}\n.pl-icon.pl-tone-danger {\n  color: var(--pl-danger);\n}\n.pl-icon.pl-tone-success {\n  color: #2e7d32;\n}\n.pl-tabs {\n  display: flex;\n  gap: 4px;\n  border-bottom: 1px solid var(--pl-border);\n  margin-bottom: 8px;\n}\n.pl-tab {\n  border: none;\n  background: transparent;\n  padding: 8px 12px;\n  cursor: pointer;\n  color: var(--pl-muted);\n  font: inherit;\n}\n.pl-tab-selected {\n  border-bottom: 2px solid var(--pl-accent, #3b7);\n  font-weight: 600;\n}\n.pl-sheet,\n.pl-dialog {\n  border: none;\n  border-radius: 10px;\n  padding: 20px;\n  max-width: 480px;\n}\n.pl-menu {\n  position: relative;\n  display: inline-block;\n}\n.pl-menu-popover {\n  position: absolute;\n  top: 100%;\n  left: 0;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);\n  display: flex;\n  flex-direction: column;\n  padding: 4px;\n  z-index: 10;\n}\n.pl-menu-item {\n  text-align: left;\n  border: none;\n  background: transparent;\n}\n.pl-grid {\n  display: grid;\n  grid-template-columns: repeat(2, 1fr);\n  gap: 12px;\n}\n@media (min-width: 640px) {\n  .pl-grid {\n    grid-template-columns: repeat(3, 1fr);\n  }\n}\n@media (min-width: 1024px) {\n  .pl-grid {\n    grid-template-columns: repeat(4, 1fr);\n  }\n}\n\n/* Width classes (SPEC.md §6.1): compact < 600px <= regular < 1200px <= wide.\n   Compact: a bottom tab bar. Regular: a narrow icon/label rail. Wide: a\n   full sidebar (the default styles above already give this). */\n@media (max-width: 599.98px) {\n  #app {\n    flex-direction: column;\n  }\n  .pl-nav {\n    position: fixed;\n    left: 0;\n    right: 0;\n    bottom: 0;\n    flex-direction: row;\n    justify-content: space-around;\n    align-items: stretch;\n    gap: 0;\n    padding: 4px;\n    min-width: 0;\n    width: 100%;\n    box-sizing: border-box;\n    border-right: none;\n    border-top: 1px solid var(--pl-border);\n    background: var(--pl-bg);\n    order: 2;\n  }\n  .pl-nav-item {\n    flex: 1;\n    text-align: center;\n    font-size: 0.8rem;\n  }\n  .pl-screen {\n    order: 1;\n    padding: 16px;\n    /* Leave room above the fixed bottom tab bar. */\n    padding-bottom: 72px;\n  }\n}\n\n@media (min-width: 600px) and (max-width: 1199.98px) {\n  .pl-nav {\n    min-width: 72px;\n    padding: 12px 6px;\n  }\n  .pl-nav-item {\n    text-align: center;\n    font-size: 0.78rem;\n    padding: 8px 4px;\n  }\n}\n\n/* Fields (SPEC.md §6.4): label above the input on compact, beside it on\n   regular/wide. */\n@media (min-width: 600px) {\n  .pl-field:not(.pl-slider-field) {\n    display: flex;\n    align-items: baseline;\n    gap: 12px;\n  }\n  .pl-field:not(.pl-slider-field) .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n  .pl-field .pl-input,\n  .pl-field .pl-select,\n  .pl-field .pl-textarea,\n  .pl-field .pl-segmented {\n    flex: 1;\n  }\n  .pl-picker-field .pl-segmented {\n    flex: 1;\n  }\n  /* The slider field has its own column layout (label above the track) so\n     the value stays readable; put its label beside the track instead,\n     matching every other field (SPEC.md §6.4). */\n  .pl-slider-field {\n    flex-direction: row;\n    align-items: center;\n    gap: 12px;\n  }\n  .pl-slider-field .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n}\n\n/* The bar above an app that the web App Hub opened (docs/web-hub.md). */\n.pl-host-bar {\n  padding: 8px 16px;\n  border-bottom: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n}\n.pl-host-bar a {\n  color: var(--pl-text);\n}\n\n/* The app frame of a web export. Height \"content\": the frame takes the\n   height of the app, so the app must not take the height of the frame. */\n.pl-frame-content #app { min-height: 0; }\n.pl-frame-error { padding: 24px; color: var(--pl-danger); white-space: pre-wrap; }\n";
+  const STYLE_CSS = "/* Minimal, runtime-owned look for the web host spike (SPEC.md §3: apps\n   declare intent, the runtime owns layout, spacing and color). */\n\n/* The renderer hides optional parts (an empty label, the back button) with\n   the `hidden` attribute; a class's `display` must not show them again. */\n[hidden] {\n  display: none !important;\n}\n\n:root {\n  --pl-bg: #0b0c0f;\n  --pl-surface: #15171c;\n  --pl-text: #e7e9ec;\n  --pl-muted: #9aa0a8;\n  --pl-accent: #3b63d1;\n  --pl-accent-text: #ffffff;\n  --pl-danger: #e5484d;\n  --pl-border: #262a31;\n  color-scheme: dark;\n  font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif;\n}\n\n/* Light mode: the desktop host's light theme tokens (SPEC.md §3). Only\n   applied when the OS/browser prefers light AND the page has not been\n   forced dark some other way, matching how the desktop theme follows the\n   system setting. */\n@media (prefers-color-scheme: light) {\n  :root {\n    --pl-bg: #f5f6f8;\n    --pl-surface: #ffffff;\n    --pl-text: #1b1d21;\n    --pl-muted: #5b6168;\n    --pl-accent: #2f54c7;\n    --pl-accent-text: #ffffff;\n    --pl-danger: #c62828;\n    --pl-border: #d8dbe0;\n    color-scheme: light;\n  }\n}\n\nbody {\n  margin: 0;\n  background: var(--pl-bg);\n  color: var(--pl-text);\n}\n\n#app {\n  display: flex;\n  min-height: 100vh;\n}\n\n.pl-nav {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  padding: 12px;\n  border-right: 1px solid var(--pl-border);\n  min-width: 160px;\n}\n\n.pl-nav-item {\n  text-align: left;\n  background: transparent;\n  color: var(--pl-text);\n  border: none;\n  border-radius: 6px;\n  padding: 8px 10px;\n  cursor: pointer;\n}\n.pl-nav-item:disabled {\n  background: var(--pl-surface);\n  color: var(--pl-accent);\n  cursor: default;\n}\n\n*, *::before, *::after {\n  box-sizing: border-box;\n}\n\n/* Visible keyboard focus on every interactive element (SPEC.md §6: keyboard\n   parity with the desktop host). */\n:focus-visible {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n\n.pl-row-pressable {\n  cursor: pointer;\n}\n\n.pl-screen {\n  flex: 1;\n  min-width: 0;\n  padding: 24px;\n  max-width: 640px;\n}\n\n.pl-title {\n  font-size: 1.5rem;\n  margin: 0 0 16px;\n}\n\n.pl-section {\n  /* A fieldset is min-content wide by default; let it shrink on compact. */\n  min-width: 0;\n  border: 1px solid var(--pl-border);\n  border-radius: 10px;\n  padding: 12px 16px 16px;\n  margin: 0 0 16px;\n}\n\n.pl-section-title {\n  color: var(--pl-muted);\n  font-size: 0.8rem;\n  text-transform: uppercase;\n  letter-spacing: 0.04em;\n  padding: 0 4px;\n}\n\n.pl-text {\n  margin: 4px 0;\n}\n\n.pl-heading {\n  margin: 8px 0;\n}\n\n.pl-button {\n  background: var(--pl-accent);\n  color: #fff;\n  border: none;\n  border-radius: 6px;\n  padding: 8px 14px;\n  cursor: pointer;\n  margin: 4px 4px 4px 0;\n}\n.pl-button:disabled {\n  opacity: 0.5;\n  cursor: default;\n}\n\n.pl-field {\n  display: block;\n  margin: 8px 0;\n}\n.pl-field-label {\n  display: block;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n  margin-bottom: 4px;\n}\n.pl-input,\n.pl-select,\n.pl-textarea {\n  width: 100%;\n  box-sizing: border-box;\n  background: var(--pl-surface);\n  color: var(--pl-text);\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  padding: 8px 10px;\n  font: inherit;\n  color-scheme: inherit;\n}\n\n.pl-checkbox,\n.pl-slider {\n  accent-color: var(--pl-accent);\n  color-scheme: inherit;\n}\n\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin: 8px 0;\n}\n\n.pl-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.pl-row {\n  display: flex;\n  justify-content: space-between;\n  align-items: center;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  padding: 10px 12px;\n}\n.pl-row-header {\n  display: flex;\n  flex-direction: column;\n}\n.pl-row-title {\n  font-weight: 600;\n}\n.pl-row-subtitle {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-row-trailing {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n  flex: none;\n  white-space: nowrap;\n}\n.pl-row-actions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.pl-empty {\n  color: var(--pl-muted);\n  text-align: center;\n  padding: 24px;\n}\n\n/* UI API 1.2 controls (SPEC.md §6.3) */\n.pl-screen-header {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n}\n.pl-back {\n  border: none;\n  background: transparent;\n  color: var(--pl-accent, #3b7);\n  cursor: pointer;\n  font-size: 0.95rem;\n}\n.pl-toolbar {\n  display: flex;\n  gap: 8px;\n  margin-bottom: 12px;\n}\n.pl-action {\n  border: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n  border-radius: 6px;\n  padding: 6px 10px;\n  cursor: pointer;\n}\n.pl-action-destructive {\n  color: var(--pl-danger);\n  border-color: var(--pl-danger);\n}\n.pl-checkbox-field,\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.pl-textarea {\n  min-height: 72px;\n}\n.pl-slider-field,\n.pl-progress-field {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.pl-slider {\n  width: 100%;\n}\n.pl-segmented {\n  display: flex;\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  overflow: hidden;\n}\n.pl-segment {\n  flex: 1;\n  text-align: center;\n  padding: 6px 8px;\n  cursor: pointer;\n  color: var(--pl-text);\n}\n.pl-segment-input {\n  position: absolute;\n  opacity: 0;\n}\n/* Selected segment: accent background with contrasting text, as the\n   desktop host shows the selected Picker option (SPEC.md §6.3). Updates\n   live because the renderer rebuilds the segment markup on every op-stream\n   commit, including the `value` change the app sends back after `change`. */\n.pl-segment:has(.pl-segment-input:checked) {\n  background: var(--pl-accent);\n  color: var(--pl-accent-text);\n}\n.pl-segment-input:focus-visible ~ .pl-segment-label {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n.pl-badge {\n  display: inline-block;\n  background: var(--pl-accent, #3b7);\n  color: white;\n  border-radius: 999px;\n  padding: 2px 8px;\n  font-size: 0.8rem;\n}\n.pl-image {\n  width: 100%;\n  overflow: hidden;\n  border-radius: 8px;\n}\n.pl-image-img {\n  width: 100%;\n  height: 100%;\n  object-fit: cover;\n  display: block;\n}\n/* Regular/wide: cap the image height and center it horizontally, keeping\n   the aspect ratio (SPEC.md §6.3). Compact keeps the full-width default. */\n@media (min-width: 600px) {\n  .pl-image-square,\n  .pl-image-tall {\n    width: auto;\n    max-width: 100%;\n    max-height: 360px;\n    margin: 0 auto;\n  }\n  .pl-image-wide {\n    width: auto;\n    max-width: 100%;\n    max-height: 280px;\n    margin: 0 auto;\n  }\n}\n.pl-image-placeholder {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: var(--pl-surface-alt, #eee);\n  border: 1px solid var(--pl-border, #ccc);\n  color: var(--pl-text-muted, #666);\n  font-size: 0.8rem;\n  text-align: center;\n  padding: 8px;\n}\n\n/* <Chart> (SPEC.md §6.3, UI API 1.5): the app never picks these colors.\n   The chart palette is derived from the accent, hue-rotated with the CSS\n   relative color syntax, so it stays distinguishable in light and dark\n   without the app or this file naming a single fixed hex value. */\n.pl-chart {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.pl-chart-empty {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  height: 120px;\n  border-radius: 8px;\n  background: var(--pl-surface-alt, #eee);\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-chart-svg {\n  width: 100%;\n  height: 160px;\n}\n.pl-chart-axis-label {\n  font-size: 7px;\n  fill: var(--pl-muted);\n}\n/* `fill: none` here, not as an SVG attribute: the palette class below sets\n   `fill`, and CSS wins over presentation attributes. */\n.pl-chart-line {\n  stroke-width: 2;\n  stroke: currentColor;\n  fill: none !important;\n}\n.pl-chart-c0 { fill: var(--pl-accent); color: var(--pl-accent); stroke: var(--pl-accent); }\n.pl-chart-c1 { fill: hsl(from var(--pl-accent) calc(h + 180) s l); color: hsl(from var(--pl-accent) calc(h + 180) s l); }\n.pl-chart-c2 { fill: hsl(from var(--pl-accent) calc(h + 45) s l); color: hsl(from var(--pl-accent) calc(h + 45) s l); }\n.pl-chart-c3 { fill: hsl(from var(--pl-accent) calc(h + 223) s l); color: hsl(from var(--pl-accent) calc(h + 223) s l); }\n.pl-chart-c4 { fill: hsl(from var(--pl-accent) calc(h + 108) s l); color: hsl(from var(--pl-accent) calc(h + 108) s l); }\n.pl-chart-c5 { fill: var(--pl-muted); color: var(--pl-muted); }\n.pl-chart-legend {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 4px 12px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n}\n.pl-chart-legend-item {\n  display: flex;\n  align-items: center;\n  gap: 4px;\n}\n.pl-chart-legend-swatch {\n  width: 10px;\n  height: 10px;\n  border-radius: 2px;\n  background: currentColor;\n}\n.pl-chart-legend-label {\n  color: var(--pl-text);\n}\n.pl-chart-legend-value {\n  color: var(--pl-muted);\n}\n/* The zero line of bar and line charts: negative values go below it. */\n.pl-chart-zero {\n  stroke: var(--pl-muted);\n  stroke-width: 1;\n}\n/* An all-zero pie: a neutral disc, as on the desktop. */\n.pl-chart-track {\n  fill: var(--pl-border);\n}\n/* Visually hidden but still reachable by a screen reader: the Chart's\n   exact-value data table (SPEC.md §6.3). */\n.pl-sr-only {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n.pl-icon {\n  display: inline-block;\n  color: var(--pl-text);\n}\n.pl-icon.pl-tone-muted {\n  color: var(--pl-muted);\n}\n.pl-icon.pl-tone-danger {\n  color: var(--pl-danger);\n}\n.pl-icon.pl-tone-success {\n  color: #2e7d32;\n}\n.pl-tabs {\n  display: flex;\n  gap: 4px;\n  border-bottom: 1px solid var(--pl-border);\n  margin-bottom: 8px;\n}\n.pl-tab {\n  border: none;\n  background: transparent;\n  padding: 8px 12px;\n  cursor: pointer;\n  color: var(--pl-muted);\n  font: inherit;\n}\n.pl-tab-selected {\n  border-bottom: 2px solid var(--pl-accent, #3b7);\n  font-weight: 600;\n}\n.pl-sheet,\n.pl-dialog {\n  border: none;\n  border-radius: 10px;\n  padding: 20px;\n  max-width: 480px;\n}\n.pl-menu {\n  position: relative;\n  display: inline-block;\n}\n.pl-menu-popover {\n  position: absolute;\n  top: 100%;\n  left: 0;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);\n  display: flex;\n  flex-direction: column;\n  padding: 4px;\n  z-index: 10;\n}\n.pl-menu-item {\n  text-align: left;\n  border: none;\n  background: transparent;\n}\n.pl-grid {\n  display: grid;\n  grid-template-columns: repeat(2, 1fr);\n  gap: 12px;\n}\n@media (min-width: 640px) {\n  .pl-grid {\n    grid-template-columns: repeat(3, 1fr);\n  }\n}\n@media (min-width: 1024px) {\n  .pl-grid {\n    grid-template-columns: repeat(4, 1fr);\n  }\n}\n\n/* Width classes (SPEC.md §6.1): compact < 600px <= regular < 1200px <= wide.\n   Compact: a bottom tab bar. Regular: a narrow icon/label rail. Wide: a\n   full sidebar (the default styles above already give this). */\n@media (max-width: 599.98px) {\n  #app {\n    flex-direction: column;\n  }\n  .pl-nav {\n    position: fixed;\n    left: 0;\n    right: 0;\n    bottom: 0;\n    flex-direction: row;\n    justify-content: space-around;\n    align-items: stretch;\n    gap: 0;\n    padding: 4px;\n    min-width: 0;\n    width: 100%;\n    box-sizing: border-box;\n    border-right: none;\n    border-top: 1px solid var(--pl-border);\n    background: var(--pl-bg);\n    order: 2;\n  }\n  .pl-nav-item {\n    flex: 1;\n    text-align: center;\n    font-size: 0.8rem;\n  }\n  .pl-screen {\n    order: 1;\n    padding: 16px;\n    /* Leave room above the fixed bottom tab bar. */\n    padding-bottom: 72px;\n  }\n}\n\n@media (min-width: 600px) and (max-width: 1199.98px) {\n  .pl-nav {\n    min-width: 72px;\n    padding: 12px 6px;\n  }\n  .pl-nav-item {\n    text-align: center;\n    font-size: 0.78rem;\n    padding: 8px 4px;\n  }\n}\n\n/* Fields (SPEC.md §6.4): label above the input on compact, beside it on\n   regular/wide. */\n@media (min-width: 600px) {\n  .pl-field:not(.pl-slider-field) {\n    display: flex;\n    align-items: baseline;\n    gap: 12px;\n  }\n  .pl-field:not(.pl-slider-field) .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n  .pl-field .pl-input,\n  .pl-field .pl-select,\n  .pl-field .pl-textarea,\n  .pl-field .pl-segmented {\n    flex: 1;\n  }\n  .pl-picker-field .pl-segmented {\n    flex: 1;\n  }\n  /* The slider field has its own column layout (label above the track) so\n     the value stays readable; put its label beside the track instead,\n     matching every other field (SPEC.md §6.4). */\n  .pl-slider-field {\n    flex-direction: row;\n    align-items: center;\n    gap: 12px;\n  }\n  .pl-slider-field .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n}\n\n/* The bar above an app that the web App Hub opened (docs/web-hub.md). */\n.pl-host-bar {\n  padding: 8px 16px;\n  border-bottom: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n}\n.pl-host-bar a {\n  color: var(--pl-text);\n}\n\n/* The app frame of a web export. Height \"content\": the frame takes the\n   height of the app, so the app must not take the height of the frame. */\n.pl-frame-content #app { min-height: 0; }\n.pl-frame-error { padding: 24px; color: var(--pl-danger); white-space: pre-wrap; }\n";
 
   // ---- zip.js
   const __zip = (() => {
@@ -1925,6 +1925,15 @@ class DomRenderer {
     }
     if (v.place) v.place(children);
     else reconcile(v.slot, children.map((c) => c.el));
+    // A List with no rows (only an EmptyState, or nothing) is not a list
+    // for assistive technology: role="list" needs listitem children.
+    if (v.kind === ControlKind.list) {
+      const items = children.some((c) => c.el.getAttribute("role") === "listitem");
+      if (items !== v.el.hasAttribute("role")) {
+        if (items) v.el.setAttribute("role", "list");
+        else v.el.removeAttribute("role");
+      }
+    }
   }
 
   /** The nav bar, the shown screen and the page title. */
@@ -2948,7 +2957,14 @@ const FRAME_TYPES = {
   dialog: { id: "number", kind: "string", message: "string" },
   "net-fetch": { id: "number", url: "string", method: "string" },
   size: { height: "number" },
+  // Only from the frame of the Hub app (the page gave it a `plinth:hub` snapshot).
+  "hub-save": { state: "object" },
+  "hub-launch": { id: "string" },
+  "hub-call": { id: "number", method: "string" },
 };
+
+/** The `hub-call` methods (`REMOTE_HUB_CALLS` in hub-host.js). */
+const HUB_CALLS = ["search", "install", "checkUpdates", "update"];
 
 /**
  * Checks a message from an app frame. The frame is not trusted: it runs
@@ -2969,6 +2985,11 @@ function checkFrameMessage(data) {
     if (!headersOk || (data.body !== null && typeof data.body !== "string")) return null;
   }
   if (data.type === "size" && !(Number.isFinite(data.height) && data.height >= 0)) return null;
+  if (data.type === "hub-save" && (data.state === null || Array.isArray(data.state))) return null;
+  if (data.type === "hub-call") {
+    if (!HUB_CALLS.includes(data.method)) return null;
+    if (!Array.isArray(data.args) || data.args.length > 1 || !data.args.every((a) => typeof a === "string")) return null;
+  }
   return data;
 }
 
@@ -2993,10 +3014,11 @@ function applyKvMessage(store, id, msg, quota = KV_QUOTA) {
 /**
  * The `start` message to an app frame: the package and the core (as
  * `ArrayBuffer`s, transferred), the kv snapshot of this app only, the quota,
- * and the capabilities that the user refused.
+ * the capabilities that the user refused, and for the Hub app only, the
+ * `plinth:hub` snapshot (`HubHost.snapshot()`), else null.
  */
-function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA }) {
-  return { channel: CHANNEL, type: "start", pkg, core, kv: store.kvSnapshot(id), quota, refused: [...refused] };
+function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA, hub = null }) {
+  return { channel: CHANNEL, type: "start", pkg, core, kv: store.kvSnapshot(id), quota, refused: [...refused], hub };
 }
   return { KV_QUOTA, MAX_KEY, CHANNEL, entrySize, memoryStorage, HubStore, frameKvStore, checkFrameMessage, applyKvMessage, startMessage };
   })();
@@ -3084,6 +3106,9 @@ function hostDialog(kind, message, title = "") {
  * - `src`: the frame page (default `app-frame.html`); or `srcdoc`: the
  *   HTML of the frame page (a web export, SPEC.md §10.3).
  * - `autoHeight`: size the iframe to the content height that the frame reports.
+ * - `hub`: a `HubHost` (`hub-host.js`), for the Hub app only. If the app
+ *   may use `hub.manage`, the frame gets a snapshot and runs `plinth:hub`
+ *   on a copy (`FrameHub`); this side keeps the page's copy up to date.
  * - `askDialog(kind, message)`: default `hostDialog`.
  * - `fetchImpl`: default `fetch`.
  * - `onStarted()`, `onFailed(message)`.
@@ -3106,6 +3131,7 @@ class AppFrame {
   }
 
   destroy() {
+    if (this.hubListener) this.opts.hub.onChange = () => {};
     window.removeEventListener("message", this.onMessage);
     this.element.remove();
   }
@@ -3114,10 +3140,18 @@ class AppFrame {
     return this.declared.has(name) && !this.refused.has(name);
   }
 
-  answer(id, value) {
+  hubAllowed() {
+    return Boolean(this.opts.hub) && this.allowed("hub.manage");
+  }
+
+  post(msg) {
     // The frame has an opaque origin: "*" is the only target origin that
     // reaches it. The message goes to the window of this frame only.
-    this.element.contentWindow?.postMessage({ channel: CHANNEL, type: "answer", id, value }, "*");
+    this.element.contentWindow?.postMessage({ channel: CHANNEL, ...msg }, "*");
+  }
+
+  answer(id, value) {
+    this.post({ type: "answer", id, value });
   }
 
   handle(event) {
@@ -3136,7 +3170,15 @@ class AppFrame {
         this.sent = true;
         const pkg = this.opts.pkg.slice().buffer;
         const core = this.opts.core.slice().buffer;
-        const start = startMessage(store, appId, { pkg, core, refused: this.refused, quota: this.opts.quota });
+        const hub = this.hubAllowed() ? this.opts.hub : null;
+        const start = startMessage(store, appId, { pkg, core, refused: this.refused, quota: this.opts.quota, hub: hub?.snapshot() ?? null });
+        if (hub) {
+          // A change in the page (the consent window) goes to the frame's copy.
+          this.hubListener = true;
+          hub.onChange = () => {
+            if (!this.applyingHubSave) this.post({ type: "hub-state", state: hub.snapshot().state });
+          };
+        }
         if (!this.allowed("store.kv")) start.kv = {};
         this.element.contentWindow.postMessage(start, "*", [pkg, core]);
         break;
@@ -3165,6 +3207,35 @@ class AppFrame {
         const denied = netDenied(msg.url, this.declared, this.refused);
         if (denied) this.answer(msg.id, [false, 0, "", denied]);
         else httpFetch(msg.url, msg.method, msg.headers, msg.body, this.opts.fetchImpl).then((r) => this.answer(msg.id, r));
+        break;
+      }
+      case "hub-save":
+        if (!this.hubAllowed()) break;
+        try {
+          this.applyingHubSave = true;
+          this.opts.hub.applySnapshot({ state: msg.state });
+          this.opts.hub.save();
+        } catch (err) {
+          console.error("a hub state from the frame was refused:", err);
+        } finally {
+          this.applyingHubSave = false;
+        }
+        break;
+      case "hub-launch":
+        if (this.hubAllowed()) this.opts.hub.launch(msg.id);
+        break;
+      case "hub-call": {
+        if (!this.hubAllowed()) {
+          this.answer(msg.id, { ok: false, error: "denied" });
+          break;
+        }
+        const hub = this.opts.hub;
+        Promise.resolve()
+          .then(() => hub[msg.method](...msg.args))
+          .then(
+            (value) => this.answer(msg.id, { ok: true, value: value ?? null, snapshot: hub.snapshot() }),
+            (err) => this.answer(msg.id, { ok: false, error: String(err?.message ?? err), snapshot: hub.snapshot() }),
+          );
         break;
       }
       case "dialog": {
@@ -3364,7 +3435,7 @@ function defineElement({ frameDocument, baseUrl, styleCss }) {
 // of this app and the refused capabilities in one `start` message; the frame
 // sends kv writes, clipboard and dialog requests back (`hub-storage.js`).
 
-const { PlinthApp, readPlnt } = __plinth_web;
+const { PlinthApp, readPlnt, parseManifest } = __plinth_web;
 const { Tree, DomRenderer } = __dom_renderer;
 const { CHANNEL, frameKvStore } = __hub_storage;
 
@@ -3373,6 +3444,7 @@ const embedded = window.parent !== window;
 let parentOrigin = null;
 let started = false;
 let nextId = 1;
+let hub = null; // the `plinth:hub` copy of the Hub app (`FrameHub`), else null
 const pending = new Map(); // request id -> resolve
 
 function send(msg) {
@@ -3399,6 +3471,14 @@ function showError(text) {
 async function start(msg) {
   const { appWasm, manifestText, assets } = await readPlnt(new Uint8Array(msg.pkg));
   const kvStore = frameKvStore(msg.kv, msg.quota, (m) => send(m));
+  // For tests: which app this frame runs.
+  document.body.dataset.appId = parseManifest(manifestText).id;
+  if (msg.hub) {
+    // Only the Hub app gets a snapshot. A web export (plinth.js) never
+    // does, so the bundle never loads this module.
+    const { FrameHub } = await import("./hub-host.js");
+    hub = new FrameHub(msg.hub, { send, ask });
+  }
   const app = new PlinthApp();
   const tree = new Tree();
   app.onCommit = (ops) => tree.apply(ops);
@@ -3415,6 +3495,7 @@ async function start(msg) {
     // The parent page makes each request (it checks the capability again),
     // so a request carries the page's origin, not "null".
     netFetch: (url, method, headers, body) => ask("net-fetch", { url, method, headers, body }),
+    hub,
   });
   new DomRenderer(tree, container, app, assets);
   app.init([]);
@@ -3453,6 +3534,12 @@ window.addEventListener("message", (event) => {
     const resolve = pending.get(msg.id);
     pending.delete(msg.id);
     resolve(msg.value ?? null);
+  } else if (msg.type === "hub-state" && hub && (parentOrigin === "*" || event.origin === parentOrigin)) {
+    try {
+      hub.applySnapshot({ state: msg.state });
+    } catch (err) {
+      console.error(err);
+    }
   }
 });
 

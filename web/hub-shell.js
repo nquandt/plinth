@@ -8,17 +8,17 @@
 //    `plinth registry build --hub-trusted-key`), downloads the Hub app and
 //    a core, and checks them (digest, signature). The Hub app gets
 //    `hub.manage` only if a trusted key signed it (docs/HUB.md §4.1).
-// 2. Runs the Hub app in this page with the `plinth:hub` backend
-//    (`hub-host.js`, browse mode: the library is the registry listing; the
-//    user's grants, blocks, pins and groups are in IndexedDB).
+// 2. Runs the Hub app in a sandboxed frame, as every app (SPEC.md §10.3),
+//    with the `plinth:hub` backend (`hub-host.js`, browse mode: the library
+//    is the registry listing; the user's grants, blocks, pins and groups
+//    are in IndexedDB of this page). The frame runs `plinth:hub` on a copy
+//    (`FrameHub`) that this page keeps up to date (`frame-host.js`).
 // 3. On a launch: the consent window (a host dialog, not app UI) for the
 //    capabilities that are not decided, then the app window: a dialog with
 //    the app in its sandboxed frame. The frame pair (`app-frame.js` in the
 //    frame, `frame-host.js` here) is the same for every page that shows a
 //    Plinth app; this page adds only the Hub parts.
 
-import { PlinthApp, readPlnt } from "./plinth-web.js";
-import { Tree, DomRenderer } from "./dom-renderer.js";
 import { loadRegistry, loadAppDocument, latestVersion, pickCore, packageUrl, coreUrl, fetchBytes } from "./registry-client.js";
 import { checkPackage, checkCore } from "./hub-integrity.js";
 import { HubHost, indexedDbPersist, memoryPersist } from "./hub-host.js";
@@ -348,16 +348,23 @@ async function start() {
   }
   host = await new HubHost({ persist, sources: [[registry.name ?? location.host, base]], hide: [summary.id], onLaunch: (id) => launchApp(id) }).load();
 
-  const { appWasm, manifestText, assets } = await readPlnt(pkg);
-  const app = new PlinthApp();
-  const tree = new Tree();
-  app.onCommit = (ops) => tree.apply(ops);
-  await app.load(coreBytes, appWasm, { log: (s) => console.log("[hub]", s), manifestText, hub: host });
-  container.replaceChildren();
-  new DomRenderer(tree, container, app, assets);
-  app.init([]);
+  const hubFrame = new AppFrame({
+    appId: summary.id,
+    title: summary.name,
+    pkg,
+    core: coreBytes,
+    declared: version.capabilities.map((c) => c.name ?? c),
+    refused: [],
+    store: appData,
+    hub: host,
+    onStarted: () => {
+      document.body.dataset.ready = "true";
+    },
+    onFailed: (message) => showStartError("The Hub app did not start", message),
+  });
+  hubFrame.element.id = "hub-frame";
+  container.replaceChildren(hubFrame.element);
   document.title = summary.name;
-  document.body.dataset.ready = "true";
 }
 
 start().catch((err) => {

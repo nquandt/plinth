@@ -79,6 +79,9 @@ export function hostDialog(kind, message, title = "") {
  * - `src`: the frame page (default `app-frame.html`); or `srcdoc`: the
  *   HTML of the frame page (a web export, SPEC.md §10.3).
  * - `autoHeight`: size the iframe to the content height that the frame reports.
+ * - `hub`: a `HubHost` (`hub-host.js`), for the Hub app only. If the app
+ *   may use `hub.manage`, the frame gets a snapshot and runs `plinth:hub`
+ *   on a copy (`FrameHub`); this side keeps the page's copy up to date.
  * - `askDialog(kind, message)`: default `hostDialog`.
  * - `fetchImpl`: default `fetch`.
  * - `onStarted()`, `onFailed(message)`.
@@ -101,6 +104,7 @@ export class AppFrame {
   }
 
   destroy() {
+    if (this.hubListener) this.opts.hub.onChange = () => {};
     window.removeEventListener("message", this.onMessage);
     this.element.remove();
   }
@@ -109,10 +113,18 @@ export class AppFrame {
     return this.declared.has(name) && !this.refused.has(name);
   }
 
-  answer(id, value) {
+  hubAllowed() {
+    return Boolean(this.opts.hub) && this.allowed("hub.manage");
+  }
+
+  post(msg) {
     // The frame has an opaque origin: "*" is the only target origin that
     // reaches it. The message goes to the window of this frame only.
-    this.element.contentWindow?.postMessage({ channel: CHANNEL, type: "answer", id, value }, "*");
+    this.element.contentWindow?.postMessage({ channel: CHANNEL, ...msg }, "*");
+  }
+
+  answer(id, value) {
+    this.post({ type: "answer", id, value });
   }
 
   handle(event) {
@@ -131,7 +143,15 @@ export class AppFrame {
         this.sent = true;
         const pkg = this.opts.pkg.slice().buffer;
         const core = this.opts.core.slice().buffer;
-        const start = startMessage(store, appId, { pkg, core, refused: this.refused, quota: this.opts.quota });
+        const hub = this.hubAllowed() ? this.opts.hub : null;
+        const start = startMessage(store, appId, { pkg, core, refused: this.refused, quota: this.opts.quota, hub: hub?.snapshot() ?? null });
+        if (hub) {
+          // A change in the page (the consent window) goes to the frame's copy.
+          this.hubListener = true;
+          hub.onChange = () => {
+            if (!this.applyingHubSave) this.post({ type: "hub-state", state: hub.snapshot().state });
+          };
+        }
         if (!this.allowed("store.kv")) start.kv = {};
         this.element.contentWindow.postMessage(start, "*", [pkg, core]);
         break;
@@ -160,6 +180,35 @@ export class AppFrame {
         const denied = netDenied(msg.url, this.declared, this.refused);
         if (denied) this.answer(msg.id, [false, 0, "", denied]);
         else httpFetch(msg.url, msg.method, msg.headers, msg.body, this.opts.fetchImpl).then((r) => this.answer(msg.id, r));
+        break;
+      }
+      case "hub-save":
+        if (!this.hubAllowed()) break;
+        try {
+          this.applyingHubSave = true;
+          this.opts.hub.applySnapshot({ state: msg.state });
+          this.opts.hub.save();
+        } catch (err) {
+          console.error("a hub state from the frame was refused:", err);
+        } finally {
+          this.applyingHubSave = false;
+        }
+        break;
+      case "hub-launch":
+        if (this.hubAllowed()) this.opts.hub.launch(msg.id);
+        break;
+      case "hub-call": {
+        if (!this.hubAllowed()) {
+          this.answer(msg.id, { ok: false, error: "denied" });
+          break;
+        }
+        const hub = this.opts.hub;
+        Promise.resolve()
+          .then(() => hub[msg.method](...msg.args))
+          .then(
+            (value) => this.answer(msg.id, { ok: true, value: value ?? null, snapshot: hub.snapshot() }),
+            (err) => this.answer(msg.id, { ok: false, error: String(err?.message ?? err), snapshot: hub.snapshot() }),
+          );
         break;
       }
       case "dialog": {
