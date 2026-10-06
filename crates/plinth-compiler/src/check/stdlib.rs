@@ -26,7 +26,22 @@ pub const UI_NAMES: &[&str] = &[
     "Icon", "DatePicker",
 ];
 pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int", "JSON"];
-pub const TIME_NAMES: &[&str] = &["now", "monotonicNow", "setTimeout", "setInterval", "clearTimeout", "clearInterval"];
+pub const TIME_NAMES: &[&str] = &[
+    "now",
+    "monotonicNow",
+    "setTimeout",
+    "setInterval",
+    "clearTimeout",
+    "clearInterval",
+    // Date/time additions (docs/GAPS.md gap #5).
+    "timezoneOffset",
+    "dateParts",
+    "makeDate",
+    "formatDate",
+    "toISOString",
+    "parseDate",
+    "DateParts",
+];
 pub const STORE_NAMES: &[&str] = &["kv"];
 pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
 pub const DIALOG_NAMES: &[&str] = &["alert", "confirm", "prompt"];
@@ -45,6 +60,16 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "setTimeout" => Binding::Std(StdFn::SetTimeout),
             "setInterval" => Binding::Std(StdFn::SetInterval),
             "clearTimeout" | "clearInterval" => Binding::Std(StdFn::ClearTimer),
+            "timezoneOffset" => Binding::Std(StdFn::TimezoneOffset),
+            "dateParts" => Binding::Std(StdFn::DateParts),
+            "makeDate" => Binding::Std(StdFn::MakeDate),
+            "formatDate" => Binding::Std(StdFn::FormatDate),
+            "toISOString" => Binding::Std(StdFn::ToIsoString),
+            "parseDate" => Binding::Std(StdFn::ParseDate),
+            // `DateParts` is shaped structurally, like `net.fetch`'s
+            // `Response` (placeholder so `tsc`/`std_typings_match` see the
+            // name; the editor's real type comes from `time.d.ts`).
+            "DateParts" => Binding::Type(Type::Error),
             _ => return None,
         }),
         StdModule::Store => Some(match name {
@@ -240,6 +265,102 @@ impl Checker<'_> {
                 let id = self.expr_with(&args[0], &Type::Number);
                 let id = self.coerce(id, &Type::Number);
                 TExpr::new(TExprKind::Rt("clear_timer", vec![id]), Type::Void, span)
+            }
+            StdFn::TimezoneOffset => {
+                if !one_arg(self, "timezoneOffset") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let ms = self.expr_with(&args[0], &Type::Number);
+                let ms = self.coerce(ms, &Type::Number);
+                TExpr::new(TExprKind::Rt("tz_offset_minutes", vec![ms]), Type::Number, span)
+            }
+            StdFn::DateParts => {
+                if args.is_empty() || args.len() > 2 {
+                    self.err(code::ARG_COUNT, span, "`dateParts` takes a timestamp and an optional `utc` flag");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let ms = self.expr_with(&args[0], &Type::Number);
+                let ms = self.coerce(ms, &Type::Number);
+                let utc = match args.get(1) {
+                    Some(a) => {
+                        let u = self.expr_with(a, &Type::Bool);
+                        self.coerce(u, &Type::Bool)
+                    }
+                    None => TExpr::new(TExprKind::Bool(false), Type::Bool, span),
+                };
+                let sid = self.date_parts_struct();
+                // `ms` and `utc` are each used 8 times (once per field);
+                // bind them to locals first so the argument expressions
+                // are evaluated exactly once, as JS semantics require.
+                let ms_v = self.temp(Type::Number);
+                let utc_v = self.temp(Type::Bool);
+                let ms_read = || TExpr::new(TExprKind::Var(ms_v), Type::Number, span);
+                let utc_read = || TExpr::new(TExprKind::Var(utc_v), Type::Bool, span);
+                let mk = |idx: i32| {
+                    TExpr::new(
+                        TExprKind::Rt("date_field", vec![ms_read(), utc_read(), TExpr::new(TExprKind::Num(idx as f64), Type::Int, span)]),
+                        Type::Number,
+                        span,
+                    )
+                };
+                let lit = TExpr::new(TExprKind::StructLit(sid, (0..8).map(mk).collect()), Type::Struct(sid), span);
+                TExpr::new(TExprKind::Block(vec![TStmt::Let(ms_v, Some(ms)), TStmt::Let(utc_v, Some(utc))], Box::new(lit)), Type::Struct(sid), span)
+            }
+            StdFn::MakeDate => {
+                if args.len() < 3 || args.len() > 6 {
+                    self.err(code::ARG_COUNT, span, "`makeDate` takes year, month, day, and optional hour, minute, second");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let num = |c: &mut Self, e: &Expr| {
+                    let te = c.expr_with(e, &Type::Number);
+                    c.coerce(te, &Type::Number)
+                };
+                let zero = || TExpr::new(TExprKind::Num(0.0), Type::Number, span);
+                let year = num(self, &args[0]);
+                let month = num(self, &args[1]);
+                let day = num(self, &args[2]);
+                let hour = args.get(3).map(|a| num(self, a)).unwrap_or_else(zero);
+                let minute = args.get(4).map(|a| num(self, a)).unwrap_or_else(zero);
+                let second = args.get(5).map(|a| num(self, a)).unwrap_or_else(zero);
+                TExpr::new(TExprKind::Rt("make_date", vec![year, month, day, hour, minute, second]), Type::Number, span)
+            }
+            StdFn::FormatDate => {
+                if args.len() < 2 || args.len() > 3 {
+                    self.err(code::ARG_COUNT, span, "`formatDate` takes a timestamp, a pattern, and an optional `utc` flag");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let ms = self.expr_with(&args[0], &Type::Number);
+                let ms = self.coerce(ms, &Type::Number);
+                let pattern = self.expr_with(&args[1], &Type::String);
+                let pattern = self.coerce(pattern, &Type::String);
+                let utc = match args.get(2) {
+                    Some(a) => {
+                        let u = self.expr_with(a, &Type::Bool);
+                        self.coerce(u, &Type::Bool)
+                    }
+                    None => TExpr::new(TExprKind::Bool(false), Type::Bool, span),
+                };
+                TExpr::new(TExprKind::Rt("format_date", vec![ms, pattern, utc]), Type::String, span)
+            }
+            StdFn::ToIsoString => {
+                if !one_arg(self, "toISOString") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let ms = self.expr_with(&args[0], &Type::Number);
+                let ms = self.coerce(ms, &Type::Number);
+                let pattern = TExpr::new(TExprKind::Str("YYYY-MM-DDTHH:mm:ss.SSS".into()), Type::String, span);
+                let utc = TExpr::new(TExprKind::Bool(true), Type::Bool, span);
+                let formatted = TExpr::new(TExprKind::Rt("format_date", vec![ms, pattern, utc]), Type::String, span);
+                let z = TExpr::new(TExprKind::Str("Z".into()), Type::String, span);
+                TExpr::new(TExprKind::Concat(Box::new(formatted), Box::new(z)), Type::String, span)
+            }
+            StdFn::ParseDate => {
+                if !one_arg(self, "parseDate") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let text = self.expr_with(&args[0], &Type::String);
+                let text = self.coerce(text, &Type::String);
+                TExpr::new(TExprKind::Rt("parse_date", vec![text]), Type::Number.nullable(), span)
             }
             StdFn::ClipboardWriteText => {
                 self.require_capability(CAP_CLIPBOARD_WRITE, span);
