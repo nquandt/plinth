@@ -1,7 +1,6 @@
-# CI for Plinth. Windows is the tested platform (SPEC.md §1). Linux and
-# macOS jobs are best-effort: they run `cargo check` and the non-GUI test
-# crates, but gpui-ce rendering is not verified there yet, so those steps
-# use `continue-on-error: true`. See HANDOFF.md.
+# CI for Plinth. Windows runs every test crate and the web host tests.
+# Linux and macOS run `cargo check` for the workspace and the non-GUI test
+# crates; they must pass too. No GUI window opens in CI. See HANDOFF.md.
 name: CI
 
 on:
