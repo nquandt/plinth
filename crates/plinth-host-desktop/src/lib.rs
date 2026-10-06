@@ -119,7 +119,7 @@ impl GuestPort for NoGuest {
 /// from `capabilities` (SPEC.md §11: a declared capability is granted;
 /// there is no consent UI yet, SPEC.md §11 stretch) and opens the
 /// `store.kv` file for `app_id`.
-fn start(component: &[u8], app_id: &str, capabilities: &[String]) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
+fn start(component: &[u8], app_id: &str, capabilities: &[String], args: &[u8]) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
     let policy = Policy::new(capabilities.iter().cloned());
     let kv = Kv::open(&plinth_runner_wasmtime::kv::data_dir(), app_id).unwrap_or_else(|e| {
         log::warn!("store.kv unavailable for {app_id}: {e:#}");
@@ -132,7 +132,10 @@ fn start(component: &[u8], app_id: &str, capabilities: &[String]) -> (Box<dyn Gu
     });
     match loaded {
         Ok((runner, mut guest)) => {
-            let init = guest.init(&[]).map_err(|e| format!("{e:#}"));
+            // Hot reload (SPEC.md §13): `args` is the previous instance's
+            // signal snapshot, or empty on the first start. A release
+            // build of the app ignores it (it never registered anything).
+            let init = guest.init(args).map_err(|e| format!("{e:#}"));
             print_logs(&mut guest);
             (Box::new(WasmGuest { guest, _runner: runner }), init)
         }
@@ -143,7 +146,7 @@ fn start(component: &[u8], app_id: &str, capabilities: &[String]) -> (Box<dyn Gu
 /// Opens the app window and runs until it closes. Each component that
 /// arrives on `reloads` replaces the running app (hot reload).
 pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
-    let (port, init) = start(&app.component, &app.app_id, &app.capabilities);
+    let (port, init) = start(&app.component, &app.app_id, &app.capabilities, &[]);
     let HostApp { title, accent, app_id, capabilities, .. } = app;
 
     gpui_platform::application().run(move |cx: &mut App| {
@@ -186,8 +189,11 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
                         }
                     }
                     if let Some(bytes) = latest {
-                        let (port, init) = start(&bytes, &app_id, &capabilities);
-                        let ok = window.update(cx, |root, _, cx| root.reload(port, init, cx)).is_ok();
+                        let ok = window
+                            .update(cx, |root, _, cx| {
+                                root.reload(|args| start(&bytes, &app_id, &capabilities, args), cx)
+                            })
+                            .is_ok();
                         if !ok {
                             return;
                         }
