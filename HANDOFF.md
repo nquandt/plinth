@@ -6,6 +6,8 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 
 **Never push before `bash scripts/ci-local.sh full` passes locally.** CI runs the same script. The owner's GitHub Actions minutes are nearly used up (about 90 % of the month on 2026-10-06), and earlier pushes failed CI because only parts of the tests ran locally. Batch commits into few pushes, and ask the owner before a push.
 
+**Update (2026-10-06, later): the Actions minutes are fully used up.** Do not push. Keep commits local on `master`. Until the minutes reset or a self-hosted runner exists, the local `ci-local.sh full` pass is the only gate.
+
 ## 1. What Plinth is
 
 Plinth is a framework for cross-platform apps. Authors write a strict subset of TypeScript with JSX ("Plinth TS"). The compiler turns an app into a `.plnt` package that holds **only app code** (a counter app is about 2 KB) and is the **same file on every platform**. A user installs a host one time: the `plinth` CLI, the `plinth-host` runner, or later the Plinth Hub app. The host has **runtime cores** (`plinth-rt` builds, which are Wasm and versioned like nvm), links each app into the core that it needs, runs it in wasmtime, and renders a semantic, adaptive UI with `gpui-ce` (the owner's fork at `../gpui-ce`). Apps declare intent; the runtime owns layout, spacing and color. A host can prove from an app's imports which capabilities the app can use, and the user approves them (the Hub's main idea, `docs/HUB.md` §1.1).
@@ -107,7 +109,7 @@ Test crates must run **one at a time** on Windows (linker errors LNK1318/LNK1201
 
 ## 9. Next steps (suggested order)
 
-1. **Push the local commits** (§0) after the owner agrees. CI run `37517664495` (commit `38004ef`) was still running at handoff; check it first.
+1. **Push the local commits** (§0) when CI minutes are available again and the owner agrees. CI run `37517664495` (commit `38004ef`) was still running at handoff; check it first.
 2. **Open decisions for the owner:** the license (Cargo.toml says Apache-2.0; there is no LICENSE file yet; "MIT OR Apache-2.0" is the Rust norm), and whether to use a self-hosted CI runner.
 3. **Hub UI (H3 step 2):** the real Hub UI as a privileged Plinth app (library, groups, search sources, capability labels, grants, blocks, launch), a host poll loop for `take_hub_launches()` that calls `open_app`, and shortcuts and the `plinth://` URL scheme on Windows.
 4. **Compiler:** `splice`/`fill`/`flat`, `Map.entries()` as a value, `async`/`await` on top of the request/completion machinery, `try`/`catch` (SPEC §5.6), dynamic-length `Chart` data, and `std/lib.d.ts` iteration types for `Map` so that `tsc` accepts `for…of` over a map.
