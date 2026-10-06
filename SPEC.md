@@ -890,7 +890,7 @@ Each milestone has exit criteria. Work in this order. Windows is the first platf
 | Q1 | Where is the `gpui-ce` fork with the iOS and Android backends? | `C:\repos\gpui-ce` has only Windows, macOS, Linux, and web. |
 | Q2 | Final project name | "Plinth" is a placeholder. |
 | Q3 | How the hub distributes iOS apps | Per-app IPAs, or a container app with AOT-compiled apps built in. |
-| Q4 | Should the runtime embed `gpui-component`, or own all controls? | Evaluate in M0. |
+| Q4 | Should the runtime embed `gpui-component`, or own all controls? | **Decided (2026-10-06):** the runtime owns all controls and rebuilds them on the Level 2 styled primitives (`docs/UI-ADVANCED.md`, phase U5). |
 | Q5 | String indexing semantics | UTF-16 compatibility vs. code points. Pick before M1 ends. |
 | Q6 | Guest-side or host-side list virtualization | Host-side is better for scroll speed. Guest-side is simpler. |
 | Q7 | Is the artifact a component or a core module plus a custom ABI? | **Decided:** the package holds a core app module that imports `plinth-rt` through a versioned app ABI (§10.4). The host links it into its runtime and runs a `plinth:app` component (WIT) on desktop. |
