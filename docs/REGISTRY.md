@@ -75,6 +75,7 @@ The client reads the **service index** at:
 ```
 
 - `capabilities` are the capabilities of the latest version, so a list view can show the capability label without more requests.
+- URLs in the app list (for example `icon`) are relative to the app list's own URL, not to an app document.
 - **Paging.** A large registry splits the list into pages. `next` is the URL of the next page, or `null`. A static registry can always use one page.
 - App ids are compared in lower case.
 
@@ -183,7 +184,7 @@ my-registry/
 5. optionally copies the built-in core to `cores/` (`--with-core`),
 6. optionally renders screenshots with `plinth-shoot` (later).
 
-Running it again is safe: the output for the same input is the same (stable order, stable JSON).
+Running it again is safe: the output for the same input is the same (stable order, stable JSON). For this, the generator does not use the clock for derived times: `published` is set one time when a version is added, and `generated` and `updated` are the latest `published` time of the versions that they cover.
 
 `plinth registry serve <folder> [--port 8080]` serves the folder on `127.0.0.1` for local development. A client can also use the folder path directly as the base URL.
 
