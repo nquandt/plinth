@@ -757,6 +757,200 @@ fn array_reduce_without_an_initial_value_is_rejected() {
     assert_eq!(codes(&main), ["PL3006"]);
 }
 
+// -- Array methods: sort (gap "Larger items" #1) -----------------------------
+
+#[test]
+fn array_sort_numbers_with_a_comparator() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const a = [5, 3, 1, 4, 2];
+  const b = a.sort((x, y) => x - y);
+  const out = b.reduce((acc, v) => acc + v, "");
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "12345");
+}
+
+#[test]
+fn array_sort_returns_the_same_array_mutated_in_place() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const a = [3, 1, 2];
+  a.sort((x, y) => x - y);
+  const out = a.reduce((acc, v) => acc + v, "");
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "123");
+}
+
+#[test]
+fn array_sort_numbers_without_a_comparator_compares_as_strings_and_warns() {
+    // JS default sort: string comparison, so 10 sorts before 2.
+    let main = with_app("const a = [10, 2, 1]; const b = a.sort();");
+    assert_eq!(codes(&main), ["PL2025"]);
+
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const a = [10, 2, 1];
+  const b = a.sort();
+  const out = b.reduce((acc, v) => acc + v + ",", "");
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "1,10,2,");
+}
+
+#[test]
+fn array_sort_strings_without_a_comparator() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const a = ["banana", "apple", "cherry"];
+  const b = a.sort();
+  return <Screen title="Home"><Text>{b.join(",")}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "apple,banana,cherry");
+}
+
+#[test]
+fn array_sort_structs_by_a_key() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const a: { k: number; name: string }[] = [
+    { k: 3, name: "c" },
+    { k: 1, name: "a" },
+    { k: 2, name: "b" },
+  ];
+  const b = a.sort((x, y) => x.k - y.k);
+  const out = b.reduce((acc, v) => acc + v.name, "");
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "abc");
+}
+
+#[test]
+fn array_sort_is_stable_for_equal_keys() {
+    // Every item has the same key, so a stable sort must keep the original
+    // order; an unstable sort (or one that overwrites equal elements)
+    // would not reliably reproduce "abcde" here.
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const a: { k: number; name: string }[] = [
+    { k: 1, name: "a" },
+    { k: 1, name: "b" },
+    { k: 1, name: "c" },
+    { k: 1, name: "d" },
+    { k: 1, name: "e" },
+  ];
+  const b = a.sort((x, y) => x.k - y.k);
+  const out = b.reduce((acc, v) => acc + v.name, "");
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "abcde");
+}
+
+#[test]
+fn array_sort_on_empty_and_one_element_arrays() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const empty: number[] = [];
+  const one = [42];
+  empty.sort((x, y) => x - y);
+  one.sort((x, y) => x - y);
+  const out = one.reduce((acc, v) => acc + v, "");
+  return <Screen title="Home"><Text>{"" + empty.length + "|" + out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "0|42");
+}
+
+#[test]
+fn array_sort_ten_thousand_elements() {
+    let main = r#"import { app, Screen, Text, signal } from "plinth:ui";
+function Home() {
+  const n = 10000;
+  const a: number[] = [];
+  for (let i = 0; i < n; i++) {
+    a.push((i * 7919) % n);
+  }
+  const b = a.sort((x, y) => x - y);
+  let ok = true;
+  for (let i = 1; i < n; i++) {
+    if (b[i - 1] > b[i]) ok = false;
+  }
+  return <Screen title="Home"><Text>{"" + ok + "|" + b.length}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "true|10000");
+}
+
+#[test]
+fn array_sort_survives_gc_stress() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const a = [
+    { k: 3, name: "c" },
+    { k: 1, name: "a" },
+    { k: 2, name: "b" },
+  ];
+  const b = a.sort((x, y) => x.k - y.k);
+  const out = b.reduce((acc, v) => acc + v.name, "");
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    let stress_args = plinth_protocol::init_arg::one(plinth_protocol::init_arg::GC_STRESS, &[]);
+    for commit in guest.init(&stress_args).unwrap() {
+        let errors = tree.apply(&commit).unwrap();
+        assert!(errors.is_empty(), "op errors: {errors:?}");
+    }
+    assert_eq!(text_of(&tree, ControlKind::Text), "abc");
+}
+
+#[test]
+fn array_sort_without_a_comparator_on_an_unsupported_element_errors() {
+    let main = with_app("const a: { k: number }[] = [{ k: 1 }]; const b = a.sort();");
+    assert_eq!(codes(&main), ["PL3006"]);
+}
+
 // -- 6. `int | null`, `boolean | null`, enum `| null` (HANDOFF.md item 2) ----
 //
 // These are boxed through the same box as `number | null` (`BoxI32`/

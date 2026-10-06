@@ -21,6 +21,7 @@ interface Array<T> {
   join(separator?: string): string;
   concat(...items: T[][]): T[];
   reduce<U>(f: (acc: U, value: T, index: number) => U, initial: U): U;
+  sort(compare?: (a: T, b: T) => number): T[];
   [Symbol.iterator](): Iterator<T>;
 }
 
