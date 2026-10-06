@@ -155,8 +155,9 @@ the app. The guest sends the text, for example `Uncaught Error: no
 network`, to the host through `error.report` (core 1.10; no capability).
 A rejected promise that nothing awaits is reported the same way, as
 `Uncaught (in promise) Error: …`, at the end of the event.
-The desktop runner logs it as an error and keeps it for tests
-(`Guest::take_errors`). The web host calls `reportError`, which is
+The desktop runner logs it as an error and keeps it
+(`Guest::take_errors`); the desktop host shows the last one in a banner
+with a "Dismiss" button (not app UI). The web host calls `reportError`, which is
 `console.error` by default. The app continues with the next event.
 
 ## Declaring a capability

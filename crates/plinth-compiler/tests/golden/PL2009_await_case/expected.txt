@@ -1,0 +1,4 @@
+app/main.tsx(3,64): error PL2009: `await` in a `case` value is not supported
+  async function g(n: number): Promise<void> { switch (n) { case await f(): break; } }
+                                                                 ^^^^^^^^^
+  help: compute the value before the `switch`

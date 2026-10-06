@@ -83,6 +83,14 @@ fn answer(guest: &mut Guest, tree: &mut Tree, kind: DialogKind, message: &str, r
     apply(guest, tree, commits);
 }
 
+/// Answers the open dialog with this message (with no value).
+fn answer_by_message(guest: &mut Guest, tree: &mut Tree, message: &str) {
+    let pending = guest.pending_dialogs().to_vec();
+    let d = pending.iter().find(|d| d.message == message).unwrap_or_else(|| panic!("no dialog {message:?} in {pending:?}"));
+    let commits = guest.answer_dialog(d.id, Value::Null).unwrap();
+    apply(guest, tree, commits);
+}
+
 /// A program with a `Text` that shows `status` and one `go` button whose
 /// handler is `handler`; `top` holds top-level declarations.
 fn app(top: &str, handler: &str) -> String {
@@ -372,10 +380,6 @@ async function later(s: string): Promise<string> { await alert(s); log = log + "
     assert_eq!(text(&tree), "aBc|y|D|a!c!");
 }
 
-#[test]
-fn await_inside_try_finally_is_rejected() {
-    assert_eq!(codes(&app("", r#"async () => { try { await alert("x"); } finally { status.set("f"); } }"#)), vec!["PL2009"]);
-}
 
 #[test]
 fn await_of_a_non_promise_is_rejected() {
@@ -429,4 +433,427 @@ export default app({ screens: { home: { title: "Home", component: Home } } });
     let caps = vec!["hub.manage".to_string(), "net:example.com".to_string()];
     let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &caps).expect("compile");
     assert!(artifact.is_some(), "{}", render(&front));
+}
+
+// -- `await` in `switch`, `do…while` and `try`/`finally` ----------------------------
+
+#[test]
+fn await_inside_switch_with_fallthrough_default_and_break() {
+    let top = r#"async function pick(n: number): Promise<string> {
+  let s = "";
+  switch (n) {
+    case 1:
+      s = s + "one";
+      if (await confirm("one?")) { break; }
+      s = s + "-no";
+    case 2:
+      s = s + "two";
+      break;
+    default:
+      s = s + (await prompt("other?") ?? "null");
+    case 3:
+      s = s + "three";
+  }
+  return s + ".";
+}
+let n = 0;"#;
+    let main = app(top, r#"async () => { n = n + 1; status.set(await pick(n)); }"#);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "one?", Value::Bool(true));
+    assert_eq!(text(&tree), "one.");
+    // n = 2: no await at all.
+    press(&mut guest, &mut tree, "go");
+    assert_eq!(text(&tree), "two.");
+    // n = 3: the case after `default`.
+    press(&mut guest, &mut tree, "go");
+    assert_eq!(text(&tree), "three.");
+    // n = 4: `default`, then falls through into `case 3`.
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Prompt, "other?", Value::Str("x".into()));
+    assert_eq!(text(&tree), "xthree.");
+    assert!(guest.take_errors().is_empty());
+}
+
+#[test]
+fn await_inside_switch_inside_a_loop_with_break_and_continue() {
+    let top = r#"async function run(): Promise<string> {
+  let s = "";
+  for (const k of ["a", "skip", "b", "stop", "c"]) {
+    switch (k) {
+      case "skip":
+        continue;
+      case "stop":
+        s = s + "|";
+        break;
+      default:
+        if (await confirm(k)) { s = s + k; break; }
+        s = s + "-";
+    }
+    s = s + ";";
+  }
+  return s;
+}"#;
+    let main = app(top, r#"async () => { status.set(await run()); }"#);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "a", Value::Bool(true));
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "b", Value::Bool(false));
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "c", Value::Bool(true));
+    assert_eq!(text(&tree), "a;-;|;c;");
+}
+
+#[test]
+fn await_inside_do_while_body_and_condition() {
+    let top = r#"async function run(): Promise<string> {
+  let s = "";
+  let i = 0;
+  do {
+    i = i + 1;
+    if (i === 2) { continue; }
+    s = s + (await prompt("p" + i) ?? "-");
+  } while (await confirm("again " + i + "?"));
+  do { s = s + "!"; } while (false);
+  return s;
+}"#;
+    let main = app(top, r#"async () => { status.set(await run()); }"#);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Prompt, "p1", Value::Str("a".into()));
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "again 1?", Value::Bool(true));
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "again 2?", Value::Bool(true));
+    answer(&mut guest, &mut tree, DialogKind::Prompt, "p3", Value::Null);
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "again 3?", Value::Bool(false));
+    assert_eq!(text(&tree), "a-!");
+}
+
+#[test]
+fn try_finally_with_await_runs_on_normal_end_throw_and_return() {
+    let top = r#"let log = "";
+async function work(mode: string): Promise<number> {
+  try {
+    log = log + "[";
+    await alert("work " + mode);
+    if (mode === "throw") { throw new Error("boom"); }
+    if (mode === "return") { return 1; }
+    log = log + "end";
+  } finally {
+    await alert("cleanup " + mode);
+    log = log + "]";
+  }
+  return 2;
+}"#;
+    let handler = r#"async () => {
+  log = "";
+  for (const m of ["normal", "return", "throw"]) {
+    try { const n = await work(m); log = log + n; } catch (e) { log = log + "caught " + e.message; }
+  }
+  status.set(log);
+}"#;
+    let main = app(top, handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    for m in ["normal", "return", "throw"] {
+        answer(&mut guest, &mut tree, DialogKind::Alert, &format!("work {m}"), Value::Null);
+        answer(&mut guest, &mut tree, DialogKind::Alert, &format!("cleanup {m}"), Value::Null);
+    }
+    assert_eq!(text(&tree), "[end]2[]1[]caught boom");
+    assert!(guest.take_errors().is_empty());
+}
+
+#[test]
+fn try_catch_finally_with_await_and_loop_exits() {
+    let top = r#"async function run(): Promise<string> {
+  let s = "";
+  let i = 0;
+  while (true) {
+    i = i + 1;
+    try {
+      if (i === 1) { continue; }
+      if (i === 3) { break; }
+      const ok = await confirm("ok " + i + "?");
+      if (!ok) { throw new Error("no"); }
+      s = s + "y";
+    } catch (e) {
+      s = s + "c:" + e.message;
+    } finally {
+      s = s + "f" + i + ";";
+    }
+  }
+  return s;
+}"#;
+    let main = app(top, r#"async () => { status.set(await run()); }"#);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "ok 2?", Value::Bool(false));
+    assert_eq!(text(&tree), "f1;c:nof2;f3;");
+}
+
+#[test]
+fn nested_try_finally_with_await_runs_both_on_return() {
+    let top = r#"let log = "";
+async function run(): Promise<string> {
+  try {
+    try {
+      await alert("inner");
+      return "r";
+    } finally {
+      log = log + "inner;";
+    }
+  } finally {
+    await alert("outer");
+    log = log + "outer;";
+  }
+}"#;
+    let main = app(top, r#"async () => { const r = await run(); status.set(r + ":" + log); }"#);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Alert, "inner", Value::Null);
+    answer(&mut guest, &mut tree, DialogKind::Alert, "outer", Value::Null);
+    assert_eq!(text(&tree), "r:inner;outer;");
+}
+
+#[test]
+fn an_exception_in_finally_replaces_the_pending_one() {
+    let top = r#"async function run(): Promise<void> {
+  try {
+    await alert("a");
+    throw new Error("first");
+  } finally {
+    throw new Error("second");
+  }
+}"#;
+    let main = app(top, r#"async () => { try { await run(); } catch (e) { status.set(e.message); } }"#);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Alert, "a", Value::Null);
+    assert_eq!(text(&tree), "second");
+}
+
+#[test]
+fn a_switch_with_await_at_the_end_of_a_loop_body() {
+    let top = r#"async function run(): Promise<string> {
+  let s = "";
+  for (let i = 0; i < 4; i++) {
+    switch (i) {
+      case 0: s = s + "a"; break;
+      case 2: if (await confirm("two")) { s = s + "T"; break; } s = s + "t"; break;
+      default: s = s + i;
+    }
+  }
+  return s;
+}"#;
+    let main = app(top, r#"async () => { status.set(await run()); }"#);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "two", Value::Bool(true));
+    assert_eq!(text(&tree), "a1T3");
+}
+
+// -- The `Promise` API -------------------------------------------------------------
+
+#[test]
+fn promise_all_of_an_array_keeps_the_order() {
+    let top = r#"async function ask(q: string): Promise<string> { const v = await prompt(q); return v ?? "-"; }"#;
+    let handler = r#"async () => {
+  const ps: Promise<string>[] = [];
+  for (const q of ["a", "b", "c"]) { ps.push(ask(q)); }
+  const all = await Promise.all(ps);
+  const empty: Promise<number>[] = [];
+  const none = await Promise.all(empty);
+  status.set(all.join(",") + "/" + none.length);
+}"#;
+    let main = app(top, handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    let pending = guest.pending_dialogs().to_vec();
+    assert_eq!(pending.len(), 3, "all three run at once");
+    // Answer in reverse order: the result keeps the order of the array.
+    for (d, v) in pending.iter().rev().zip(["z", "y", "x"]) {
+        let commits = guest.answer_dialog(d.id, Value::Str(v.into())).unwrap();
+        apply(&mut guest, &mut tree, commits);
+        if v != "x" {
+            assert_eq!(text(&tree), "idle");
+        }
+    }
+    assert_eq!(text(&tree), "x,y,z/0");
+}
+
+#[test]
+fn promise_all_of_a_tuple_and_rejection() {
+    let top = r#"async function num(): Promise<number> { await alert("n"); return 4; }
+async function str(): Promise<string> { return "s"; }
+async function bad(): Promise<number> { await alert("bad"); throw new Error("nope"); }"#;
+    let handler = r#"async () => {
+  const [n, s] = await Promise.all([num(), str()]);
+  try {
+    const xs = await Promise.all([num(), bad()]);
+    status.set("no " + xs.length);
+  } catch (e) {
+    status.set(s + n + " " + e.message);
+  }
+}"#;
+    let main = app(top, handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Alert, "n", Value::Null);
+    let pending = guest.pending_dialogs().to_vec();
+    assert_eq!(pending.len(), 2);
+    let bad = pending.iter().find(|d| d.message == "bad").unwrap().id;
+    let commits = guest.answer_dialog(bad, Value::Null).unwrap();
+    apply(&mut guest, &mut tree, commits);
+    assert_eq!(text(&tree), "s4 nope");
+    let n = guest.pending_dialogs()[0].id;
+    let commits = guest.answer_dialog(n, Value::Null).unwrap();
+    apply(&mut guest, &mut tree, commits);
+    assert!(guest.take_errors().is_empty());
+}
+
+#[test]
+fn promise_resolve_and_reject() {
+    let handler = r#"async () => {
+  const a = await Promise.resolve(5);
+  const b: Promise<string | null> = Promise.resolve(null);
+  await Promise.resolve();
+  let msg = "";
+  try { await Promise.reject<number>(new Error("r1")); } catch (e) { msg = e.message; }
+  try { await Promise.reject("r2"); } catch (e) { msg = msg + e.message; }
+  status.set(a + ":" + ((await b) ?? "null") + ":" + msg);
+}"#;
+    let main = app("", handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    assert_eq!(text(&tree), "5:null:r1r2");
+}
+
+#[test]
+fn then_catch_and_finally_chain() {
+    let top = r#"let log = "";
+async function num(n: number): Promise<number> { await alert("n" + n); if (n < 0) { throw new Error("neg"); } return n; }"#;
+    let handler = r#"() => {
+  num(2)
+    .then((v) => v * 10)
+    .then((v) => num(v + 1))
+    .then((v) => { log = log + "v=" + v + ";"; })
+    .finally(() => { log = log + "fin;"; })
+    .then(() => { status.set(log); });
+  num(-1)
+    .then((v) => "ok" + v, (e) => "handled " + e.message)
+    .then((s) => { log = log + s + ";"; });
+  num(-2)
+    .catch((e) => 99)
+    .then((v) => { log = log + "c" + v + ";"; });
+}"#;
+    let main = app(top, handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer_by_message(&mut guest, &mut tree, "n-1");
+    answer_by_message(&mut guest, &mut tree, "n-2");
+    answer_by_message(&mut guest, &mut tree, "n2");
+    answer_by_message(&mut guest, &mut tree, "n21");
+    assert_eq!(text(&tree), "handled neg;c99;v=21;fin;");
+    assert!(guest.take_errors().is_empty());
+}
+
+#[test]
+fn an_unhandled_rejection_through_then_is_reported() {
+    let top = r#"async function bad(): Promise<number> { await alert("x"); throw new Error("lost"); }"#;
+    let main = app(top, r#"() => { bad().then((v) => v + 1); status.set("started"); }"#);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Alert, "x", Value::Null);
+    assert_eq!(guest.take_errors(), vec!["Uncaught (in promise) Error: lost".to_string()]);
+}
+
+#[test]
+fn new_promise_with_resolve_reject_and_a_timer() {
+    let top = r#"import { setTimeout } from "plinth:time";
+function delay(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+}
+function check(n: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    if (n > 0) { resolve(n * 2); } else { reject(new Error("bad " + n)); }
+    resolve(1000);
+  });
+}
+function throws(): Promise<string> {
+  return new Promise<string>(() => { throw new Error("in executor"); });
+}"#;
+    let handler = r#"async () => {
+  await delay(0);
+  const a = await check(3);
+  let m = "";
+  try { await check(-1); } catch (e) { m = e.message; }
+  try { await throws(); } catch (e) { m = m + "/" + e.message; }
+  status.set(a + " " + m);
+}"#;
+    let main = app(top, handler);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    assert_eq!(text(&tree), "idle");
+    let deadline = guest.next_timer_deadline().expect("a timer is set");
+    let commits = guest.fire_due_timers(deadline + std::time::Duration::from_millis(1)).unwrap();
+    apply(&mut guest, &mut tree, commits);
+    assert_eq!(text(&tree), "6 bad -1/in executor");
+}
+
+#[test]
+fn promise_api_diagnostics() {
+    assert_eq!(codes(&app("", r#"() => { const p = new Promise((resolve: (v: number) => void) => resolve(1)); }"#)), vec!["PL3007"]);
+    assert_eq!(codes(&app("", r#"() => { Promise.race([]); }"#)), vec!["PL3004"]);
+    assert_eq!(codes(&app("", r#"() => { Promise.all([1, 2]); }"#)), vec!["PL3001"]);
+}
+
+#[test]
+fn promise_all_and_then_survive_gc_stress() {
+    let handler = r#"async () => {
+  const ps = ["a", "b"].map((q) => prompt(q).then((v) => (v ?? "?") + q));
+  const both = await Promise.all(ps);
+  status.set(both.join("+"));
+}"#;
+    let main = app("", handler);
+    let (mut guest, mut tree) = start_with(&main, true);
+    press(&mut guest, &mut tree, "go");
+    let pending = guest.pending_dialogs().to_vec();
+    for (d, v) in pending.iter().zip(["x".repeat(30), "y".to_string()]) {
+        let commits = guest.answer_dialog(d.id, Value::Str(v)).unwrap();
+        apply(&mut guest, &mut tree, commits);
+    }
+    assert_eq!(text(&tree), format!("{}a+yb", "x".repeat(30)));
+}
+
+// -- `async` methods -----------------------------------------------------------------
+
+#[test]
+fn async_class_methods_capture_this_and_await_each_other() {
+    let top = r#"class Counter {
+  count: number;
+  log: string;
+  constructor() { this.count = 0; this.log = ""; }
+  async step(q: string): Promise<number> {
+    if (await confirm(q)) { this.count = this.count + 1; }
+    this.log = this.log + q;
+    return this.count;
+  }
+  async run(): Promise<string> {
+    const a = await this.step("a");
+    const b = await this.step("b");
+    return this.log + ":" + a + b;
+  }
+}
+class Loud extends Counter {
+  constructor() { super(); }
+  async step(q: string): Promise<number> { const n = await super.step(q.toUpperCase()); return n * 10; }
+}
+const c = new Counter();
+const l: Counter = new Loud();"#;
+    let main = app(top, r#"async () => { status.set(await c.run() + "|" + await l.run()); }"#);
+    let (mut guest, mut tree) = start(&main);
+    press(&mut guest, &mut tree, "go");
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "a", Value::Bool(true));
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "b", Value::Bool(true));
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "A", Value::Bool(true));
+    answer(&mut guest, &mut tree, DialogKind::Confirm, "B", Value::Bool(false));
+    assert_eq!(text(&tree), "ab:12|AB:1010");
 }

@@ -5,6 +5,7 @@
 
 mod asyncfn;
 mod expr;
+mod promises;
 mod jsx;
 pub mod stdlib;
 mod stmt;
@@ -249,6 +250,9 @@ pub struct Checker<'d> {
     promises: Vec<asyncfn::PromiseInfo>,
     /// The app's microtask queue and drain, made with the first promise.
     async_rt: Option<asyncfn::AsyncRt>,
+    /// `Promise.all` helper functions, one per element type
+    /// (`check/promises.rs`).
+    promise_alls: Vec<(Type, FuncId)>,
 }
 
 /// The built-in `Error` class (SPEC.md §5.6). `throw` takes an instance of
@@ -310,6 +314,7 @@ pub fn check_ex(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>,
         error_class: 0,
         promises: Vec::new(),
         async_rt: None,
+        promise_alls: Vec::new(),
     };
     c.prog.module_count = modules.len() as u32;
     c.declare_error_class(modules[main].file);

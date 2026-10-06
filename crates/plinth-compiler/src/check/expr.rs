@@ -169,6 +169,7 @@ impl Checker<'_> {
             }
             ExprKind::New(name, type_args) => self.new_map_or_set(name, type_args, expected, span),
             ExprKind::NewInstance(name, args) => self.new_instance(name, args, span),
+            ExprKind::NewPromise(type_args, args) => self.new_promise_expr(type_args, args, expected, span),
             ExprKind::InstanceOf(obj, name, name_span) => self.instance_of(obj, name, *name_span, span),
             ExprKind::As(inner, type_ann, cast_span) => self.as_cast(inner, type_ann, *cast_span),
             ExprKind::Await(inner) => {
@@ -530,6 +531,9 @@ impl Checker<'_> {
                     }
                     if let Some(Binding::StdObj(o)) = self.lookup(name) {
                         return self.std_obj_call(o, prop, *prop_span, type_args, args, span);
+                    }
+                    if name == "Promise" && self.lookup(name).is_none() {
+                        return self.promise_static(prop, *prop_span, type_args, args, span, expected);
                     }
                 }
                 let o = self.expr(obj, None);
@@ -947,6 +951,9 @@ impl Checker<'_> {
             Type::Map(k, v) => self.map_method(o, &k, &v, prop, prop_span, args, span),
             Type::Set(t) => self.set_method(o, &t, prop, prop_span, args, span),
             Type::Struct(sid) => {
+                if let Some(info) = self.promise_of(&o.ty).cloned() {
+                    return self.promise_method(o, info, prop, prop_span, args, span);
+                }
                 if let Some(fid) = self.resolve_method(sid, prop) {
                     let ft = self.func_type(fid, prop_span);
                     let mut targs = self.method_args(&ft, o, args, span);
@@ -1707,7 +1714,7 @@ impl Checker<'_> {
     /// uses): `Map`/`Set`'s `.keys()`/`.values()` return this, not the raw
     /// field, so pushing/popping the result cannot corrupt the map/set's own
     /// backing arrays.
-    fn arr_copy_of(&self, arr: TExpr, span: Span) -> TExpr {
+    pub(super) fn arr_copy_of(&self, arr: TExpr, span: Span) -> TExpr {
         let ty = arr.ty.clone();
         let zero = TExpr::new(TExprKind::Coerce(Coercion::NumToI32, bx(TExpr::new(TExprKind::Num(0.0), Type::Number, span))), Type::Bool, span);
         let max = TExpr::new(
@@ -1732,7 +1739,7 @@ impl Checker<'_> {
         TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Index(bx(arr), bx(idx)), bx(value)), elem_ty, span))
     }
 
-    fn arr_push_discard(&self, arr: TExpr, value: TExpr, span: Span) -> TStmt {
+    pub(super) fn arr_push_discard(&self, arr: TExpr, value: TExpr, span: Span) -> TStmt {
         let f = if value.ty.repr() == crate::types::Repr::F64 { "arr_push_f64" } else { "arr_push_i32" };
         let push = TExpr::new(TExprKind::Rt(f, vec![arr, value]), Type::Bool, span);
         TStmt::Expr(TExpr::new(TExprKind::Coerce(Coercion::Discard, bx(push)), Type::Void, span))

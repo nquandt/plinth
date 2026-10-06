@@ -22,8 +22,9 @@ small local change), per the dogfooding task's scope.
 ## Larger items (not started, out of scope here)
 
 - `async`/`await` and `try`/`catch`: done (see "Fixed in this pass").
-  Still open: `Promise.all`, async methods, `await` inside `switch`,
-  `do…while` and `try`/`finally`.
+  The `Promise` API, async methods and `await` in all statements: done
+  (see "Fixed in this pass"). Still open: `Promise.race`, `Promise.any`
+  and `Promise.allSettled`.
 - Regular expressions: not needed by either app; the text-tools screen used
   manual character scans instead of `RegExp` (which `lib.d.ts` declares as
   an empty, unusable interface).
@@ -287,8 +288,8 @@ small local change), per the dogfooding task's scope.
   index reads, `str_concat`, `json_num_str`); no new runtime function. The
   array literal path does not change. `ChartPoint` and `ChartSeriesDef` are
   now real types when imported from `plinth:ui` (before, the import was
-  `PL1004`). `series` itself must still be an array literal (only its
-  `points` can be dynamic). `examples/budget`'s statistics screen now
+  `PL1004`). `series` can also be any expression now (see "`Chart`
+  `series` as an expression" below). `examples/budget`'s statistics screen now
   builds both charts with `categories.map(...)`. Tests: the "Dynamic
   `Chart` data" section of `crates/plinth-compiler/tests/collections.rs`,
   and a chart check in `budget_add_filter_edit_delete_and_stats`
@@ -358,11 +359,101 @@ small local change), per the dogfooding task's scope.
   after each event before the reactive flush (`set_drain`) and the drain
   reports unhandled rejections (`report`). Pending continuations are
   reachable from the host request that settles them (GC stress test).
-  An `async` arrow where `void` is expected is detached. Not done:
-  `Promise.all`, `then`/`new Promise`, async methods, `await` in
-  `switch`/`do…while`/`try…finally` (`PL2009`). `examples/dialogs` uses
+  An `async` arrow where `void` is expected is detached. The items that
+  were not done here are done now (see the next entries).
+  `examples/dialogs` uses
   `await`; `web/test/run-net.mjs` awaits two fetches in the browser host.
   Tests: `crates/plinth-compiler/tests/async_await.rs`.
+
+- **`await` in `switch`, `do…while` and `try`/`finally` (branch
+  `wt/lang6`).** Before, these were the error `PL2009`. Now
+  `check/asyncfn.rs` changes them:
+  - A `switch` with an `await` becomes `if` statements
+    (`async_switch`). The first `if` chain puts the index of the case
+    that matches (or of `default`) in `$m`. Each case body runs when its
+    index is at least `$m`, so control falls through. A `break` of the
+    `switch` runs the code after it (`Ctx::sw`). At the end of a Wasm
+    loop body, this `break` is a `continue`.
+  - A `do…while` with an `await` becomes
+    `first = true; while (true) { if (!first) { if (!c) break; } first = false; body }`.
+    The condition can also have an `await`.
+  - A `try`/`finally` with an `await` (`async_finally`) puts the
+    `finally` body in a closure. The end of the `try` and `catch` blocks
+    calls it. An exception sets `$ck = 1` and keeps the error in `$ce`.
+    A `return`, `break` or `continue` that leaves the blocks sets `$ck` to
+    2, 3 or 4 (`leave_via_finally`), and a `return` keeps its value in
+    `$cv`. After the `finally` body, a second closure completes the
+    pending action. Nested `try`/`finally` blocks chain.
+  - Only `await` in a `case` value is still `PL2009` (new golden
+    `PL2009_await_case`). The goldens of the removed messages are
+    deleted; `PL2009_generator_method` replaces `PL2009_async_method`.
+  - Limit: a `return` inside a synchronous `try`/`finally` that is inside
+    an asynchronous `try`/`finally` runs the outer `finally` before the
+    inner one.
+  - Tests: the "`await` in `switch`, `do…while` and `try`/`finally`"
+    section of `tests/async_await.rs`.
+
+- **Shared promise helpers (branch `wt/lang6`).** Before, each
+  `Promise<T>` type had its own `then`, `resolve` and `reject`. Now one
+  `then(p, k)`, one `reject(p, e)` and one `settle(p, state)` work on
+  the common view `Promise<void>` (the fields before `#value` have the
+  same layout in all promises, and the GC sees the real type). Each
+  `Promise<T>` keeps only a small `resolve(p, v)`. Measured with
+  `plinth build examples/dialogs` (three promise types): the app code
+  went from 6075 B to 5673 B (−402 B, −6.6 %).
+
+- **The `Promise` API (branch `wt/lang6`).** New file
+  `check/promises.rs`, generated code only, no new runtime function, no
+  new core version:
+  - `p.then(f, g?)`, `p.catch(g)`, `p.finally(h)`. Each call makes a new
+    promise and one waiter closure that the shared `then` registers. A
+    callback that returns a promise is adopted. An exception in a
+    callback rejects the new promise. Errors: `PL3001` when `onRejected`
+    or the `catch` callback returns another type.
+  - `new Promise<T>((resolve, reject) => ...)` (new AST node
+    `ExprKind::NewPromise`). The type comes from `<T>` or from the
+    expected type; otherwise `PL3007` (golden `PL3007_new_promise`).
+  - `Promise.all`: for `Promise<T>[]`, one generated helper function per
+    `T` (`make_promise_all`; it copies the array, counts the open
+    promises, and resolves with the values in order). For an array
+    literal of promises of different types, inline code that gives a
+    tuple. `Promise<void>[]` gives `Promise<void>`; a `Promise<void>` in
+    a tuple is `PL2012`.
+  - `Promise.resolve(v)`, `Promise.resolve()`, `Promise.reject(e)`
+    (`e` is an `Error` or a string).
+  - `Promise.race`/`any`/`allSettled` are `PL3004`.
+  - `std/lib.d.ts` declares all of these for `tsc`.
+  - Tests: "The `Promise` API" section of `tests/async_await.rs` (also
+    under GC stress); goldens `PL3001_promise_all`,
+    `PL3001_promise_then`, `PL3001_promise_reject`,
+    `PL3004_promise_race`, `PL2012_promise_all_void`.
+
+- **`async` class methods (branch `wt/lang6`).** The parser now keeps
+  `async` on a method, and the method body goes through the same
+  transform as an `async` function. `this` is a parameter of the lowered
+  method, so the continuations capture it like any other variable.
+  Overrides and `super.m()` work. Generator methods are still `PL2009`.
+  Test: `async_class_methods_capture_this_and_await_each_other`.
+
+- **`Chart` `series` as an expression (branch `wt/lang6`).** Before,
+  `series` had to be an array literal. Now any expression of an array of
+  structs with a `name: string` and a `points` array of
+  `{ label, value }` structs is accepted (a `ChartSeriesDef[]` variable,
+  a `computed`, a `.map()` result). `check/jsx.rs::encode_chart_series_dyn`
+  builds the same wire string with a generated loop; `encode_each` is the
+  loop that `data` and `series` share. Tests:
+  `chart_series_from_a_computed_map_updates`,
+  `chart_series_from_a_variable_and_wrong_types`
+  (`tests/collections.rs`), golden `PL3001_chart_series`.
+
+- **Error banner on the desktop (branch `wt/lang6`).** Before, the
+  desktop host only logged an `error.report` message. Now `GuestPort`
+  has `take_errors`, `PlinthRoot` collects the errors after each commit,
+  and the host shows the last one in a banner with a "Dismiss" button
+  (AccessKit roles `Alert` and `Button`). The banner shows how many other
+  errors there are. The app keeps running. The web host did not change
+  (it calls `reportError`). Test:
+  `crates/plinth-shoot/tests/error_banner.rs` (headless GPU).
 
 ## Found later
 

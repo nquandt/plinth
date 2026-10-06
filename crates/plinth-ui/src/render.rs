@@ -71,6 +71,12 @@ pub trait GuestPort {
         Vec::new()
     }
 
+    /// The uncaught app errors (`error.report`, SPEC.md §5.6) since the
+    /// last call. The app is still running. The default has none.
+    fn take_errors(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Drains the app ids that a privileged Hub UI guest asked the host to
     /// launch (`plinth:hub`'s `launch`, `docs/HUB.md` §4.1, §4.2). The
     /// default (no `plinth:hub` backend) has none.
@@ -193,6 +199,9 @@ pub struct PlinthRoot {
     fields: HashMap<NodeId, Field>,
     /// Set when the guest traps. The tree then stays read-only.
     stopped: Option<String>,
+    /// Uncaught app errors that the user did not dismiss yet (SPEC.md
+    /// §5.6). The app keeps running; the host shows the last one.
+    app_errors: Vec<String>,
     class: WidthClass,
     /// Toolbar overflow menus and `<Menu>` controls that are open, by node
     /// id (UI API 1.2).
@@ -242,6 +251,7 @@ impl PlinthRoot {
             accent: accent.into(),
             fields: HashMap::new(),
             stopped: None,
+            app_errors: Vec::new(),
             class: WidthClass::Wide,
             open_menus: HashSet::new(),
             confirm: None,
@@ -265,6 +275,7 @@ impl PlinthRoot {
             accent: accent.into(),
             fields: HashMap::new(),
             stopped: Some(error),
+            app_errors: Vec::new(),
             class: WidthClass::Wide,
             open_menus: HashSet::new(),
             confirm: None,
@@ -361,6 +372,7 @@ impl PlinthRoot {
             self.fields.remove(&id);
             self.list_states.borrow_mut().remove(&id);
         }
+        self.app_errors.extend(self.guest.take_errors());
     }
 
     /// Sends one `ui` event to the guest and applies what it commits.
@@ -788,6 +800,7 @@ impl Render for PlinthRoot {
             .flex()
             .flex_col()
             .child(self.render_stopped_banner(&t))
+            .children(self.render_error_banner(&t, cx))
             .child(match self.tree.current_root() {
                 Some(root) => self.render_screen(root, &t, cx),
                 None => div().flex_1().into_any_element(),
@@ -900,6 +913,64 @@ impl PlinthRoot {
                 .child(div().font_weight(FontWeight::SEMIBOLD).child("This app stopped"))
                 .child(div().text_xs().child(error))
         })
+    }
+
+    /// The last uncaught app error (`error.report`), with a "Dismiss"
+    /// button. The host owns this banner, not the app.
+    fn render_error_banner(&self, t: &Tokens, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.stopped.is_some() {
+            return None;
+        }
+        let last = self.app_errors.last()?.clone();
+        let more = self.app_errors.len() - 1;
+        let title: SharedString = if more == 0 { "An error occurred".into() } else { format!("An error occurred ({more} more)").into() };
+        let dismiss = div()
+            .id("plinth-error-dismiss")
+            .role(accesskit::Role::Button)
+            .aria_label("Dismiss error")
+            .px_3()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(t.on_accent)
+            .cursor_pointer()
+            .child("Dismiss")
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.app_errors.clear();
+                cx.notify();
+            }));
+        Some(
+            div()
+                .id("plinth-error-banner")
+                .role(accesskit::Role::Alert)
+                .aria_label(format!("{title}: {last}"))
+                .w_full()
+                .px_4()
+                .py_3()
+                .bg(t.danger)
+                .text_color(t.on_accent)
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+                        .child(div().text_xs().child(last)),
+                )
+                .child(dismiss)
+                .into_any_element(),
+        )
+    }
+
+    /// The uncaught app errors that the error banner shows (for tests).
+    pub fn app_errors(&self) -> &[String] {
+        &self.app_errors
     }
 
     /// The navigation shell (SPEC.md §6.2): a tab bar on compact, a rail on

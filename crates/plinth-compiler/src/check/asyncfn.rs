@@ -39,8 +39,12 @@
 //! of a `return`. An `await` deeper in an expression is first moved out
 //! (`lin`): the parts that run before it go into variables, and `&&`,
 //! `||` and `?:` become `if` statements. Statements with an `await` can be
-//! in `if`, `while`, `for`, `for…of`, blocks and `try`/`catch`; inside
-//! `switch`, `do…while` and `try`/`finally` they are the error `PL2009`.
+//! in `if`, `while`, `do…while`, `for`, `for…of`, `switch`, blocks and
+//! `try`/`catch`/`finally`. A `do…while` becomes a `while` with a flag; a
+//! `switch` becomes `if` statements that select and run the cases
+//! (`async_switch`); a `finally` body becomes a closure that the end of
+//! the `try`, an exception, and a `return`, `break` or `continue` call
+//! (`async_finally`).
 //! A loop with an `await` becomes a loop closure: an iteration that does
 //! not wait stays in the Wasm loop, and a continuation queues the loop
 //! closure again.
@@ -56,11 +60,11 @@ use crate::tir::*;
 use crate::types::{Field, FuncType, StructDef, StructId, Type};
 use std::rc::Rc;
 
-const STATE: u32 = 0;
-const ERROR: u32 = 1;
+pub(super) const STATE: u32 = 0;
+pub(super) const ERROR: u32 = 1;
 const WAITERS: u32 = 2;
 const HANDLED: u32 = 3;
-const VALUE: u32 = 4;
+pub(super) const VALUE: u32 = 4;
 
 /// One `Promise<T>`: its struct and helper functions.
 #[derive(Clone, Debug)]
@@ -68,34 +72,38 @@ pub(crate) struct PromiseInfo {
     /// `T`.
     pub ty: Type,
     pub sid: StructId,
-    resolve: FuncId,
-    reject: FuncId,
-    then: FuncId,
+    pub(super) resolve: FuncId,
 }
 
-fn bx(e: TExpr) -> Box<TExpr> {
+pub(super) fn bx(e: TExpr) -> Box<TExpr> {
     Box::new(e)
 }
 
-fn int(n: i32, span: Span) -> TExpr {
+pub(super) fn int(n: i32, span: Span) -> TExpr {
     TExpr::new(TExprKind::Num(n as f64), Type::Int, span)
 }
 
-fn waiter_ty() -> Type {
+pub(super) fn waiter_ty() -> Type {
     Type::Func(Rc::new(FuncType { params: Vec::new(), required: 0, ret: Type::Void }))
 }
 
 /// The `#value` type of `Promise<t>`.
-fn value_ty(t: &Type) -> Type {
+pub(super) fn value_ty(t: &Type) -> Type {
     if *t == Type::Void { Type::Bool } else { t.clone() }
 }
 
-fn void_stmt(kind: TExprKind, span: Span) -> TStmt {
+pub(super) fn void_stmt(kind: TExprKind, span: Span) -> TStmt {
     TStmt::Expr(TExpr::new(kind, Type::Void, span))
 }
 
+/// `v = e;`
+pub(super) fn set_var(v: VarId, e: TExpr, span: Span) -> TStmt {
+    let ty = e.ty.clone();
+    TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(v), bx(e)), ty, span))
+}
+
 /// `e === n` on `int` values.
-fn is(e: TExpr, n: i32, span: Span) -> TExpr {
+pub(super) fn is(e: TExpr, n: i32, span: Span) -> TExpr {
     TExpr::new(TExprKind::Cmp(CmpOp::Eq, EqKind::I32, bx(e), bx(int(n, span))), Type::Bool, span)
 }
 
@@ -107,6 +115,11 @@ pub(crate) struct AsyncRt {
     enqueue: FuncId,
     /// `Promise<void>`, the common view of every promise.
     base: StructId,
+    /// `settle(p, state)`, `reject(p, e)` and `then(p, k)` on the common
+    /// view: one of each for all promise types.
+    settle: FuncId,
+    reject: FuncId,
+    then: FuncId,
 }
 
 /// The tail of a statement list: what runs when control reaches its end.
@@ -134,6 +147,19 @@ struct LoopCx {
     in_tir: bool,
 }
 
+/// The innermost `try`/`finally` with an `await`: a `return`, `break` or
+/// `continue` that leaves it records a completion kind in `ck` (2, 3, 4;
+/// 1 is a throw, 0 the normal end) and calls the `finally` closure.
+struct FinCx {
+    ck: VarId,
+    /// The value of a `return` (not for `Promise<void>`).
+    cv: Option<VarId>,
+    /// The `finally` closure.
+    fin: VarId,
+    /// A `return`, `break`, `continue` went through it.
+    used: std::cell::Cell<[bool; 3]>,
+}
+
 #[derive(Clone)]
 struct Ctx {
     owner: FuncId,
@@ -141,16 +167,38 @@ struct Ctx {
     lcx: Option<LoopCx>,
     /// The closures of the enclosing `catch` blocks, innermost last.
     handlers: Vec<VarId>,
+    /// The code after the innermost transformed `switch` (where its `break`
+    /// goes), unless a loop is nearer.
+    sw: Option<Box<Tail>>,
+    fin: Option<Rc<FinCx>>,
+    /// `break` and `continue` at the top go through `fin` (no loop or
+    /// `switch` is between).
+    fin_brk: bool,
+    fin_cont: bool,
+}
+
+/// A tail for code in a new closure: it is not inside the Wasm loop.
+fn relocate_tail(t: &Tail) -> Tail {
+    match t {
+        Tail::FallThrough(l) => Tail::Next(Box::new(LoopCx { in_tir: false, ..(**l).clone() })),
+        t => t.clone(),
+    }
 }
 
 impl Ctx {
+    fn new(owner: FuncId, tail: Tail) -> Ctx {
+        Ctx { owner, tail, lcx: None, handlers: Vec::new(), sw: None, fin: None, fin_brk: false, fin_cont: false }
+    }
+
     /// The context for code moved into a new closure `owner`.
     fn relocate(&self, owner: FuncId) -> Ctx {
-        let tail = match &self.tail {
-            Tail::FallThrough(l) => Tail::Next(Box::new(LoopCx { in_tir: false, ..(**l).clone() })),
-            t => t.clone(),
-        };
-        Ctx { owner, tail, lcx: self.lcx.clone().map(|l| LoopCx { in_tir: false, ..l }), handlers: self.handlers.clone() }
+        Ctx {
+            owner,
+            tail: relocate_tail(&self.tail),
+            lcx: self.lcx.clone().map(|l| LoopCx { in_tir: false, ..l }),
+            sw: self.sw.as_ref().map(|t| Box::new(relocate_tail(t))),
+            ..self.clone()
+        }
     }
 }
 
@@ -272,35 +320,19 @@ impl Checker<'_> {
             self.make_async_rt(sid);
         }
 
-        // then(p, k)
-        let (then, tv) = self.helper_fn(&format!("{name}.then"), &[("p", pty.clone()), ("k", waiter_ty())], Type::Void);
-        let p = TExpr::new(TExprKind::Var(tv[0]), pty.clone(), span);
-        let k = TExpr::new(TExprKind::Var(tv[1]), waiter_ty(), span);
-        let state = self.pfield(&p, sid, STATE, Type::Int);
-        let waiters = self.pfield(&p, sid, WAITERS, Type::Array(Box::new(waiter_ty())));
-        let body = vec![TStmt::If(
-            is(state, 0, span),
-            vec![TStmt::Expr(TExpr::new(TExprKind::Rt("arr_push_i32", vec![waiters, k.clone()]), Type::Int, span))],
-            vec![self.set_pfield(p.clone(), sid, HANDLED, TExpr::new(TExprKind::Bool(true), Type::Bool, span)), self.enqueue(k, span)],
-        )];
-        self.prog.funcs[then as usize].body = body;
-
-        // resolve(p, v) and reject(p, e)
+        // resolve(p, v): `if (p.#state === 0) { p.#value = v; settle(p, 1); }`
+        let settle = self.async_rt.as_ref().expect("made above").settle;
         let (resolve, rv) = self.helper_fn(&format!("{name}.resolve"), &[("p", pty.clone()), ("v", value_ty(t))], Type::Void);
+        let p = TExpr::new(TExprKind::Var(rv[0]), pty.clone(), span);
         let v = TExpr::new(TExprKind::Var(rv[1]), value_ty(t), span);
-        let set_value = self.set_pfield(TExpr::new(TExprKind::Var(rv[0]), pty.clone(), span), sid, VALUE, v);
-        let body = self.settle_body(resolve, rv[0], sid, 1, set_value, false);
+        let body = vec![TStmt::If(
+            is(self.pfield(&p, sid, STATE, Type::Int), 0, span),
+            vec![self.set_pfield(p.clone(), sid, VALUE, v), void_stmt(TExprKind::Call(settle, vec![self.as_base(p), int(1, span)]), span)],
+            Vec::new(),
+        )];
         self.prog.funcs[resolve as usize].body = body;
 
-        let err_ty = self.error_type();
-        let (reject, jv) = self.helper_fn(&format!("{name}.reject"), &[("p", pty.clone()), ("e", err_ty.clone())], Type::Void);
-        let e = TExpr::new(TExprKind::Var(jv[1]), err_ty.clone(), span);
-        let as_nullable = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(e)), err_ty.nullable(), span);
-        let set_error = self.set_pfield(TExpr::new(TExprKind::Var(jv[0]), pty.clone(), span), sid, ERROR, as_nullable);
-        let body = self.settle_body(reject, jv[0], sid, 2, set_error, true);
-        self.prog.funcs[reject as usize].body = body;
-
-        let info = PromiseInfo { ty: t.clone(), sid, resolve, reject, then };
+        let info = PromiseInfo { ty: t.clone(), sid, resolve };
         self.promises.push(info.clone());
         info
     }
@@ -414,7 +446,53 @@ impl Checker<'_> {
             void_stmt(TExprKind::Call(init, Vec::new()), span),
             TStmt::Expr(TExpr::new(TExprKind::Rt("arr_push_i32", vec![q, k]), Type::Int, span)),
         ];
-        self.async_rt = Some(AsyncRt { unhandled, init, enqueue, base });
+        self.async_rt = Some(AsyncRt { unhandled, init, enqueue, base, settle: 0, reject: 0, then: 0 });
+
+        // settle(p, s)
+        let (settle, sv) = self.helper_fn("<settle>", &[("p", bty.clone()), ("s", Type::Int)], Type::Void);
+        let body = self.settle_body(sv[0], sv[1], base);
+        self.prog.funcs[settle as usize].body = body;
+
+        // reject(p, e): `if (p.#state === 0) { p.#error = e; settle(p, 2); }`
+        let err_ty = self.error_type();
+        let (reject, jv) = self.helper_fn("<reject>", &[("p", bty.clone()), ("e", err_ty.clone())], Type::Void);
+        let p = TExpr::new(TExprKind::Var(jv[0]), bty.clone(), span);
+        let e = TExpr::new(TExprKind::Var(jv[1]), err_ty.clone(), span);
+        let as_nullable = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(e)), err_ty.nullable(), span);
+        self.prog.funcs[reject as usize].body = vec![TStmt::If(
+            is(self.pfield(&p, base, STATE, Type::Int), 0, span),
+            vec![self.set_pfield(p.clone(), base, ERROR, as_nullable), void_stmt(TExprKind::Call(settle, vec![p, int(2, span)]), span)],
+            Vec::new(),
+        )];
+
+        // then(p, k): wait for `p`, or queue `k` at once when `p` has settled.
+        let (then, tv) = self.helper_fn("<then>", &[("p", bty.clone()), ("k", waiter_ty())], Type::Void);
+        let p = TExpr::new(TExprKind::Var(tv[0]), bty.clone(), span);
+        let k = TExpr::new(TExprKind::Var(tv[1]), waiter_ty(), span);
+        let state = self.pfield(&p, base, STATE, Type::Int);
+        let waiters = self.pfield(&p, base, WAITERS, Type::Array(Box::new(waiter_ty())));
+        self.prog.funcs[then as usize].body = vec![TStmt::If(
+            is(state, 0, span),
+            vec![TStmt::Expr(TExpr::new(TExprKind::Rt("arr_push_i32", vec![waiters, k.clone()]), Type::Int, span))],
+            vec![self.set_pfield(p.clone(), base, HANDLED, TExpr::new(TExprKind::Bool(true), Type::Bool, span)), self.enqueue(k, span)],
+        )];
+        self.async_rt = Some(AsyncRt { unhandled, init, enqueue, base, settle, reject, then });
+    }
+
+    /// The shared `then(p, k)` and `reject(p, e)`.
+    pub(super) fn promise_then_reject(&self) -> (FuncId, FuncId) {
+        let rt = self.async_rt.as_ref().expect("made with the first promise");
+        (rt.then, rt.reject)
+    }
+
+    /// `e` as the common view `Promise<void>`.
+    pub(super) fn as_base(&self, e: TExpr) -> TExpr {
+        let base = self.async_rt.as_ref().expect("made with the first promise").base;
+        if e.ty == Type::Struct(base) {
+            return e;
+        }
+        let span = e.span;
+        TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(e)), Type::Struct(base), span)
     }
 
     /// `enqueue(k)`: runs `k` as a microtask.
@@ -424,7 +502,7 @@ impl Checker<'_> {
     }
 
     /// A top-level helper function with these parameters.
-    fn helper_fn(&mut self, name: &str, params: &[(&str, Type)], ret: Type) -> (FuncId, Vec<VarId>) {
+    pub(super) fn helper_fn(&mut self, name: &str, params: &[(&str, Type)], ret: Type) -> (FuncId, Vec<VarId>) {
         let fid = self.prog.new_func(FuncDef {
             name: name.to_owned(),
             kind: FuncKind::TopLevel,
@@ -438,62 +516,58 @@ impl Checker<'_> {
         (fid, vars)
     }
 
-    fn var_in(&mut self, owner: FuncId, name: &str, ty: Type, in_loop: Option<LoopId>) -> VarId {
+    pub(super) fn var_in(&mut self, owner: FuncId, name: &str, ty: Type, in_loop: Option<LoopId>) -> VarId {
         self.prog.new_var(VarInfo { name: name.to_owned(), ty, owner, mutable: true, module: None, in_loop, captured: false })
     }
 
-    fn pfield(&self, p: &TExpr, sid: StructId, idx: u32, ty: Type) -> TExpr {
+    pub(super) fn pfield(&self, p: &TExpr, sid: StructId, idx: u32, ty: Type) -> TExpr {
         TExpr::new(TExprKind::Field(bx(p.clone()), sid, idx), ty, p.span)
     }
 
-    fn set_pfield(&self, p: TExpr, sid: StructId, idx: u32, v: TExpr) -> TStmt {
+    pub(super) fn set_pfield(&self, p: TExpr, sid: StructId, idx: u32, v: TExpr) -> TStmt {
         let span = p.span;
         let ty = v.ty.clone();
         TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Field(bx(p), sid, idx), bx(v)), ty, span))
     }
 
-    /// `if (p.#state === 0) { p.#state = state; <set>; queue the waiters }`.
+    /// The body of `settle(p, s)`: `p.#state = s`, then queue the waiters.
     /// A rejection with no waiters goes to the unhandled list; the drain
     /// reports it unless an `await` handles it first.
-    fn settle_body(&mut self, fid: FuncId, pv: VarId, sid: StructId, state: i32, set: TStmt, reject: bool) -> Vec<TStmt> {
+    fn settle_body(&mut self, pv: VarId, sv: VarId, sid: StructId) -> Vec<TStmt> {
         let span = Span::default();
-        let pty = Type::Struct(sid);
-        let p = TExpr::new(TExprKind::Var(pv), pty, span);
+        let fid = self.prog.vars[pv as usize].owner;
+        let p = TExpr::new(TExprKind::Var(pv), Type::Struct(sid), span);
+        let st = TExpr::new(TExprKind::Var(sv), Type::Int, span);
         let arr_ty = Type::Array(Box::new(waiter_ty()));
         let ws = self.var_in(fid, "$ws", arr_ty.clone(), None);
         let ws_r = TExpr::new(TExprKind::Var(ws), arr_ty.clone(), span);
         let id = self.prog.new_loop();
         let w = self.var_in(fid, "$w", waiter_ty(), Some(id));
-        let mut then = vec![
-            self.set_pfield(p.clone(), sid, STATE, int(state, span)),
-            set,
+        let rt = self.async_rt.clone().expect("made with the first promise");
+        let len = TExpr::new(TExprKind::Rt("arr_len", vec![ws_r.clone()]), Type::Int, span);
+        let empty = TExpr::new(TExprKind::Cmp(CmpOp::Eq, EqKind::I32, bx(len), bx(int(0, span))), Type::Bool, span);
+        let unhandled = TExpr::new(TExprKind::And(bx(is(st.clone(), 2, span)), bx(empty)), Type::Bool, span);
+        let uty = Type::Array(Box::new(Type::Struct(rt.base)));
+        let u = TExpr::new(TExprKind::Var(rt.unhandled), uty, span);
+        let enq = self.enqueue(TExpr::new(TExprKind::Var(w), waiter_ty(), span), span);
+        vec![
+            self.set_pfield(p.clone(), sid, STATE, st),
             TStmt::Let(ws, Some(self.pfield(&p, sid, WAITERS, arr_ty.clone()))),
             self.set_pfield(p.clone(), sid, WAITERS, TExpr::new(TExprKind::ArrayLit(Vec::new()), arr_ty.clone(), span)),
-        ];
-        if reject {
-            let rt = self.async_rt.clone().expect("made with the first promise");
-            let len = TExpr::new(TExprKind::Rt("arr_len", vec![ws_r.clone()]), Type::Int, span);
-            let empty = TExpr::new(TExprKind::Cmp(CmpOp::Eq, EqKind::I32, bx(len), bx(int(0, span))), Type::Bool, span);
-            let uty = Type::Array(Box::new(Type::Struct(rt.base)));
-            let u = TExpr::new(TExprKind::Var(rt.unhandled), uty, span);
-            let as_base = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(p.clone())), Type::Struct(rt.base), span);
-            then.push(TStmt::If(
-                empty,
+            TStmt::If(
+                unhandled,
                 vec![
                     void_stmt(TExprKind::Call(rt.init, Vec::new()), span),
-                    TStmt::Expr(TExpr::new(TExprKind::Rt("arr_push_i32", vec![u, as_base]), Type::Int, span)),
+                    TStmt::Expr(TExpr::new(TExprKind::Rt("arr_push_i32", vec![u, p]), Type::Int, span)),
                 ],
                 Vec::new(),
-            ));
-        }
-        let enq = self.enqueue(TExpr::new(TExprKind::Var(w), waiter_ty(), span), span);
-        then.push(TStmt::ForOf { id, var: w, arr: ws_r, body: vec![enq] });
-        let pending = is(self.pfield(&p, sid, STATE, Type::Int), 0, span);
-        vec![TStmt::If(pending, then, Vec::new())]
+            ),
+            TStmt::ForOf { id, var: w, arr: ws_r, body: vec![enq] },
+        ]
     }
 
     /// A new pending `Promise<info.ty>`.
-    fn new_promise(&self, info: &PromiseInfo, span: Span) -> TExpr {
+    pub(super) fn new_promise(&self, info: &PromiseInfo, span: Span) -> TExpr {
         let fields = vec![
             int(0, span),
             TExpr::new(TExprKind::Null, self.error_type().nullable(), span),
@@ -544,7 +618,7 @@ impl Checker<'_> {
         let pty = Type::Struct(info.sid);
         let p = self.var_in(fid, "$promise", pty.clone(), None);
         let acx = Acx { p, info: info.clone(), span };
-        let cx = Ctx { owner: fid, tail: Tail::Resolve, lcx: None, handlers: Vec::new() };
+        let cx = Ctx::new(fid, Tail::Resolve);
         let start = self.make_closure(&acx, &cx, "<async start>", Vec::new(), |c, kcx| c.block(&acx, body, kcx));
         let p_r = TExpr::new(TExprKind::Var(p), pty, span);
         vec![
@@ -603,7 +677,11 @@ impl Checker<'_> {
                 let hty = self.prog.vars[*h as usize].ty.clone();
                 TExprKind::CallClosure(bx(TExpr::new(TExprKind::Var(*h), hty, span)), vec![e])
             }
-            None => TExprKind::Call(acx.info.reject, vec![TExpr::new(TExprKind::Var(acx.p), Type::Struct(acx.info.sid), span), e]),
+            None => {
+                let reject = self.async_rt.as_ref().expect("made with the first promise").reject;
+                let p = self.as_base(TExpr::new(TExprKind::Var(acx.p), Type::Struct(acx.info.sid), span));
+                TExprKind::Call(reject, vec![p, e])
+            }
         };
         vec![TStmt::Try { body, catch: Some((ev, vec![void_stmt(dispatch, span)])), finally: None }]
     }
@@ -695,7 +773,18 @@ impl Checker<'_> {
     fn sync_stmt(&mut self, acx: &Acx, s: TStmt, cx: &Ctx, loops: u32, brks: u32) -> Vec<TStmt> {
         let span = acx.span;
         let outside = cx.lcx.as_ref().filter(|l| !l.in_tir).cloned();
+        let fin = cx.fin.is_some();
         match s {
+            TStmt::Return(e) if fin => self.leave_via_finally(acx, cx, 0, e),
+            TStmt::Break if brks == 0 && fin && cx.fin_brk => self.leave_via_finally(acx, cx, 1, None),
+            TStmt::Continue if loops == 0 && fin && cx.fin_cont => self.leave_via_finally(acx, cx, 2, None),
+            // The `break` of a transformed `switch`. At the end of a Wasm
+            // loop body, the code after the `switch` is the next iteration.
+            TStmt::Break if brks == 0 && cx.sw.is_some() => match cx.sw.as_deref() {
+                Some(Tail::FallThrough(_)) => vec![TStmt::Continue],
+                Some(t) => self.emit_tail(acx, t),
+                None => unreachable!(),
+            },
             TStmt::Return(e) => {
                 let p = TExpr::new(TExprKind::Var(acx.p), Type::Struct(acx.info.sid), span);
                 let v = match e {
@@ -736,6 +825,27 @@ impl Checker<'_> {
             }
             s => vec![s],
         }
+    }
+
+    /// A `return` (`kind` 0), `break` (1) or `continue` (2) that leaves a
+    /// `try`/`finally` with an `await`: record it, then run the `finally`
+    /// closure, which completes it.
+    fn leave_via_finally(&mut self, acx: &Acx, cx: &Ctx, kind: usize, e: Option<TExpr>) -> Vec<TStmt> {
+        let span = acx.span;
+        let f = cx.fin.clone().expect("checked by the caller");
+        let mut used = f.used.get();
+        used[kind] = true;
+        f.used.set(used);
+        let mut out = Vec::new();
+        if let Some(e) = e {
+            out.push(match f.cv {
+                Some(cv) => set_var(cv, e, span),
+                None => TStmt::Expr(e),
+            });
+        }
+        out.push(set_var(f.ck, int(kind as i32 + 2, span), span));
+        out.extend(self.emit_tail(acx, &Tail::Call(f.fin)));
+        out
     }
 
     fn sync_list(&mut self, acx: &Acx, stmts: Vec<TStmt>, cx: &Ctx, loops: u32, brks: u32) -> Vec<TStmt> {
@@ -794,7 +904,7 @@ impl Checker<'_> {
         });
         vec![
             TStmt::Let(q, Some(pe)),
-            void_stmt(TExprKind::Call(qinfo.then, vec![q_r, k]), span),
+            void_stmt(TExprKind::Call(self.async_rt.as_ref().expect("made with the first promise").then, vec![self.as_base(q_r), k]), span),
             TStmt::Return(None),
         ]
     }
@@ -841,13 +951,31 @@ impl Checker<'_> {
                 out
             }
             TStmt::Try { body, catch: Some((ev, cbody)), finally: None } => self.async_try(acx, body, ev, cbody, cx),
+            TStmt::Try { body, catch, finally: Some(fbody) } => self.async_finally(acx, body, catch, fbody, cx),
+            TStmt::Loop { id, cond: Some(c), test_after: true, update: None, body } => {
+                // `do body while (c)` becomes
+                // `first = true; while (true) { if (!first && !c) break; first = false; body }`,
+                // written with nested `if`s so an `await` in `c` runs only
+                // when the test runs.
+                let sp = c.span;
+                let first = self.var_in(cx.owner, "$first", Type::Bool, None);
+                let first_r = TExpr::new(TExprKind::Var(first), Type::Bool, sp);
+                let not = |e: TExpr| TExpr::new(TExprKind::Not(bx(e)), Type::Bool, sp);
+                let test = TStmt::If(not(first_r), vec![TStmt::If(not(c), vec![TStmt::Break], Vec::new())], Vec::new());
+                let mut new_body = vec![test, set_var(first, TExpr::new(TExprKind::Bool(false), Type::Bool, sp), sp)];
+                new_body.extend(body);
+                let mut out = vec![TStmt::Let(first, Some(TExpr::new(TExprKind::Bool(true), Type::Bool, sp)))];
+                out.extend(self.compound(acx, TStmt::Loop { id, cond: None, test_after: false, update: None, body: new_body }, cx));
+                out
+            }
+            TStmt::Switch { disc, eq, cases }
+                if !has_await_expr(&disc) && cases.iter().all(|(t, _)| !t.as_ref().is_some_and(has_await_expr)) =>
+            {
+                self.async_switch(acx, disc, eq, cases, cx)
+            }
             s => {
                 let (msg, help) = match &s {
-                    TStmt::Try { finally: Some(_), .. } => {
-                        ("`await` inside `try` with `finally` is not supported yet", "use `try`/`catch`, and repeat the clean-up code after it")
-                    }
-                    TStmt::Loop { test_after: true, .. } => ("`await` inside `do…while` is not supported yet", "use a `while` loop"),
-                    TStmt::Switch { .. } => ("`await` inside `switch` is not supported yet", "use `if`/`else`"),
+                    TStmt::Switch { .. } => ("`await` in a `case` value is not supported", "compute the value before the `switch`"),
                     _ => (
                         "`await` is not supported in this place",
                         "make the `await` its own statement: `await p;`, `const v = await p;`, `v = await p;` or `return await p;`",
@@ -976,13 +1104,136 @@ impl Checker<'_> {
         let lv = self.var_in(cx.owner, "$loop", waiter_ty(), None);
         let l = self.make_closure(acx, cx, "<async loop>", Vec::new(), |c, lcx| {
             let lc = LoopCx { lv, update: update.clone(), brk: lcx.tail.clone(), in_tir: true };
-            let bcx = Ctx { owner: lcx.owner, tail: Tail::FallThrough(Box::new(lc.clone())), lcx: Some(lc), handlers: lcx.handlers.clone() };
+            let bcx = Ctx {
+                tail: Tail::FallThrough(Box::new(lc.clone())),
+                lcx: Some(lc),
+                sw: None,
+                fin_brk: false,
+                fin_cont: false,
+                ..lcx.clone()
+            };
             let body = c.block(acx, body, &bcx);
             let mut out = vec![TStmt::Loop { id, cond, test_after: false, update, body }];
             out.extend(c.emit_tail(acx, &lcx.tail));
             out
         });
         vec![TStmt::Let(lv, Some(l)), self.call_var(lv, acx.span), TStmt::Return(None)]
+    }
+
+    /// A `switch` with an `await`: `$m` gets the index of the case that
+    /// matches (or of `default`), and each case body runs when its index is
+    /// at least `$m`, so control falls through as in a `switch`. A `break`
+    /// runs the code after the `switch` (`Ctx::sw`).
+    fn async_switch(&mut self, acx: &Acx, disc: TExpr, eq: EqKind, cases: Vec<(Option<TExpr>, Vec<TStmt>)>, cx: &Ctx) -> Vec<TStmt> {
+        let sp = disc.span;
+        let dv = self.var_in(cx.owner, "$d", disc.ty.clone(), None);
+        let d = TExpr::new(TExprKind::Var(dv), disc.ty.clone(), sp);
+        let mv = self.var_in(cx.owner, "$m", Type::Int, None);
+        let m = TExpr::new(TExprKind::Var(mv), Type::Int, sp);
+        let default = cases.iter().position(|(t, _)| t.is_none()).unwrap_or(cases.len());
+        let mut select = Vec::new();
+        for (i, (t, _)) in cases.iter().enumerate().rev() {
+            let Some(t) = t else { continue };
+            let test = TExpr::new(TExprKind::Cmp(CmpOp::Eq, eq, bx(d.clone()), bx(t.clone())), Type::Bool, sp);
+            select = vec![TStmt::If(test, vec![set_var(mv, int(i as i32, sp), sp)], select)];
+        }
+        let mut stmts = vec![TStmt::Let(dv, Some(disc)), TStmt::Let(mv, Some(int(default as i32, sp)))];
+        stmts.extend(select);
+        let mut bodies = Vec::new();
+        for (i, (_, body)) in cases.into_iter().enumerate() {
+            let run = TExpr::new(TExprKind::Cmp(CmpOp::Le, EqKind::I32, bx(m.clone()), bx(int(i as i32, sp))), Type::Bool, sp);
+            bodies.push(TStmt::If(run, body, Vec::new()));
+        }
+        let scx = Ctx { sw: Some(Box::new(cx.tail.clone())), fin_brk: false, ..cx.clone() };
+        stmts.extend(self.block(acx, bodies, &scx));
+        stmts
+    }
+
+    /// A `try`/`finally` (with or without `catch`) with an `await`. The
+    /// `finally` body becomes a closure. The end of the `try` and `catch`
+    /// blocks calls it; so do an exception (`$ck` 1, the error in `$ce`),
+    /// and a `return`, `break` or `continue` that leaves the blocks
+    /// (`leave_via_finally`). After the `finally` body, a second closure
+    /// completes what was pending.
+    fn async_finally(&mut self, acx: &Acx, body: Vec<TStmt>, catch: Option<(VarId, Vec<TStmt>)>, fbody: Vec<TStmt>, cx: &Ctx) -> Vec<TStmt> {
+        let span = acx.span;
+        let err_ty = self.error_type();
+        let nerr = err_ty.clone().nullable();
+        let ck = self.var_in(cx.owner, "$ck", Type::Int, None);
+        let ce = self.var_in(cx.owner, "$ce", nerr.clone(), None);
+        let cv = (acx.info.ty != Type::Void).then(|| self.var_in(cx.owner, "$cv", acx.info.ty.clone(), None));
+        let finv = self.var_in(cx.owner, "$finally", waiter_ty(), None);
+        let fin = Rc::new(FinCx { ck, cv, fin: finv, used: std::cell::Cell::new([false; 3]) });
+
+        // An exception in the `try` (without `catch`) or the `catch` block.
+        let ev = self.var_in(cx.owner, "$e", err_ty.clone(), None);
+        let (et, ne) = (err_ty.clone(), nerr.clone());
+        let fh = self.make_closure(acx, cx, "<finally catch>", vec![ev], |c, _| {
+            let e = TExpr::new(TExprKind::Var(ev), et, span);
+            let mut b = vec![
+                set_var(ce, TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(e)), ne, span), span),
+                set_var(ck, int(1, span), span),
+            ];
+            b.extend(c.emit_tail(acx, &Tail::Call(finv)));
+            b
+        });
+        let fhv = self.var_in(cx.owner, "$fcatch", fh.ty.clone(), None);
+        let mut icx = Ctx { tail: Tail::Call(finv), fin: Some(fin.clone()), fin_brk: true, fin_cont: true, ..cx.clone() };
+        icx.handlers.push(fhv);
+        let try_part = match catch {
+            Some((ev, cbody)) => self.async_try(acx, body, ev, cbody, &icx),
+            None => {
+                let tbody = self.block(acx, body, &icx);
+                let e2 = self.var_in(cx.owner, "$e", err_ty.clone(), None);
+                let call = TExprKind::CallClosure(
+                    bx(TExpr::new(TExprKind::Var(fhv), fh.ty.clone(), span)),
+                    vec![TExpr::new(TExprKind::Var(e2), err_ty.clone(), span)],
+                );
+                vec![TStmt::Try { body: tbody, catch: Some((e2, vec![void_stmt(call, span), TStmt::Return(None)])), finally: None }]
+            }
+        };
+
+        // After the `finally` body: complete the pending throw, `return`,
+        // `break` or `continue`, or run the code after the statement.
+        let used = fin.used.get();
+        let (et, ne) = (err_ty.clone(), nerr.clone());
+        let fd = self.make_closure(acx, cx, "<finally done>", Vec::new(), |c, dcx| {
+            let ck_is = |n: i32| is(TExpr::new(TExprKind::Var(ck), Type::Int, span), n, span);
+            let ce_r = TExpr::new(
+                TExprKind::Coerce(Coercion::Retag, bx(TExpr::new(TExprKind::Var(ce), ne, span))),
+                et,
+                span,
+            );
+            let mut b = vec![TStmt::If(ck_is(1), vec![TStmt::Throw(ce_r)], Vec::new())];
+            let pending = [
+                TStmt::Return(cv.map(|v| TExpr::new(TExprKind::Var(v), acx.info.ty.clone(), span))),
+                TStmt::Break,
+                TStmt::Continue,
+            ];
+            for (i, s) in pending.into_iter().enumerate() {
+                if used[i] {
+                    let then = c.sync_stmt(acx, s, dcx, 0, 0);
+                    b.push(TStmt::If(ck_is(i as i32 + 2), then, Vec::new()));
+                }
+            }
+            b.extend(c.emit_tail(acx, &dcx.tail));
+            b
+        });
+        let fdv = self.var_in(cx.owner, "$fdone", waiter_ty(), None);
+        let fc = self.make_closure(acx, cx, "<finally>", Vec::new(), |c, fcx| {
+            let fcx = Ctx { tail: Tail::Call(fdv), ..fcx.clone() };
+            c.block(acx, fbody, &fcx)
+        });
+        let mut out = vec![
+            TStmt::Let(ck, Some(int(0, span))),
+            TStmt::Let(ce, Some(TExpr::new(TExprKind::Null, nerr.clone(), span))),
+        ];
+        if let Some(cv) = cv {
+            out.push(TStmt::Let(cv, None));
+        }
+        out.extend([TStmt::Let(fdv, Some(fd)), TStmt::Let(finv, Some(fc)), TStmt::Let(fhv, Some(fh))]);
+        out.extend(try_part);
+        out
     }
 
     /// A `try`/`catch` with an `await`: the `catch` body becomes a handler

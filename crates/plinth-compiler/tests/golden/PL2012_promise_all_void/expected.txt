@@ -1,0 +1,4 @@
+app/main.tsx(4,11): error PL2012: `Promise.all` of promises of different types cannot have a `Promise<void>`
+  const p = Promise.all([f(), g()]);
+            ^^^^^^^^^^^^^^^^^^^^^^^
+  help: await the `Promise<void>` on its own

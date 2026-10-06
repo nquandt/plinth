@@ -110,17 +110,33 @@ declare class Error {
 /**
  * The result of an `async` function, or of a host call without a `done`
  * callback (SPEC.md §4.5). Read the value with `await` inside an `async`
- * function. `then`, `catch` and `new Promise` are not available in Plinth.
+ * function, or with `then`. A callback may return a value or a promise.
+ * A rejection reason is always an `Error`.
  */
 interface Promise<T> {
-  then<R = T>(onfulfilled: (value: T) => R): Promise<R>;
+  then<R = T>(onfulfilled: (value: T) => R | PromiseLike<R>, onrejected?: (reason: Error) => R | PromiseLike<R>): Promise<R>;
+  /** `onrejected` returns a value of the same type `T` (or a promise of it). */
+  catch(onrejected: (reason: Error) => T | PromiseLike<T>): Promise<T>;
+  finally(onfinally: () => void | PromiseLike<void>): Promise<T>;
 }
-// `tsc` needs these two for `async` functions; Plinth has no `new Promise`.
+// `tsc` needs this for `async` functions.
 interface PromiseLike<T> {
-  then<R = T>(onfulfilled: (value: T) => R): PromiseLike<R>;
+  then<R = T>(onfulfilled: (value: T) => R | PromiseLike<R>, onrejected?: (reason: Error) => R | PromiseLike<R>): PromiseLike<R>;
 }
 interface PromiseConstructor {
   readonly prototype: Promise<unknown>;
+  /** Write the type: `new Promise<T>((resolve, reject) => { ... })`. */
+  new <T>(executor: (resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T>;
+  /** Waits for every promise; rejects with the first rejection. */
+  all<T>(values: Promise<T>[]): Promise<T[]>;
+  /** An array literal of promises of different types: a tuple. */
+  all<A, B>(values: [Promise<A>, Promise<B>]): Promise<[A, B]>;
+  all<A, B, C>(values: [Promise<A>, Promise<B>, Promise<C>]): Promise<[A, B, C]>;
+  all<A, B, C, D>(values: [Promise<A>, Promise<B>, Promise<C>, Promise<D>]): Promise<[A, B, C, D]>;
+  resolve(): Promise<void>;
+  resolve<T>(value: T | Promise<T>): Promise<T>;
+  /** `reason` is an `Error`, or a string that becomes `new Error(reason)`. */
+  reject<T = void>(reason: Error | string): Promise<T>;
 }
 declare var Promise: PromiseConstructor;
 

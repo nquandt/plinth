@@ -156,8 +156,11 @@ needed. There are no size, axis or color props.
   can be imported from `plinth:ui` as types. The compiler encodes the
   points into one wire string. A signal read in the expression makes the
   chart update like any other reactive prop.
-- **`series`** is optional: an array literal of `{ name, points }`
-  object literals (`points` is any expression that `data` accepts), for
+- **`series`** is optional: an array of `{ name, points }` objects (an
+  array literal of object literals, or any expression of an array of
+  structs with a `name: string` and a `points` field, such as a
+  `ChartSeriesDef[]` variable, a `computed` or a `.map()` result;
+  `points` is any expression that `data` accepts), for
   overlaying several series on a `bar` or `line` chart (for example
   "this year" vs "last year"). When present, the renderer draws every
   series instead of `data`; `data` stays the single-series fallback a

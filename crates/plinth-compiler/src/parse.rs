@@ -324,13 +324,8 @@ impl Cx<'_> {
                         continue;
                     }
                     let f = &m.value;
-                    if f.r#async || f.generator {
-                        self.err_help(
-                            code::ASYNC,
-                            m.span,
-                            "async methods and generators are not supported yet",
-                            "use a top-level `async function` that takes the object as a parameter",
-                        );
+                    if f.generator {
+                        self.err(code::ASYNC, m.span, "generator methods are not supported");
                         continue;
                     }
                     let Some(body) = &f.body else {
@@ -367,7 +362,7 @@ impl Cx<'_> {
                         is_default: false,
                         span: self.span(m.span),
                         type_params: Vec::new(),
-                        is_async: false,
+                        is_async: f.r#async,
                     });
                 }
                 o::ClassElement::AccessorProperty(a) => {
@@ -1188,7 +1183,25 @@ impl Cx<'_> {
                         return None;
                     }
                 };
-                if name == "Map" || name == "Set" {
+                if name == "Promise" {
+                    let mut type_args = Vec::new();
+                    if let Some(a) = &n.type_arguments {
+                        for t in &a.params {
+                            type_args.push(self.ty(t)?);
+                        }
+                    }
+                    let mut args = Vec::new();
+                    for a in &n.arguments {
+                        match a {
+                            o::Argument::SpreadElement(s) => {
+                                self.err(code::UNSUPPORTED, s.span, "spread arguments are not supported");
+                                return None;
+                            }
+                            other => args.push(self.expr(other.as_expression()?)?),
+                        }
+                    }
+                    ExprKind::NewPromise(type_args, args)
+                } else if name == "Map" || name == "Set" {
                     if !n.arguments.is_empty() {
                         self.err(code::ARG_COUNT, n.span, format!("`new {name}()` takes no arguments"));
                         return None;

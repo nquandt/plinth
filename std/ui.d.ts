@@ -289,7 +289,7 @@ export interface ChartSeriesDef {
  * each `points` array is an array of `{ label, value }` objects: a literal,
  * a `ChartPoint[]` variable, a signal or computed, or a `.map()` result. A
  * signal read in it makes the chart update like any other reactive prop. `series` draws several series over `data`
- * (bar and line only); `data` stays the fallback a host without `series`
+ * (bar and line only), and can also be a literal, a `ChartSeriesDef[]` variable, a computed or a `.map()` result; `data` stays the fallback a host without `series`
  * support can show. */
 export declare function Chart(props: {
   label: string;

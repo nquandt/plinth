@@ -1,0 +1,4 @@
+app/main.tsx(2,26): error PL3001: expected an `Error` or a string, not `number`
+  const p = Promise.reject(42);
+                           ^^
+  help: write `new Error("message")`

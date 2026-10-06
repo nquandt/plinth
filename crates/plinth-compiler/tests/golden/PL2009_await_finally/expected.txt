@@ -1,4 +1,0 @@
-app/main.tsx(3,43): error PL2009: `await` inside `try` with `finally` is not supported yet
-  async function g(): Promise<void> { try { await f(); } finally { } }
-                                            ^^^^^^^^^
-  help: use `try`/`catch`, and repeat the clean-up code after it

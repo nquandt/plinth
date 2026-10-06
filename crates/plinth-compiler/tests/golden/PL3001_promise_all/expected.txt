@@ -1,0 +1,3 @@
+app/main.tsx(2,24): error PL3001: `Promise.all` needs promises, not `number`
+  const p = Promise.all([1, 2]);
+                         ^

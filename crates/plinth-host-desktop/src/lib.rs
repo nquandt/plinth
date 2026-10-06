@@ -225,6 +225,10 @@ impl GuestPort for WasmGuest {
     fn take_hub_launches(&mut self) -> Vec<String> {
         self.guest.take_hub_launches()
     }
+
+    fn take_errors(&mut self) -> Vec<String> {
+        self.guest.take_errors()
+    }
 }
 
 fn print_logs(guest: &mut Guest) {
