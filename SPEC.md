@@ -706,6 +706,8 @@ A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version i
 
 ## 12. App hub
 
+> `docs/HUB.md` is the full design of the Plinth Hub: discovery and sources, publisher identity and signing, the transparency log, the capability label and consent, the library and groups, shortcuts and OS integration, platforms, and the phases H0–H7. The summary below stays valid.
+
 - **Publishing:** `plinth publish` uploads a signed `.plnt`. The hub runs these checks:
   1. the import validator,
   2. the manifest checks,

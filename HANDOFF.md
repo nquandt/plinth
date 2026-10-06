@@ -105,6 +105,8 @@ A host: `cores::link_app(app)` picks the installed core (same major, highest min
 
 ## 9. Next steps (suggested order)
 
+0. **Plinth Hub** (`docs/HUB.md`): the user's direction for the product. Start with phase H0 (local library, grants store, install-time consent screen in the desktop host), then H1 (signing, the shared capability map, reachable-capability analysis).
+
 1. **Web host (M5) early spike:** export the core's table; JS glue that instantiates the core and then `app.wasm` with the core's exports, memory, table and `table_base` (no static link needed in a browser); JS implementations of the core's WIT imports at the core-module level; a minimal DOM renderer for the op buffer, or gpui-ce's web backend.
 2. **Hot reload:** keep signals with array and object values (component-local and row signals are kept now).
 3. **Host APIs:** consent UI (today a declared capability is granted), `dialog`, `net` (async with `completion` events; needs callbacks or `async`/`await`).
