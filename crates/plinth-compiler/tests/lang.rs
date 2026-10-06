@@ -6,7 +6,7 @@
 //! the example apps.
 
 use plinth_compiler::driver::{Frontend, MemFs, frontend};
-use plinth_protocol::ControlKind;
+use plinth_protocol::{ControlKind, Event, Value, Writer, event, prop};
 use plinth_runner_wasmtime::{Limits, Runner};
 use plinth_ui::tree::Tree;
 
@@ -1613,6 +1613,72 @@ function Home() {
         + APP;
     let tree = run(&main);
     assert_eq!(text_of(&tree, ControlKind::Text), "hé");
+}
+
+// -- Dynamic `Picker.options` (dogfooding gap #1): any `string[]`
+// expression, not just an array literal, now works and updates the host
+// tree's `options` prop when the underlying signal changes. -------------
+
+#[test]
+fn picker_options_from_a_signal_update_at_run_time() {
+    let main = r#"import { app, Screen, Picker, Button, signal, computed } from "plinth:ui";
+function Home() {
+  const wide = signal(false);
+  const opts = computed(() => (wide() ? ["a", "b", "c"] : ["a", "b"]));
+  const v = signal("a");
+  return (
+    <Screen title="Home">
+      <Picker label="P" value={v} options={opts()} />
+      <Button label="Toggle" onPress={() => wide.set(true)} />
+    </Screen>
+  );
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        tree.apply(&commit).unwrap();
+    }
+    let picker = {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        loop {
+            let id = stack.pop().expect("no Picker found");
+            let node = tree.get(id).unwrap();
+            if node.kind == Some(ControlKind::Picker) {
+                break id;
+            }
+            stack.extend(node.children.iter());
+        }
+    };
+    assert_eq!(tree.get(picker).unwrap().str_prop(prop::OPTIONS), Some("a\u{1f}b"));
+
+    let button = {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        loop {
+            let id = stack.pop().expect("no Button found");
+            let node = tree.get(id).unwrap();
+            if node.kind == Some(ControlKind::Button) {
+                break id;
+            }
+            stack.extend(node.children.iter());
+        }
+    };
+    let handler = tree.get(button).unwrap().handler(event::PRESS).expect("button has a handler");
+    let mut w = Writer::new();
+    w.event(&Event::Ui { handler, event: event::PRESS, value: Value::Null });
+    for commit in guest.on_event(w.as_bytes()).unwrap() {
+        tree.apply(&commit).unwrap();
+    }
+    assert_eq!(tree.get(picker).unwrap().str_prop(prop::OPTIONS), Some("a\u{1f}b\u{1f}c"));
 }
 
 #[test]

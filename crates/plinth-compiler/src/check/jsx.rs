@@ -90,22 +90,33 @@ impl Checker<'_> {
                 None => Expr { kind: ExprKind::Bool(true), span: a.span },
             };
             if ps.ty == PropTy::StrList {
-                let ExprKind::Array(items) = &value.kind else {
-                    self.err(code::TYPE_MISMATCH, value.span, format!("`{}` must be an array literal of strings", ps.name));
-                    continue;
-                };
-                let mut parts = Vec::new();
-                for (spread, it) in items {
-                    match &it.kind {
-                        _ if *spread => self.err(code::TYPE_MISMATCH, it.span, "each item must be a string literal"),
-                        ExprKind::Str(s) if !s.contains('\u{1f}') => parts.push(s.clone()),
-                        ExprKind::Str(_) => self.err(code::TYPE_MISMATCH, it.span, "the character U+001F is not allowed here"),
-                        _ => self.err(code::TYPE_MISMATCH, it.span, "each item must be a string literal"),
-                    }
-                }
                 let Target::Prop(id) = ps.target else { unreachable!("StrList always targets a prop") };
-                let joined = TExpr::new(TExprKind::Str(parts.join("\u{1f}")), Type::String, value.span);
-                props.push(TProp { target: PropTarget::Str(id), value: joined });
+                if let ExprKind::Array(items) = &value.kind {
+                    // Literal fast path: join at compile time, and diagnose
+                    // a literal item that contains the separator.
+                    let mut parts = Vec::new();
+                    for (spread, it) in items {
+                        match &it.kind {
+                            _ if *spread => self.err(code::TYPE_MISMATCH, it.span, "each item must be a string literal"),
+                            ExprKind::Str(s) if !s.contains('\u{1f}') => parts.push(s.clone()),
+                            ExprKind::Str(_) => self.err(code::TYPE_MISMATCH, it.span, "the character U+001F is not allowed here"),
+                            _ => self.err(code::TYPE_MISMATCH, it.span, "each item must be a string literal"),
+                        }
+                    }
+                    let joined = TExpr::new(TExprKind::Str(parts.join("\u{1f}")), Type::String, value.span);
+                    props.push(TProp { target: PropTarget::Str(id), value: joined });
+                } else {
+                    // Any other `string[]` expression (a signal read, a
+                    // computed, a plain variable): join at run time with
+                    // the same U+001F separator. This is an ordinary
+                    // string-valued prop from here on, so it gets the same
+                    // reactive-effect treatment as any other prop that
+                    // reads a signal in JSX.
+                    let te = self.typed(&value, &Type::Array(Box::new(Type::String)));
+                    let sep = TExpr::new(TExprKind::Str("\u{1f}".into()), Type::String, value.span);
+                    let joined = TExpr::new(TExprKind::Rt("arr_join", vec![te, sep]), Type::String, value.span);
+                    props.push(TProp { target: PropTarget::Str(id), value: joined });
+                }
                 continue;
             }
             if ps.ty == PropTy::ActionList {

@@ -119,10 +119,11 @@ fn image_control() {
 fn slider_number_picker_progress_badge() {
     // Good usage: all five check clean.
     let good = "import { app, Screen, Slider, NumberField, Picker, Progress, Badge, signal } from \"plinth:ui\";\n\
-                function Home() {\n  const v = signal(10);\n  const n = signal(1);\n  const t = signal(\"a\");\n  return <Screen title=\"Home\">\n    \
+                function Home() {\n  const v = signal(10);\n  const n = signal(1);\n  const t = signal(\"a\");\n  const opts = [\"a\"];\n  return <Screen title=\"Home\">\n    \
                 <Slider label=\"V\" value={v} min={0} max={100} />\n    \
                 <NumberField label=\"N\" value={n} />\n    \
                 <Picker label=\"T\" value={t} options={[\"a\", \"b\", \"c\"]} />\n    \
+                <Picker label=\"U\" value={t} options={opts} />\n    \
                 <Progress label=\"P\" value={0.5} />\n    \
                 <Badge label=\"new\" />\n  \
                 </Screen>;\n}"
@@ -130,9 +131,9 @@ fn slider_number_picker_progress_badge() {
         + APP;
     assert_eq!(codes(&good), Vec::<&str>::new());
 
-    // Bad usage: missing required `min`/`max` on Slider, and a non-literal `options`.
+    // Bad usage: missing required `min`/`max` on Slider, and a non-string-array `options`.
     let bad = "import { app, Screen, Slider, Picker, signal } from \"plinth:ui\";\n\
-               function Home() {\n  const v = signal(10);\n  const t = signal(\"a\");\n  const opts = [\"a\"];\n  return <Screen title=\"Home\">\n    \
+               function Home() {\n  const v = signal(10);\n  const t = signal(\"a\");\n  const opts = [1, 2];\n  return <Screen title=\"Home\">\n    \
                <Slider label=\"V\" value={v} />\n    \
                <Picker label=\"T\" value={t} options={opts} />\n  \
                </Screen>;\n}"

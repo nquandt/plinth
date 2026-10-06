@@ -40,6 +40,22 @@ small local change), per the dogfooding task's scope.
   `icon_glyph` in `crates/plinth-ui/src/theme.rs` to U+270D (WRITING HAND),
   which renders. Verified with `plinth-shoot` on `examples/utility`
   before/after the change.
+- #1 (fixed): `Picker.options`/`Tabs.items` (`PropTy::StrList`) now accept
+  any `string[]` expression, not just an array literal. `check/jsx.rs`
+  keeps the literal fast path (compile-time join, and the U+001F
+  diagnostic, which still only applies to literals since a dynamic value
+  cannot be checked at compile time); a non-literal expression is type
+  checked as `string[]` and lowered to a runtime `arr_join(expr, "\u001f")`
+  call, which becomes an ordinary reactive `string` prop (the same
+  effect-wrapping machinery as any other prop that reads a signal in JSX).
+  No new runtime function needed (`arr_join` already existed). Tests: a
+  frontend test (`slider_number_picker_progress_badge` in
+  `tests/frontend.rs`) exercising a `const` array variable, and an e2e
+  test (`picker_options_from_a_signal_update_at_run_time` in
+  `tests/lang.rs`) where a `computed`'s array drives `options` and updates
+  after a button press. `examples/utility/app/converter.tsx` was simplified
+  from one Picker per unit kind to a single From/To pair whose `options`
+  comes from `unitsFor(kind())`.
 - #4 (fixed, plus neighbors): added `String.split(sep)`, `replace(a, b)`
   (first match only), `replaceAll(a, b)`, `padStart`/`padEnd`, `charAt`,
   `lastIndexOf` to `std/lib.d.ts` and the checker (`check/expr.rs`'s
