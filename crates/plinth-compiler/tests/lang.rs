@@ -2210,6 +2210,49 @@ function Home() {
     assert_eq!(tree.get(picker).unwrap().str_prop(prop::OPTIONS), Some("a\u{1f}b\u{1f}c"));
 }
 
+/// An array literal of `const` names (7GUIs flight booker:
+/// `options={[ONE_WAY, RETURN]}`) is not a literal of strings, so it is
+/// joined at run time instead of rejected.
+#[test]
+fn picker_options_from_an_array_of_const_names() {
+    let main = r#"import { app, Screen, Picker, signal } from "plinth:ui";
+const A = "one way";
+const B = "return";
+function Home() {
+  const v = signal(A);
+  return (
+    <Screen title="Home">
+      <Picker label="P" value={v} options={[A, B, "x"]} />
+    </Screen>
+  );
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        tree.apply(&commit).unwrap();
+    }
+    let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+    let picker = loop {
+        let id = stack.pop().expect("no Picker found");
+        let node = tree.get(id).unwrap();
+        if node.kind == Some(ControlKind::Picker) {
+            break id;
+        }
+        stack.extend(node.children.iter());
+    };
+    assert_eq!(tree.get(picker).unwrap().str_prop(prop::OPTIONS), Some("one way\u{1f}return\u{1f}x"));
+}
+
 #[test]
 fn last_index_of_finds_the_final_occurrence() {
     let main = r#"import { app, Screen, Text } from "plinth:ui";

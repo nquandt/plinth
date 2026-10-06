@@ -149,6 +149,24 @@ body {
   color: var(--pl-muted);
   margin-bottom: 4px;
 }
+/* A text field's input and its error message, one under the other. */
+.pl-input-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.pl-field-error {
+  color: var(--pl-danger);
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
+.pl-field .pl-input-col .pl-input {
+  flex: none;
+}
+.pl-input[aria-invalid="true"] {
+  border-color: var(--pl-danger);
+}
 .pl-input,
 .pl-select,
 .pl-textarea {

@@ -208,7 +208,14 @@ Notes:
 - A `Signal` prop binds both ways: the host updates the control at
   once, sends a UI event, and the guest updates the signal — but the
   guest does not echo a redundant `set-prop` back, so the cursor never
-  jumps.
+  jumps. The same is true for a plain `value` plus `onChange`: while the
+  `change` event runs, the runtime does not send back the value that the
+  host shows already (two fields that set each other do not loop; see
+  `examples/7guis/temperature`).
+- `TextField.error` shows a message under the field and marks it as
+  invalid (red border; `aria-invalid` on the web). An empty string means
+  no error, so `error={bad() ? "Not a number" : ""}` works. The same is
+  true for an empty `Row.trailing`.
 - `Picker.options` (and `Tabs.items`) must be array literals of string
   literals; the compiler joins them at compile time. Four options or
   fewer render as a segmented control; more render as a list.
