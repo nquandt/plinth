@@ -243,6 +243,18 @@ fn run_region(id: u32) {
     else {
         return;
     };
+    // Remove the old content from the host and dispose its scope BEFORE
+    // building new content. Disposing frees any node ids the old content
+    // held (Cleanup::Node pushes them to `free_nodes`), so if we built the
+    // new content first it could be assigned an id the host still thinks
+    // is in use. Removing the old node first also means the host sees
+    // Remove before any Create that reuses its id.
+    if old_node != 0 {
+        with(|u| u.ops.op(&Op::Remove { id: old_node }));
+    }
+    if let Some(c) = old_content {
+        reactive::dispose(c);
+    }
     // The content gets its own scope, which the next run disposes. The
     // region effect tracks the reads of the callable (the condition).
     let scope = reactive::new_scope(reactive::current_scope());
@@ -250,15 +262,9 @@ fn run_region(id: u32) {
         Val::I32(n) => n as NodeId,
         _ => 0,
     });
-    if old_node != 0 && old_node != node {
-        with(|u| u.ops.op(&Op::Remove { id: old_node }));
-    }
-    if let Some(c) = old_content {
-        reactive::dispose(c);
-    }
     with(|u| {
         let parent = u.regions[id as usize].as_ref().map(|r| r.parent).unwrap_or(0);
-        if node != 0 && node != old_node {
+        if node != 0 {
             let index = u.slots(parent).iter().position(|s| *s == Slot::Region(id)).unwrap_or(0);
             let before = node_after(u, parent, index);
             u.ops.op(&Op::Insert { parent, id: node, before });

@@ -382,4 +382,6 @@ abi! {
     fn __plinth_rt_kv_keys() -> i32 { host::kv_keys() }
     fn __plinth_rt_clipboard_write_text(text: i32) { host::clipboard_write_text(text) }
     fn __plinth_rt_clipboard_read_text() -> i32 { host::clipboard_read_text() }
+    fn __plinth_rt_kv_last_error() -> i32 { host::kv_last_error() }
+    fn __plinth_rt_clipboard_last_error() -> i32 { host::clipboard_last_error() }
 }

@@ -71,6 +71,7 @@ pub enum StdFn {
     ClipboardWriteText,
     ClipboardReadText,
     Int,
+    ClipboardLastError,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

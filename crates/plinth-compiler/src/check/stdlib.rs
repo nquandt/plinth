@@ -20,7 +20,7 @@ pub const UI_NAMES: &[&str] = &[
 pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int"];
 pub const TIME_NAMES: &[&str] = &["now", "monotonicNow", "setTimeout", "setInterval", "clearTimeout", "clearInterval"];
 pub const STORE_NAMES: &[&str] = &["kv"];
-pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText"];
+pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
 
 /// The `store.kv` capability (SPEC.md §11), needed by every `plinth:store`
 /// call.
@@ -47,6 +47,7 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
         StdModule::Clipboard => Some(match name {
             "writeText" => Binding::Std(StdFn::ClipboardWriteText),
             "readText" => Binding::Std(StdFn::ClipboardReadText),
+            "lastError" => Binding::Std(StdFn::ClipboardLastError),
             _ => return None,
         }),
         StdModule::Ui => Some(match name {
@@ -239,6 +240,12 @@ impl Checker<'_> {
                 let te = self.coerce(te, &Type::Number);
                 TExpr::new(TExprKind::Coerce(Coercion::NumToI32, Box::new(te)), Type::Int, span)
             }
+            StdFn::ClipboardLastError => {
+                if !args.is_empty() {
+                    self.err(code::ARG_COUNT, span, "`lastError` takes no arguments");
+                }
+                TExpr::new(TExprKind::Rt("clipboard_last_error", Vec::new()), Type::String.nullable(), span)
+            }
         }
     }
 
@@ -367,6 +374,12 @@ impl Checker<'_> {
                             self.err(code::ARG_COUNT, span, "`kv.keys` takes no arguments");
                         }
                         TExpr::new(TExprKind::Rt("kv_keys", Vec::new()), Type::Array(Box::new(Type::String)), span)
+                    }
+                    "lastError" => {
+                        if !args.is_empty() {
+                            self.err(code::ARG_COUNT, span, "`kv.lastError` takes no arguments");
+                        }
+                        TExpr::new(TExprKind::Rt("kv_last_error", Vec::new()), Type::String.nullable(), span)
                     }
                     _ => {
                         self.err(code::NO_PROPERTY, prop_span, format!("`kv.{prop}` does not exist"));
