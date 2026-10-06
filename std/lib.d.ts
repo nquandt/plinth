@@ -19,6 +19,8 @@ interface Array<T> {
   slice(start?: number, end?: number): T[];
   reverse(): T[];
   join(separator?: string): string;
+  concat(...items: T[][]): T[];
+  reduce<U>(f: (acc: U, value: T, index: number) => U, initial: U): U;
   [Symbol.iterator](): Iterator<T>;
 }
 
@@ -63,6 +65,9 @@ declare class Map<K, V> {
   has(key: K): boolean;
   delete(key: K): boolean;
   clear(): void;
+  forEach(f: (value: V, key: K) => void): void;
+  keys(): K[];
+  values(): V[];
   readonly size: number;
 }
 
@@ -73,6 +78,9 @@ declare class Set<T> {
   has(value: T): boolean;
   delete(value: T): boolean;
   clear(): void;
+  forEach(f: (value: T) => void): void;
+  keys(): T[];
+  values(): T[];
   readonly size: number;
 }
 

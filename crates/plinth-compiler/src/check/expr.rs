@@ -1204,6 +1204,75 @@ impl Checker<'_> {
                 };
                 TExpr::new(TExprKind::Rt("arr_join", vec![o, sep]), Type::String, span)
             }
+            // `a.concat(b, c)` is exactly `[...a, ...b, ...c]`: reuse the
+            // array literal's existing spread handling (`arr_extend`,
+            // HANDOFF.md item 1), so no new runtime function is needed.
+            "concat" => {
+                let mut items = vec![(true, o)];
+                for a in args {
+                    let te = self.expr_with(a, &arr_ty);
+                    let te = self.coerce(te, &arr_ty);
+                    items.push((true, te));
+                }
+                TExpr::new(TExprKind::ArrayLit(items), arr_ty, span)
+            }
+            // `arr.reduce((acc, item, index) => ..., initial)`: a plain
+            // index loop built from existing TIR (`Let`/`Loop`/
+            // `CallClosure`/`Assign`), the same approach `kv_for_of` uses,
+            // so this needs no new runtime function or codegen support.
+            // Only the two-argument form (with an explicit initial value)
+            // is supported: without one, the accumulator's type would have
+            // to be inferred from an array that might be empty, which
+            // TypeScript itself only resolves by falling back to the
+            // element type (and still traps at run time on an empty
+            // array) — not worth the extra inference path here.
+            "reduce" => {
+                if args.len() != 2 {
+                    self.err_help(
+                        code::ARG_COUNT,
+                        span,
+                        "`reduce` takes a callback and an initial value",
+                        "`arr.reduce((acc, item, index) => ..., initial)`; `reduce` without an initial value is not supported",
+                    );
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let init = self.expr(&args[1], None);
+                let acc_ty = self.widen(init.ty.clone());
+                let init = self.coerce(init, &acc_ty);
+                let (f, arity) = self.callback(&args[0], &[acc_ty.clone(), elem.clone(), Type::Number], Some(acc_ty.clone()));
+
+                let arr_v = self.temp(arr_ty.clone());
+                let arr_r = TExpr::new(TExprKind::Var(arr_v), arr_ty.clone(), span);
+                let len = self.arr_len_of(arr_r.clone(), span);
+                let len_v = self.temp(Type::Number);
+                let len_r = TExpr::new(TExprKind::Var(len_v), Type::Number, span);
+                let i_v = self.temp(Type::Number);
+                let i_r = TExpr::new(TExprKind::Var(i_v), Type::Number, span);
+                let acc_v = self.temp(acc_ty.clone());
+                let acc_r = TExpr::new(TExprKind::Var(acc_v), acc_ty.clone(), span);
+                let f_v = self.temp(f.ty.clone());
+                let f_r = TExpr::new(TExprKind::Var(f_v), f.ty.clone(), span);
+
+                let elem_at = self.arr_get_at(arr_r.clone(), i_r.clone(), elem.clone(), span);
+                let mut call_args = vec![acc_r.clone(), elem_at, i_r.clone()];
+                call_args.truncate(arity);
+                let call = TExpr::new(TExprKind::CallClosure(bx(f_r), call_args), acc_ty.clone(), span);
+                let update_acc = TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(acc_v), bx(call)), acc_ty.clone(), span));
+                let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r.clone()), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))), Type::Number, span);
+                let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
+                let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(len_r)), Type::Bool, span);
+                let id = self.prog.new_loop();
+                let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![update_acc] };
+                let prelude = vec![
+                    TStmt::Let(arr_v, Some(o)),
+                    TStmt::Let(f_v, Some(f)),
+                    TStmt::Let(len_v, Some(len)),
+                    TStmt::Let(acc_v, Some(init)),
+                    TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
+                    loop_stmt,
+                ];
+                TExpr::new(TExprKind::Block(prelude, bx(acc_r)), acc_ty, span)
+            }
             _ => {
                 self.err(code::NO_PROPERTY, prop_span, format!("arrays have no method `{prop}` in Plinth TS"));
                 TExpr::new(TExprKind::Null, Type::Error, span)
@@ -1233,6 +1302,21 @@ impl Checker<'_> {
     fn kv_field(&self, obj: &TExpr, sid: crate::types::StructId, idx: u32, span: Span) -> TExpr {
         let ty = self.prog.structs[sid as usize].fields[idx as usize].ty.clone();
         TExpr::new(TExprKind::Field(bx(obj.clone()), sid, idx), ty, span)
+    }
+
+    /// A fresh copy of `arr` (`arr_slice(arr, 0, MAX)`, the same op `.slice()`
+    /// uses): `Map`/`Set`'s `.keys()`/`.values()` return this, not the raw
+    /// field, so pushing/popping the result cannot corrupt the map/set's own
+    /// backing arrays.
+    fn arr_copy_of(&self, arr: TExpr, span: Span) -> TExpr {
+        let ty = arr.ty.clone();
+        let zero = TExpr::new(TExprKind::Coerce(Coercion::NumToI32, bx(TExpr::new(TExprKind::Num(0.0), Type::Number, span))), Type::Bool, span);
+        let max = TExpr::new(
+            TExprKind::Coerce(Coercion::NumToI32, bx(TExpr::new(TExprKind::Num(i32::MAX as f64), Type::Number, span))),
+            Type::Bool,
+            span,
+        );
+        TExpr::new(TExprKind::Rt("arr_slice", vec![arr, zero, max]), ty, span)
     }
 
     fn arr_len_of(&self, arr: TExpr, span: Span) -> TExpr {
@@ -1556,8 +1640,68 @@ impl Checker<'_> {
                 body.extend(self.arr_clear(self.kv_field(&obj_r, sid, 1, span), span));
                 TExpr::new(TExprKind::Block(body, bx(self.void_tail(span))), Type::Void, span)
             }
+            // `m.forEach((value, key) => ...)` (JS order: value first): an
+            // index loop over the `keys`/`values` arrays, the same shape
+            // `kv_for_of` already builds for a bare `for…of`. No new
+            // runtime function or codegen support is needed.
+            "forEach" => {
+                if args.len() != 1 {
+                    wrong_arity(self, "forEach", 1);
+                    return self.void_tail(span);
+                }
+                let (f, arity) = self.callback(&args[0], &[v.clone(), k.clone()], Some(Type::Void));
+                let obj_v = self.temp(o.ty.clone());
+                let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
+                let keys = self.kv_field(&obj_r, sid, 0, span);
+                let values = self.kv_field(&obj_r, sid, 1, span);
+                let len = self.arr_len_of(keys.clone(), span);
+                let len_v = self.temp(Type::Number);
+                let len_r = TExpr::new(TExprKind::Var(len_v), Type::Number, span);
+                let i_v = self.temp(Type::Number);
+                let i_r = TExpr::new(TExprKind::Var(i_v), Type::Number, span);
+                let f_v = self.temp(f.ty.clone());
+                let f_r = TExpr::new(TExprKind::Var(f_v), f.ty.clone(), span);
+                let val_at = self.arr_get_at(values, i_r.clone(), v.clone(), span);
+                let key_at = self.arr_get_at(keys, i_r.clone(), k.clone(), span);
+                let mut call_args = vec![val_at, key_at];
+                call_args.truncate(arity);
+                let call = TExpr::new(TExprKind::CallClosure(bx(f_r), call_args), Type::Void, span);
+                let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r.clone()), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))), Type::Number, span);
+                let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
+                let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(len_r)), Type::Bool, span);
+                let id = self.prog.new_loop();
+                let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![TStmt::Expr(call)] };
+                let prelude = vec![
+                    TStmt::Let(obj_v, Some(o)),
+                    TStmt::Let(f_v, Some(f)),
+                    TStmt::Let(len_v, Some(len)),
+                    TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
+                    loop_stmt,
+                ];
+                TExpr::new(TExprKind::Block(prelude, bx(self.void_tail(span))), Type::Void, span)
+            }
+            // `.keys()`/`.values()` as a plain array (not only as a bare
+            // `for…of` target, which `kv_for_of` already handles): a copy
+            // of the backing array, so `[...m.keys()]` works through the
+            // array literal's existing spread handling with no new
+            // runtime function. `.entries()` is not included: there is no
+            // tuple/array-of-pairs type to return it as (the `for…of
+            // ([k, v] of m)` form still works, via `kv_for_of`).
+            "keys" => {
+                self.no_args(args, span);
+                self.arr_copy_of(self.kv_field(&o, sid, 0, span), span)
+            }
+            "values" => {
+                self.no_args(args, span);
+                self.arr_copy_of(self.kv_field(&o, sid, 1, span), span)
+            }
             _ => {
-                self.err_help(code::NO_PROPERTY, prop_span, format!("`Map` has no method `{prop}`"), "use `get`, `set`, `has`, `delete` or `clear`");
+                self.err_help(
+                    code::NO_PROPERTY,
+                    prop_span,
+                    format!("`Map` has no method `{prop}`"),
+                    "use `get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys` or `values`",
+                );
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
         }
@@ -1613,8 +1757,56 @@ impl Checker<'_> {
                 body.extend(self.arr_clear(self.kv_field(&obj_r, sid, 0, span), span));
                 TExpr::new(TExprKind::Block(body, bx(self.void_tail(span))), Type::Void, span)
             }
+            // `s.forEach(v => ...)`: same shape as `Map.forEach`, over the
+            // single `keys` array.
+            "forEach" => {
+                if args.len() != 1 {
+                    self.err(code::ARG_COUNT, span, "`forEach` takes one function");
+                    return self.void_tail(span);
+                }
+                let (f, arity) = self.callback(&args[0], &[t.clone()], Some(Type::Void));
+                let obj_v = self.temp(o.ty.clone());
+                let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
+                let keys = self.kv_field(&obj_r, sid, 0, span);
+                let len = self.arr_len_of(keys.clone(), span);
+                let len_v = self.temp(Type::Number);
+                let len_r = TExpr::new(TExprKind::Var(len_v), Type::Number, span);
+                let i_v = self.temp(Type::Number);
+                let i_r = TExpr::new(TExprKind::Var(i_v), Type::Number, span);
+                let f_v = self.temp(f.ty.clone());
+                let f_r = TExpr::new(TExprKind::Var(f_v), f.ty.clone(), span);
+                let val_at = self.arr_get_at(keys, i_r.clone(), t.clone(), span);
+                let mut call_args = vec![val_at];
+                call_args.truncate(arity);
+                let call = TExpr::new(TExprKind::CallClosure(bx(f_r), call_args), Type::Void, span);
+                let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r.clone()), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))), Type::Number, span);
+                let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
+                let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(len_r)), Type::Bool, span);
+                let id = self.prog.new_loop();
+                let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![TStmt::Expr(call)] };
+                let prelude = vec![
+                    TStmt::Let(obj_v, Some(o)),
+                    TStmt::Let(f_v, Some(f)),
+                    TStmt::Let(len_v, Some(len)),
+                    TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
+                    loop_stmt,
+                ];
+                TExpr::new(TExprKind::Block(prelude, bx(self.void_tail(span))), Type::Void, span)
+            }
+            // `.keys()`/`.values()` as a plain array: both are the same
+            // backing array for a `Set` (there is only one), copied so the
+            // caller cannot mutate the `Set` through the result.
+            "keys" | "values" => {
+                self.no_args(args, span);
+                self.arr_copy_of(self.kv_field(&o, sid, 0, span), span)
+            }
             _ => {
-                self.err_help(code::NO_PROPERTY, prop_span, format!("`Set` has no method `{prop}`"), "use `add`, `has`, `delete` or `clear`");
+                self.err_help(
+                    code::NO_PROPERTY,
+                    prop_span,
+                    format!("`Set` has no method `{prop}`"),
+                    "use `add`, `has`, `delete`, `clear`, `forEach`, `keys` or `values`",
+                );
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
         }

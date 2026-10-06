@@ -28,10 +28,20 @@ small local change), per the dogfooding task's scope.
 - Regular expressions: not needed by either app; the text-tools screen used
   manual character scans instead of `RegExp` (which `lib.d.ts` declares as
   an empty, unusable interface).
-- `Map`/`Set` iteration (`keys()`, `values()`, `entries()`, `forEach`): not
-  hit directly (`examples/budget` sidesteps it by iterating the known
-  `categories` array and calling `Map.get`), but a `Map` built from
-  unknown/dynamic keys has no way to enumerate its contents today.
+- `Map`/`Set` iteration as plain methods (`keys()`/`values()`/`forEach`,
+  fixed in gap batch 3 item 2; see "Fixed in this pass"). `entries()` as a
+  plain array is still not possible: no tuple/array-of-pairs type exists to
+  return it as (the `for…of ([k, v] of m)` form still works).
+- `Array` methods beyond the common set (gap batch 3 item 3 added
+  `concat`/`reduce`; see "Fixed in this pass"): `sort` (with a comparator),
+  `splice`, `fill` and `flat` are still not implemented. `sort` in
+  particular would need a comparator-calling loop generated in
+  `codegen.rs` (the same shape `ArrayHof` already uses for `map`/`filter`/
+  etc., extended with an in-place swap), which was not done here for lack
+  of time; `reduce`'s existing checker-level loop
+  (`check/expr.rs::array_method`) is not a template for it, since a sort
+  needs `O(n log n)` comparisons between elements, not one callback per
+  element.
 
 ## Fixed in this pass
 
@@ -164,6 +174,43 @@ small local change), per the dogfooding task's scope.
   a plain `{categories.map((c) => <Progress .../>)}`. Verified with
   `npx -y -p typescript@7 tsc -p .` (clean) and
   `cargo test -p plinth-compiler --test apps`.
+- **Map/Set iteration as plain methods (gap batch 3 item 2).** `m.forEach((v,
+  k) => ...)` and `s.forEach(v => ...)` now work, plus `m.keys()`/
+  `m.values()`/`s.keys()`/`s.values()` as plain `K[]`/`V[]` arrays (not
+  just as a bare `for…of` target, which `check/expr.rs::kv_for_of` already
+  handled) — so `[...m.keys()]` and `m.values().reduce(...)` work.
+  `forEach` (`map_method`/`set_method` in `check/expr.rs`) builds an index
+  loop over the `keys`/`values` arrays with `CallClosure`, the same shape
+  `kv_for_of` already uses for a bare `for…of`. `keys()`/`values()` return
+  a copy (`arr_copy_of`, `arr_slice(arr, 0, MAX)` — the same op `.slice()`
+  uses) rather than the struct's own backing array, so the caller cannot
+  corrupt the `Map`/`Set` by pushing/popping the result. `entries()` as a
+  plain array is not included: there is no tuple/array-of-pairs type to
+  return it as (`for (const [k, v] of m)` still works). No new runtime
+  function. `std/lib.d.ts`'s `Map`/`Set` declarations gained the matching
+  signatures. Tests in `crates/plinth-compiler/tests/lang.rs`:
+  `map_foreach_visits_every_entry_in_insertion_order`,
+  `set_foreach_visits_every_value`, `map_keys_and_values_as_arrays`,
+  `set_keys_and_values_as_arrays`.
+- **Array `concat`/`reduce` (gap batch 3 item 3).** `a.concat(b, c)` is
+  exactly `[...a, ...b, ...c]`, so it reuses the array literal's existing
+  spread handling (`arr_extend`) with no new runtime function or TIR node
+  — `array_method`'s `"concat"` arm just builds a `TExprKind::ArrayLit`
+  with every operand marked as a spread. `reduce` only supports the
+  two-argument form (callback plus an explicit initial value, matching
+  the task's "reduce" audit); it is a plain index loop built from
+  existing TIR (`Let`/`Loop`/`CallClosure`/`Assign`), the same approach
+  `kv_for_of` and the new `Map`/`Set.forEach` use, so again no new
+  runtime function. `find`, `findIndex`, `some`, `every` and `forEach`
+  (also named in the task) already existed (`ArrayHof` in
+  `check/expr.rs::array_method`); `sort` (with a comparator), `splice`,
+  `fill` and `flat` were not implemented — see "Larger items". `std/
+  lib.d.ts`'s `Array<T>` gained `concat`/`reduce`. Tests in
+  `crates/plinth-compiler/tests/lang.rs`: `array_concat_joins_arrays`,
+  `array_concat_on_an_empty_array`, `array_reduce_sums_with_an_initial_value`,
+  `array_reduce_on_an_empty_array_returns_the_initial_value`,
+  `array_reduce_with_index_builds_a_string`,
+  `array_reduce_without_an_initial_value_is_rejected`.
 
 ## Found later
 
