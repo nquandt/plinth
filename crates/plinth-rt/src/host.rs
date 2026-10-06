@@ -400,10 +400,14 @@ pub fn net_result_ok() -> i32 {
     LAST_LIST.with(|l| matches!(l.first(), Some(plinth_protocol::Value::Bool(true))) as i32)
 }
 
-/// The last `net.fetch` completion's `status` field, as a `number`.
+/// The last `net.fetch` completion's `status` field, as a `number`. Native
+/// hosts send `Value::Int`; the web host's JS encoder has no `int` tag for
+/// a plain number literal, so it sends `Value::Number` instead (both are
+/// accepted here).
 pub fn net_result_status() -> f64 {
     LAST_LIST.with(|l| match l.get(1) {
         Some(plinth_protocol::Value::Int(i)) => *i as f64,
+        Some(plinth_protocol::Value::Number(n)) => *n,
         _ => 0.0,
     })
 }
