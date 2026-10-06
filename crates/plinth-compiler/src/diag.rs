@@ -57,6 +57,9 @@ pub mod code {
     pub const REGEX: &str = "PL2018";
     pub const BIGINT: &str = "PL2019";
     pub const SIGNAL_NOT_REACTIVE: &str = "PL2020";
+    /// A class method is referenced without calling it (SPEC.md §4.2):
+    /// methods are static-dispatch functions, so a bare `c.m` has no value.
+    pub const UNBOUND_METHOD: &str = "PL2021";
     // 3xxx: types.
     pub const TYPE_MISMATCH: &str = "PL3001";
     pub const UNKNOWN_NAME: &str = "PL3002";

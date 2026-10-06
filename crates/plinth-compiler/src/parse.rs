@@ -112,7 +112,7 @@ impl Cx<'_> {
     fn declaration_stmt(&mut self, s: &o::Statement) -> Option<Option<Item>> {
         use o::Statement as S;
         Some(match s {
-            S::TSInterfaceDeclaration(_) | S::TSTypeAliasDeclaration(_) | S::TSEnumDeclaration(_) => {
+            S::TSInterfaceDeclaration(_) | S::TSTypeAliasDeclaration(_) | S::TSEnumDeclaration(_) | S::ClassDeclaration(_) => {
                 let d = s.as_declaration()?;
                 self.declaration(d, false)
             }
@@ -135,10 +135,7 @@ impl Cx<'_> {
                 f.exported = exported;
                 Some(Item::Stmt(Stmt { span: f.span, kind: StmtKind::Func(f) }))
             }
-            D::ClassDeclaration(c) => {
-                self.class_err(c.span);
-                None
-            }
+            D::ClassDeclaration(c) => self.class_decl(c, exported).map(Item::Class),
             D::TSTypeAliasDeclaration(t) => {
                 let mut type_params = Vec::new();
                 if let Some(tp) = &t.type_parameters {
@@ -235,9 +232,153 @@ impl Cx<'_> {
         self.err_help(
             code::CLASS,
             s,
-            "classes come in v1",
+            "this class form is not supported",
             "use an interface for the data and functions for the behavior",
         );
+    }
+
+    /// A basic class declaration (SPEC.md §4.2, v0: no `extends`). Each
+    /// unsupported member gives its own diagnostic and is skipped, so the
+    /// rest of the class still checks.
+    fn class_decl(&mut self, c: &o::Class, exported: bool) -> Option<ClassDecl> {
+        let Some(id) = &c.id else {
+            self.err(code::CLASS, c.span, "a class declaration needs a name");
+            return None;
+        };
+        if c.heritage.is_some() || !c.implements.is_empty() {
+            self.err_help(
+                code::CLASS,
+                c.span,
+                "`extends`/`implements` are not supported (v0 has no inheritance)",
+                "give each class its own fields and methods",
+            );
+            return None;
+        }
+        if c.r#abstract {
+            self.err(code::CLASS, c.span, "`abstract` classes are not supported");
+            return None;
+        }
+        if c.type_parameters.is_some() {
+            self.err(code::GENERIC_USER, c.span, "generic classes are not supported yet");
+            return None;
+        }
+        let mut fields = Vec::new();
+        let mut ctor = None;
+        let mut methods = Vec::new();
+        for el in &c.body.body {
+            match el {
+                o::ClassElement::PropertyDefinition(p) => {
+                    if p.r#static {
+                        self.err_help(code::CLASS, p.span, "static members are not supported yet", "use a top-level `let` instead");
+                        continue;
+                    }
+                    if matches!(p.key, o::PropertyKey::PrivateIdentifier(_)) {
+                        self.err_help(
+                            code::CLASS,
+                            p.span,
+                            "`#private` fields are not supported yet",
+                            "use a plain field name; v0 has no access control",
+                        );
+                        continue;
+                    }
+                    let Some(key) = p.key.static_name() else {
+                        self.err(code::COMPUTED_ACCESS, p.span, "computed field names are not supported");
+                        continue;
+                    };
+                    if p.optional {
+                        self.err_help(code::CLASS, p.span, "optional class fields are not supported yet", "use `T | null` with a default of `null`");
+                        continue;
+                    }
+                    let Some(ann) = &p.type_annotation else {
+                        self.err(code::ANY, p.span, "a field needs a type");
+                        continue;
+                    };
+                    let Some(ty) = self.ty(&ann.type_annotation) else { continue };
+                    let init = match &p.value {
+                        Some(e) => self.expr(e),
+                        None => None,
+                    };
+                    fields.push(ClassField { name: key.to_string(), ty, init, span: self.span(p.span) });
+                }
+                o::ClassElement::MethodDefinition(m) => {
+                    if m.r#static {
+                        self.err_help(code::CLASS, m.span, "static members are not supported yet", "use a top-level function instead");
+                        continue;
+                    }
+                    if matches!(m.kind, o::MethodDefinitionKind::Get | o::MethodDefinitionKind::Set) {
+                        self.err_help(code::GETTER_SETTER, m.span, "getters and setters are not supported in classes yet", "use a plain method");
+                        continue;
+                    }
+                    let f = &m.value;
+                    if f.r#async || f.generator {
+                        self.err(code::ASYNC, m.span, "async methods and generators come in v1");
+                        continue;
+                    }
+                    let Some(body) = &f.body else {
+                        self.err(code::NAMESPACE, m.span, "a method needs a body");
+                        continue;
+                    };
+                    if m.kind == o::MethodDefinitionKind::Constructor {
+                        if ctor.is_some() {
+                            self.err(code::DUPLICATE, m.span, "a class can have only one constructor");
+                            continue;
+                        }
+                        let Some(params) = self.ctor_params(&f.params) else { continue };
+                        ctor = Some(CtorDecl { params, body: self.block(&body.statements), span: self.span(m.span) });
+                        continue;
+                    }
+                    let Some(key) = m.key.static_name() else {
+                        self.err(code::COMPUTED_ACCESS, m.span, "computed method names are not supported");
+                        continue;
+                    };
+                    let Some(params) = self.params(&f.params) else { continue };
+                    let ret = match &f.return_type {
+                        Some(r) => match self.ty(&r.type_annotation) {
+                            Some(t) => Some(t),
+                            None => continue,
+                        },
+                        None => None,
+                    };
+                    methods.push(FuncDecl {
+                        name: Some((key.to_string(), self.span(m.span))),
+                        params,
+                        ret,
+                        body: Body::Block(self.block(&body.statements)),
+                        exported: false,
+                        is_default: false,
+                        span: self.span(m.span),
+                        type_params: Vec::new(),
+                    });
+                }
+                o::ClassElement::AccessorProperty(a) => {
+                    self.err_help(code::GETTER_SETTER, a.span, "accessor properties are not supported", "use a plain field and method");
+                }
+                o::ClassElement::StaticBlock(s) => {
+                    self.err(code::CLASS, s.span, "static blocks are not supported");
+                }
+                o::ClassElement::TSIndexSignature(s) => {
+                    self.err(code::COMPUTED_ACCESS, s.span, "index signatures are not supported in classes");
+                }
+            }
+        }
+        Some(ClassDecl { name: id.name.to_string(), fields, ctor, methods, exported, span: self.span(c.span) })
+    }
+
+    /// Constructor parameters: like `params`, but parameter properties
+    /// (`constructor(public x: number)`) are not supported.
+    fn ctor_params(&mut self, params: &o::FormalParameters) -> Option<Vec<Param>> {
+        for p in &params.items {
+            if p.accessibility.is_some() || p.readonly || p.r#override {
+                self.err_help(
+                    code::CLASS,
+                    p.span,
+                    "parameter properties are not supported yet",
+                    "declare the field on the class and assign it in the constructor body",
+                );
+                return None;
+            }
+        }
+        self.params(params)
     }
 
     fn import(&mut self, d: &o::ImportDeclaration) -> Option<Import> {
@@ -927,10 +1068,9 @@ impl Cx<'_> {
                 self.non_null_err(n.span);
                 return None;
             }
-            E::ThisExpression(t) => {
-                self.err(code::THIS, t.span, "`this` is not allowed");
-                return None;
-            }
+            // `this` is only valid inside a method or constructor body; the
+            // checker reports `code::THIS` when it is not bound there.
+            E::ThisExpression(_) => ExprKind::Ident("this".to_string()),
             E::ClassExpression(c) => {
                 self.class_err(c.span);
                 return None;
@@ -938,9 +1078,16 @@ impl Cx<'_> {
             E::NewExpression(n) => {
                 let name = match &n.callee {
                     o::Expression::Identifier(id) => id.name.to_string(),
-                    _ => String::new(),
+                    _ => {
+                        self.err_help(code::CLASS, n.span, "this `new` expression is not supported", "`new` only works on a class name");
+                        return None;
+                    }
                 };
-                if (name == "Map" || name == "Set") && n.arguments.is_empty() {
+                if name == "Map" || name == "Set" {
+                    if !n.arguments.is_empty() {
+                        self.err(code::ARG_COUNT, n.span, format!("`new {name}()` takes no arguments"));
+                        return None;
+                    }
                     let mut type_args = Vec::new();
                     if let Some(a) = &n.type_arguments {
                         for t in &a.params {
@@ -949,8 +1096,21 @@ impl Cx<'_> {
                     }
                     ExprKind::New(name, type_args)
                 } else {
-                    self.err_help(code::CLASS, n.span, "`new` is only supported for `new Map()` and `new Set()`", "use object literals and functions");
-                    return None;
+                    if n.type_arguments.is_some() {
+                        self.err(code::GENERIC_USER, n.span, "generic classes are not supported yet");
+                        return None;
+                    }
+                    let mut args = Vec::new();
+                    for a in &n.arguments {
+                        match a {
+                            o::Argument::SpreadElement(s) => {
+                                self.err(code::UNSUPPORTED, s.span, "spread arguments are not supported");
+                                return None;
+                            }
+                            other => args.push(self.expr(other.as_expression()?)?),
+                        }
+                    }
+                    ExprKind::NewInstance(name, args)
                 }
             }
             E::AwaitExpression(a) => {

@@ -887,3 +887,93 @@ fn distinct_generic_interface_instantiations_are_distinct_types() {
     );
     assert_eq!(codes(&main)[0], "PL3001");
 }
+
+// -- Classes (SPEC.md §4.2: a GC ref to a struct; v0 has no `extends`) ------
+
+#[test]
+fn counter_class_used_from_jsx_events() {
+    let main = r#"import { app, Screen, Text, Button } from "plinth:ui";
+class Counter {
+  count: number;
+  constructor(start: number) { this.count = start; }
+  inc(): void { this.count = this.count + 1; }
+}
+const c = new Counter(0);
+function Home() {
+  return <Screen title="Home">
+    <Text>{c.count}</Text>
+    <Button label="inc" onPress={() => c.inc()} />
+  </Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "0");
+}
+
+#[test]
+fn class_with_array_field_and_pushing_method() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class Box {
+  items: string[] = [];
+  add(s: string): void { this.items.push(s); }
+}
+function Home() {
+  const b = new Box();
+  b.add("a");
+  b.add("b");
+  return <Screen title="Home"><Text>{b.items.join(",")}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "a,b");
+}
+
+#[test]
+fn classes_in_an_array() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class Counter {
+  count: number;
+  constructor(start: number) { this.count = start; }
+}
+function Home() {
+  const list: Counter[] = [new Counter(1), new Counter(2)];
+  return <Screen title="Home"><Text>{list[0].count + list[1].count}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "3");
+}
+
+#[test]
+fn class_extends_is_rejected() {
+    let main = with_app("class Base { x: number = 0; constructor() {} }\nclass Derived extends Base { constructor() { super(); } }");
+    assert_eq!(codes(&main), ["PL2003"]);
+}
+
+#[test]
+fn this_outside_a_method_is_rejected() {
+    let main = with_app("class C { x: number = 0; constructor() {} }\nfunction f(): number { return this.x; }");
+    assert_eq!(codes(&main), ["PL2004"]);
+}
+
+#[test]
+fn unbound_method_reference_is_rejected() {
+    let main = r#"import { app, Screen, Button } from "plinth:ui";
+class Counter {
+  count: number;
+  constructor(start: number) { this.count = start; }
+  inc(): void { this.count = this.count + 1; }
+}
+const c = new Counter(0);
+function Home() { return <Screen title="Home"><Button label="inc" onPress={c.inc} /></Screen>; }
+"#
+    .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL2021"]);
+}
