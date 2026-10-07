@@ -24,6 +24,6 @@ toml.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
-plinth-runner-wasmtime.workspace = true
+plinth-runner-wasmtime = { workspace = true, features = ["wasmi"] }
 plinth-ui.workspace = true
 serde_json.workspace = true
