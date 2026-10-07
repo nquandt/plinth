@@ -72,6 +72,8 @@ pub enum StdFn {
     App,
     Navigate,
     ParseNumber,
+    /// `seedRandom(seed)` (core 1.12): the same seed gives the same `Math.random` numbers.
+    SeedRandom,
     ToString,
     TimeNow,
     TimeMonotonicNow,

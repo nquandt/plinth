@@ -2,9 +2,9 @@
 // units (one unit is 4 px), the same units that the court uses in
 // main.tsx; speeds are units per tick, and one tick is 1/60 s. The UI calls
 // `step` once per display frame with `k`, the frame time in ticks, so the
-// ball moves by `speed * k` (the same speed at 60 Hz and 144 Hz). With
-// `k = 1` the game is deterministic (no random numbers: plinth:core has no
-// Math.random, so the serve angles come from a fixed list).
+// ball moves by `speed * k` (the same speed at 60 Hz and 144 Hz). The serve
+// angles are random (`Math.random`, core 1.12); the host seeds it, and a
+// test gives a fixed seed, so a test game is the same each time.
 import { Math } from "plinth:core";
 
 /** The width of the field between the two paddles. */
@@ -32,7 +32,15 @@ export const PLAYER_SPEED = 1.2;
 const COMPUTER_SPEED = 0.62;
 /** Ticks that the ball waits at the center before a serve. */
 const SERVE_WAIT = 30;
-const SERVE_ANGLES: number[] = [0.35, -0.55, 0.6, -0.3, 0.5, -0.45, 0.2, -0.65];
+/** The vertical speed of a serve is random between these, up or down. */
+const SERVE_MIN_VY = 0.2;
+const SERVE_MAX_VY = 0.65;
+
+/** A random vertical serve speed. */
+function serveAngle(): number {
+  const a = SERVE_MIN_VY + Math.random() * (SERVE_MAX_VY - SERVE_MIN_VY);
+  return Math.random() < 0.5 ? -a : a;
+}
 
 export type Phase = "ready" | "playing" | "paused" | "over";
 
@@ -73,7 +81,7 @@ export function newGame(): Game {
     ballX: (FIELD_W - BALL) / 2,
     ballY: (FIELD_H - BALL) / 2,
     velX: SERVE_SPEED,
-    velY: SERVE_ANGLES[0],
+    velY: serveAngle(),
     leftY: (FIELD_H - PADDLE_H) / 2,
     rightY: (FIELD_H - PADDLE_H) / 2,
     leftScore: 0,
@@ -100,11 +108,10 @@ export function toggle(g: Game): Game {
 
 /** Puts the ball at the center and serves toward `dir` (-1 left, 1 right). */
 function serve(g: Game, dir: number): void {
-  const n = g.leftScore + g.rightScore;
   g.ballX = (FIELD_W - BALL) / 2;
   g.ballY = (FIELD_H - BALL) / 2;
   g.velX = SERVE_SPEED * dir;
-  g.velY = SERVE_ANGLES[n % SERVE_ANGLES.length];
+  g.velY = serveAngle();
   g.wait = SERVE_WAIT;
   g.rally = 0;
 }

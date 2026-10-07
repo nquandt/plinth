@@ -959,6 +959,8 @@ const { decodeOps, encodeEvent, encodeInitArgs } = __protocol;
 const { FileSpace, memoryFileBackend, FILES_CAPABILITY } = __files;
 
 const RT_PREFIX = "__plinth_rt_";
+/** The `init` record of the `Math.random` seed (core 1.12): 8 bytes, a little-endian u64. */
+const INIT_RANDOM_SEED = 3;
 
 /** Reads the `plinth-rt`/`table` import's minimum size from a raw wasm module. */
 function readTableImportMin(bytes) {
@@ -1795,8 +1797,15 @@ class PlinthApp {
     return ptr;
   }
 
+  /**
+   * Calls `init` with the init records. Without a `RANDOM_SEED` record (tag
+   * 3), it adds one with fresh entropy (core 1.12, `Math.random`); a test
+   * gives its own seed to repeat a run.
+   */
   init(initArgRecords = []) {
-    const bytes = encodeInitArgs(initArgRecords);
+    const records = [...initArgRecords];
+    if (!records.some((r) => r.tag === INIT_RANDOM_SEED)) records.push({ tag: INIT_RANDOM_SEED, data: crypto.getRandomValues(new Uint8Array(8)) });
+    const bytes = encodeInitArgs(records);
     const ptr = this._writeBuf(bytes);
     this.core.instance.exports.init(ptr, bytes.length);
   }
@@ -1807,7 +1816,7 @@ class PlinthApp {
     this.core.instance.exports["on-event"](ptr, bytes.length);
   }
 }
-  return { readPlnt, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, loadCore, linkApp, PlinthApp };
+  return { INIT_RANDOM_SEED, readPlnt, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, loadCore, linkApp, PlinthApp };
   })();
 
   // ---- dom-renderer.js

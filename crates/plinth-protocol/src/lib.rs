@@ -71,6 +71,9 @@ pub mod init_arg {
     /// A hot-reload signal snapshot from the previous instance (dev only,
     /// SPEC.md §13).
     pub const SNAPSHOT: u8 = 2;
+    /// Core 1.12: the seed of `Math.random`, 8 bytes (a little-endian
+    /// `u64`). A host gives fresh entropy; a test gives a fixed value.
+    pub const RANDOM_SEED: u8 = 3;
 
     /// Appends one record.
     pub fn push(out: &mut Vec<u8>, tag: u8, data: &[u8]) {

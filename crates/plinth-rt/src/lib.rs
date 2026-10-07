@@ -43,6 +43,7 @@ mod global;
 pub mod gc;
 mod host;
 mod json;
+mod random;
 mod reactive;
 pub mod strings;
 mod ui;
@@ -235,6 +236,12 @@ impl bindings::Guest for Rt {
         // every `init`/`on-event` for the life of this instance.
         if plinth_protocol::init_arg::find(&args, plinth_protocol::init_arg::GC_STRESS).is_some() {
             gc::set_stress(true);
+        }
+        // Core 1.12: the seed of `Math.random`, before any app code runs.
+        if let Some(s) = plinth_protocol::init_arg::find(&args, plinth_protocol::init_arg::RANDOM_SEED)
+            && let Ok(bytes) = <[u8; 8]>::try_from(s)
+        {
+            random::seed(u64::from_le_bytes(bytes));
         }
         let Some(main) = MAIN.get() else { trap("the artifact has no app entry point") };
         invoke(Callable { thunk: main, env: 0 }, Val::None);
@@ -590,6 +597,9 @@ abi! {
     // and later parameters with these (the first with `arg_f64`/`arg_i32`).
     fn __plinth_rt_arg_at_f64(i: i32) -> f64 { arg_at(i).f64() }
     fn __plinth_rt_arg_at_i32(i: i32) -> i32 { arg_at(i).i32() }
+    // -- Math.random and seedRandom (core 1.12, docs/GAPS.md G6) ---------------
+    fn __plinth_rt_math_random() -> f64 { random::next() }
+    fn __plinth_rt_math_seed(seed: f64) { random::seed(seed.to_bits()) }
 
     // -- plinth:time date/time additions (SPEC.md §8.5, docs/GAPS.md gap #5) --
     fn __plinth_rt_tz_offset_minutes(ms: f64) -> f64 { host::timezone_offset(ms as i64) as f64 }

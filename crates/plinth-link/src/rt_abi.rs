@@ -186,6 +186,9 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     // -- Several callback arguments (core 1.12) ----------------------------
     ("arg_at_f64", &[I32], &[F64]),
     ("arg_at_i32", &[I32], &[I32]),
+    // -- Math.random and seedRandom (core 1.12) -------------------------------
+    ("math_random", &[], &[F64]),
+    ("math_seed", &[F64], &[]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -267,6 +270,8 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("set_frame", 12),
     ("arg_at_f64", 12),
     ("arg_at_i32", 12),
+    ("math_random", 12),
+    ("math_seed", 12),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).

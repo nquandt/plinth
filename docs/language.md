@@ -511,7 +511,7 @@ accurate.
 
 | Module | Contents | Capability |
 |---|---|---|
-| `plinth:core` | `int`, `Math`, `JSON.stringify`/`JSON.parse<T>`, `parseNumber`, `toString`, `console.log` (dev only) | none |
+| `plinth:core` | `int`, `Math` (with `Math.random`, core 1.12: the host seeds it with fresh entropy, a test with a fixed seed), `seedRandom(seed)`, `JSON.stringify`/`JSON.parse<T>`, `parseNumber`, `toString`, `console.log` (dev only) | none |
 | `plinth:ui` | `signal`, `computed`, `effect`, `app()`, `navigate`, and every UI control (see [ui.md](ui.md)) | none |
 | `plinth:time` | `now()`, `monotonicNow()`, `setTimeout`/`setInterval`/`clearTimeout`/`clearInterval` | none |
 | `plinth:store` | `kv.get`/`kv.set`/`kv.remove`/`kv.keys`, `kv.lastError()` | `store.kv` |

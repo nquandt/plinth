@@ -13,7 +13,7 @@ import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { PlinthApp, readPlnt } from "../plinth-web.js";
+import { PlinthApp, readPlnt, INIT_RANDOM_SEED } from "../plinth-web.js";
 import { Tree } from "../dom-renderer.js";
 import { ControlKind, Prop, Event, EnumColor } from "../ui-api.js";
 
@@ -53,7 +53,8 @@ app.onCommit = (ops) => {
   tree.apply(ops);
 };
 await app.load(core, appWasm, { log: () => {}, manifestText, requestFrame, cancelFrame });
-app.init([]);
+// A fixed `Math.random` seed (core 1.12): the same game each time.
+app.init([{ tag: INIT_RANDOM_SEED, data: new Uint8Array([1, 0, 0, 0, 0, 0, 0, 0]) }]);
 
 const nodes = () => [...tree.nodes.values()];
 const labelled = (label) => {

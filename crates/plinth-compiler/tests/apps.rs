@@ -43,7 +43,9 @@ impl Harness {
         let runner = Runner::new().unwrap();
         let mut guest = runner.load(bytes, Limits::default()).unwrap();
         let mut tree = Tree::new();
-        let commits = guest.init(&[]);
+        // A fixed `Math.random` seed (core 1.12): the same run each time.
+        let seed = plinth_protocol::init_arg::one(plinth_protocol::init_arg::RANDOM_SEED, &1u64.to_le_bytes());
+        let commits = guest.init(&seed);
         for log in guest.take_logs() {
             eprintln!("guest: {log}");
         }
@@ -555,4 +557,66 @@ export default app({ screens: { home: { title: "Home", component: Home } } });
     h.fire_frame(t0 + Duration::from_millis(500));
     h.fire_frame(t0 + Duration::from_millis(520));
     assert_eq!(text(&h), "5 frames, 55 ms");
+}
+
+/// Core 1.12 (docs/GAPS.md G6): `Math.random` gives numbers in [0, 1) from
+/// the host's seed (the same seed, the same numbers), and `seedRandom`
+/// restarts the sequence from the app's own seed.
+#[test]
+fn math_random_follows_the_seed() {
+    const APP: &str = r#"
+import { app, signal, Screen, Text, Button } from "plinth:ui";
+import { Math, seedRandom } from "plinth:core";
+
+function Home() {
+  const first = Math.random();
+  const shown = signal(`${first}`);
+  const replay = () => {
+    seedRandom(7);
+    const a = Math.random();
+    const b = Math.random();
+    shown.set(`${a} ${b} ${a >= 0 && a < 1 && b >= 0 && b < 1 && a !== b}`);
+  };
+  return (
+    <Screen title="Home">
+      <Text>{shown()}</Text>
+      <Button label="Replay" onPress={replay} />
+    </Screen>
+  );
+}
+
+export default app({ screens: { home: { title: "Home", component: Home } } });
+"#;
+    let fs = plinth_compiler::driver::MemFs::default().with("app/main.tsx", APP);
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &[]).expect("compile");
+    let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+    let art = artifact.unwrap_or_else(|| panic!("errors:\n{}", diags.join("\n")));
+    let text = |h: &Harness| h.text_of(h.find(ControlKind::Text, |_| true)[0]);
+    let start = |seed: Option<u64>| {
+        let runner = Runner::new().unwrap();
+        let mut guest = runner.load(&art.component, Limits::default()).unwrap();
+        let args = seed.map(|s| plinth_protocol::init_arg::one(plinth_protocol::init_arg::RANDOM_SEED, &s.to_le_bytes())).unwrap_or_default();
+        let mut tree = Tree::new();
+        for commit in guest.init(&args).unwrap() {
+            tree.apply(&commit).unwrap();
+        }
+        Harness { guest, tree, _runner: runner }
+    };
+    let (a, b, c) = (start(Some(9)), start(Some(9)), start(Some(10)));
+    assert_eq!(text(&a), text(&b), "the same seed gives the same number");
+    assert_ne!(text(&a), text(&c), "another seed gives another number");
+    let n: f64 = text(&a).parse().unwrap();
+    assert!((0.0..1.0).contains(&n), "{n}");
+    // Without a seed record the runner gives fresh entropy.
+    assert_ne!(text(&start(None)), text(&start(None)));
+
+    // seedRandom: the same numbers in every instance, whatever the host seed.
+    let mut a = a;
+    let mut c = c;
+    for h in [&mut a, &mut c] {
+        let replay = h.find(ControlKind::Button, |_| true)[0];
+        h.fire(replay, event::PRESS, Value::Null);
+    }
+    assert_eq!(text(&a), text(&c));
+    assert!(text(&a).ends_with(" true"), "{}", text(&a));
 }

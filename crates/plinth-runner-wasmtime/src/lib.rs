@@ -152,6 +152,15 @@ struct HostState {
     files: files::Files,
 }
 
+/// 64 bits of entropy for `Math.random`: the standard library's random
+/// hash keys (from the OS) mixed with the clock. Not for security.
+fn fresh_seed() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
+    h.finish()
+}
+
 impl bindings::plinth::app::ui::Host for HostState {
     fn commit(&mut self, ops: Vec<u8>) {
         self.commits.push(ops);
@@ -665,8 +674,16 @@ impl Guest {
     }
 
     /// Calls `init` and returns the op buffers that the guest committed.
+    /// Calls `init` with the `init` records `args` (SPEC.md §8.1). Without a
+    /// `RANDOM_SEED` record, it adds one with fresh entropy (core 1.12,
+    /// `Math.random`); a test gives its own seed to repeat a run.
     pub fn init(&mut self, args: &[u8]) -> Result<Vec<Vec<u8>>> {
-        self.call(|app, store| app.call_init(store, args))
+        use plinth_protocol::init_arg;
+        let mut args = args.to_vec();
+        if init_arg::find(&args, init_arg::RANDOM_SEED).is_none() {
+            init_arg::push(&mut args, init_arg::RANDOM_SEED, &fresh_seed().to_le_bytes());
+        }
+        self.call(|app, store| app.call_init(store, &args))
     }
 
     /// Calls `on-event` and returns the op buffers that the guest committed.

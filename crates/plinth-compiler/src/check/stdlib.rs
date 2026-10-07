@@ -29,7 +29,7 @@ pub const UI_NAMES: &[&str] = &[
     // UI API 1.13
     "strokeRect", "strokeCircle",
 ];
-pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int", "JSON"];
+pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int", "JSON", "seedRandom"];
 pub const TIME_NAMES: &[&str] = &[
     "now",
     "monotonicNow",
@@ -195,6 +195,7 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "toString" => Binding::Std(StdFn::ToString),
             "int" => Binding::Std(StdFn::Int),
             "JSON" => Binding::StdObj(StdObj::Json),
+            "seedRandom" => Binding::Std(StdFn::SeedRandom),
             _ => return None,
         }),
     }
@@ -291,6 +292,14 @@ impl Checker<'_> {
                         TExpr::new(TExprKind::Null, Type::Error, span)
                     }
                 }
+            }
+            StdFn::SeedRandom => {
+                if !one_arg(self, "seedRandom") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let te = self.expr_with(&args[0], &Type::Number);
+                let te = self.coerce(te, &Type::Number);
+                TExpr::new(TExprKind::Rt("math_seed", vec![te]), Type::Void, span)
             }
             StdFn::ParseNumber => {
                 if !one_arg(self, "parseNumber") {
@@ -997,6 +1006,8 @@ impl Checker<'_> {
                     "max" => (2, Ok(MathOp::Max)),
                     "round" => (1, Err("f64_round")),
                     "pow" => (2, Err("f64_pow")),
+                    // Core 1.12 (docs/GAPS.md G6): seeded by the host.
+                    "random" => (0, Err("math_random")),
                     _ => {
                         self.err(code::NO_PROPERTY, prop_span, format!("`Math.{prop}` is not available in Plinth TS"));
                         return TExpr::new(TExprKind::Num(0.0), Type::Error, span);

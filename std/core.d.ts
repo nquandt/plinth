@@ -21,7 +21,14 @@ export declare const Math: {
   min(a: number, b: number): number;
   max(a: number, b: number): number;
   pow(x: number, y: number): number;
+  /** A number in [0, 1) (core 1.12). The host seeds it with fresh entropy
+   * for each run; `seedRandom` makes the numbers repeat. Not for security. */
+  random(): number;
 };
+
+/** Seeds `Math.random` (core 1.12): the same seed gives the same numbers,
+ * for a replay or a daily puzzle. */
+export declare function seedRandom(seed: number): void;
 
 /** Converts a string to a number, as the JS `Number(s)` function does. */
 export declare function parseNumber(s: string): number;
