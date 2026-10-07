@@ -16,7 +16,7 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { PlinthApp, readPlnt } from "../plinth-web.js";
-import { Tree } from "../dom-renderer.js";
+import { Tree, parseShapes } from "../dom-renderer.js";
 import { ControlKind, Event, Prop } from "../ui-api.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -244,40 +244,37 @@ async function circleDrawer() {
   const canvas = h.one(ControlKind.canvas);
   // Pointer events carry [x, y] in view units (UI API 1.12).
   const pointer = (event, x, y) => h.send(canvas, event, [x, y]);
-  // The fill of each circle (an outline is two circles: the border, then the fill).
-  const fills = () =>
-    String(canvas.props.get(Prop.shapes) ?? "")
-      .split("")
-      .map((s) => s.split(""))
-      .filter((f) => f[0] === "c")
-      .filter((_, i) => i % 2 === 1)
-      .map((f) => [Number(f[1]), Number(f[2]), f[4]]);
-  const borderRadius = () => Number(String(canvas.props.get(Prop.shapes)).split("").find((s) => s.startsWith("c")).split("")[3]);
+  // The circles on the canvas, with the renderer's own parser: every circle
+  // has an outline; only the selected one has a fill.
+  const outlines = () => parseShapes(canvas.props.get(Prop.shapes)).filter((s) => s.kind === "strokeCircle");
+  const filled = () => parseShapes(canvas.props.get(Prop.shapes)).filter((s) => s.kind === "circle").map((s) => [s.cx, s.cy]);
+  const radius = () => outlines()[0].r;
 
-  assert.deepEqual(fills(), []);
+  assert.deepEqual(outlines(), []);
   pointer(Event.pointerDown, 100, 100);
   pointer(Event.pointerDown, 250.5, 150);
-  assert.deepEqual(fills(), [[100, 100, "surface.alt"], [250.5, 150, "text.muted"]]);
+  assert.deepEqual(outlines().map((s) => [s.cx, s.cy, s.r]), [[100, 100, 15], [250.5, 150, 15]]);
+  assert.deepEqual(filled(), [[250.5, 150]]);
   pointer(Event.pointerMove, 110, 95);
-  assert.equal(fills()[0][2], "text.muted", "the pointer selects the circle under it");
+  assert.deepEqual(filled(), [[100, 100]], "the pointer selects the circle under it");
   pointer(Event.pointerDown, 105, 100);
-  assert.equal(fills().length, 2, "a click in a circle adds none");
+  assert.equal(outlines().length, 2, "a click in a circle adds none");
 
   h.press("Adjust diameter");
   const slider = h.labeled(ControlKind.slider, "Diameter");
   h.send(slider, Event.change, 70);
-  assert.equal(borderRadius(), 35);
+  assert.equal(radius(), 35);
   h.press("Done");
   h.press("Undo");
-  assert.equal(borderRadius(), 15, "one undo step for the whole adjustment");
+  assert.equal(radius(), 15, "one undo step for the whole adjustment");
   h.press("Undo");
   h.press("Undo");
-  assert.deepEqual(fills(), []);
+  assert.deepEqual(outlines(), []);
   h.press("Redo");
   h.press("Redo");
   h.press("Redo");
-  assert.equal(fills().length, 2);
-  assert.equal(borderRadius(), 35);
+  assert.equal(outlines().length, 2);
+  assert.equal(radius(), 35);
   assert.ok(h.disabled("Redo"));
 }
 

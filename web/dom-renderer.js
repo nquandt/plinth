@@ -419,6 +419,11 @@ export function parseShapes(text) {
     else if (f[0] === "c" && ok(n(1), n(2), n(3)) && f[4] !== undefined) out.push({ kind: "circle", cx: n(1), cy: n(2), r: n(3), color: f[4] });
     else if (f[0] === "l" && ok(n(1), n(2), n(3), n(4)) && f[5] !== undefined)
       out.push({ kind: "line", x1: n(1), y1: n(2), x2: n(3), y2: n(4), color: f[5], width: n(6) ?? 1 });
+    // UI API 1.13: outlines.
+    else if (f[0] === "R" && ok(n(1), n(2), n(3), n(4)) && f[5] !== undefined)
+      out.push({ kind: "strokeRect", x: n(1), y: n(2), w: n(3), h: n(4), color: f[5], width: n(6) ?? 1 });
+    else if (f[0] === "C" && ok(n(1), n(2), n(3)) && f[4] !== undefined)
+      out.push({ kind: "strokeCircle", cx: n(1), cy: n(2), r: n(3), color: f[4], width: n(5) ?? 1 });
     else if (f[0] === "t" && ok(n(1), n(2)) && f[3] !== undefined)
       out.push({ kind: "text", x: n(1), y: n(2), color: f[3], size: n(4) ?? 12, text: f.slice(5).join("\u001f") });
   }
@@ -1191,6 +1196,10 @@ export class DomRenderer {
               return svgEl("rect", { x: s.x, y: s.y, width: Math.max(0, s.w), height: Math.max(0, s.h), style: `fill: ${color}` });
             case "circle":
               return svgEl("circle", { cx: s.cx, cy: s.cy, r: Math.max(0, s.r), style: `fill: ${color}` });
+            case "strokeRect":
+              return svgEl("rect", { x: s.x, y: s.y, width: Math.max(0, s.w), height: Math.max(0, s.h), style: `fill: none; stroke: ${color}; stroke-width: ${Math.max(0, s.width)}` });
+            case "strokeCircle":
+              return svgEl("circle", { cx: s.cx, cy: s.cy, r: Math.max(0, s.r), style: `fill: none; stroke: ${color}; stroke-width: ${Math.max(0, s.width)}` });
             case "line":
               return svgEl("line", { x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2, "stroke-linecap": "round", style: `stroke: ${color}; stroke-width: ${s.width}` });
             default: {

@@ -26,6 +26,8 @@ pub const UI_NAMES: &[&str] = &[
     "Icon", "DatePicker", "Box", "Span", "Pressable", "Scroll", "Canvas", "Shape", "rect", "circle", "line", "canvasText",
     // UI API 1.5
     "Chart", "ChartPoint", "ChartSeriesDef",
+    // UI API 1.13
+    "strokeRect", "strokeCircle",
 ];
 pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int", "JSON"];
 pub const TIME_NAMES: &[&str] = &[
@@ -178,6 +180,9 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "circle" => Binding::Std(StdFn::ShapeCircle),
             "line" => Binding::Std(StdFn::ShapeLine),
             "canvasText" => Binding::Std(StdFn::ShapeText),
+            // UI API 1.13: outlines.
+            "strokeRect" => Binding::Std(StdFn::ShapeStrokeRect),
+            "strokeCircle" => Binding::Std(StdFn::ShapeStrokeCircle),
             "Shape" => Binding::Type(Type::String),
             // Config shapes exist for the editor only.
             "ScreenDef" | "AppConfig" => Binding::Type(Type::Error),
@@ -302,7 +307,12 @@ impl Checker<'_> {
                 let te = self.expr(&args[0], None);
                 self.to_str(te)
             }
-            StdFn::ShapeRect | StdFn::ShapeCircle | StdFn::ShapeLine | StdFn::ShapeText => self.shape_call(f, args, span),
+            StdFn::ShapeRect
+            | StdFn::ShapeCircle
+            | StdFn::ShapeLine
+            | StdFn::ShapeText
+            | StdFn::ShapeStrokeRect
+            | StdFn::ShapeStrokeCircle => self.shape_call(f, args, span),
             StdFn::TimeNow => {
                 if !args.is_empty() {
                     self.err(code::ARG_COUNT, span, "`now` takes no arguments");
@@ -1248,6 +1258,8 @@ impl Checker<'_> {
             StdFn::ShapeRect => ("rect", "r", 4, true, None),
             StdFn::ShapeCircle => ("circle", "c", 3, true, None),
             StdFn::ShapeLine => ("line", "l", 4, true, Some("width")),
+            StdFn::ShapeStrokeRect => ("strokeRect", "R", 4, true, Some("width")),
+            StdFn::ShapeStrokeCircle => ("strokeCircle", "C", 3, true, Some("width")),
             _ => ("canvasText", "t", 2, true, Some("size")),
         };
         let text_arg = f == StdFn::ShapeText;
@@ -1257,6 +1269,8 @@ impl Checker<'_> {
                 StdFn::ShapeRect => "`rect(x, y, width, height, color)`",
                 StdFn::ShapeCircle => "`circle(cx, cy, r, color)`",
                 StdFn::ShapeLine => "`line(x1, y1, x2, y2, color, width?)`",
+                StdFn::ShapeStrokeRect => "`strokeRect(x, y, width, height, color, lineWidth?)`",
+                StdFn::ShapeStrokeCircle => "`strokeCircle(cx, cy, r, color, lineWidth?)`",
                 _ => "`canvasText(x, y, text, color, size?)`",
             };
             self.err(code::ARG_COUNT, span, format!("`{name}` takes {usage}"));
@@ -1287,7 +1301,7 @@ impl Checker<'_> {
         if extra.is_some() {
             parts.push(match args.get(i) {
                 Some(e) => num(self, e),
-                None => TExpr::new(TExprKind::Str(if f == StdFn::ShapeLine { "1".into() } else { "12".into() }), Type::String, span),
+                None => TExpr::new(TExprKind::Str(if f == StdFn::ShapeText { "12".into() } else { "1".into() }), Type::String, span),
             });
         }
         if let Some(t) = text {

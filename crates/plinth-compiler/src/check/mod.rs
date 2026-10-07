@@ -122,6 +122,9 @@ pub enum StdFn {
     ShapeCircle,
     ShapeLine,
     ShapeText,
+    /// `strokeRect`, `strokeCircle` (UI API 1.13): outlines.
+    ShapeStrokeRect,
+    ShapeStrokeCircle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

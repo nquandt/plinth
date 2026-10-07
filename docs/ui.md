@@ -327,12 +327,16 @@ import { Canvas, rect, circle, line, canvasText } from "plinth:ui";
   width; `width`, `maxWidth` and `grow` as for a box). Text scales too.
 - `rect(x, y, width, height, color)`, `circle(cx, cy, r, color)`,
   `line(x1, y1, x2, y2, color, width?)`, `canvasText(x, y, text, color,
-  size?)`. Colors are theme tokens. `shapes` is any `Shape[]`: a literal,
+  size?)`, and the outlines `strokeRect(x, y, width, height, color,
+  lineWidth?)` and `strokeCircle(cx, cy, r, color, lineWidth?)` (UI API
+  1.13; the line is centered on the edge, as an SVG stroke). Colors are
+  theme tokens. `shapes` is any `Shape[]`: a literal,
   a variable, a `computed` or a `.map()` result; a signal read in it makes
   the drawing update.
 - `label` is required: the canvas is one image for assistive technology.
-- Not built yet: pointer input on the canvas (phase U3), paths and curves,
-  images.
+- Pointer events (UI API 1.12) give positions in view units: see Level 2
+  "Pointer". `examples/7guis/circle-drawer` uses them.
+- Not built yet: paths and curves, images.
 
 ## Layout rules the runtime owns
 

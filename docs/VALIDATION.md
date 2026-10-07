@@ -88,7 +88,7 @@ Fill in this section as the apps are done.
 | 7GUIs 3 Flight booker | 125 (107) | 2388 B (4170 B) | 30 ms | 2.2 ms | 1152 KiB | Return date hidden, not disabled (GAPS 7G-1). 30 lines are a `DD.MM.YYYY` parser (7G-4). |
 | 7GUIs 4 Timer | 46 (33) | 1490 B (2006 B) | 22 ms | 2.4 ms | 1152 KiB | |
 | 7GUIs 5 CRUD | 120 (98) | 2489 B (4409 B) | 28 ms | 2.8 ms | 1152 KiB | Selection shown with `trailing` (7G-2). |
-| 7GUIs 6 Circle drawer | 220 (200) | 2916 B (5537 B) | not measured | not measured | not measured | A button instead of a right-click menu (GAPS 7G-6); the slider in a `Sheet` (7G-7); outlines as two circles (7G-8). Pointer events (UI API 1.12). |
+| 7GUIs 6 Circle drawer | 220 (200) | 2916 B (5537 B) | not measured | not measured | not measured | A button instead of a right-click menu (GAPS 7G-6); the slider in a `Sheet` (7G-7). Pointer events (UI API 1.12), outlines (UI API 1.13). |
 
 How these numbers were measured (2026-10-06, Windows, one machine):
 

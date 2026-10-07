@@ -414,64 +414,67 @@ fn circle_drawer_draws_adjusts_and_undoes() {
     let mut h = Harness::start(&art.component);
     let canvas = h.one(ControlKind::Canvas, |_| true);
     let at = |x: f64, y: f64| Value::List(vec![Value::Number(x), Value::Number(y)]);
-    // The circles that the canvas draws: (x, y, r, color) of each `circle`
-    // shape (an outline is two circles: the border, then the fill).
-    let shapes = |h: &Harness| -> Vec<(f64, f64, f64, String)> {
+    // The shapes of one kind on the canvas, as (x, y, r): "C" is an outline
+    // (every circle), "c" a fill (only the selected circle).
+    let shapes = |h: &Harness, kind: &str| -> Vec<(f64, f64, f64)> {
         let text = h.node(canvas).str_prop(prop::SHAPES).unwrap_or_default().to_owned();
         text.split('\u{1e}')
             .filter_map(|s| {
                 let f: Vec<&str> = s.split('\u{1f}').collect();
-                (f.first() == Some(&"c")).then(|| (f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap(), f[4].to_owned()))
+                (f.first() == Some(&kind)).then(|| (f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap()))
             })
             .collect()
     };
-    let fills = |h: &Harness| -> Vec<(f64, f64, String)> { shapes(h).into_iter().skip(1).step_by(2).map(|(x, y, _, c)| (x, y, c)).collect() };
+    let outlines = |h: &Harness| shapes(h, "C");
+    let filled = |h: &Harness| -> Vec<(f64, f64)> { shapes(h, "c").into_iter().map(|(x, y, _)| (x, y)).collect() };
     let status = |h: &Harness| h.texts().into_iter().find(|t| t.contains("selected") || t.starts_with("Selected")).unwrap();
 
-    assert!(shapes(&h).is_empty());
+    assert!(outlines(&h).is_empty());
     assert!(h.disabled("Undo") && h.disabled("Redo") && h.disabled("Adjust diameter"));
 
     // Two clicks on empty canvas: two circles; the newest is selected.
     h.fire(canvas, event::POINTER_DOWN, at(100.0, 100.0));
     h.fire(canvas, event::POINTER_DOWN, at(250.5, 150.0));
-    assert_eq!(fills(&h), [(100.0, 100.0, "surface.alt".to_owned()), (250.5, 150.0, "text.muted".to_owned())]);
+    assert_eq!(outlines(&h), [(100.0, 100.0, 15.0), (250.5, 150.0, 15.0)]);
+    assert_eq!(filled(&h), [(250.5, 150.0)]);
     assert_eq!(status(&h), "Selected: diameter 30");
 
     // The pointer over the first circle selects it; over nothing, none.
     h.fire(canvas, event::POINTER_MOVE, at(110.0, 95.0));
-    assert_eq!(fills(&h)[0].2, "text.muted");
+    assert_eq!(filled(&h), [(100.0, 100.0)]);
     h.fire(canvas, event::POINTER_MOVE, at(10.0, 10.0));
     assert_eq!(status(&h), "No circle selected");
+    assert!(filled(&h).is_empty());
     // A click inside a circle selects it and adds none.
     h.fire(canvas, event::POINTER_DOWN, at(105.0, 100.0));
-    assert_eq!(fills(&h).len(), 2);
+    assert_eq!(outlines(&h).len(), 2);
 
     // Adjust the diameter: the circle changes at once; closing is one undo step.
     h.press("Adjust diameter");
     let slider = h.labeled(ControlKind::Slider, "Diameter");
     h.fire(slider, event::CHANGE, Value::Number(60.0));
     h.fire(slider, event::CHANGE, Value::Number(80.0));
-    assert_eq!(shapes(&h)[0].2, 40.0, "the border radius is half of 80");
+    assert_eq!(outlines(&h)[0].2, 40.0, "the radius is half of 80");
     h.press("Done");
     assert_eq!(status(&h), "Selected: diameter 80");
 
     // Undo: the diameter goes back to 30 in one step, then the circles go one by one.
     h.press("Undo");
-    assert_eq!(shapes(&h)[0].2, 15.0);
+    assert_eq!(outlines(&h)[0].2, 15.0);
     h.press("Undo");
-    assert_eq!(fills(&h).len(), 1);
+    assert_eq!(outlines(&h).len(), 1);
     h.press("Undo");
-    assert!(fills(&h).is_empty() && h.disabled("Undo"));
+    assert!(outlines(&h).is_empty() && h.disabled("Undo"));
     // Redo all three steps.
     h.press("Redo");
     h.press("Redo");
     h.press("Redo");
-    assert_eq!(fills(&h).len(), 2);
-    assert_eq!(shapes(&h)[0].2, 40.0);
+    assert_eq!(outlines(&h).len(), 2);
+    assert_eq!(outlines(&h)[0].2, 40.0);
     assert!(h.disabled("Redo"));
     // A new circle after an undo clears redo.
     h.press("Undo");
     h.fire(canvas, event::POINTER_DOWN, at(300.0, 60.0));
     assert!(h.disabled("Redo"));
-    assert_eq!(fills(&h).len(), 3);
+    assert_eq!(outlines(&h).len(), 3);
 }

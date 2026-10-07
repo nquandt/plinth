@@ -450,6 +450,10 @@ export declare function rect(x: number, y: number, width: number, height: number
 export declare function circle(cx: number, cy: number, r: number, color: ColorToken): Shape;
 /** A straight line; `width` in view units (default 1). */
 export declare function line(x1: number, y1: number, x2: number, y2: number, color: ColorToken, width?: number): Shape;
+/** The outline of a rectangle; `lineWidth` in view units (default 1). UI API 1.13. */
+export declare function strokeRect(x: number, y: number, width: number, height: number, color: ColorToken, lineWidth?: number): Shape;
+/** The outline of a circle; `lineWidth` in view units (default 1). UI API 1.13. */
+export declare function strokeCircle(cx: number, cy: number, r: number, color: ColorToken, lineWidth?: number): Shape;
 /** Text with its left baseline at (x, y); `size` in view units (default 12). */
 export declare function canvasText(x: number, y: number, text: string, color: ColorToken, size?: number): Shape;
 

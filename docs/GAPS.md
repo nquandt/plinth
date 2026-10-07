@@ -658,7 +658,7 @@ immutable list. Tests: `circle_drawer_draws_adjusts_and_undoes`
 |---|---|---|---|---|
 | 7G-6 | UI API | No secondary button: pointer events are for the main button only, and there is no context menu. The task opens the diameter dialog with a right-click on a circle. | An "Adjust diameter" button for the selected circle. | A `button` argument (or `onContextMenu`, also for a long press on touch) and an anchored `Menu` at a point. |
 | 7G-7 | UI API | A `Dialog` holds only a title, a message and actions: no slider. | The slider is in a `Sheet`. | Children in `Dialog` (a small form). |
-| 7G-8 | Canvas | No stroke shapes: a circle outline is two filled circles. | A border-color circle with a smaller fill circle on it. | `stroke` and `strokeWidth` on `circle` and `rect` (compile-time encoding, no core change). |
+| 7G-8 | Canvas | **Fixed (UI API 1.13):** `strokeRect` and `strokeCircle` (compile-time encodings, kinds "R" and "C"); the circle drawer uses them. Before: no stroke shapes: a circle outline is two filled circles. | A border-color circle with a smaller fill circle on it. | `stroke` and `strokeWidth` on `circle` and `rect` (compile-time encoding, no core change). |
 
 ## Games (Pong, 2026-10-06)
 

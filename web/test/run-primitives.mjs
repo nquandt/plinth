@@ -174,4 +174,10 @@ assert.equal(primitiveStyle(wrapRow)["flex-wrap"], "wrap");
 const third = [...tree.nodes.values()].find((n) => n.kind === ControlKind.box && n.props.get(Prop.widthFraction));
 assert.equal(primitiveStyle(third).width, "33.3333%");
 
+// UI API 1.13: outlines (`strokeRect`, `strokeCircle`); a bad one is skipped.
+assert.deepEqual(parseShapes("R\u001f1\u001f2\u001f3\u001f4\u001faccent\u001f2\u001eC\u001f5\u001f6\u001f7\u001ftext\u001eC\u001f5"), [
+  { kind: "strokeRect", x: 1, y: 2, w: 3, h: 4, color: "accent", width: 2 },
+  { kind: "strokeCircle", cx: 5, cy: 6, r: 7, color: "text", width: 1 },
+]);
+
 console.log("run-primitives.mjs: ok (style mapping, Box/Span/Pressable/Scroll in examples/primitives, presses)");

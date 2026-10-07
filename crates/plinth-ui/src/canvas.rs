@@ -8,7 +8,9 @@
 
 use crate::primitives;
 use crate::theme::Tokens;
-use gpui::{Bounds, Hsla, PathBuilder, Pixels, SharedString, TextAlign, TextRun, canvas, div, fill, point, prelude::*, px, size};
+use gpui::{
+    BorderStyle, Bounds, Hsla, PathBuilder, Pixels, SharedString, TextAlign, TextRun, canvas, div, fill, outline, point, prelude::*, px, size,
+};
 use plinth_protocol::color;
 
 /// One shape, in view units.
@@ -18,6 +20,10 @@ pub enum Shape {
     Circle { cx: f32, cy: f32, r: f32, color: String },
     Line { x1: f32, y1: f32, x2: f32, y2: f32, color: String, width: f32 },
     Text { x: f32, y: f32, color: String, size: f32, text: String },
+    /// UI API 1.13: the outline of a rectangle, `width` in view units.
+    StrokeRect { x: f32, y: f32, w: f32, h: f32, color: String, width: f32 },
+    /// UI API 1.13: the outline of a circle.
+    StrokeCircle { cx: f32, cy: f32, r: f32, color: String, width: f32 },
 }
 
 /// The shapes of a `shapes` prop. A malformed shape is skipped.
@@ -36,6 +42,8 @@ fn parse_one(s: &str) -> Option<Shape> {
         "c" => Shape::Circle { cx: n(1)?, cy: n(2)?, r: n(3)?, color: c(4)? },
         "l" => Shape::Line { x1: n(1)?, y1: n(2)?, x2: n(3)?, y2: n(4)?, color: c(5)?, width: n(6).unwrap_or(1.0) },
         "t" => Shape::Text { x: n(1)?, y: n(2)?, color: c(3)?, size: n(4).unwrap_or(12.0), text: c(5).unwrap_or_default() },
+        "R" => Shape::StrokeRect { x: n(1)?, y: n(2)?, w: n(3)?, h: n(4)?, color: c(5)?, width: n(6).unwrap_or(1.0) },
+        "C" => Shape::StrokeCircle { cx: n(1)?, cy: n(2)?, r: n(3)?, color: c(4)?, width: n(5).unwrap_or(1.0) },
         _ => return None,
     })
 }
@@ -81,6 +89,24 @@ pub fn render(id: u64, label: String, vw: f32, vh: f32, shapes: Vec<Shape>, t: &
                         if let Some(c) = token_color(&tokens, color) {
                             let d = px(2.0 * r * k);
                             window.paint_quad(fill(Bounds::new(at(cx - r, cy - r), size(d, d)), c).corner_radii(px(r * k)));
+                        }
+                    }
+                    // An outline is a border inside the shape's bounds, as an SVG stroke
+                    // is centered on the edge: the bounds grow by half the line width.
+                    Shape::StrokeRect { x, y, w, h, color, width } => {
+                        if let Some(c) = token_color(&tokens, color) {
+                            let lw = width.max(0.0);
+                            let b = Bounds::new(at(x - lw / 2.0, y - lw / 2.0), size(px((w + lw) * k), px((h + lw) * k)));
+                            window.paint_quad(outline(b, c, BorderStyle::Solid).border_widths(px((lw * k).max(0.5))));
+                        }
+                    }
+                    Shape::StrokeCircle { cx, cy, r, color, width } => {
+                        if let Some(c) = token_color(&tokens, color) {
+                            let lw = width.max(0.0);
+                            let outer = r + lw / 2.0;
+                            let d = px(2.0 * outer * k);
+                            let b = Bounds::new(at(cx - outer, cy - outer), size(d, d));
+                            window.paint_quad(outline(b, c, BorderStyle::Solid).border_widths(px((lw * k).max(0.5))).corner_radii(px(outer * k)));
                         }
                     }
                     Shape::Line { x1, y1, x2, y2, color, width } => {
@@ -145,5 +171,17 @@ mod tests {
         assert_eq!(shapes[2], Shape::Line { x1: 0.0, y1: 0.0, x2: 10.0, y2: 10.0, color: "border".into(), width: 2.0 });
         // The text is the last field and may hold the field separator.
         assert_eq!(shapes[3], Shape::Text { x: 1.0, y: 20.0, color: "text.muted".into(), size: 14.0, text: "Hi\u{1f}there".into() });
+    }
+
+    #[test]
+    fn parses_outlines() {
+        let s = "R\u{1f}1\u{1f}2\u{1f}3\u{1f}4\u{1f}accent\u{1f}2\u{1e}C\u{1f}5\u{1f}6\u{1f}7\u{1f}text\u{1e}C\u{1f}5\u{1f}6";
+        assert_eq!(
+            parse(s),
+            [
+                Shape::StrokeRect { x: 1.0, y: 2.0, w: 3.0, h: 4.0, color: "accent".into(), width: 2.0 },
+                Shape::StrokeCircle { cx: 5.0, cy: 6.0, r: 7.0, color: "text".into(), width: 1.0 },
+            ]
+        );
     }
 }

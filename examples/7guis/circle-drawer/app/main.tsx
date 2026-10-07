@@ -9,7 +9,7 @@
 // right-click context menu, so "Adjust diameter" is a button; and a Dialog
 // cannot hold a slider, so the slider is in a Sheet.
 import { Math } from "plinth:core";
-import { app, signal, Screen, Section, Group, Button, Canvas, Sheet, Slider, Text, rect, circle, Shape } from "plinth:ui";
+import { app, signal, Screen, Section, Group, Button, Canvas, Sheet, Slider, Text, rect, circle, strokeCircle, Shape } from "plinth:ui";
 import {
   VIEW_W,
   VIEW_H,
@@ -36,9 +36,11 @@ function CircleDrawer() {
   const shapes = (): Shape[] => {
     const out: Shape[] = [rect(0, 0, VIEW_W, VIEW_H, "surface.alt")];
     for (const c of circles()) {
-      // An outline: a circle in the border color with a smaller one inside.
-      out.push(circle(c.x, c.y, c.d / 2, "text"));
-      out.push(circle(c.x, c.y, Math.max(0, c.d / 2 - 1), c.id === selectedId() ? "text.muted" : "surface.alt"));
+      // The selected circle is filled; every circle has an outline.
+      if (c.id === selectedId()) {
+        out.push(circle(c.x, c.y, c.d / 2, "text.muted"));
+      }
+      out.push(strokeCircle(c.x, c.y, c.d / 2, "text", 1.5));
     }
     return out;
   };

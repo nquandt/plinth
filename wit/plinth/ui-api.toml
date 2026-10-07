@@ -4,7 +4,10 @@
 # enum ids. The compiler, the guest runtime and the host all generate their
 # constants from it. Never reuse or renumber an id inside one major version.
 
-version = "1.12"
+version = "1.13"
+# UI API 1.13: no new ids. Canvas shapes `strokeRect` (kind "R") and
+# `strokeCircle` (kind "C"): outlines with a line width. A host that does not
+# know a kind skips the shape.
 # UI API 1.12: the pointer events `pointer-down`, `pointer-move`, `pointer-up`
 # on Box, Pressable, Scroll and Canvas. Their value is a list `[x, y]`; the
 # core (1.12) passes the items as the callback's arguments.
