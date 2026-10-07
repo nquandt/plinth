@@ -106,6 +106,10 @@ fn raw_free(ptr: u32, size: usize) {
 
 /// Allocates a raw buffer that the GC does not manage (array data).
 pub fn buffer_alloc(size: usize) -> u32 {
+    // Array data counts toward the next collection too. Without it, an app
+    // that makes large arrays (`big-list` filters 10,000 rows) used memory
+    // with no collection until it ran out (tests/monkey.rs).
+    HEAP.with(|h| h.allocated_since_gc += size);
     raw_alloc(size)
 }
 

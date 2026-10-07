@@ -112,6 +112,41 @@ impl Default for Limits {
     }
 }
 
+/// The store limits, plus the size of the guest's memory (it only grows:
+/// the allocator never gives memory back), for `Guest::memory_bytes`.
+struct Limiter {
+    inner: StoreLimits,
+    memory: usize,
+}
+
+impl wasmtime::ResourceLimiter for Limiter {
+    fn memory_growing(&mut self, current: usize, desired: usize, maximum: Option<usize>) -> wasmtime::Result<bool> {
+        let ok = self.inner.memory_growing(current, desired, maximum)?;
+        if ok {
+            self.memory = self.memory.max(desired);
+        }
+        Ok(ok)
+    }
+    fn memory_grow_failed(&mut self, error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.inner.memory_grow_failed(error)
+    }
+    fn table_growing(&mut self, current: usize, desired: usize, maximum: Option<usize>) -> wasmtime::Result<bool> {
+        self.inner.table_growing(current, desired, maximum)
+    }
+    fn table_grow_failed(&mut self, error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.inner.table_grow_failed(error)
+    }
+    fn instances(&self) -> usize {
+        self.inner.instances()
+    }
+    fn tables(&self) -> usize {
+        self.inner.tables()
+    }
+    fn memories(&self) -> usize {
+        self.inner.memories()
+    }
+}
+
 /// How often the epoch ticker increments the engine epoch.
 const EPOCH_TICK: Duration = Duration::from_millis(10);
 
@@ -122,7 +157,7 @@ struct HostState {
     /// Uncaught app errors from `error.report` (SPEC.md §5.6). The app
     /// keeps running after each one.
     errors: Vec<String>,
-    limits: StoreLimits,
+    limits: Limiter,
     policy: Policy,
     kv: Kv,
     timers: TimerQueue,
@@ -606,7 +641,7 @@ impl Runner {
             commits: Vec::new(),
             logs: Vec::new(),
             errors: Vec::new(),
-            limits: StoreLimitsBuilder::new().memory_size(limits.memory_bytes).instances(4).build(),
+            limits: Limiter { inner: StoreLimitsBuilder::new().memory_size(limits.memory_bytes).instances(4).build(), memory: 0 },
             policy,
             kv,
             timers: TimerQueue::new(),
@@ -665,6 +700,12 @@ impl Guest {
     /// Returns the `dev.log` messages since the last call.
     pub fn take_logs(&mut self) -> Vec<String> {
         std::mem::take(&mut self.store.data_mut().logs)
+    }
+
+    /// The size of the guest's linear memory, in bytes. It only grows, so a
+    /// long run that keeps it level has no leak (`tests/monkey.rs`).
+    pub fn memory_bytes(&self) -> usize {
+        self.store.data().limits.memory
     }
 
     /// Returns the uncaught errors that the guest reported (`error.report`,

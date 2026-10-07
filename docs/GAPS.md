@@ -738,6 +738,14 @@ Fixed:
 - **Out of memory had no reason**: a failed `memory.grow` gave a null pointer to Rust's allocation error path, which reached the panic handler (and the over-aligned path used the null as an address). The allocator now stops with `trap: out of memory` (`trap_oom`, no allocation).
 - **The web host had no stopped state and no banners.** A trap left a broken instance that timers and events still called, and an uncaught error went only to `console.error`. Now `PlinthApp` stops after a trap (`stopped`, `onStop`, the same reasons as the desktop) and never calls the app again, and `DomRenderer` shows "This app stopped" (the screen becomes `inert`) and "An error occurred" with Dismiss, as the desktop does.
 
+Long use (`crates/plinth-compiler/tests/monkey.rs`, 2026-10-07): every example gets 400 random UI events in the desktop runner (presses, typed text, toggles, slider values, keys, pointer moves), with timers, frames and dialog answers between them, then 100 more in GC stress mode. It checks that the app never traps, that every commit applies with no op error, and that the memory stops growing (`Guest::memory_bytes`, new). It found three memory bugs in the core, all fixed:
+
+- **A large block lost its tail at each reuse.** The allocator took a free block up to two times the requested size, but `dealloc` knows only the requested size, so the rest was lost. Now the rest goes back on the free list as its own block.
+- **First fit grew the memory at each collection.** The newest free block (at the head of the list) was often up to two times too large for a request, so the next request of that size found nothing and grew the memory. The GC's own mark stack (doubled up to 128 KiB for 26,500 objects) grew the 7GUIs cells by 128 KiB at each collection: in GC stress mode it ran out of memory after about 450 events. Now the allocator uses best fit.
+- **Array data did not count toward the next collection.** Only GC objects counted toward the 1 MiB threshold, so `big-list` (filters of 10,000 rows) used memory with no collection and ran out after about 780 events. Now array buffers count too (`gc::buffer_alloc`).
+
+After the fixes, all 27 examples keep a level memory in both modes (cells 7.4 MiB, big-list 22.2 MiB).
+
 Hostile input to the host (no bug found; the tests stay as guards):
 
 - **The op stream** (`crates/plinth-ui/tests/hostile_ops.rs`): random well-formed ops over a small id range (bad parents, cycles, removed nodes, wrong value types) and their bytes with random changes. After each commit the tree keeps its invariants (each child names its parent, no node in two places, no cycle). 20,000 commits passed.

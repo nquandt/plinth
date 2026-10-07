@@ -77,17 +77,41 @@ unsafe impl GlobalAlloc for Allocator {
             }
             None => {
                 let need = size.div_ceil(LARGE_UNIT) * LARGE_UNIT;
-                // First fit, but not more than twice the size.
+                // Best fit: the smallest free block that is large enough.
+                // First fit took the newest block (at the head), often one
+                // up to two times too large, so a later request of that
+                // size found nothing and grew the memory: the GC's mark
+                // stack (`work`, doubled up to 128 KiB) grew the 7GUIs
+                // cells by 128 KiB at each collection.
+                let mut best: Option<(*mut usize, usize, usize)> = None; // (link to it, block, size)
                 let mut prev: *mut usize = &mut st.large;
                 let mut cur = st.large;
                 while cur != 0 {
                     let (bsize, next) = unsafe { (*(cur as *const usize), *((cur + 4) as *const usize)) };
-                    if bsize >= need && bsize <= need * 2 {
-                        unsafe { *prev = next };
-                        return cur as *mut u8;
+                    if bsize >= need && best.is_none_or(|(_, _, b)| bsize < b) {
+                        best = Some((prev, cur, bsize));
+                        if bsize == need {
+                            break;
+                        }
                     }
                     prev = (cur + 4) as *mut usize;
                     cur = next;
+                }
+                if let Some((link, block, bsize)) = best {
+                    let next = unsafe { *((block + 4) as *const usize) };
+                    unsafe { *link = next };
+                    // `dealloc` knows only the requested size, so the block
+                    // must be exactly `need`: the rest goes back on the list
+                    // as its own block (sizes are whole `LARGE_UNIT`s).
+                    if bsize > need {
+                        let rest = block + need;
+                        unsafe {
+                            *(rest as *mut usize) = bsize - need;
+                            *((rest + 4) as *mut usize) = st.large;
+                        }
+                        st.large = rest;
+                    }
+                    return block as *mut u8;
                 }
                 unsafe { st.bump(need) }
             }
