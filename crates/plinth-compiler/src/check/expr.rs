@@ -83,8 +83,12 @@ impl Checker<'_> {
                         let i = self.coerce(i, &Type::Number);
                         TExpr::new(TExprKind::Index(bx(o), bx(i)), *elem, span)
                     }
-                    Type::Struct(sid) if self.tuple_elems(sid).is_some() => match self.tuple_index(sid, index) {
-                        Some((i, ty)) => TExpr::new(TExprKind::Field(bx(o), sid, i), ty, span),
+                    Type::Struct(sid) if self.tuple_shape(sid).is_some() => match self.tuple_index(sid, index) {
+                        Some(TupleAt::Field(i, ty)) => TExpr::new(TExprKind::Field(bx(o), sid, i), ty, span),
+                        Some(TupleAt::Rest(f, k, ty)) => {
+                            let arr = TExpr::new(TExprKind::Field(bx(o), sid, f), Type::Array(Box::new(ty.clone())), span);
+                            TExpr::new(TExprKind::Index(bx(arr), bx(self.num_lit(k as f64, span))), ty, span)
+                        }
                         None => TExpr::new(TExprKind::Null, Type::Error, span),
                     },
                     Type::Error => TExpr::new(TExprKind::Null, Type::Error, span),
@@ -296,6 +300,9 @@ impl Checker<'_> {
                 self.err(code::UNKNOWN_NAME, span, format!("`{name}` is a type, not a value"));
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
+            // `Infinity` and `NaN` from `std/lib.d.ts`.
+            None if name == "Infinity" => TExpr::new(TExprKind::Num(f64::INFINITY), Type::Number, span),
+            None if name == "NaN" => TExpr::new(TExprKind::Num(f64::NAN), Type::Number, span),
             None if name == "this" => {
                 self.err_help(
                     code::THIS,
@@ -383,6 +390,7 @@ impl Checker<'_> {
     /// A non-method property read: struct fields and `length`.
     fn property(&mut self, o: TExpr, prop: &str, prop_span: Span, span: Span) -> TExpr {
         match o.ty.clone() {
+            Type::Struct(sid) if prop == "length" && self.tuple_shape(sid).is_some() => self.tuple_length(o, sid, span),
             Type::Struct(sid) => match self.prog.structs[sid as usize].field(prop).map(|(i, f)| (i, f.ty.clone())) {
                 Some((idx, ty)) => {
                     // A member path rooted at a `const`/parameter (`r.subtitle`)
@@ -1323,17 +1331,58 @@ impl Checker<'_> {
     }
 
     /// `t[i]` on a tuple: `i` must be a number literal in range, so the
-    /// read is a plain field read with a known type.
-    fn tuple_index(&mut self, sid: crate::types::StructId, index: &Expr) -> Option<(u32, Type)> {
-        let tys = self.tuple_elems(sid).unwrap_or_default();
-        match index.kind {
-            ExprKind::Num(n) if n >= 0.0 && n.fract() == 0.0 && (n as usize) < tys.len() => Some((n as u32, tys[n as usize].clone())),
-            _ => {
-                let msg = format!("an index into `{}` must be a number literal from 0 to {}", self.prog.structs[sid as usize].name, tys.len().saturating_sub(1));
+    /// read is a plain field read with a known type. An index past the
+    /// fixed elements of a tuple with a rest element reads the rest array.
+    fn tuple_index(&mut self, sid: crate::types::StructId, index: &Expr) -> Option<TupleAt> {
+        let shape = self.tuple_shape(sid).expect("checked by the caller");
+        let n = shape.fixed.len();
+        let lit = match index.kind {
+            ExprKind::Num(k) if k >= 0.0 && k.fract() == 0.0 && k < 1e9 => Some(k as usize),
+            _ => None,
+        };
+        match (lit, &shape.rest) {
+            (Some(k), _) if k < n => Some(TupleAt::Field(k as u32, shape.fixed[k].clone())),
+            (Some(k), Some(rest)) => Some(TupleAt::Rest(shape.rest_field(), (k - n) as u32, rest.clone())),
+            (_, rest) => {
+                let name = &self.prog.structs[sid as usize].name;
+                let msg = match rest {
+                    None => format!("an index into `{name}` must be a number literal from 0 to {}", n.saturating_sub(1)),
+                    Some(_) => format!("an index into `{name}` must be a number literal (0 or more)"),
+                };
                 self.err_help(code::COMPUTED_ACCESS, index.span, msg, "write `t[0]`, or destructure: `const [a, b] = t`");
                 None
             }
         }
+    }
+
+    /// `t.length` of a tuple: the number of required elements, plus the
+    /// optional elements up to the last one that is not null, plus the
+    /// length of the rest array.
+    fn tuple_length(&mut self, o: TExpr, sid: crate::types::StructId, span: Span) -> TExpr {
+        let shape = self.tuple_shape(sid).expect("checked by the caller");
+        if shape.required == shape.fixed.len() && shape.rest.is_none() {
+            let n = self.num_lit(shape.fixed.len() as f64, span);
+            return TExpr::new(TExprKind::Block(vec![TStmt::Expr(o)], bx(n)), Type::Number, span);
+        }
+        let tv = self.temp(o.ty.clone());
+        let t = TExpr::new(TExprKind::Var(tv), o.ty.clone(), span);
+        let nv = self.temp(Type::Number);
+        let n = TExpr::new(TExprKind::Var(nv), Type::Number, span);
+        let mut stmts = vec![TStmt::Let(tv, Some(o)), TStmt::Let(nv, Some(self.num_lit(shape.required as f64, span)))];
+        for k in shape.required..shape.fixed.len() {
+            let f = TExpr::new(TExprKind::Field(bx(t.clone()), sid, k as u32), shape.fixed[k].clone(), span);
+            let present = TExpr::new(TExprKind::Not(bx(TExpr::new(TExprKind::IsNull(bx(f)), Type::Bool, span))), Type::Bool, span);
+            let set = TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(nv), bx(self.num_lit(k as f64 + 1.0, span))), Type::Number, span));
+            stmts.push(TStmt::If(present, vec![set], Vec::new()));
+        }
+        let total = match &shape.rest {
+            Some(r) => {
+                let arr = TExpr::new(TExprKind::Field(bx(t), sid, shape.rest_field()), Type::Array(Box::new(r.clone())), span);
+                TExpr::new(TExprKind::Num2(NumOp::Add, bx(n), bx(self.arr_len_of(arr, span))), Type::Number, span)
+            }
+            None => n,
+        };
+        TExpr::new(TExprKind::Block(stmts, bx(total)), Type::Number, span)
     }
 
     fn num_lit(&self, v: f64, span: Span) -> TExpr {
@@ -1509,17 +1558,49 @@ impl Checker<'_> {
     /// `arr.flat()`: one level. On a `T[][]` it appends every inner array to
     /// a new `T[]`; on any other array it returns a copy (as JS does). A
     /// depth other than a literal `1` is not supported.
+    /// `arr.flat(depth?)`. The result type depends on the depth, so the
+    /// depth must be a number literal or `Infinity`. Each level is one
+    /// generated loop (`flat_once`); a depth larger than the nesting of
+    /// the array flattens all levels, as in JS.
     fn array_flat(&mut self, o: TExpr, elem: Type, args: &[Expr], span: Span) -> TExpr {
         if args.len() > 1 {
             self.err(code::ARG_COUNT, span, "`flat` takes at most one depth");
             return TExpr::new(TExprKind::Null, Type::Error, span);
         }
-        if let Some(a) = args.first()
-            && !matches!(a.kind, ExprKind::Num(n) if n == 1.0)
-        {
-            self.err_help(code::UNSUPPORTED, a.span, "`flat` flattens one level only", "remove the depth, or call `flat()` again for each level");
-            return TExpr::new(TExprKind::Null, Type::Error, span);
+        let depth = match args.first().map(|a| &a.kind) {
+            None => 1.0,
+            Some(ExprKind::Num(n)) => n.trunc().max(0.0),
+            Some(ExprKind::Ident(name)) if name == "Infinity" && self.lookup(name).is_none() => f64::INFINITY,
+            Some(_) => {
+                let a = &args[0];
+                self.err_help(
+                    code::UNSUPPORTED,
+                    a.span,
+                    "the depth of `flat` must be a number literal or `Infinity`",
+                    "write the depth as a number, such as `flat(2)`",
+                );
+                return TExpr::new(TExprKind::Null, Type::Error, span);
+            }
+        };
+        if depth == 0.0 {
+            return self.arr_copy_of(o, span);
         }
+        let mut out = self.flat_once(o, elem, span);
+        let mut done = 1.0;
+        while done < depth {
+            let Type::Array(e) = out.ty.clone() else { unreachable!() };
+            if !matches!(*e, Type::Array(_)) {
+                break;
+            }
+            out = self.flat_once(out, *e, span);
+            done += 1.0;
+        }
+        out
+    }
+
+    /// One level of `flat`: a `T[][]` becomes a `T[]`; any other array is
+    /// copied.
+    fn flat_once(&mut self, o: TExpr, elem: Type, span: Span) -> TExpr {
         let inner = match &elem {
             Type::Array(inner) => (**inner).clone(),
             _ => return self.arr_copy_of(o, span),
@@ -2293,17 +2374,36 @@ impl Checker<'_> {
             _ => None,
         };
         if let Some(sid) = tuple
-            && let Some(tys) = self.tuple_elems(sid)
+            && let Some(shape) = self.tuple_shape(sid)
         {
-            if elems.len() != tys.len() || elems.iter().any(|(spread, _)| *spread) {
-                let msg = format!("`{}` needs exactly {} element(s) and no spread", self.prog.structs[sid as usize].name, tys.len());
+            let n = shape.fixed.len();
+            let head = &elems[..elems.len().min(n)];
+            if elems.len() < shape.required || (shape.rest.is_none() && elems.len() > n) || head.iter().any(|(spread, _)| *spread) {
+                let name = &self.prog.structs[sid as usize].name;
+                let msg = match (&shape.rest, shape.required == n) {
+                    (None, true) => format!("`{name}` needs exactly {n} element(s) and no spread"),
+                    (None, false) => format!("`{name}` needs {} to {n} element(s) and no spread", shape.required),
+                    (Some(_), _) => format!("`{name}` needs at least {} element(s), and a spread only after the first {n}", shape.required),
+                };
                 self.err(code::TYPE_MISMATCH, span, msg);
                 return TExpr::new(TExprKind::Null, Type::Error, span);
             }
             let mut values = Vec::new();
-            for ((_, e), t) in elems.iter().zip(&tys) {
-                let te = self.expr_with(e, t);
-                values.push(self.coerce(te, t));
+            for (i, t) in shape.fixed.iter().enumerate() {
+                match head.get(i) {
+                    Some((_, e)) => {
+                        let te = self.expr_with(e, t);
+                        values.push(self.coerce(te, t));
+                    }
+                    None => values.push(self.coerce(TExpr::new(TExprKind::Null, Type::Null, span), t)),
+                }
+            }
+            if let Some(rest) = &shape.rest {
+                let aty = Type::Array(Box::new(rest.clone()));
+                let tail = &elems[head.len()..];
+                let rspan = tail.first().map(|(_, e)| e.span).unwrap_or(span);
+                let arr = self.array_lit(tail, Some(&aty), rspan);
+                values.push(self.coerce(arr, &aty));
             }
             return TExpr::new(TExprKind::StructLit(sid, values), Type::Struct(sid), span);
         }
@@ -2784,10 +2884,13 @@ impl Checker<'_> {
                         let i = self.coerce(i, &Type::Number);
                         Some((Place::Index(bx(o), bx(i)), *elem))
                     }
-                    Type::Struct(sid) if self.tuple_elems(sid).is_some() => {
-                        let (i, ty) = self.tuple_index(sid, index)?;
-                        Some((Place::Field(bx(o), sid, i), ty))
-                    }
+                    Type::Struct(sid) if self.tuple_shape(sid).is_some() => match self.tuple_index(sid, index)? {
+                        TupleAt::Field(i, ty) => Some((Place::Field(bx(o), sid, i), ty)),
+                        TupleAt::Rest(f, k, ty) => {
+                            let arr = TExpr::new(TExprKind::Field(bx(o), sid, f), Type::Array(Box::new(ty.clone())), target.span);
+                            Some((Place::Index(bx(arr), bx(self.num_lit(k as f64, target.span))), ty))
+                        }
+                    },
                     Type::Error => None,
                     other => {
                         let msg = format!("cannot index a value of type `{}`", self.show(&other));
@@ -2977,7 +3080,7 @@ impl Checker<'_> {
     fn json_stringify_struct(&mut self, value: TExpr, sid: crate::types::StructId, span: Span) -> TExpr {
         let fields = self.prog.structs[sid as usize].fields.clone();
         // A tuple is a JSON array, as in JS.
-        let tuple = self.tuple_elems(sid).is_some();
+        let tuple = self.tuple_shape(sid).is_some();
         let (open, close) = if tuple { ("[", "]") } else { ("{", "}") };
         let v = self.temp(value.ty.clone());
         let v_r = TExpr::new(TExprKind::Var(v), value.ty.clone(), span);
@@ -2990,6 +3093,20 @@ impl Checker<'_> {
                 (false, _) => format!(",\"{}\":", f.name),
             };
             let field_val = TExpr::new(TExprKind::Field(bx(v_r.clone()), sid, i as u32), f.ty.clone(), span);
+            if tuple && f.name == "..." {
+                // The rest elements of a tuple: `,` and the array's JSON
+                // without its brackets, or nothing for an empty array.
+                let len = self.arr_len_of(field_val.clone(), span);
+                let arr_str = self.json_stringify_value(field_val, span);
+                let inner = TExpr::new(TExprKind::Rt("str_slice", vec![arr_str, self.num_lit(1.0, span), self.num_lit(-1.0, span)]), Type::String, span);
+                let comma = TExpr::new(TExprKind::Str(",".into()), Type::String, span);
+                let piece = TExpr::new(TExprKind::Concat(bx(comma), bx(inner)), Type::String, span);
+                let some = TExpr::new(TExprKind::Cmp(CmpOp::Gt, EqKind::F64, bx(len), bx(self.num_lit(0.0, span))), Type::Bool, span);
+                let none = TExpr::new(TExprKind::Str(String::new()), Type::String, span);
+                let piece = TExpr::new(TExprKind::Cond(bx(some), bx(piece), bx(none)), Type::String, span);
+                acc = TExpr::new(TExprKind::Concat(bx(acc), bx(piece)), Type::String, span);
+                continue;
+            }
             let field_str = self.json_stringify_value(field_val, span);
             let prefix_e = TExpr::new(TExprKind::Str(prefix), Type::String, span);
             let piece = TExpr::new(TExprKind::Concat(bx(prefix_e), bx(field_str)), Type::String, span);
@@ -3152,7 +3269,7 @@ impl Checker<'_> {
             }
             Type::Nullable(inner) => self.json_decode_nullable(inner, span),
             Type::Array(elem) => self.json_decode_array(elem, span),
-            Type::Struct(sid) if self.tuple_elems(*sid).is_some() => {
+            Type::Struct(sid) if self.tuple_shape(*sid).is_some() => {
                 let msg = format!("`JSON.parse` does not support the tuple type `{}`", self.show(ty));
                 self.err_help(code::TYPE_MISMATCH, span, msg, "parse an interface with named fields");
                 TExpr::new(TExprKind::Null, Type::Error, span)
@@ -3353,4 +3470,11 @@ impl Checker<'_> {
             _ => TExpr::new(TExprKind::Null, ty.clone(), span),
         }
     }
+}
+
+/// Where `t[k]` of a tuple is: a fixed element (field, type), or element
+/// `k` of the rest array (its field, `k`, the element type).
+pub(super) enum TupleAt {
+    Field(u32, Type),
+    Rest(u32, u32, Type),
 }

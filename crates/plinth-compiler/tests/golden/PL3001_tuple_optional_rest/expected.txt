@@ -1,0 +1,11 @@
+app/main.tsx(2,38): error PL3001: `[number, number, string?]` needs 2 to 3 element(s) and no spread
+  const a: [number, number, string?] = [1];
+                                       ^^^
+
+app/main.tsx(3,30): error PL3001: `[number, string?]` needs 1 to 2 element(s) and no spread
+  const b: [number, string?] = [1, "a", "b"];
+                               ^^^^^^^^^^^^^
+
+app/main.tsx(4,34): error PL3001: `[number, ...number[]]` needs at least 1 element(s), and a spread only after the first 1
+  const c: [number, ...number[]] = [...[1]];
+                                   ^^^^^^^^

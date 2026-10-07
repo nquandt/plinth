@@ -252,13 +252,29 @@ pub struct Checker<'d> {
     async_rt: Option<asyncfn::AsyncRt>,
     /// `Promise.all` helper functions, one per element type
     /// (`check/promises.rs`).
-    promise_alls: Vec<(Type, FuncId)>,
+    promise_alls: Vec<(promises::Combinator, Type, FuncId)>,
 }
 
 /// The built-in `Error` class (SPEC.md §5.6). `throw` takes an instance of
 /// it (or of a subclass), and a `catch` variable has its type. Its fields
 /// are `name` and `message`, in this order.
 const ERROR_PRELUDE: &str = "class Error { name: string = \"Error\"; message: string; constructor(message?: string) { this.message = message ?? \"\"; } }";
+
+/// A tuple: the types of its fixed elements (an optional one is
+/// `T | null`), how many of them are required, and the element type of its
+/// rest element.
+pub(crate) struct TupleShape {
+    pub fixed: Vec<Type>,
+    pub required: usize,
+    pub rest: Option<Type>,
+}
+
+impl TupleShape {
+    /// The index of the field that holds the rest elements.
+    pub fn rest_field(&self) -> u32 {
+        self.fixed.len() as u32
+    }
+}
 
 struct ClassInfo {
     /// `None` only right after a "a class needs a constructor" error.
@@ -875,10 +891,7 @@ impl Checker<'_> {
                 let fields = self.fields(fields);
                 self.anon_struct(fields)
             }
-            TypeAnn::Tuple(parts, _) => {
-                let elems: Vec<Type> = parts.iter().map(|p| self.resolve_type(p)).collect();
-                Type::Struct(self.tuple_struct(&elems))
-            }
+            TypeAnn::Tuple(parts, _) => self.tuple_type(parts),
             TypeAnn::Named { name, args, span } => self.named_type(name, args, *span),
         }
     }
@@ -949,6 +962,24 @@ impl Checker<'_> {
                     return Type::Error;
                 }
                 return self.promise_type(&t);
+            }
+            "PromiseSettledResult" | "PromiseFulfilledResult" if self.lookup(name).is_none() => {
+                if !arity(self, 1) {
+                    return Type::Error;
+                }
+                let t = self.resolve_type(&args[0]);
+                if t.is_error() {
+                    return Type::Error;
+                }
+                let (ok, _, u) = self.settled_result(&t);
+                return if name == "PromiseFulfilledResult" { Type::Struct(ok) } else { u };
+            }
+            "PromiseRejectedResult" if self.lookup(name).is_none() => {
+                if !arity(self, 0) {
+                    return Type::Error;
+                }
+                let (_, bad, _) = self.settled_result(&Type::Void);
+                return Type::Struct(bad);
             }
             "Record" | "Partial" | "Readonly" => {
                 self.err(code::ADVANCED_TYPE, span, format!("`{name}` is not supported yet"));
@@ -1126,20 +1157,88 @@ impl Checker<'_> {
     pub(crate) fn tuple_struct(&mut self, elems: &[Type]) -> types::StructId {
         let shown: Vec<String> = elems.iter().map(|t| self.show(t)).collect();
         let name = format!("[{}]", shown.join(", "));
+        let fields = elems.iter().enumerate().map(|(i, t)| Field { name: i.to_string(), ty: t.clone(), optional: false }).collect();
+        self.tuple_struct_named(name, fields)
+    }
+
+    fn tuple_struct_named(&mut self, name: String, fields: Vec<Field>) -> types::StructId {
         if let Some(id) = self.anon_structs.get(&name) {
             return *id;
         }
-        let fields = elems.iter().enumerate().map(|(i, t)| Field { name: i.to_string(), ty: t.clone(), optional: false }).collect();
         let id = self.prog.structs.len() as types::StructId;
         self.prog.structs.push(StructDef { name: name.clone(), fields });
         self.anon_structs.insert(name, id);
         id
     }
 
-    /// The element types of a tuple struct, or `None` for any other struct.
-    pub(crate) fn tuple_elems(&self, sid: types::StructId) -> Option<Vec<Type>> {
+    /// A tuple type `[A, B?, ...C[]]`. An optional element is a field of
+    /// type `T | null` (marked `optional`); a rest element is a last field
+    /// named `...` that holds an array. `[...T[]]` is `T[]`.
+    fn tuple_type(&mut self, parts: &[(TypeAnn, ast::TupleMark)]) -> Type {
+        let mut fields = Vec::new();
+        let mut shown = Vec::new();
+        let mut rest = None;
+        for (p, mark) in parts {
+            let t = self.resolve_type(p);
+            if t.is_error() {
+                return Type::Error;
+            }
+            let s = self.show(&t);
+            let s = if s.contains(' ') { format!("({s})") } else { s };
+            match mark {
+                ast::TupleMark::Required => {
+                    shown.push(s);
+                    fields.push(Field { name: fields.len().to_string(), ty: t, optional: false });
+                }
+                ast::TupleMark::Optional => {
+                    shown.push(format!("{s}?"));
+                    let t = self.nullable(t, p.span());
+                    if t.is_error() {
+                        return Type::Error;
+                    }
+                    fields.push(Field { name: fields.len().to_string(), ty: t, optional: true });
+                }
+                ast::TupleMark::Rest => {
+                    if !matches!(t, Type::Array(_)) {
+                        let msg = format!("a rest element must have an array type, not `{}`", self.show(&t));
+                        self.err_help(code::ADVANCED_TYPE, p.span(), msg, "write `...T[]`, for example `[string, ...number[]]`");
+                        return Type::Error;
+                    }
+                    shown.push(format!("...{}", self.show(&t)));
+                    rest = Some(t);
+                }
+            }
+        }
+        if fields.is_empty()
+            && let Some(r) = rest
+        {
+            return r;
+        }
+        if let Some(r) = rest {
+            fields.push(Field { name: "...".into(), ty: r, optional: false });
+        }
+        Type::Struct(self.tuple_struct_named(format!("[{}]", shown.join(", ")), fields))
+    }
+
+    /// The shape of a tuple struct, or `None` for any other struct.
+    pub(crate) fn tuple_shape(&self, sid: types::StructId) -> Option<TupleShape> {
         let def = &self.prog.structs[sid as usize];
-        def.name.starts_with('[').then(|| def.fields.iter().map(|f| f.ty.clone()).collect())
+        if !def.name.starts_with('[') {
+            return None;
+        }
+        let mut shape = TupleShape { fixed: Vec::new(), required: 0, rest: None };
+        for f in &def.fields {
+            match &f.ty {
+                Type::Array(e) if f.name == "..." => shape.rest = Some((**e).clone()),
+                t => {
+                    if !f.optional {
+                        shape.required += 1;
+                    }
+                    shape.fixed.push(t.clone());
+                }
+            }
+        }
+        Some(shape)
     }
 
     /// `ChartPoint` from `plinth:ui`: `{ label: string; value: number }`,

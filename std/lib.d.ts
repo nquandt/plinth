@@ -24,9 +24,19 @@ interface Array<T> {
   sort(compare?: (a: T, b: T) => number): T[];
   splice(start: number, deleteCount?: number, ...items: T[]): T[];
   fill(value: T, start?: number, end?: number): T[];
-  /** One level only: `depth` can only be 1. */
+  /**
+   * `depth` must be a number literal or `Infinity` (the result type
+   * depends on it). A depth larger than the nesting flattens all levels.
+   */
+  flat(depth: 0): T[];
   flat<U>(this: U[][], depth?: 1): U[];
-  flat(depth?: 1): T[];
+  flat<U>(this: U[][][], depth: 2): U[];
+  flat<U>(this: U[][][][], depth: 3): U[];
+  // A larger depth or `Infinity`: all levels (typed up to four levels).
+  flat<U>(this: U[][][][], depth: number): U[];
+  flat<U>(this: U[][][], depth: number): U[];
+  flat<U>(this: U[][], depth: number): U[];
+  flat(depth?: number): T[];
   [Symbol.iterator](): Iterator<T>;
 }
 
@@ -133,12 +143,33 @@ interface PromiseConstructor {
   all<A, B>(values: [Promise<A>, Promise<B>]): Promise<[A, B]>;
   all<A, B, C>(values: [Promise<A>, Promise<B>, Promise<C>]): Promise<[A, B, C]>;
   all<A, B, C, D>(values: [Promise<A>, Promise<B>, Promise<C>, Promise<D>]): Promise<[A, B, C, D]>;
+  /** Settles as the first promise that settles. */
+  race<T>(values: Promise<T>[]): Promise<T>;
+  /**
+   * Resolves with the first value. When all promises reject, rejects with
+   * an `Error` whose `name` is "AggregateError".
+   */
+  any<T>(values: Promise<T>[]): Promise<T>;
+  /** Waits until all promises settle; one result per promise, in order. */
+  allSettled<T>(values: Promise<T>[]): Promise<PromiseSettledResult<T>[]>;
   resolve(): Promise<void>;
   resolve<T>(value: T | Promise<T>): Promise<T>;
   /** `reason` is an `Error`, or a string that becomes `new Error(reason)`. */
   reject<T = void>(reason: Error | string): Promise<T>;
 }
 declare var Promise: PromiseConstructor;
+declare var Infinity: number;
+declare var NaN: number;
+interface PromiseFulfilledResult<T> {
+  status: "fulfilled";
+  value: T;
+}
+interface PromiseRejectedResult {
+  status: "rejected";
+  reason: Error;
+}
+/** An element of the result of `Promise.allSettled`. Narrow it with `status`. */
+type PromiseSettledResult<T> = PromiseFulfilledResult<T> | PromiseRejectedResult;
 
 interface Boolean {}
 interface Function {}

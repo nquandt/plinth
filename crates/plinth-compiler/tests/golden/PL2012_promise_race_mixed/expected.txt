@@ -1,0 +1,4 @@
+app/main.tsx(4,11): error PL2012: `Promise.race` of promises of different types is not supported
+  const p = Promise.race([n(), s()]);
+            ^^^^^^^^^^^^^^^^^^^^^^^^
+  help: give all the promises the same type

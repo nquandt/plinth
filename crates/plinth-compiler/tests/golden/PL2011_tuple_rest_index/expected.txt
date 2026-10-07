@@ -1,0 +1,4 @@
+app/main.tsx(3,26): error PL2011: an index into `[string, ...number[]]` must be a number literal (0 or more)
+  const i = 1; const v = a[i];
+                           ^
+  help: write `t[0]`, or destructure: `const [a, b] = t`

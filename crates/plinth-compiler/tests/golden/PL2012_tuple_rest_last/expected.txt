@@ -1,0 +1,4 @@
+app/main.tsx(2,9): error PL2012: a rest element must be the last element of a tuple
+  let a: [...number[], string] | null = null;
+          ^^^^^^^^^^^
+  help: write the rest element last: `[string, ...number[]]`

@@ -175,6 +175,12 @@ struct Ctx {
     /// `switch` is between).
     fin_brk: bool,
     fin_cont: bool,
+    /// Inside a synchronous `try`/`finally` in the `try` blocks of `fin`:
+    /// the flag variable of the outermost such `try`, and whether a
+    /// `return`, `break` or `continue` used it. A statement that leaves
+    /// `fin` sets the flag and returns; the synchronous `finally` blocks
+    /// run first, and the last one calls the `finally` closure of `fin`.
+    sync_fin: Option<(VarId, Rc<std::cell::Cell<bool>>)>,
 }
 
 /// A tail for code in a new closure: it is not inside the Wasm loop.
@@ -187,7 +193,7 @@ fn relocate_tail(t: &Tail) -> Tail {
 
 impl Ctx {
     fn new(owner: FuncId, tail: Tail) -> Ctx {
-        Ctx { owner, tail, lcx: None, handlers: Vec::new(), sw: None, fin: None, fin_brk: false, fin_cont: false }
+        Ctx { owner, tail, lcx: None, handlers: Vec::new(), sw: None, fin: None, fin_brk: false, fin_cont: false, sync_fin: None }
     }
 
     /// The context for code moved into a new closure `owner`.
@@ -817,6 +823,25 @@ impl Checker<'_> {
                 let cases = cases.into_iter().map(|(t, b)| (t, self.sync_list(acx, b, cx, loops, brks + 1))).collect();
                 vec![TStmt::Switch { disc, eq, cases }]
             }
+            TStmt::Try { body, catch, finally: Some(f) } if fin && cx.sync_fin.is_none() => {
+                // A `try`/`finally` without `await` inside the `try` blocks
+                // of an asynchronous `try`/`finally`.
+                let flag = self.var_in(cx.owner, "$leave", Type::Bool, None);
+                let used = Rc::new(std::cell::Cell::new(false));
+                let icx = Ctx { sync_fin: Some((flag, used.clone())), ..cx.clone() };
+                let body = self.sync_list(acx, body, &icx, loops, brks);
+                let catch = catch.map(|(v, c)| (v, self.sync_list(acx, c, &icx, loops, brks)));
+                // A `return` in the `finally` block itself leaves the
+                // asynchronous `try`/`finally` directly.
+                let mut f = self.sync_list(acx, f, cx, loops, brks);
+                if !used.get() {
+                    return vec![TStmt::Try { body, catch, finally: Some(f) }];
+                }
+                let fin = cx.fin.as_ref().expect("checked above").fin;
+                let flag_r = TExpr::new(TExprKind::Var(flag), Type::Bool, span);
+                f.push(TStmt::If(flag_r, vec![self.call_var(fin, span)], Vec::new()));
+                vec![TStmt::Let(flag, Some(TExpr::new(TExprKind::Bool(false), Type::Bool, span))), TStmt::Try { body, catch, finally: Some(f) }]
+            }
             TStmt::Try { body, catch, finally } => {
                 let body = self.sync_list(acx, body, cx, loops, brks);
                 let catch = catch.map(|(v, c)| (v, self.sync_list(acx, c, cx, loops, brks)));
@@ -844,7 +869,14 @@ impl Checker<'_> {
             });
         }
         out.push(set_var(f.ck, int(kind as i32 + 2, span), span));
-        out.extend(self.emit_tail(acx, &Tail::Call(f.fin)));
+        match &cx.sync_fin {
+            Some((flag, used)) => {
+                used.set(true);
+                out.push(set_var(*flag, TExpr::new(TExprKind::Bool(true), Type::Bool, span), span));
+                out.push(TStmt::Return(None));
+            }
+            None => out.extend(self.emit_tail(acx, &Tail::Call(f.fin))),
+        }
         out
     }
 
@@ -1178,7 +1210,7 @@ impl Checker<'_> {
             b
         });
         let fhv = self.var_in(cx.owner, "$fcatch", fh.ty.clone(), None);
-        let mut icx = Ctx { tail: Tail::Call(finv), fin: Some(fin.clone()), fin_brk: true, fin_cont: true, ..cx.clone() };
+        let mut icx = Ctx { tail: Tail::Call(finv), fin: Some(fin.clone()), fin_brk: true, fin_cont: true, sync_fin: None, ..cx.clone() };
         icx.handlers.push(fhv);
         let try_part = match catch {
             Some((ev, cbody)) => self.async_try(acx, body, ev, cbody, &icx),

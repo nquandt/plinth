@@ -23,8 +23,9 @@ small local change), per the dogfooding task's scope.
 
 - `async`/`await` and `try`/`catch`: done (see "Fixed in this pass").
   The `Promise` API, async methods and `await` in all statements: done
-  (see "Fixed in this pass"). Still open: `Promise.race`, `Promise.any`
-  and `Promise.allSettled`.
+  (see "Fixed in this pass"). `Promise.race`, `Promise.any` and
+  `Promise.allSettled`: done (see "`Promise.race`, `any` and
+  `allSettled`" in "Fixed in this pass").
 - Regular expressions: not needed by either app; the text-tools screen used
   manual character scans instead of `RegExp` (which `lib.d.ts` declares as
   an empty, unusable interface).
@@ -244,9 +245,24 @@ small local change), per the dogfooding task's scope.
   end?)` changes the array in place and returns it; `start` and `end` use the
   same relative index rule as `slice`. `flat()` flattens one level: a `T[][]`
   becomes a new `T[]`; on another array it returns a copy. A depth other
-  than a literal `1` is `PL2000`. `std/lib.d.ts` has the three signatures
-  (`flat` has a `this: U[][]` overload, so `tsc` gives the correct type).
-  Tests: `crates/plinth-compiler/tests/collections.rs`.
+  than a literal `1` was `PL2000`; see the next entry. `std/lib.d.ts` has
+  the three signatures (`flat` has a `this: U[][]` overload, so `tsc`
+  gives the correct type). Tests: `crates/plinth-compiler/tests/collections.rs`.
+
+- **`flat(depth)` with a depth larger than 1, and `Infinity` (branch
+  `wt-compiler2`).** The result type depends on the depth, so the depth
+  must be a number literal or `Infinity`; any other expression is
+  `PL2000` (golden `PL2000_flat_depth`). `array_flat` repeats the
+  one-level loop (`flat_once`) once for each level, and stops when the
+  elements are not arrays, so a depth larger than the nesting (or
+  `Infinity`) flattens all levels, as in JS. `flat(0)` is a copy. A
+  fractional depth is truncated. Each level makes one new array; there is
+  no new runtime function. `std/lib.d.ts` has overloads for `tsc`: depth
+  0, 1, 2 and 3 exactly, and for a larger depth or `Infinity` all levels
+  of an array with up to four levels. `Infinity` and `NaN` are now global
+  values (`f64` constants; `declare var` in `std/lib.d.ts`). Tests:
+  `flat_with_a_larger_depth_and_infinity`,
+  `flat_with_a_computed_depth_is_rejected` (`tests/collections.rs`).
 
 - **`Map.entries()` as a value, and tuples (HANDOFF.md §9 item 4).**
   `m.entries()` returns a new `[K, V][]`. A tuple type `[A, B, …]` is a
@@ -387,9 +403,17 @@ small local change), per the dogfooding task's scope.
   - Only `await` in a `case` value is still `PL2009` (new golden
     `PL2009_await_case`). The goldens of the removed messages are
     deleted; `PL2009_generator_method` replaces `PL2009_async_method`.
-  - Limit: a `return` inside a synchronous `try`/`finally` that is inside
-    an asynchronous `try`/`finally` runs the outer `finally` before the
-    inner one.
+  - Limit (fixed, branch `wt-compiler2`): a `return` inside a
+    synchronous `try`/`finally` that is inside an asynchronous
+    `try`/`finally` ran the outer `finally` before the inner one. The
+    same was true for `break` and `continue`, and an exception in the
+    inner `finally` was lost. Now the statement that leaves sets a flag
+    (`$leave`) and returns, so the synchronous `finally` blocks run
+    first; the outermost of them calls the closure of the asynchronous
+    `finally` when the flag is set (`Ctx::sync_fin` in
+    `check/asyncfn.rs`). A `return` in the synchronous `finally` block
+    itself replaces the pending one, as in JavaScript. Test:
+    `a_sync_finally_inside_an_async_finally_runs_first`.
   - Tests: the "`await` in `switch`, `do…while` and `try`/`finally`"
     section of `tests/async_await.rs`.
 
@@ -421,12 +445,86 @@ small local change), per the dogfooding task's scope.
     a tuple is `PL2012`.
   - `Promise.resolve(v)`, `Promise.resolve()`, `Promise.reject(e)`
     (`e` is an `Error` or a string).
-  - `Promise.race`/`any`/`allSettled` are `PL3004`.
+  - `Promise.race`/`any`/`allSettled` were `PL3004` here; they are done
+    now (see the entry "`Promise.race`, `any` and `allSettled`").
   - `std/lib.d.ts` declares all of these for `tsc`.
   - Tests: "The `Promise` API" section of `tests/async_await.rs` (also
     under GC stress); goldens `PL3001_promise_all`,
     `PL3001_promise_then`, `PL3001_promise_reject`,
-    `PL3004_promise_race`, `PL2012_promise_all_void`.
+    `PL3004_promise_static` (was `PL3004_promise_race`),
+    `PL2012_promise_all_void`.
+
+- **Tuples with optional and rest elements (branch `wt-compiler2`).**
+  Before, `[number, string?]` and `[string, ...number[]]` were
+  `PL2012`. Now:
+  - The parser keeps a mark on each element (`ast::TupleMark`:
+    required, optional, rest). A rest element that is not last is
+    `PL2012` (golden `PL2012_tuple_rest_last`). The parser of `oxc`
+    already reports a required element after an optional one
+    (`PL1000`).
+  - `Checker::tuple_type` (`check/mod.rs`) builds the tuple struct. An
+    optional element is a field of type `T | null` with the `optional`
+    mark. A rest element is a last field named `...` that holds the
+    array; its type must be an array (`PL2012`, golden
+    `PL2012_tuple_rest_array`). `[...T[]]` is `T[]`. `tuple_shape`
+    gives the fixed element types, the number of required elements and
+    the rest element type.
+  - A literal where such a tuple is expected can leave out optional
+    elements (they are `null`) and can have any number of elements and
+    spreads after the fixed ones (they go into a new array). Wrong
+    lengths and a spread in the fixed part are `PL3001` (golden
+    `PL3001_tuple_optional_rest`).
+  - `t[k]` with a number literal `k` past the fixed elements reads (or
+    writes) element `k - n` of the rest array. A computed index is
+    still `PL2011` (golden `PL2011_tuple_rest_index`). Destructuring
+    reads the rest array the same way.
+  - `t.length` works on all tuples: the number of required elements,
+    plus the optional elements up to the last one that is not `null`,
+    plus the length of the rest array.
+  - `JSON.stringify` writes the rest elements into the same JSON array.
+    A left-out optional element is written as `null` (JavaScript leaves
+    it out); Plinth cannot tell a left-out element from `null`.
+  - Not done: a rest pattern in destructuring (`const [a, ...r] = t`;
+    array patterns have no rest at all), a rest element in the middle,
+    a spread of a tuple into a rest element (`...[A, B]`), and
+    `JSON.parse` of a tuple type.
+  - Tests: `tuple_with_optional_elements`,
+    `tuple_with_a_rest_element`,
+    `tuple_with_optional_and_rest_elements_to_json`,
+    `tuple_with_optional_and_rest_elements_diagnostics`
+    (`tests/collections.rs`).
+
+- **`Promise.race`, `any` and `allSettled` (branch `wt-compiler2`).**
+  Generated code only, like `Promise.all`: one helper function per
+  combinator and promise type (`make_promise_race_any`,
+  `make_promise_all_settled` in `check/promises.rs`), no new runtime
+  function, no new core version.
+  - `race` registers a waiter on each promise that copies the result to
+    the new promise. `resolve` and `reject` do nothing on a settled
+    promise, so the later results are dropped. A losing rejection has a
+    waiter, so it is not reported as unhandled.
+  - `any` counts the rejections. When all promises reject (or the array
+    is empty), it rejects with an `Error` with the name
+    `AggregateError`. There is no `AggregateError` class and no `errors`
+    array: TypeScript types them as `any[]`, and Plinth has only one
+    error type.
+  - `allSettled` gives `PromiseSettledResult<T>[]`, the TypeScript shape
+    `{ status: "fulfilled"; value: T } | { status: "rejected"; reason:
+    Error }`. It is an ordinary discriminated union of two object types
+    (`settled_result`), so `r.status === "fulfilled"` narrows it. The
+    names `PromiseSettledResult<T>`, `PromiseFulfilledResult<T>` and
+    `PromiseRejectedResult` are built-in types. For `Promise<void>`, the
+    fulfilled object has no `value` field (a field cannot have the type
+    `void`).
+  - An array literal of promises of different types is `PL2012` for
+    these three (TypeScript gives a union of the value types, and a
+    Plinth union cannot hold numbers or booleans). Golden
+    `PL2012_promise_race_mixed`.
+  - `std/lib.d.ts` declares all of them.
+  - Tests: `promise_race_settles_as_the_first_promise`,
+    `promise_any_takes_the_first_value_and_aggregates_rejections`,
+    `promise_all_settled_gives_a_result_per_promise`,
+    `promise_combinators_survive_gc_stress` (`tests/async_await.rs`).
 
 - **`async` class methods (branch `wt/lang6`).** The parser now keeps
   `async` on a method, and the method body goes through the same

@@ -18,13 +18,13 @@ large enough to write real apps; see the examples in `examples/`.
 
 | Plinth TS | Notes |
 |---|---|
-| `number` | A 64-bit float (IEEE 754 `f64`). |
+| `number` | A 64-bit float (IEEE 754 `f64`). The globals `Infinity` and `NaN` exist. |
 | `int` | A branded `number` from `plinth:core`. Literals and arithmetic on `int` stay `int` and wrap at 32 bits. `int` converts to `number` implicitly; convert back with `int(x)` (it truncates). |
 | `boolean` | — |
 | `string` | Immutable. `length`, indexing, and `slice` count UTF-16 code units, for TypeScript compatibility; see "Deviations" below. |
-| `T[]` / `Array<T>` | A growable array, monomorphized per `T`. See `std/lib.d.ts` for the supported methods (`push`, `pop`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `forEach`, `includes`, `indexOf`, `slice`, `reverse`, `join`, `concat`, `reduce` (needs an initial value; there is no no-initial-value overload), `sort` (in place, stable; without a comparator, `string`/`number`/`boolean` elements only, compared as strings exactly like JS, with a lint for `number`), `splice` (JS rules: a negative start counts from the end; it returns the removed elements), `fill(value, start?, end?)` (in place), `flat()` (one level only; a depth other than `1` is an error), `for…of`). |
+| `T[]` / `Array<T>` | A growable array, monomorphized per `T`. See `std/lib.d.ts` for the supported methods (`push`, `pop`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `forEach`, `includes`, `indexOf`, `slice`, `reverse`, `join`, `concat`, `reduce` (needs an initial value; there is no no-initial-value overload), `sort` (in place, stable; without a comparator, `string`/`number`/`boolean` elements only, compared as strings exactly like JS, with a lint for `number`), `splice` (JS rules: a negative start counts from the end; it returns the removed elements), `fill(value, start?, end?)` (in place), `flat(depth?)` (the depth is a number literal or `Infinity`; a depth larger than the nesting flattens all levels; a computed depth is the error `PL2000`), `for…of`). |
 | `Map<K, V>`, `Set<T>` | `K`/element type must be `string`, `int`, `number`, `boolean`, or an enum. Insertion order; lookup, insert, and delete are linear scans. `get` returns `null`, not `undefined`, for a missing key. `forEach`, `keys()`, `values()` and `entries()` work as plain methods too, not just as a `for…of` target (`[...m.keys()]`, `m.values().reduce(...)`, `m.entries().map(([k, v]) => ...)`). `entries()` returns a new `[K, V][]`; a change to it does not change the map. `for (const e of m)` gives `e` as a `[K, V]` pair. `std/lib.d.ts` declares `Map` and `Set` iterable, so `tsc` also accepts `for…of` over them. |
-| `[A, B]` (tuples) | A fixed-length tuple. It is a struct at run time. Read an element with a number literal index (`t[0]`) or with destructuring (`const [a, b] = t`). A computed index is an error (`PL2011`). Optional and rest elements are not supported. `JSON.stringify` writes a tuple as a JSON array; `JSON.parse` does not accept a tuple type. |
+| `[A, B]` (tuples) | A tuple. It is a struct at run time. Read an element with a number literal index (`t[0]`) or with destructuring (`const [a, b] = t`). A computed index is an error (`PL2011`). `t.length` works. **Optional elements** (`[number, string?]`) come after the required ones; an optional element has the type `T \| null`, and a literal can leave it out (it is then `null`). **A rest element** (`[string, ...number[]]`) must be last and have an array type; a literal can have any number of elements after the fixed ones, also spreads (`["a", ...xs]`). `[...T[]]` is the same as `T[]`. Not supported: a rest element that is not last (`PL2012`), a rest element that is not an array, such as `...[A, B]` (`PL2012`), and a rest pattern in destructuring (`const [a, ...r] = t`). `JSON.stringify` writes a tuple as a JSON array (a left-out optional element is `null`); `JSON.parse` does not accept a tuple type. |
 | `T \| null` | Supported for every type except signals. `undefined` exists only as "absent" for optional properties and parameters; it is otherwise the same value as `null`. |
 | interfaces, object types | A GC-allocated struct with a fixed layout. |
 | classes | Single inheritance: fields, one constructor, methods (also `async` methods), `new`, `extends`, `super(...)` as the first statement, `super.m()`, overriding, `instanceof` with narrowing. A base class must be declared before its subclasses. A method reference without a call (`arr.map(obj.method)`) is the error `PL2021`; write `() => obj.method()` instead. |
@@ -38,8 +38,9 @@ signals; discriminated unions with narrowing; generic functions,
 interfaces, and type aliases; `Map`/`Set`; classes with single
 inheritance and `instanceof`; `JSON.stringify`/`JSON.parse<T>`;
 `try`/`catch`/`finally`/`throw` (see "Errors and exceptions");
-`async`/`await` (see "Async functions and `await`"). **Not yet:** static
-members, getters/setters, generic classes, `Promise.race`/`any`/`allSettled`.
+`async`/`await` (see "Async functions and `await`"); the `Promise` API
+with `all`, `race`, `any` and `allSettled`. **Not yet:** static
+members, getters/setters, generic classes.
 
 ## Supported syntax
 
@@ -250,9 +251,33 @@ load()
   **`Promise.reject(e)`** gives a rejected promise; `e` is an `Error` or
   a string (`new Error(e)`). Write `Promise.reject<T>(e)` for a type
   other than `Promise<void>`.
-- Not supported: `Promise.race`, `Promise.any`, `Promise.allSettled`
-  (`PL3004`), and a `then` callback that takes a rejection reason of a
-  type other than `Error`.
+- **`Promise.race(ps)`** settles as the first promise in `ps` that
+  settles: the same value or the same error. An empty array gives a
+  promise that never settles.
+- **`Promise.any(ps)`** resolves with the first value. When all
+  promises reject, it rejects with an `Error` whose `name` is
+  `"AggregateError"` and whose `message` is "All promises were
+  rejected" (Plinth has no `AggregateError` class, so the single errors
+  are not kept). An empty array rejects at once.
+- **`Promise.allSettled(ps)`** waits until all promises settle and
+  never rejects. It gives an array of `PromiseSettledResult<T>`, in the
+  order of `ps`. This is a discriminated union, as in TypeScript:
+  `{ status: "fulfilled"; value: T }` (`PromiseFulfilledResult<T>`) or
+  `{ status: "rejected"; reason: Error }` (`PromiseRejectedResult`).
+  Narrow it with `r.status === "fulfilled"`. For `Promise<void>`, the
+  fulfilled result has no `value` field.
+  ```ts
+  const rs = await Promise.allSettled(urls.map((u) => fetch(u, null)));
+  for (const r of rs) {
+    if (r.status === "fulfilled") { show(r.value.body); } else { log(r.reason.message); }
+  }
+  ```
+- `race`, `any` and `allSettled` take an array of promises of one type.
+  An array literal of promises of different types is the error `PL2012`
+  (only `Promise.all` makes a tuple).
+- Not supported: other `Promise` functions such as
+  `Promise.withResolvers` (`PL3004`), and a `then` callback that takes a
+  rejection reason of a type other than `Error`.
 
 ## Errors and exceptions
 
