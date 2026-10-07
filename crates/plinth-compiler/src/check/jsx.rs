@@ -129,6 +129,15 @@ impl Checker<'_> {
                 }
                 continue;
             }
+            if ps.ty == PropTy::Shapes {
+                let Target::Prop(id) = ps.target else { unreachable!("shapes always target a prop") };
+                // A `Shape` is a string at run time: join the array.
+                let te = self.typed(&value, &Type::Array(Box::new(Type::String)));
+                let sep = TExpr::new(TExprKind::Str("\u{1e}".into()), Type::String, value.span);
+                let joined = TExpr::new(TExprKind::Rt("arr_join", vec![te, sep]), Type::String, value.span);
+                props.push(TProp { target: PropTarget::Str(id), value: joined });
+                continue;
+            }
             if let PropTy::PartialStyle(allowed) = ps.ty {
                 let Target::Prop(id) = ps.target else { unreachable!("a partial style always targets a prop") };
                 if let Some(text) = self.encode_partial_style(&value, allowed, ps.name) {
@@ -386,7 +395,7 @@ impl Checker<'_> {
                     (PropTarget::ListRow, f)
                 }
                 PropTy::Element => (PropTarget::ListEmpty, self.typed(&value, &Type::Element)),
-                PropTy::StrList | PropTy::ActionList | PropTy::ChartPoints | PropTy::ChartSeries | PropTy::PartialStyle(_) => {
+                PropTy::StrList | PropTy::ActionList | PropTy::ChartPoints | PropTy::ChartSeries | PropTy::PartialStyle(_) | PropTy::Shapes => {
                     unreachable!("handled above with `continue`")
                 }
             };
@@ -429,7 +438,7 @@ impl Checker<'_> {
 
     /// Joins already-string `parts` with a literal `sep`, as one `str_concat`
     /// chain. An empty list gives the empty string.
-    fn join_parts(&mut self, parts: Vec<TExpr>, sep: &str, span: crate::diag::Span) -> TExpr {
+    pub(super) fn join_parts(&mut self, parts: Vec<TExpr>, sep: &str, span: crate::diag::Span) -> TExpr {
         let mut it = parts.into_iter();
         let Some(mut acc) = it.next() else {
             return TExpr::new(TExprKind::Str(String::new()), Type::String, span);

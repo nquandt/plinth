@@ -299,7 +299,29 @@ the default, or `"row"`), `wrap`, `gap`, `padding`, `paddingX`, `paddingY`,
 </Pressable>
 ```
 
-`examples/primitives` shows all four.
+`examples/primitives` shows all four, and a Canvas.
+
+### Canvas (UI API 1.10)
+
+```tsx
+import { Canvas, rect, circle, line, canvasText } from "plinth:ui";
+
+<Canvas label="A sun over the ground" viewWidth={200} viewHeight={100} maxWidth={120}
+        shapes={[rect(0, 80, 200, 20, "success"), circle(170, 25, 12, "accent"),
+                 line(0, 80, 200, 80, "border", 2), canvasText(8, 96, "Hello", "text.muted", 9)]} />
+```
+
+- The shapes use a view space of `viewWidth` × `viewHeight`. The canvas
+  keeps that aspect ratio and scales it to its width (by default the full
+  width; `width`, `maxWidth` and `grow` as for a box). Text scales too.
+- `rect(x, y, width, height, color)`, `circle(cx, cy, r, color)`,
+  `line(x1, y1, x2, y2, color, width?)`, `canvasText(x, y, text, color,
+  size?)`. Colors are theme tokens. `shapes` is any `Shape[]`: a literal,
+  a variable, a `computed` or a `.map()` result; a signal read in it makes
+  the drawing update.
+- `label` is required: the canvas is one image for assistive technology.
+- Not built yet: pointer input on the canvas (phase U3), paths and curves,
+  images.
 
 ## Layout rules the runtime owns
 

@@ -672,6 +672,13 @@ body {
   outline-offset: 2px;
 }
 
+/* Canvas (UI API 1.10): the drawing scales to the width. */
+.pl-canvas {
+  display: block;
+  height: auto;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
 /* The selected row of a list (UI API 1.8). */
 .pl-row-selected {
   background: var(--pl-selected);

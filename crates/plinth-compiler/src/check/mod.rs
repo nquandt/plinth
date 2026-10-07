@@ -108,6 +108,12 @@ pub enum StdFn {
     HubUnblockPublisher,
     HubCheckUpdates,
     HubUpdate,
+    /// `rect`, `circle`, `line`, `canvasText` from `plinth:ui` (UI API 1.10):
+    /// each makes one encoded `Shape` string for `Canvas.shapes`.
+    ShapeRect,
+    ShapeCircle,
+    ShapeLine,
+    ShapeText,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

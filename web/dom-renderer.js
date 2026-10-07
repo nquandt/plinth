@@ -400,6 +400,35 @@ export function keyName(key) {
   return /^[A-Za-z0-9]$/.test(key) ? key.toLowerCase() : null;
 }
 
+// -- UI API 1.10: Canvas ---------------------------------------------------------
+
+/** The shapes of a Canvas `shapes` prop (the same format as `crates/plinth-ui/src/canvas.rs`). Malformed shapes are skipped. */
+export function parseShapes(text) {
+  const out = [];
+  for (const s of String(text ?? "").split("\u001e")) {
+    if (!s) continue;
+    const f = s.split("\u001f");
+    const n = (i) => {
+      const v = Number(f[i]);
+      return f[i] !== undefined && f[i] !== "" && Number.isFinite(v) ? v : null;
+    };
+    const ok = (...vs) => vs.every((v) => v !== null);
+    if (f[0] === "r" && ok(n(1), n(2), n(3), n(4)) && f[5] !== undefined) out.push({ kind: "rect", x: n(1), y: n(2), w: n(3), h: n(4), color: f[5] });
+    else if (f[0] === "c" && ok(n(1), n(2), n(3)) && f[4] !== undefined) out.push({ kind: "circle", cx: n(1), cy: n(2), r: n(3), color: f[4] });
+    else if (f[0] === "l" && ok(n(1), n(2), n(3), n(4)) && f[5] !== undefined)
+      out.push({ kind: "line", x1: n(1), y1: n(2), x2: n(3), y2: n(4), color: f[5], width: n(6) ?? 1 });
+    else if (f[0] === "t" && ok(n(1), n(2)) && f[3] !== undefined)
+      out.push({ kind: "text", x: n(1), y: n(2), color: f[3], size: n(4) ?? 12, text: f.slice(5).join("\u001f") });
+  }
+  return out;
+}
+
+/** A color token name of a shape ("accent", "text.muted") as CSS, or null. */
+export function shapeColor(name) {
+  const key = String(name).replace(/\.([a-z])/g, (_, c) => c.toUpperCase());
+  return Object.hasOwn(EnumColor, key) ? colorVar(EnumColor[key], name === "accent") : null;
+}
+
 /** One generated class for each distinct partial style, in one style element of the document. */
 class PartialStyles {
   constructor(doc) {
@@ -994,6 +1023,7 @@ export class DomRenderer {
       case "scroll":
       case "pressable": return this.primitiveBoxView(kname);
       case "span": return this.spanView();
+      case "canvas": return this.canvasView();
       default: return this.containerView(el("div", `pl-${kname}`));
     }
   }
@@ -1073,6 +1103,56 @@ export class DomRenderer {
           setAttr(e, "aria-label", label);
           setAttr(e, "tabindex", kname === "scroll" || keys ? "0" : null);
         }
+      },
+    };
+  }
+
+  /**
+   * A Canvas (UI API 1.10): inline SVG with a viewBox, so the drawing keeps
+   * its aspect ratio and scales to the width. The shapes are drawn again
+   * only when the `shapes` prop changes.
+   */
+  canvasView() {
+    const svg = svgEl("svg", { class: "pl-canvas", role: "img", preserveAspectRatio: "xMidYMid meet" });
+    let lastShapes = null;
+    let last = {};
+    return {
+      el: svg,
+      update: (n) => {
+        const vw = Math.max(1, n.props.get(Prop.viewWidth) ?? 100);
+        const vh = Math.max(1, n.props.get(Prop.viewHeight) ?? 100);
+        setAttr(svg, "viewBox", `0 0 ${vw} ${vh}`);
+        setAttr(svg, "aria-label", n.props.get(Prop.label) ?? null);
+        const css = {};
+        const w = sizeOf(n.props, Prop.width, Prop.widthFraction);
+        css.width = w ?? "100%";
+        const mw = sizeOf(n.props, Prop.maxWidth, Prop.maxWidthFraction);
+        if (mw) css["max-width"] = mw;
+        if (w) css["flex-shrink"] = "0";
+        const grow = n.props.get(Prop.grow);
+        if (typeof grow === "number" && grow > 0) css.flex = `${Math.min(Math.trunc(grow), 100)} 1 0px`;
+        css["aspect-ratio"] = `${vw} / ${vh}`;
+        last = applyStyle(svg, css, last);
+        const text = n.props.get(Prop.shapes) ?? "";
+        if (text === lastShapes) return;
+        lastShapes = text;
+        const els = parseShapes(text).map((s) => {
+          const color = shapeColor(s.color) ?? "currentColor";
+          switch (s.kind) {
+            case "rect":
+              return svgEl("rect", { x: s.x, y: s.y, width: Math.max(0, s.w), height: Math.max(0, s.h), style: `fill: ${color}` });
+            case "circle":
+              return svgEl("circle", { cx: s.cx, cy: s.cy, r: Math.max(0, s.r), style: `fill: ${color}` });
+            case "line":
+              return svgEl("line", { x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2, "stroke-linecap": "round", style: `stroke: ${color}; stroke-width: ${s.width}` });
+            default: {
+              const t = svgEl("text", { x: s.x, y: s.y, "font-size": s.size, style: `fill: ${color}` });
+              t.textContent = s.text;
+              return t;
+            }
+          }
+        });
+        svg.replaceChildren(...els);
       },
     };
   }

@@ -2,6 +2,7 @@
 //! shell and the control library on gpui-ce (SPEC.md §6 and §9.3).
 
 mod calendar;
+mod canvas;
 mod chart;
 mod primitives;
 mod render;

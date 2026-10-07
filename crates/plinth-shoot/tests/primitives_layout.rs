@@ -61,6 +61,10 @@ fn primitives_roles_and_layout() {
     };
 
     find(Role::Button, "Press me");
+    // Canvas (UI API 1.10): an image with its label, in the aspect of its view space (200 x 100).
+    let drawing = find(Role::Image, "A sun over five bars");
+    let aspect = (drawing.x1 - drawing.x0) / (drawing.y1 - drawing.y0);
+    assert!((aspect - 2.0).abs() < 0.02, "the canvas is not 2:1: {drawing:?}");
     find(Role::Link, "Reset the count");
     let scroll = find(Role::ScrollView, "Cards");
     assert!(found.iter().any(|(r, l, _)| *r == Role::Label && l == "Styled primitives"), "the Span is a label");

@@ -14,7 +14,7 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { PlinthApp, readPlnt } from "../plinth-web.js";
-import { Tree, primitiveStyle, colorVar, UNIT, parsePartialStyle, partialRule } from "../dom-renderer.js";
+import { Tree, primitiveStyle, colorVar, UNIT, parsePartialStyle, partialRule, parseShapes } from "../dom-renderer.js";
 import { ControlKind, Prop, Event, EnumAxis, EnumColor, EnumFraction, EnumRadius, EnumCrossAlign, EnumJustify, EnumTextSize, EnumWeight } from "../ui-api.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -134,6 +134,17 @@ assert.equal(inbox.props.get(Prop.bg)?.enum, EnumColor.surface);
 app.onEvent({ kind: "ui", handler: inbox.listeners.get(Event.press), event: Event.press, value: null });
 assert.equal(pressable("Inbox").props.get(Prop.bg)?.enum, EnumColor.selected);
 assert.ok([...tree.nodes.values()].some((n) => n.text === "Chosen: Inbox"));
+
+// Canvas (UI API 1.10): the compiler encodes the shapes; the circle grows with the presses.
+const canvasNode = () => [...tree.nodes.values()].find((n) => n.kind === ControlKind.canvas);
+const shapes = parseShapes(canvasNode().props.get(Prop.shapes));
+assert.equal(shapes.length, 9, JSON.stringify(shapes));
+assert.deepEqual(shapes[0], { kind: "rect", x: 0, y: 0, w: 200, h: 100, color: "surface.alt" });
+assert.deepEqual(shapes[2], { kind: "line", x1: 0, y1: 80, x2: 200, y2: 80, color: "border", width: 2 });
+assert.deepEqual(shapes[3], { kind: "rect", x: 14, y: 62, w: 14, h: 18, color: "success" });
+assert.deepEqual(shapes[8], { kind: "text", x: 8, y: 96, color: "text.muted", size: 9, text: "Canvas: view 200 x 100" });
+assert.equal(shapes[1].r, 12 + 2, "the sun has grown by the two presses");
+assert.equal(canvasNode().props.get(Prop.viewWidth), 200);
 
 // The compiler encodes the partial styles of the app.
 assert.equal(pressable("Inbox").props.get(Prop.hover), `${Prop.border}:${EnumColor.accent}`);

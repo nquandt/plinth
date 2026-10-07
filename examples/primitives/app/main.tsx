@@ -3,7 +3,8 @@
 // with state styles (`hover`, `focus`) and a width-class style (`compact`,
 // UI API 1.7).
 // Spaces and sizes are spacing units (4 px); colors are theme tokens.
-import { app, signal, Screen, Section, Box, Span, Pressable, Scroll } from "plinth:ui";
+import { Math } from "plinth:core";
+import { app, signal, Screen, Section, Box, Span, Pressable, Scroll, Canvas, rect, circle, line, canvasText, Shape } from "plinth:ui";
 
 type Card = { title: string; body: string };
 
@@ -15,6 +16,19 @@ const CARDS: Card[] = [
   { title: "Music", body: "A new album from an artist that you follow." },
   { title: "Weather", body: "Sunny, with a light wind from the west." },
 ];
+
+const BARS: number[] = [3, 7, 4, 9, 6];
+
+/** A small scene for the Canvas (UI API 1.10): view units, theme colors. */
+function scene(presses: number): Shape[] {
+  const shapes: Shape[] = [
+    rect(0, 0, 200, 100, "surface.alt"),
+    circle(170, 25, 12 + Math.min(presses, 8), "accent"),
+    line(0, 80, 200, 80, "border", 2),
+  ];
+  const bars = BARS.map((v, i) => rect(14 + i * 22, 80 - v * 6, 14, v * 6, i % 2 === 0 ? "success" : "danger"));
+  return [...shapes, ...bars, canvasText(8, 96, "Canvas: view 200 x 100", "text.muted", 9)];
+}
 
 function Gallery() {
   const presses = signal(0);
@@ -47,6 +61,9 @@ function Gallery() {
         <Pressable label="Reset the count" role="link" padding={1} onPress={() => presses.set(0)} disabled={presses() === 0}>
           <Span fg="accent">Reset the count</Span>
         </Pressable>
+      </Section>
+      <Section title="Canvas">
+        <Canvas label="A sun over five bars" viewWidth={200} viewHeight={100} maxWidth={120} shapes={scene(presses())} />
       </Section>
       <Section title="Scroll">
         <Scroll label="Cards" direction="row" gap={3} paddingY={1}>

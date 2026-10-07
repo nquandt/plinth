@@ -422,3 +422,31 @@ export declare function Pressable(
 
 /** A box that scrolls along its direction. Give it a height or a max height. */
 export declare function Scroll(props: BoxStyle & KeyHandlers & { label?: string }): Element;
+
+// -- Canvas (UI API 1.10, docs/UI-ADVANCED.md U4) --------------------------
+// Shapes in a view space of `viewWidth` x `viewHeight`. The canvas keeps
+// that aspect ratio and scales the space to its width (by default the full
+// width of its parent). Colors are theme tokens.
+
+/** One shape of a canvas: make it with `rect`, `circle`, `line` or `canvasText`. */
+export type Shape = string & { readonly __plinthShape: true };
+
+/** A filled rectangle. */
+export declare function rect(x: number, y: number, width: number, height: number, color: ColorToken): Shape;
+/** A filled circle. */
+export declare function circle(cx: number, cy: number, r: number, color: ColorToken): Shape;
+/** A straight line; `width` in view units (default 1). */
+export declare function line(x1: number, y1: number, x2: number, y2: number, color: ColorToken, width?: number): Shape;
+/** Text with its left baseline at (x, y); `size` in view units (default 12). */
+export declare function canvasText(x: number, y: number, text: string, color: ColorToken, size?: number): Shape;
+
+/** A drawing. `label` describes it for assistive technology (required). */
+export declare function Canvas(props: {
+  label: string;
+  viewWidth: number;
+  viewHeight: number;
+  shapes: Shape[];
+  width?: SizeValue;
+  maxWidth?: SizeValue;
+  grow?: number;
+}): Element;

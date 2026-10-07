@@ -23,7 +23,7 @@ pub const UI_NAMES: &[&str] = &[
     // UI API 1.3
     "Image", "Aspect",
     // UI API 1.4
-    "Icon", "DatePicker", "Box", "Span", "Pressable", "Scroll",
+    "Icon", "DatePicker", "Box", "Span", "Pressable", "Scroll", "Canvas", "Shape", "rect", "circle", "line", "canvasText",
     // UI API 1.5
     "Chart", "ChartPoint", "ChartSeriesDef",
 ];
@@ -157,6 +157,12 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "Tone" => Binding::Type(Type::str_lits(["default", "muted", "danger", "success"].iter().map(|s| s.to_string()).collect())),
             "Aspect" => Binding::Type(Type::str_lits(["square", "wide", "tall"].iter().map(|s| s.to_string()).collect())),
             "App" => Binding::Type(Type::App),
+            // UI API 1.10: Canvas shapes. A `Shape` is a string at run time.
+            "rect" => Binding::Std(StdFn::ShapeRect),
+            "circle" => Binding::Std(StdFn::ShapeCircle),
+            "line" => Binding::Std(StdFn::ShapeLine),
+            "canvasText" => Binding::Std(StdFn::ShapeText),
+            "Shape" => Binding::Type(Type::String),
             // Config shapes exist for the editor only.
             "ScreenDef" | "AppConfig" => Binding::Type(Type::Error),
             _ => Binding::Control(controls::by_name(name)?.kind),
@@ -280,6 +286,7 @@ impl Checker<'_> {
                 let te = self.expr(&args[0], None);
                 self.to_str(te)
             }
+            StdFn::ShapeRect | StdFn::ShapeCircle | StdFn::ShapeLine | StdFn::ShapeText => self.shape_call(f, args, span),
             StdFn::TimeNow => {
                 if !args.is_empty() {
                     self.err(code::ARG_COUNT, span, "`now` takes no arguments");
@@ -1087,5 +1094,63 @@ impl Checker<'_> {
                 None
             }
         }
+    }
+}
+
+impl Checker<'_> {
+    /// One Canvas shape (UI API 1.10): the fields joined with U+001F, the
+    /// kind letter first. Numbers use the JSON number form; a color is a
+    /// theme token name, checked at compile time.
+    fn shape_call(&mut self, f: StdFn, args: &[Expr], span: Span) -> TExpr {
+        let (name, kind, nums, has_color, extra) = match f {
+            StdFn::ShapeRect => ("rect", "r", 4, true, None),
+            StdFn::ShapeCircle => ("circle", "c", 3, true, None),
+            StdFn::ShapeLine => ("line", "l", 4, true, Some("width")),
+            _ => ("canvasText", "t", 2, true, Some("size")),
+        };
+        let text_arg = f == StdFn::ShapeText;
+        let want = nums + usize::from(has_color) + usize::from(text_arg);
+        if args.len() < want || args.len() > want + usize::from(extra.is_some()) {
+            let usage = match f {
+                StdFn::ShapeRect => "`rect(x, y, width, height, color)`",
+                StdFn::ShapeCircle => "`circle(cx, cy, r, color)`",
+                StdFn::ShapeLine => "`line(x1, y1, x2, y2, color, width?)`",
+                _ => "`canvasText(x, y, text, color, size?)`",
+            };
+            self.err(code::ARG_COUNT, span, format!("`{name}` takes {usage}"));
+            return TExpr::new(TExprKind::Str(String::new()), Type::String, span);
+        }
+        let num = |c: &mut Self, e: &Expr| {
+            let te = c.expr_with(e, &Type::Number);
+            let te = c.coerce(te, &Type::Number);
+            TExpr::new(TExprKind::Rt("json_num_str", vec![te]), Type::String, span)
+        };
+        let colors = Type::str_lits(crate::controls::COLOR_NAMES.iter().map(|s| s.to_string()).collect());
+        let mut parts = vec![TExpr::new(TExprKind::Str(kind.into()), Type::String, span)];
+        let mut i = 0;
+        for _ in 0..nums {
+            parts.push(num(self, &args[i]));
+            i += 1;
+        }
+        let text = if text_arg {
+            let te = self.expr_with(&args[i], &Type::String);
+            i += 1;
+            Some(self.coerce(te, &Type::String))
+        } else {
+            None
+        };
+        let color = self.expr_with(&args[i], &colors);
+        parts.push(self.coerce(color, &Type::String));
+        i += 1;
+        if extra.is_some() {
+            parts.push(match args.get(i) {
+                Some(e) => num(self, e),
+                None => TExpr::new(TExprKind::Str(if f == StdFn::ShapeLine { "1".into() } else { "12".into() }), Type::String, span),
+            });
+        }
+        if let Some(t) = text {
+            parts.push(t);
+        }
+        self.join_parts(parts, "\u{1f}", span)
     }
 }

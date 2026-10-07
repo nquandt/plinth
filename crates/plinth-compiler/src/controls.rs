@@ -65,6 +65,10 @@ pub enum PropTy {
     /// compile time into one string prop, `"<prop id>:<int>"` pairs joined
     /// with `,` (`hover={{ bg: "hover" }}`).
     PartialStyle(&'static [PropSpec]),
+    /// `Canvas.shapes` (UI API 1.10): a `Shape[]`. A `Shape` is the encoded
+    /// string that `rect`/`circle`/`line`/`canvasText` make; the array is
+    /// joined with U+001E into one string prop at run time.
+    Shapes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +136,11 @@ pub const FRACTIONS: &[(&str, u16)] = &[
     ("2/3", fraction::TWO_THIRDS),
     ("1/4", fraction::QUARTER),
     ("3/4", fraction::THREE_QUARTERS),
+];
+/// The color token names (UI API 1.6), also the colors of Canvas shapes.
+pub const COLOR_NAMES: &[&str] = &[
+    "none", "background", "surface", "surface.alt", "accent", "danger", "success", "text", "text.muted", "on.accent", "border",
+    "hover", "selected",
 ];
 const COLORS: &[(&str, u16)] = &[
     ("none", color::NONE),
@@ -570,6 +579,20 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("onKeyUp", T::CallbackStr, false, Ev(event::KEY_UP)),
         ],
         children: ChildKind::Nodes,
+    },
+    ControlSpec {
+        name: "Canvas",
+        kind: ControlKind::Canvas,
+        props: &[
+            p("label", T::Str, true, P(prop::LABEL)),
+            p("viewWidth", T::Int, true, P(prop::VIEW_WIDTH)),
+            p("viewHeight", T::Int, true, P(prop::VIEW_HEIGHT)),
+            p("shapes", T::Shapes, true, P(prop::SHAPES)),
+            p("width", T::Size(prop::WIDTH_FRACTION), false, P(prop::WIDTH)),
+            p("maxWidth", T::Size(prop::MAX_WIDTH_FRACTION), false, P(prop::MAX_WIDTH)),
+            p("grow", T::Int, false, P(prop::GROW)),
+        ],
+        children: ChildKind::None,
     },
     ControlSpec {
         name: "Scroll",

@@ -680,11 +680,17 @@ async function checkPrimitives(cdpPort, base) {
     for (const type of ["keyDown", "keyUp"]) await page.send("Input.dispatchKeyEvent", { type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
     await page.waitFor(`document.getElementById("app").innerText.includes("Pressed 1 times") ? true : null`, 3000);
     if ((await page.eval(`${reset}.getAttribute("tabindex")`)) !== "0") throw new Error("the Reset link is not a tab stop after a press");
+    // UI API 1.10: the Canvas is an SVG image in the aspect of its view space.
+    const svg = await page.eval(`(() => { const s = document.querySelector("#app svg.pl-canvas"); const r = s.getBoundingClientRect();
+      return { role: s.getAttribute("role"), label: s.getAttribute("aria-label"), shapes: s.children.length, aspect: r.width / r.height }; })()`);
+    if (svg.role !== "img" || svg.label !== "A sun over five bars" || svg.shapes !== 9 || Math.abs(svg.aspect - 2) > 0.02) {
+      throw new Error(`the canvas: ${JSON.stringify(svg)}`);
+    }
     // UI API 1.7: the hover style of a card (a generated class) colors its border.
     const inbox = `[...document.querySelectorAll("#app [role=button]")].find((e) => e.getAttribute("aria-label") === "Inbox")`;
     const borderOf = `getComputedStyle(${inbox}).borderTopColor`;
     const before = await page.eval(borderOf);
-    const c = await page.eval(`(() => { const r = ${inbox}.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    const c = await page.eval(`(() => { ${inbox}.scrollIntoView({ block: "center" }); const r = ${inbox}.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
     await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: c.x, y: c.y });
     const hovered = await page.eval(borderOf);
     const accent = await page.eval(`(() => { const d = document.createElement("div"); d.style.color = "var(--pl-accent)"; document.body.append(d); const v = getComputedStyle(d).color; d.remove(); return v; })()`);

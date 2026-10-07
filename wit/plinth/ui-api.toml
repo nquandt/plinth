@@ -4,7 +4,7 @@
 # enum ids. The compiler, the guest runtime and the host all generate their
 # constants from it. Never reuse or renumber an id inside one major version.
 
-version = "1.9"
+version = "1.10"
 
 [controls]
 screen = 1
@@ -40,6 +40,7 @@ box = 30           # a layout box: flex direction, gap, padding, size, token col
 span = 31          # styled text
 pressable = 32     # a box that is a button or a link (label and onPress required)
 scroll = 33        # a box that scrolls along its direction
+canvas = 34        # UI API 1.10: shapes in a view space that scales to the box (U4)
 
 [props]
 title = 1        # string
@@ -119,6 +120,15 @@ top = 73               # int, spacing units from the top of the parent
 left = 74              # int, spacing units from the left of the parent
 right = 75             # int, spacing units from the right of the parent
 bottom = 76            # int, spacing units from the bottom of the parent
+# UI API 1.10, Canvas (docs/UI-ADVANCED.md U4). The shapes use their own
+# coordinate space (view-width x view-height); the canvas keeps its aspect
+# ratio and scales the space to its width.
+view-width = 77        # int, the width of the view space
+view-height = 78       # int, the height of the view space
+shapes = 79            # string: shapes joined with U+001E; each shape is fields
+                       # joined with U+001F: "r" x y w h color | "c" cx cy r color |
+                       # "l" x1 y1 x2 y2 color width | "t" x y color size text
+                       # (colors are token names such as "accent" or "text.muted")
 
 [events]
 press = 1        # value: null

@@ -1221,7 +1221,26 @@ impl PlinthRoot {
             ControlKind::Span => self.render_span(node, t),
             ControlKind::Pressable => self.render_pressable(node, t, cx),
             ControlKind::Scroll => self.render_scroll(node, t, cx),
+            ControlKind::Canvas => self.render_canvas(node, t),
         }
+    }
+
+    /// A Canvas (UI API 1.10): shapes in a view space that scales to the width.
+    fn render_canvas(&self, node: &Node, t: &Tokens) -> AnyElement {
+        let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
+        warn_if_unlabeled("Canvas", node.id, &label);
+        let vw = node.prop(prop::VIEW_WIDTH).and_then(Value::as_int).unwrap_or(100) as f32;
+        let vh = node.prop(prop::VIEW_HEIGHT).and_then(Value::as_int).unwrap_or(100) as f32;
+        let shapes = crate::canvas::parse(node.str_prop(prop::SHAPES).unwrap_or(""));
+        let style = self.primitive_style(node);
+        let mut d = crate::canvas::render(u64::from(node.id), label, vw, vh, shapes, t);
+        if let Some(w) = primitives::size(&style, prop::WIDTH, prop::WIDTH_FRACTION) {
+            d = d.w(w).flex_shrink_0();
+        }
+        if let Some(w) = primitives::size(&style, prop::MAX_WIDTH, prop::MAX_WIDTH_FRACTION) {
+            d = d.max_w(w);
+        }
+        primitives::grow(d, &style).into_any_element()
     }
 
     // -- UI API 1.6: Level 2 styled primitives (docs/UI-ADVANCED.md) --
