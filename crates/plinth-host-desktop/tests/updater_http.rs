@@ -42,7 +42,7 @@ fn signed_package(identity: &PublisherIdentity, id: &str, version: &str) -> Vec<
     let wasm = b"\0asm fake component".to_vec();
     let cfg = ProjectConfig::parse(&format!("id = \"{id}\"\nname = \"App\"\nversion = \"{version}\"\npublisher = \"{}\"\n", identity.name)).unwrap();
     let manifest = cfg.manifest("1.0", "plinth-rt/test", None, &wasm);
-    let mut pkg = Package { manifest, component: wasm, assets: Vec::new(), signature: None };
+    let mut pkg = Package::new(manifest, wasm, Vec::new());
     pkg.signature = Some(plinth_package::signature::sign(&pkg, identity).unwrap());
     pkg.write().unwrap()
 }

@@ -16,6 +16,7 @@
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::io::{Cursor, Read, Write};
 
 pub mod feed;
@@ -286,7 +287,21 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The canonical text of a manifest: the bytes that `Package::write` puts
+/// in `manifest.toml` and that `signature::sign` digests for a package
+/// that was not read from a file. Both use this one function, so the
+/// bytes in the file are always the bytes that were signed.
+pub fn manifest_toml(manifest: &Manifest) -> Result<String> {
+    Ok(toml::to_string(manifest)?)
+}
+
 /// A package in memory.
+///
+/// Make a new package with `Package::new`. `Package::read` also keeps the
+/// raw bytes of `manifest.toml` and `plinth-profile`, and the entries that
+/// the host does not use (`source/…`), so that `write` gives them back
+/// unchanged and `signature::verify` digests the bytes of the file, never
+/// a new serialization.
 #[derive(Debug, Clone)]
 pub struct Package {
     pub manifest: Manifest,
@@ -296,17 +311,77 @@ pub struct Package {
     /// (`docs/HUB.md` §6.1, `signature` module). `None` for an unsigned
     /// package.
     pub signature: Option<Vec<u8>>,
+    /// The raw bytes of `plinth-profile`.
+    profile: Vec<u8>,
+    /// For a package from `read`: the manifest as parsed, and the raw
+    /// bytes of `manifest.toml`. The raw bytes are used while `manifest`
+    /// is equal to the parsed value.
+    read_manifest: Option<(Manifest, Vec<u8>)>,
+    /// The entries that the host does not use (`source/…`). They are kept
+    /// and signed, but never served as assets and never run.
+    other: Vec<(String, Vec<u8>)>,
 }
 
 impl Package {
+    /// A new package with no signature and no other entries.
+    pub fn new(manifest: Manifest, component: Vec<u8>, assets: Vec<(String, Vec<u8>)>) -> Package {
+        Package { manifest, component, assets, signature: None, profile: PROFILE.as_bytes().to_vec(), read_manifest: None, other: Vec::new() }
+    }
+
+    /// The bytes of `manifest.toml`: the raw bytes from the file if the
+    /// manifest did not change after `read`, else `manifest_toml`. `write`
+    /// and `signature::sign`/`verify` all use this function.
+    pub fn manifest_bytes(&self) -> Result<Cow<'_, [u8]>> {
+        match &self.read_manifest {
+            Some((parsed, raw)) if *parsed == self.manifest => Ok(Cow::Borrowed(raw)),
+            _ => Ok(Cow::Owned(manifest_toml(&self.manifest)?.into_bytes())),
+        }
+    }
+
+    /// The raw bytes of `plinth-profile`.
+    pub fn profile_bytes(&self) -> &[u8] {
+        &self.profile
+    }
+
+    /// The entries that the host does not use. The host never serves them
+    /// and never runs them.
+    pub fn other_entries(&self) -> &[(String, Vec<u8>)] {
+        &self.other
+    }
+
+    /// Adds an entry that the host does not use (for example `source/…`).
+    pub fn add_other_entry(&mut self, path: String, bytes: Vec<u8>) -> Result<()> {
+        check_path(&path)?;
+        if is_reserved_entry(&path) || path.starts_with("assets/") || path == self.manifest.entry {
+            bail!("`{path}` cannot be an other entry");
+        }
+        self.other.push((path, bytes));
+        Ok(())
+    }
+
+    /// Every entry except `signature.json`, as (path, bytes): the entries
+    /// that the signature covers (`signature` module).
+    pub fn signed_entries(&self) -> Result<Vec<(String, Cow<'_, [u8]>)>> {
+        let mut out = vec![
+            ("plinth-profile".to_owned(), Cow::Borrowed(&self.profile[..])),
+            ("manifest.toml".to_owned(), self.manifest_bytes()?),
+            (self.manifest.entry.clone(), Cow::Borrowed(&self.component[..])),
+        ];
+        for (path, bytes) in self.assets.iter().chain(&self.other) {
+            out.push((path.clone(), Cow::Borrowed(&bytes[..])));
+        }
+        Ok(out)
+    }
+
     pub fn write(&self) -> Result<Vec<u8>> {
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        check_entry_name(&self.manifest.entry)?;
         zip.start_file("plinth-profile", stored)?;
-        zip.write_all(PROFILE.as_bytes())?;
+        zip.write_all(&self.profile)?;
         zip.start_file("manifest.toml", opts)?;
-        zip.write_all(toml::to_string(&self.manifest)?.as_bytes())?;
+        zip.write_all(&self.manifest_bytes()?)?;
         zip.start_file(self.manifest.entry.as_str(), opts)?;
         zip.write_all(&self.component)?;
         for (path, bytes) in &self.assets {
@@ -314,6 +389,11 @@ impl Package {
             if !path.starts_with("assets/") {
                 bail!("asset `{path}` must be under assets/");
             }
+            zip.start_file(path.as_str(), opts)?;
+            zip.write_all(bytes)?;
+        }
+        for (path, bytes) in &self.other {
+            check_path(path)?;
             zip.start_file(path.as_str(), opts)?;
             zip.write_all(bytes)?;
         }
@@ -372,8 +452,10 @@ impl Package {
         if String::from_utf8_lossy(&profile).trim() != PROFILE {
             bail!("the package profile is not `{PROFILE}`");
         }
-        let manifest: Manifest = toml::from_str(std::str::from_utf8(&manifest.context("the package has no manifest.toml")?)?)
+        let manifest_raw = manifest.context("the package has no manifest.toml")?;
+        let manifest: Manifest = toml::from_str(std::str::from_utf8(&manifest_raw).context("manifest.toml is not UTF-8")?)
             .context("manifest.toml is not valid")?;
+        check_entry_name(&manifest.entry)?;
         let pos = files.iter().position(|(n, _)| *n == manifest.entry).context("the manifest entry is not in the package")?;
         let component = files.remove(pos).1;
         if hex(&Sha256::digest(&component)) != manifest.digest {
@@ -381,9 +463,24 @@ impl Package {
         }
         let sig_pos = files.iter().position(|(n, _)| n == "signature.json");
         let signature = sig_pos.map(|i| files.remove(i).1);
-        let assets = files.into_iter().filter(|(n, _)| n.starts_with("assets/")).collect();
-        Ok(Package { manifest, component, assets, signature })
+        let (assets, other) = files.into_iter().partition(|(n, _)| n.starts_with("assets/"));
+        Ok(Package { read_manifest: Some((manifest.clone(), manifest_raw)), manifest, component, assets, signature, profile, other })
     }
+}
+
+/// The entries with a fixed meaning that are not app files.
+fn is_reserved_entry(path: &str) -> bool {
+    matches!(path, "plinth-profile" | "manifest.toml" | "signature.json")
+}
+
+/// The manifest's `entry` must be a safe path that is not a reserved entry
+/// and not an asset.
+fn check_entry_name(entry: &str) -> Result<()> {
+    check_path(entry)?;
+    if is_reserved_entry(entry) || entry.starts_with("assets/") {
+        bail!("the manifest entry `{entry}` is not allowed");
+    }
+    Ok(())
 }
 
 fn check_path(p: &str) -> Result<()> {
@@ -484,18 +581,23 @@ mod tests {
     #[test]
     fn round_trip() {
         let wasm = b"\0asm fake component".to_vec();
-        let pkg = Package {
-            manifest: config().manifest("1.0", "plinth-rt/test", Some("teal".into()), &wasm),
-            component: wasm.clone(),
-            assets: vec![("assets/a.txt".into(), b"hi".to_vec())],
-            signature: None,
-        };
+        let pkg = Package::new(
+            config().manifest("1.0", "plinth-rt/test", Some("teal".into()), &wasm),
+            wasm.clone(),
+            vec![("assets/a.txt".into(), b"hi".to_vec())],
+        );
         let bytes = pkg.write().unwrap();
         assert!(is_package(&bytes));
         let back = Package::read(&bytes).unwrap();
         assert_eq!(back.manifest, pkg.manifest);
         assert_eq!(back.component, wasm);
         assert_eq!(back.assets.len(), 1);
+        // The bytes in the file are the canonical text of the manifest.
+        assert_eq!(&*back.manifest_bytes().unwrap(), manifest_toml(&pkg.manifest).unwrap().as_bytes());
+        // A change after `read` gives the new canonical text.
+        let mut changed = back.clone();
+        changed.manifest.version = "2.0.0".into();
+        assert_eq!(&*changed.manifest_bytes().unwrap(), manifest_toml(&changed.manifest).unwrap().as_bytes());
     }
 
     #[test]
@@ -504,8 +606,7 @@ mod tests {
             assert!(check_path(p).is_err(), "{p}");
         }
         let wasm = b"abc".to_vec();
-        let mut pkg =
-            Package { manifest: config().manifest("1.0", "plinth-rt/test", None, &wasm), component: wasm, assets: Vec::new(), signature: None };
+        let mut pkg = Package::new(config().manifest("1.0", "plinth-rt/test", None, &wasm), wasm, Vec::new());
         pkg.component = b"tampered".to_vec();
         assert!(Package::read(&pkg.write().unwrap()).is_err());
     }

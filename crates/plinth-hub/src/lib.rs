@@ -1265,7 +1265,7 @@ mod tests {
         }
         let cfg = plinth_package::ProjectConfig::parse(&toml).unwrap();
         let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
-        let pkg = plinth_package::Package { manifest, component, assets: Vec::new(), signature: None };
+        let pkg = plinth_package::Package::new(manifest, component, Vec::new());
         pkg.write().unwrap()
     }
 
@@ -1283,7 +1283,7 @@ mod tests {
         let toml = format!("id = \"{id}\"\nname = \"Test App\"\nversion = \"{version}\"\npublisher = \"{}\"\n", identity.name);
         let cfg = plinth_package::ProjectConfig::parse(&toml).unwrap();
         let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
-        let mut pkg = plinth_package::Package { manifest, component, assets: Vec::new(), signature: None };
+        let mut pkg = plinth_package::Package::new(manifest, component, Vec::new());
         pkg.signature = Some(plinth_package::signature::sign(&pkg, identity).unwrap());
         pkg.write().unwrap()
     }

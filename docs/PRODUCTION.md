@@ -113,6 +113,7 @@ Production apps run code from many publishers. This area must be complete before
 | S11 | Security review by a third party (sandbox, consent, signing, web bridge) | 1.0 | Open | |
 | S12 | Hub: signed indexes (H2) and a transparency log | 1.0 | Open | `docs/HUB.md` |
 | S13 | The Hub tells the user when an app's pinned core has a known vulnerability | 1.0 | Open | THREAT-MODEL §6 item 6; needs an advisory list in the core feed. |
+| S14 | The signature covers the manifest | Preview | Done | `plinth.signature/2` digests the raw bytes of `manifest.toml` and every other entry (`docs/HUB.md` §6.1, THREAT-MODEL §4.4). Desktop: `plinth-package` `signature::tests` (a changed `version`, `id`, capability, feed, `core` or profile is refused; `write` puts the signed bytes in the file). Web: `web/test/run-hub-integrity.mjs`. |
 
 ## 8. Platforms
 

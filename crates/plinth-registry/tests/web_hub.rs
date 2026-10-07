@@ -26,7 +26,7 @@ fn compile_counter() -> Vec<u8> {
     });
     let cfg = plinth_package::ProjectConfig::parse("id = \"com.example.counter\"\nname = \"Counter\"\nversion = \"0.1.0\"\npublisher = \"me\"\n").unwrap();
     let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &artifact.app);
-    plinth_package::Package { manifest, component: artifact.app, assets: Vec::new(), signature: None }.write().unwrap()
+    plinth_package::Package::new(manifest, artifact.app, Vec::new()).write().unwrap()
 }
 
 struct Response {
@@ -133,7 +133,7 @@ fn the_package_icon_is_copied_and_the_app_list_url_resolves() {
     let mut manifest = pkg.manifest.clone();
     manifest.id = "com.example.iconic".into();
     manifest.icon = Some("assets/icon.png".into());
-    let bytes = plinth_package::Package { manifest, component: pkg.component, assets: vec![("assets/icon.png".into(), png.clone())], signature: None }
+    let bytes = plinth_package::Package::new(manifest, pkg.component, vec![("assets/icon.png".into(), png.clone())])
         .write()
         .unwrap();
     std::fs::write(dir.join("iconic.plnt"), &bytes).unwrap();

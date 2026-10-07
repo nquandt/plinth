@@ -144,6 +144,44 @@ async function main() {
     );
     await rejects(checkPackage(changed, { ...notesV, sha256: await sha256Hex(changed) }, "dev.plinth.examples.notes"), /does not match the manifest|does not match its signature/);
 
+    // A changed manifest (plinth.signature/2 covers manifest.toml). The
+    // registry document agrees with each changed file, so only the
+    // signature can catch the change.
+    const changeManifest = (edit) =>
+      rezip(pkg(notesV), (entries) => entries.map(([name, data]) => (name === "manifest.toml" ? [name, Buffer.from(edit(data.toString("utf8")))] : [name, data])));
+    const manifestChanges = [
+      ["version", (t) => t.replace('version = "0.1.0"', 'version = "9.9.9"'), { version: "9.9.9" }, "dev.plinth.examples.notes"],
+      ["id", (t) => t.replace('id = "dev.plinth.examples.notes"', 'id = "dev.plinth.examples.counter"'), {}, "dev.plinth.examples.counter"],
+      ["capability", (t) => t.replace('name = "store.kv"', 'name = "net:*"'), {}, "dev.plinth.examples.notes"],
+      ["added capability", (t) => `${t}\n[[capabilities]]\nname = "files"\nrationale = "x"\n`, {}, "dev.plinth.examples.notes"],
+      ["feed", (t) => `${t}\n[updates]\nfeed = "https://evil.example/feed.json"\n`, {}, "dev.plinth.examples.notes"],
+    ];
+    for (const [what, edit, extra, appId] of manifestChanges) {
+      const bytes = await changeManifest((t) => {
+        const out = edit(t);
+        assert.notEqual(out, t, `the edit "${what}" changes the manifest`);
+        return out;
+      });
+      const v = { ...notesV, ...extra, sha256: await sha256Hex(bytes) };
+      await rejects(checkPackage(bytes, v, appId), /does not match its signature/, `a changed manifest: ${what}`);
+    }
+    // An old signature schema gets a clear message.
+    const oldSchema = await rezip(pkg(notesV), (entries) =>
+      entries.map(([name, data]) => {
+        if (name !== "signature.json") return [name, data];
+        const sig = JSON.parse(data.toString("utf8"));
+        sig.schema = "plinth.signature/1";
+        return [name, Buffer.from(JSON.stringify(sig))];
+      }),
+    );
+    await rejects(checkPackage(oldSchema, { ...notesV, sha256: await sha256Hex(oldSchema) }, "dev.plinth.examples.notes"), /old format.*plinth sign/, "plinth.signature/1");
+    // An added entry is covered too.
+    const added = await rezip(pkg(notesV), (entries) => [["extra.txt", Buffer.from("x")], ...entries]);
+    await rejects(checkPackage(added, { ...notesV, sha256: await sha256Hex(added) }, "dev.plinth.examples.notes"), /does not match its signature/, "an added entry");
+    // Two entries with one name.
+    const twice = await rezip(pkg(notesV), (entries) => [...entries, entries.find(([n]) => n === "manifest.toml")]);
+    await rejects(checkPackage(twice, { ...notesV, sha256: await sha256Hex(twice) }, "dev.plinth.examples.notes"), /two times/, "a duplicate entry");
+
     // The core digest from the core list.
     const cores = JSON.parse(readFileSync(path.join(reg, "cores", "index.json"), "utf8")).cores;
     const coreDir = readdirSync(path.join(reg, "cores")).find((d) => d !== "index.json");
@@ -151,7 +189,7 @@ async function main() {
     await checkCore(coreBytes, cores[0]);
     await rejects(checkCore(coreBytes.slice(1), cores[0]), /does not match the registry digest/);
 
-    console.log("run-hub-integrity.mjs: ok (digests, manifest, Ed25519 signature, not-checked mode, core digest)");
+    console.log("run-hub-integrity.mjs: ok (digests, manifest, Ed25519 signature over every entry, changed manifests refused, not-checked mode, core digest)");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -34,7 +34,7 @@ fn counter_package(publisher: &str) -> Vec<u8> {
     ))
     .unwrap();
     let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
-    plinth_package::Package { manifest, component, assets: Vec::new(), signature: None }.write().unwrap()
+    plinth_package::Package::new(manifest, component, Vec::new()).write().unwrap()
 }
 
 fn plinth() -> Command {

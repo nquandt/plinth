@@ -13,7 +13,7 @@ Status of this file: first version, 2026-10-07.
 | Host interfaces (`wit/plinth/app.wit`) | `plinth:app@1.0.0`, plus the core minor that added each item | SPEC §8.1, §3 below | Hosts with old cores |
 | `.plnt` container | `plinth-profile` (`plinth/1`) | SPEC §10.1, §4 below | Hosts with old packages |
 | Manifest (`manifest.toml`) | Part of `plinth/1` | SPEC §10.2, §4 below | Hosts with old and new packages |
-| Signature (`signature.json`) | `schema = "plinth.signature/1"` | `docs/HUB.md` §6.1 | Hosts and the Hub |
+| Signature (`signature.json`) | `schema = "plinth.signature/2"` | `docs/HUB.md` §6.1 | Hosts and the Hub |
 | Update feed (`feed.json`) | Its `schema` field | `docs/UPDATES.md` §7 | Updaters with old and new feeds |
 | Plinth TS (the language and `plinth:*` modules) | The compiler version | SPEC §4, §5 below | The compiler with old sources |
 | Project files (`plinth.toml`, CLI commands) | The CLI version | SPEC §13 | The CLI with old projects |

@@ -69,8 +69,9 @@ async function ed25519Verify(publicKey, signature, message) {
 }
 
 /**
- * Checks `signature.json` of a package (`plinth-package/src/signature.rs`):
- * the digest of each entry, the publisher, and the Ed25519 signature over
+ * Checks `signature.json` of a package (`plinth-package/src/signature.rs`,
+ * schema `plinth.signature/2`): the digest of each entry (also the raw
+ * bytes of `manifest.toml`), the publisher, and the Ed25519 signature over
  * the canonical statement. Returns `{ status, key, publisher, note }`:
  * - `verified`: the signature is correct.
  * - `not-checked`: the entry digests are correct, but this browser cannot
@@ -85,13 +86,20 @@ export async function checkSignature(zip, manifest, sigBytes, { canVerify } = {}
   } catch {
     throw new Error("signature.json is not valid JSON");
   }
-  if (file?.schema !== "plinth.signature/1") throw new Error(`signature.json has an unknown schema "${file?.schema}"`);
+  if (file?.schema === "plinth.signature/1") {
+    throw new Error("this package was signed with an old format (plinth.signature/1); sign it again with plinth sign");
+  }
+  if (file?.schema !== "plinth.signature/2") throw new Error(`signature.json has an unknown schema "${file?.schema}"`);
   if (file.publisher !== manifest.publisher) {
     throw new Error(`the manifest's publisher ("${manifest.publisher}") does not match the signature's ("${file.publisher}")`);
   }
+  // `plinth.signature/2` covers every entry except `signature.json`: the
+  // raw bytes of `manifest.toml` and `plinth-profile` too. Directory
+  // entries hold no bytes; the Rust reader skips them too.
   const expected = {};
   for (const name of zip.names()) {
-    if (name === manifest.entry || name.startsWith("assets/")) expected[name] = await sha256Hex(await zip.read(name));
+    if (name === "signature.json" || name.endsWith("/")) continue;
+    expected[name] = await sha256Hex(await zip.read(name));
   }
   if (canonicalJson(expected) !== canonicalJson(file.digests ?? {})) {
     throw new Error("the package does not match its signature (a byte changed, or an entry was added or removed)");

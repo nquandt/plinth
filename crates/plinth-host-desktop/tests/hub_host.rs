@@ -34,7 +34,7 @@ fn package(id: &str, version: &str, caps: &[(&str, &str)]) -> Vec<u8> {
     }
     let cfg = plinth_package::ProjectConfig::parse(&toml).unwrap();
     let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &artifact.app);
-    plinth_package::Package { manifest, component: artifact.app, assets: Vec::new(), signature: None }.write().unwrap()
+    plinth_package::Package::new(manifest, artifact.app, Vec::new()).write().unwrap()
 }
 
 #[test]

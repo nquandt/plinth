@@ -52,6 +52,9 @@ function readCentralDirectory(bytes) {
     const commentLen = readU16(view, off + 32);
     const localHeaderOffset = readU32(view, off + 42);
     const name = new TextDecoder().decode(bytes.subarray(off + 46, off + 46 + nameLen));
+    // Two entries with one name could give different bytes to different
+    // readers; the Rust reader refuses them too.
+    if (entries.has(name)) throw new Error(`the package has the entry \`${name}\` two times`);
     entries.set(name, { method, compSize, uncompSize, localHeaderOffset });
     off += 46 + nameLen + extraLen + commentLen;
   }
