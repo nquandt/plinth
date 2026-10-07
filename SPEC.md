@@ -202,7 +202,8 @@ The compiler rejects these features, and each one has a clear error message and 
 | `plinth:core` | `int`, `Math`, `JSON` (typed `parse<T>` with a schema, and `stringify`), string helpers, `console.log` (dev only) |
 | `plinth:ui` | Control components (§6.3), `signal`, `computed`, `effect`, `navigate`, `app()` entry |
 | `plinth:store` | key-value store, simple SQL (SQLite) — capability `store.kv`, `store.sql` |
-| `plinth:fs` | user-picked file tokens, app-private data directory — capability `fs.*` |
+| `plinth:fs` | user-picked file tokens — capability `fs.pick` |
+| `plinth:files` | text files in the app's private space (core 1.11, docs/STORAGE.md) — capability `files.private` |
 | `plinth:net` | `fetch`-like HTTP and WebSocket — capability `net:<host pattern>` |
 | `plinth:time` | clock, timers, `sleep` |
 | `plinth:clipboard`, `plinth:notify`, `plinth:share`, `plinth:dialog` | as the names say |
@@ -732,7 +733,7 @@ A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version i
 ## 11. Security and capabilities
 
 - **Default deny.** A package can do nothing outside its own UI until the user grants its declared capabilities.
-- **Capability names** (v0): `store.kv`, `store.sql`, `fs.pick` (user-picked files, delivered as tokens, never paths), `fs.app-data`, `net:<host-pattern>`, `clipboard.read`, `clipboard.write`, `notify`, `ui.canvas`, `ui.window.multi`, `camera`, `microphone`, `location` (later).
+- **Capability names** (v0): `store.kv`, `store.sql`, `fs.pick` (user-picked files, delivered as tokens, never paths), `files.private` (the app's private space, `docs/STORAGE.md`), `net:<host-pattern>`, `clipboard.read`, `clipboard.write`, `notify`, `ui.canvas`, `ui.window.multi`, `camera`, `microphone`, `location` (later).
 - Each capability in the manifest must have a `rationale`. The consent screen shows it.
 - Every host API call passes through `Policy::check(app, capability)`. Denial reasons are distinct: `undeclared`, `refused`, `unsupported`.
 - Grants are stored per app id and per publisher key. A new version that asks for new capabilities asks the user again.

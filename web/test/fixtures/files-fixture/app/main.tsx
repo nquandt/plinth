@@ -33,7 +33,7 @@ async function readSecret(): Promise<void> {
     const t = await read("secret.md");
     result.set("done:" + t);
   } catch (e) {
-    result.set("done:err:" + e.message);
+    result.set("done:err:" + (e as Error).message);
   }
 }
 
@@ -42,7 +42,7 @@ async function listRoot(): Promise<void> {
     const entries = await list("");
     result.set("done:list:" + entries.length);
   } catch (e) {
-    result.set("done:err:" + e.message);
+    result.set("done:err:" + (e as Error).message);
   }
 }
 
@@ -53,14 +53,14 @@ async function tricks(): Promise<void> {
       const t = await read(p);
       r = r + "read:" + t + ";";
     } catch (e) {
-      r = r + e.message + ";";
+      r = r + (e as Error).message + ";";
     }
   }
   try {
     await write("../escape.txt", "x");
     r = r + "escaped;";
   } catch (e) {
-    r = r + e.message + ";";
+    r = r + (e as Error).message + ";";
   }
   result.set("done:" + r);
 }

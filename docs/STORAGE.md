@@ -1,6 +1,6 @@
 # Storage design (draft)
 
-Status: draft for discussion (2026-10-06). Nothing in this document is built yet, except `store.kv` and `fs.pick` in the SPEC.
+Status: draft for discussion (2026-10-06). Built: `store.kv`, and `plinth:files` on the private space (core 1.11, `files.private`: `read`, `write`, `list`, `stat`, `remove` of text files; local folder on the desktop, the page's IndexedDB on the web; path rules and isolation tests; `docs/host-apis.md` "plinth:files"). Not built: granted spaces (`vault`), `watch`, sync, remote providers, the Hub UI for spaces, the cross-app capability.
 
 This document gives one model for app data in Plinth. The model must cover many scenarios: private app data, sync across devices, the app vendor's cloud, storage that the user chooses, folders that other tools also use, shared team storage, and more. §1 lists the scenarios. §2 gives the model. §3 gives the rules that keep apps apart. §4 shows how each scenario maps to the model. §6 is the first slice to build.
 
