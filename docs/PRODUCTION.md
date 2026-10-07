@@ -149,6 +149,7 @@ Production apps run code from many publishers. This area must be complete before
 | T4 | A debugger or an inspector: the UI tree, signals, host calls | Beta | Open | |
 | T5 | A profiler view: frame times, GC, memory (`PLINTH_TRACE_RENDER` as a start) | 1.0 | Open | |
 | T6 | `plinth publish` to a registry | Beta | Partial | SPEC §12, `plinth hub` |
+| T7 | `plinth build --release` optimizes the app module with Binaryen `wasm-opt` (and the release core) | Beta | Open | SPEC §5.1 step 10. Measure size and speed before and after; keep the result deterministic. |
 
 ## 11. Documentation
 
