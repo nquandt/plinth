@@ -13,7 +13,7 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 
 **Do not push.** The owner's GitHub Actions minutes are used up (2026-10-06). Keep commits local on `master`. The gate is a local pass of `bash scripts/ci-local.sh full` (CI runs the same script) and, for UI or web changes, `node web/test/run-a11y.mjs`. When minutes come back, ask the owner before a push and push in one batch. The owner wants self-hosted runners later.
 
-State at this handoff (2026-10-06, night): `master` is about 152 commits ahead of `origin/master`. `ci-local.sh full --shoot` and `run-a11y.mjs` pass on it. The working tree is clean. The installed `plinth` is current (reinstalled after the last commit).
+State at this handoff (2026-10-07): `master` is about 153 commits ahead of `origin/master`. `ci-local.sh full` and `run-a11y.mjs` pass on it (the primitives check in `run-a11y.mjs` timed out at page load one time in three runs; it passed when run again). The working tree is clean. The installed `plinth` is current (reinstalled after the last commit).
 
 **Owner decisions (keep them):**
 
@@ -153,6 +153,8 @@ The owner played Pong: about 63 ticks per second, but the ball "seems a little j
 **How to measure:** add a frame-time histogram to Pong's status line or to `PLINTH_TRACE_RENDER` (the time between presented frames, not only the tick count). Check that the ball's x position changes by the same amount each frame. Record the numbers in `docs/VALIDATION.md` §6 and in GAPS "Games". Already done: the runtime sends no op for an unchanged value (GAPS G8, 9 → 1.4 ops per tick).
 
 ## 10. Next steps (in order)
+
+0. **Robustness (2026-10-07, `docs/GAPS.md` "Robustness"):** done: a compiler mutation test (`tests/robustness.rs`; run more cases with `PLINTH_FUZZ_ITERS=40000`), a large stack for each compile (`stacker`) and a nesting limit (`PL1000`), JSON of recursive types, limit tests, plain stop reasons on both hosts, and the web host's stopped state and banners. Open: R1 a time limit on the web (a Worker per app), R2 a web memory cap, R4 structure-aware mutations.
 
 1. **Smooth motion (§9), the rest:** steps 4–6 (transitions, a release build for play, frame cost). Ask the owner to play Pong again first.
 2. **Pointer, the rest (GAPS G4, 7G-6..8):** a secondary button or `onContextMenu`; children in `Dialog`; stroke shapes on `Canvas` (compile-time only); a modal overlay that blocks pointer events to the boxes under it on the desktop; `onDrag` and drop targets (U3).
