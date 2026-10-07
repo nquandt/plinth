@@ -130,7 +130,7 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 
 - Commit after each tested step. No GPG signing; no attribution lines.
 - The owner may edit `SPEC.md`; diff it before you change it.
-- Parallel agents: sibling worktrees `C:\repos\plinth-wt-<name>` (so `../gpui-ce` resolves), one or two items per agent, a full `ci-local.sh` pass before it reports, never a push. Merge locally, regenerate `web/plinth.js` on a conflict, run the script and `run-a11y.mjs`, then report. Old merged worktrees still exist (`-a11y`, `-ci`, `-hostapi`, `-inputs`, `-lang`, `-rtfix`, `-structure`); they can be removed.
+- Parallel agents: worktrees `U:\plinth-wt\<name>` (`U:\plinth-wt\gpui-ce` is a junction, so `../gpui-ce` resolves; `C:` has little space), one or two items per agent, a full `ci-local.sh` pass before it reports, never a push. Merge locally, regenerate `web/plinth.js` on a conflict, run the script and `run-a11y.mjs`, then report. Old merged worktrees still exist (`-a11y`, `-ci`, `-hostapi`, `-inputs`, `-lang`, `-rtfix`, `-structure`); they can be removed.
 
 ## 9. Smooth motion and performance (owner request, 2026-10-06)
 
