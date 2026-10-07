@@ -25,6 +25,10 @@ env_logger.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 arboard = { version = "3", default-features = false }
+ureq.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 plinth-protocol.workspace = true
@@ -36,3 +40,6 @@ wat = "1"
 # the Hub launch poll loop test (`tests/hub_host.rs`).
 gpui = { workspace = true, features = ["test-support"] }
 plinth-ui.workspace = true
+# A tiny real HTTP server for the updater's integration test
+# (`tests/updater_http.rs`), reusing `plinth registry serve`'s server.
+plinth-registry.workspace = true

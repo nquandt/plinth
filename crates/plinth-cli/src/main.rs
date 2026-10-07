@@ -9,6 +9,7 @@ use std::sync::mpsc;
 use std::time::{Duration, SystemTime};
 
 mod dev_tools;
+mod feed_cmd;
 mod registry_cmd;
 mod web_export;
 
@@ -73,6 +74,8 @@ usage:
   plinth registry serve <folder> [--port N] [--web]
                                    serve a static registry on 127.0.0.1;
                                    --web also serves the web App Hub at /
+  plinth feed add <feed-dir> <app.plnt> [--channel <name>] [--with-core]
+                                   write or update a signed update feed (docs/UPDATES.md §8)
 
 The project directory defaults to the current directory.";
 
@@ -195,6 +198,7 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
         }
         Some("hub") => hub_command(&positional[1..], &args[1..]),
         Some("registry") => registry_command(&positional[1..], &args[1..]),
+        Some("feed") => feed_command(&positional[1..], &args[1..]),
         Some("validate") => {
             let file = positional.get(1).context("usage: plinth validate <file>")?;
             dev_tools::validate_file(Path::new(file))?;
@@ -554,12 +558,27 @@ fn native(input: &Path, out: Option<PathBuf>) -> Result<bool> {
     Ok(true)
 }
 
-/// Runs the payload of a single-file export.
+/// Runs the payload of a single-file export, with the updater
+/// (`docs/UPDATES.md` §8 step 4) if the embedded package has `[updates]`.
 fn run_payload(plnt: Vec<u8>) -> ExitCode {
     hide_own_console();
     plinth_host_desktop::init_logging();
     let name = std::env::current_exe().unwrap_or_default();
-    let result = plinth_host_desktop::HostApp::from_bytes(plnt, &name).and_then(|app| plinth_host_desktop::run(app, None));
+    let picked_update = picked_update_for(&plnt);
+    let bytes = picked_update.as_ref().map(|p| p.bytes.clone()).unwrap_or_else(|| plnt.clone());
+    let result = plinth_host_desktop::HostApp::from_bytes(bytes, &name).and_then(|app| {
+        if let Some(picked) = picked_update {
+            plinth_host_desktop::run_reporting_init(app, None, move |ok| {
+                if ok {
+                    plinth_host_desktop::updater::report_success(&picked.dir, &picked.pick);
+                } else if plinth_host_desktop::updater::report_failure(&picked.dir, &picked.pick) {
+                    eprintln!("[plinth] an update failed to start twice in a row; rolled back to the previous version (docs/UPDATES.md §6)");
+                }
+            })
+        } else {
+            plinth_host_desktop::run(app, None)
+        }
+    });
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -567,6 +586,51 @@ fn run_payload(plnt: Vec<u8>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// What this start runs, when the embedded package has `[updates]`: either
+/// the embedded bytes, or a previously downloaded, verified set
+/// (`docs/UPDATES.md` §8 step 4). Also carries what `run_payload` needs to
+/// report the result back to the rollback state machine.
+struct PickedUpdate {
+    bytes: Vec<u8>,
+    dir: PathBuf,
+    pick: plinth_host_desktop::updater::Pick,
+}
+
+/// Decides what this start of a `plinth native` executable should run,
+/// and starts a background feed check for the *next* start
+/// (`docs/UPDATES.md` §8 step 4: the check never blocks the first frame).
+/// Returns `None` when the embedded package has no `[updates]`, or is
+/// unsigned (an unsigned app has no key to check update continuity
+/// against, so it never takes updates) -- `run_payload` then runs the
+/// embedded bytes exactly as before this feature existed.
+fn picked_update_for(embedded: &[u8]) -> Option<PickedUpdate> {
+    let pkg = plinth_package::Package::read(embedded).ok()?;
+    let updates = pkg.manifest.updates.clone()?;
+    let signer = plinth_package::signature::verify(&pkg).ok().flatten()?;
+    let dir = plinth_host_desktop::updater::app_dir(&plinth_host_desktop::updater::updates_dir(), &pkg.manifest.id);
+    let pick = plinth_host_desktop::updater::pick(&dir, &pkg.manifest.version);
+    let bytes = match &pick {
+        plinth_host_desktop::updater::Pick::Embedded => embedded.to_vec(),
+        plinth_host_desktop::updater::Pick::Downloaded(path) => std::fs::read(path).unwrap_or_else(|_| embedded.to_vec()),
+    };
+
+    // `check = "on-start"` is the only policy today (`docs/UPDATES.md` §5).
+    // This never blocks the bytes already chosen above; a newer version it
+    // finds only takes effect on the *next* start.
+    let app_id = pkg.manifest.id.clone();
+    let version = pkg.manifest.version.clone();
+    let key = signer.key.clone();
+    let check_dir = dir.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = plinth_host_desktop::updater::check(&check_dir, &app_id, &updates.feed, updates.channel.as_str(), &version, &key, plinth_host_desktop::updater::http_fetch)
+        {
+            eprintln!("[plinth] update check failed: {e:#}");
+        }
+    });
+
+    Some(PickedUpdate { bytes, dir, pick })
 }
 
 /// On Windows, a console program that starts from Explorer gets its own
@@ -1058,5 +1122,21 @@ fn registry_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
         }
         Some(other) => bail!("unknown `plinth registry {other}`; use build or serve"),
         None => bail!("usage: plinth registry build|serve <folder>"),
+    }
+}
+
+/// `plinth feed add <feed-dir> <app.plnt> [--channel <name>] [--with-core]`
+/// (`docs/UPDATES.md` §8 step 3).
+fn feed_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
+    match args.first().copied() {
+        Some("add") => {
+            let feed_dir = args.get(1).context("usage: plinth feed add <feed-dir> <app.plnt> [--channel <name>] [--with-core]")?;
+            let package = args.get(2).context("usage: plinth feed add <feed-dir> <app.plnt> [--channel <name>] [--with-core]")?;
+            let channel = raw.iter().position(|a| *a == "--channel").and_then(|i| raw.get(i + 1)).copied().unwrap_or("stable");
+            feed_cmd::add(Path::new(feed_dir), Path::new(package), channel, raw.iter().any(|a| *a == "--with-core"))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(other) => bail!("unknown `plinth feed {other}`; use add"),
+        None => bail!("usage: plinth feed add <feed-dir> <app.plnt>"),
     }
 }

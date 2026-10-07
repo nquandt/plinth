@@ -4929,6 +4929,7 @@ dependencies = [
  "plinth-package",
  "plinth-protocol",
  "plinth-registry",
+ "sha2",
  "wasmparser 0.251.0",
  "wit-component 0.251.0",
 ]
@@ -4981,9 +4982,14 @@ dependencies = [
  "plinth-link",
  "plinth-package",
  "plinth-protocol",
+ "plinth-registry",
  "plinth-runner-wasmtime",
  "plinth-ui",
  "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "sha2",
+ "ureq 3.4.2",
  "wat",
 ]
 

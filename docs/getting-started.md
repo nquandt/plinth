@@ -247,6 +247,55 @@ package, and a host that lacks it tells the user which core to install.
 An app built before this field existed has no `core` entry, which means
 `follow`.
 
+### 7.2 Self-updating executables
+
+A `plinth native` executable can update itself: no reinstall, no
+administrator rights (`docs/UPDATES.md`). You need a publisher key and a
+place to host two small files.
+
+1. Make a publisher key, once, if you do not have one:
+
+   ```sh
+   plinth publisher init --name "Your Name"
+   ```
+
+2. Add `[updates]` to `plinth.toml`:
+
+   ```toml
+   [updates]
+   feed = "https://example.com/myapp/feed.json"
+   channel = "stable"      # or "beta"
+   apply = "next-start"    # or "prompt"
+   ```
+
+3. Build and sign your package, then add it to the feed:
+
+   ```sh
+   plinth build --sign
+   plinth feed add dist/feed dist/myapp.plnt --channel stable
+   ```
+
+   `plinth feed add` writes `feed.json`, `feed.json.sig` and a copy of
+   the package into `dist/feed`. Upload that folder's contents next to
+   each other at the URL you put in `feed`. Running `plinth feed add`
+   again with a newer `plinth.toml` version adds that version to the
+   feed; it never removes or changes an older entry.
+
+4. Make the executable as usual (`plinth native`). It checks the feed in
+   the background the first time it starts (`check = "on-start"`, the
+   only policy today) and runs a newer, verified version from the next
+   start on. A user never runs an installer again.
+
+Rules the host enforces, with no setting to turn them off: an update
+must carry your publisher key (an update signed by a different key, even
+a validly signed one, is refused); a version never goes backward; a
+digest mismatch refuses the file. If an update fails to start twice in a
+row, the host goes back to the previous version on its own and writes a
+line to the log.
+
+`apply = "live"` (replace the running app with no restart) is not built
+yet; `plinth.toml` with it is rejected at build time.
+
 ## 8. Put your app on the web
 
 ```sh
