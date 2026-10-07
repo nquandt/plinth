@@ -157,9 +157,9 @@ function askConsent(entry, version, rows) {
     const dialog = el(
       "dialog",
       { class: "host-dialog", id: "host-consent", "aria-labelledby": "host-consent-title" },
-      el("h2", { id: "host-consent-title" }, `Allow ${entry.name} to use these capabilities?`),
+      el("h2", { id: "host-consent-title" }, `Allow ${entry.name} to do these things?`),
       el("p", { class: "host-meta" }, `Version ${version.version}. ${signer}`),
-      el("p", {}, "A denied capability does not stop the app: the app gets the answer “denied”. You can change this later on the app page of the Hub."),
+      el("p", {}, "If you do not allow something, the app still opens, but that part does not work. You can change this later on the app page in the Hub."),
       form,
     );
     // The answer comes from the button (the submit event), not only from

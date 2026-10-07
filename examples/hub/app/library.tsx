@@ -58,7 +58,7 @@ export default function Library() {
 
   return (
     <Screen
-      title="Library"
+      title="Your apps"
       actions={[
         <Action label="Refresh" icon="refresh" onPress={reload} />,
         <Action label="Check for updates" icon="download" onPress={checkForUpdates} />,
@@ -69,7 +69,7 @@ export default function Library() {
       {updateCount() > 0 ? <Badge label={updateCount() === 1 ? "1 update available" : `${updateCount()} updates available`} tone="success" /> : null}
       {updateStatus() !== "" ? <Text tone="muted">{checkingUpdates() ? "Checking for updates…" : updateStatus()}</Text> : null}
       <Tabs items={groupTabs()} value={groupFilter} />
-      <TextField label="Find in library" placeholder="App name" value={filterText} />
+      <TextField label="Find in your apps" placeholder="App name" value={filterText} />
       <Section title="Apps" footer={countText()}>
         <List
           items={visibleApps()}
@@ -83,7 +83,7 @@ export default function Library() {
               onPress={() => openApp(a.id)}
             />
           )}
-          empty={<Empty title="No apps" message="Find apps on the Discover screen, or add one with `plinth hub add`." />}
+          empty={<Empty title="No apps" message="Find apps in the Store." />}
         />
       </Section>
       <Sheet open={newGroupOpen} title="New group" onClose={() => newGroupOpen.set(false)}>

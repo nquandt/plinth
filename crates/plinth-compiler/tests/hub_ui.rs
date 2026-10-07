@@ -375,7 +375,7 @@ fn the_hub_ui_manages_the_library() {
 
     // The library: every app, with its highest risk as the trailing text,
     // and the number of updates.
-    assert_eq!(h.screen_title(), "Library");
+    assert_eq!(h.screen_title(), "Your apps");
     let badge = h.one(ControlKind::Badge, |_| true);
     assert_eq!(h.tree.get(badge).unwrap().str_prop(prop::LABEL), Some("1 update available"));
     assert!(h.texts().iter().any(|t| t == "1 update is available."), "{:?}", h.texts());
@@ -391,7 +391,7 @@ fn the_hub_ui_manages_the_library() {
     h.fire(tabs, event::CHANGE, "Work".into());
     assert_eq!(h.row_titles(), ["Notes"]);
     h.fire(tabs, event::CHANGE, "All".into());
-    let filter = h.labeled(ControlKind::TextField, "Find in library");
+    let filter = h.labeled(ControlKind::TextField, "Find in your apps");
     h.tree.set_local_prop(filter, prop::VALUE, "wea".into());
     h.fire(filter, event::CHANGE, "wea".into());
     assert_eq!(h.row_titles(), ["Weather"]);
@@ -405,11 +405,11 @@ fn the_hub_ui_manages_the_library() {
     let clip = h.row("Read the clipboard");
     let subtitle = h.tree.get(clip).unwrap().str_prop(prop::SUBTITLE).unwrap().to_owned();
     assert!(subtitle.starts_with("Medium risk · clipboard.read · Not decided yet"), "{subtitle}");
-    let label = h.one(ControlKind::Section, |n| n.str_prop(prop::TITLE) == Some("What this app can do"));
+    let label = h.one(ControlKind::Section, |n| n.str_prop(prop::TITLE) == Some("Permissions"));
     assert_eq!(h.tree.get(label).unwrap().str_prop(prop::FOOTER), Some("This app cannot use the network, read your files."));
 
     // Change a grant with its toggle.
-    let toggle = h.labeled(ControlKind::Toggle, "Allow clipboard.read");
+    let toggle = h.labeled(ControlKind::Toggle, "Allow: Read the clipboard");
     h.fire(toggle, event::CHANGE, Value::Bool(true));
     assert!(lib.lock().unwrap().apps[0].caps[1].4, "the grant reached the backend");
     let clip = h.row("Read the clipboard");
@@ -424,7 +424,7 @@ fn the_hub_ui_manages_the_library() {
     );
     h.fire(h.labeled(ControlKind::Button, "Update to 1.1.0"), event::PRESS, Value::Null);
     h.deliver_completions(1);
-    assert!(h.texts().iter().any(|t| t == "Version 1.1.0 is installed."), "{:?}", h.texts());
+    assert!(h.texts().iter().any(|t| t == "Version 1.1.0 is ready."), "{:?}", h.texts());
     assert!(h.find(ControlKind::Button, |n| n.str_prop(prop::LABEL) == Some("Update to 1.1.0")).is_empty());
     // The new capability is not decided yet: the Hub asks at the next open.
     let sync = h.row("Connect to sync.example.com");
@@ -433,12 +433,12 @@ fn the_hub_ui_manages_the_library() {
 
     // Versions: pin the old one, then run the newest again.
     let v1 = h.row("Version 1.0.0");
-    assert_eq!(h.tree.get(v1).unwrap().str_prop(prop::SUBTITLE), Some("Installed · no capabilities"));
-    assert_eq!(h.tree.get(h.row("Version 1.1.0")).unwrap().str_prop(prop::SUBTITLE), Some("Runs now · no capabilities"));
+    assert_eq!(h.tree.get(v1).unwrap().str_prop(prop::SUBTITLE), Some("On this device · no permissions"));
+    assert_eq!(h.tree.get(h.row("Version 1.1.0")).unwrap().str_prop(prop::SUBTITLE), Some("Runs now · no permissions"));
     h.fire(v1, event::PRESS, Value::Null);
     assert_eq!(lib.lock().unwrap().apps[0].pinned, "1.0.0");
     assert_eq!(h.tree.get(h.row("Version 1.0.0")).unwrap().str_prop(prop::TRAILING), Some("Pinned"));
-    assert!(h.texts().iter().any(|t| t == "Version 1.0.0 · From the source main · com.example.notes"), "{:?}", h.texts());
+    assert!(h.texts().iter().any(|t| t == "Version 1.0.0 · From the store main · com.example.notes"), "{:?}", h.texts());
     h.fire(h.labeled(ControlKind::Button, "Run the newest version"), event::PRESS, Value::Null);
     assert_eq!(lib.lock().unwrap().apps[0].pinned, "");
     assert!(h.find(ControlKind::Button, |n| n.str_prop(prop::LABEL) == Some("Run the newest version")).is_empty());
@@ -470,8 +470,8 @@ fn the_hub_ui_manages_the_library() {
     assert!(!lib.lock().unwrap().apps[0].blocked);
 
     // Remove goes back to the library.
-    h.fire(h.labeled(ControlKind::Action, "Remove from library"), event::PRESS, Value::Null);
-    assert_eq!(h.screen_title(), "Library");
+    h.fire(h.labeled(ControlKind::Action, "Remove from your apps"), event::PRESS, Value::Null);
+    assert_eq!(h.screen_title(), "Your apps");
     assert_eq!(h.row_titles(), ["Weather"]);
 
     // A new group, from the sheet.
@@ -489,8 +489,8 @@ fn the_hub_ui_manages_the_library() {
     h.fire(tabs, event::CHANGE, "All".into());
 
     // Discover: search across sources, with the failing source shown.
-    h.primary("Discover");
-    let query = h.labeled(ControlKind::TextField, "Search sources");
+    h.primary("Store");
+    let query = h.labeled(ControlKind::TextField, "Search the store");
     h.tree.set_local_prop(query, prop::VALUE, "ti".into());
     h.fire(query, event::CHANGE, "ti".into());
     h.fire(h.labeled(ControlKind::Button, "Search"), event::PRESS, Value::Null);
@@ -498,14 +498,14 @@ fn the_hub_ui_manages_the_library() {
     assert!(h.texts().iter().any(|t| t == "1 app found."), "{:?}", h.texts());
     assert_eq!(h.row_titles(), ["broken: cannot reach the source", "Timer"]);
     let timer_row = h.row("Timer");
-    assert_eq!(h.tree.get(timer_row).unwrap().str_prop(prop::TRAILING), Some("Install"));
+    assert_eq!(h.tree.get(timer_row).unwrap().str_prop(prop::TRAILING), Some("Keep"));
 
     // Install: the completion reloads the library.
     h.fire(timer_row, event::PRESS, Value::Null);
     h.deliver_completions(1);
-    assert!(h.texts().iter().any(|t| t == "Timer is in your library."), "{:?}", h.texts());
-    assert_eq!(h.tree.get(h.row("Timer")).unwrap().str_prop(prop::TRAILING), Some("In library"));
-    h.primary("Library");
+    assert!(h.texts().iter().any(|t| t == "Timer is in your apps."), "{:?}", h.texts());
+    assert_eq!(h.tree.get(h.row("Timer")).unwrap().str_prop(prop::TRAILING), Some("In your apps"));
+    h.primary("Your apps");
     assert_eq!(h.row_titles(), ["Weather", "Timer"]);
 }
 
@@ -530,6 +530,6 @@ fn the_hub_ui_without_a_backend_shows_the_denial() {
         tree.apply(&commit).unwrap();
     }
     let h = Harness { guest, tree, _runner: runner };
-    assert!(h.texts().iter().any(|t| t == "The host refused to show the library (denied:unsupported)."), "{:?}", h.texts());
+    assert!(h.texts().iter().any(|t| t == "The host refused to show your apps (denied:unsupported)."), "{:?}", h.texts());
     assert!(h.row_titles().is_empty());
 }

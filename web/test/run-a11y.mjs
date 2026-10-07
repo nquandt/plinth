@@ -878,7 +878,7 @@ async function checkHub(cdpPort) {
     };
     const library = async () => {
       if (await hub.eval(`!!document.querySelector("#app .pl-back")`)) await hub.eval(`document.querySelector("#app .pl-back").click()`);
-      await click(`[...document.querySelectorAll("#app .pl-nav-item")].find((b) => b.textContent === "Library")`, "Library tab");
+      await click(`[...document.querySelectorAll("#app .pl-nav-item")].find((b) => b.textContent === "Your apps")`, "Your apps tab");
       await hub.waitFor(`document.querySelector("#app .pl-row") ? true : null`, 10000);
     };
     /** Selects the app in the Hub app's library and presses Open. */
@@ -911,7 +911,7 @@ async function checkHub(cdpPort) {
     await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
 
     // Discover: search the registry.
-    await click(`[...document.querySelectorAll("#app .pl-nav-item")].find((b) => b.textContent === "Discover")`, "Discover tab");
+    await click(`[...document.querySelectorAll("#app .pl-nav-item")].find((b) => b.textContent === "Store")`, "Store tab");
     await hub.waitFor(`document.querySelector("#app input[type=text]") ? true : null`, 10000);
     await hub.eval(`(() => { const i = document.querySelector("#app input[type=text]"); i.value = "util"; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
     await click(button("Search"), "Search button");
@@ -945,7 +945,7 @@ async function checkHub(cdpPort) {
     await openApp("Utility");
     await page.waitFor(`document.body.dataset.consent === ${JSON.stringify(ID("utility"))} ? true : null`, 10000);
     const consent = await page.eval(`document.getElementById("host-consent").innerText`);
-    for (const want of ["Allow Utility to use these capabilities?", "Read the clipboard.", "Medium risk", "Paste text into the input box."]) {
+    for (const want of ["Allow Utility to do these things?", "Read the clipboard.", "Medium risk", "Paste text into the input box."]) {
       if (!consent.includes(want)) throw new Error(`the consent window has no "${want}":\n${consent}`);
     }
     if (consent.includes("Write to the clipboard")) throw new Error("the consent window asks for a low-risk capability");
@@ -1003,7 +1003,7 @@ async function checkHub(cdpPort) {
     await closeApp();
 
     // The Hub app turns store.kv off for notes: notes runs and reads nothing.
-    await hub.eval(`[...document.querySelectorAll("#app label.pl-toggle")].find((l) => l.textContent.includes("Allow store.kv")).querySelector("input").click()`);
+    await hub.eval(`[...document.querySelectorAll("#app label.pl-toggle")].find((l) => l.textContent.includes("Allow: Save data on this device")).querySelector("input").click()`);
     await hub.waitFor(`document.getElementById("app").innerText.includes("Not allowed") ? true : null`, 5000);
     await click(button("Open"), "Open button");
     await waitRunning(ID("notes"));

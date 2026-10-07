@@ -41,7 +41,7 @@ function signer(): string {
 
 function aboutText(): string {
   const a = selectedApp();
-  return a === null ? "This app is no longer in the library." : publisherText(a);
+  return a === null ? "This app is no longer in your apps." : publisherText(a);
 }
 
 function versionText(): string {
@@ -49,7 +49,7 @@ function versionText(): string {
   if (a === null) {
     return "";
   }
-  const source = a.source === "" ? "Added from a file" : "From the source " + a.source;
+  const source = a.source === "" ? "Added from a file" : "From the store " + a.source;
   return `Version ${a.version} · ${source} · ${a.id}`;
 }
 
@@ -105,8 +105,8 @@ function versionsFooter(): string {
 
 function versionSubtitle(v: HubVersion): string {
   const a = selectedApp();
-  const running = a !== null && a.version === v.version ? "Runs now" : "Installed";
-  const caps = v.capabilities.length === 0 ? "no capabilities" : v.capabilities.join(", ");
+  const running = a !== null && a.version === v.version ? "Runs now" : "On this device";
+  const caps = v.capabilities.length === 0 ? "no permissions" : v.capabilities.join(", ");
   return `${running} · ${caps}`;
 }
 
@@ -157,12 +157,12 @@ export default function AppDetail() {
     const id = selectedId();
     const version = availableUpdate();
     busy.set(true);
-    status.set(`Installing version ${version}…`);
+    status.set(`Getting version ${version}…`);
     update(id, (error) => {
       busy.set(false);
       refreshApp(id);
       if (error === null) {
-        status.set(`Version ${version} is installed.`);
+        status.set(`Version ${version} is ready.`);
       } else {
         status.set(`Could not update: ${error}`);
       }
@@ -180,7 +180,7 @@ export default function AppDetail() {
       title={title()}
       actions={[
         <Action label={isBlocked() ? "Unblock" : "Block"} icon="lock" onPress={toggleBlock} />,
-        <Action label="Remove from library" icon="trash" role="destructive" onPress={removeApp} />,
+        <Action label="Remove from your apps" icon="trash" role="destructive" onPress={removeApp} />,
       ]}
     >
       <Section title="About">
@@ -202,13 +202,13 @@ export default function AppDetail() {
       ) : null}
       {busy() ? <Progress label="Working" /> : null}
       {status() !== "" ? <Text tone="muted">{status()}</Text> : null}
-      <Section title="What this app can do" footer={footer()}>
+      <Section title="Permissions" footer={footer()}>
         <List
           items={capabilities()}
           key={(c) => c.name}
           row={(c) => (
             <Row title={capabilityTitle(c)} subtitle={capabilitySubtitle(c)} trailing={riskLabel(c.risk)}>
-              <Toggle label={"Allow " + c.name} value={c.allowed} onChange={(v) => changeGrant(c.name, v)} />
+              <Toggle label={"Allow: " + capabilityTitle(c)} value={c.allowed} onChange={(v) => changeGrant(c.name, v)} />
             </Row>
           )}
           empty={<Empty title="Nothing to allow" message="This app only shows its own screens." />}
@@ -230,7 +230,7 @@ export default function AppDetail() {
         />
         {pinned() !== "" ? <Button label="Run the newest version" onPress={() => pinTo("")} /> : null}
       </Section>
-      <Section title="Groups" footer="Make a group with New group on the Library screen.">
+      <Section title="Groups" footer="Make a group with New group on the Your apps screen.">
         {groups().map((g) => (
           <Checkbox label={g} value={inGroup(g)} onChange={(v) => changeGroup(g, v)} />
         ))}

@@ -159,7 +159,7 @@ These protections are always on and need no decision:
 
 Each step is useful on its own:
 
-1. **Plain words and defaults:** the UI words of §2 and the defaults of §4 in the current Hub and consent screens.
+1. **Plain words and defaults:** the UI words of §2 and the defaults of §4 in the current Hub and consent screens. *Status (2026-10-06): the words are done in the Hub app ("Your apps", "Store", "Permissions", "Keep", "Allow: <what it does>") and the web consent window; the desktop consent window already used plain words. The defaults of §4 that exist today (low risk allowed with no prompt, medium and high asked) were already in place; the others need the Privacy page and sync.*
 2. **Try and Keep:** browse mode in the Hub and the web Hub (scenarios A and B).
 3. **Privacy page:** permissions with last use, storage size, Remove, the "reads AND sends" mark, the 90-day expiry (G, H).
 4. **Sync through a synced folder**, with end-to-end encryption, the recovery kit and device pairing (C, D, E simple path).

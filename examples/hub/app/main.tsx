@@ -11,8 +11,8 @@ import AppDetail from "./detail";
 export default app({
   accent: "blue",
   screens: {
-    library: { title: "Library", icon: "house", component: Library },
-    discover: { title: "Discover", icon: "search", component: Discover },
+    library: { title: "Your apps", icon: "house", component: Library },
+    discover: { title: "Store", icon: "search", component: Discover },
     // Not in `primary`: the library and the search results push it.
     app: { title: "App", component: AppDetail },
   },

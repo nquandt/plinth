@@ -94,7 +94,7 @@ export function checkForUpdates(): void {
     const n = updateCount();
     let text = n === 0 ? "All apps are up to date." : n === 1 ? "1 update is available." : `${n} updates are available.`;
     if (result !== null && result.errors.length > 0) {
-      text = text + " Some sources did not answer: " + result.errors.join("; ");
+      text = text + " Some stores did not answer: " + result.errors.join("; ");
     }
     updateStatus.set(text);
   });
@@ -121,12 +121,12 @@ export function refreshApp(id: string): void {
 export function reload(): void {
   const json = listApps();
   if (json === null) {
-    loadError.set("The host refused to show the library (" + (lastError() ?? "denied") + ").");
+    loadError.set("The host refused to show your apps (" + (lastError() ?? "denied") + ").");
     apps.set([]);
   } else {
     const parsed = JSON.parse<HubApp[]>(json);
     if (parsed === null) {
-      loadError.set("The host sent a library that this Hub cannot read.");
+      loadError.set("The host sent a list of apps that this Hub cannot read.");
       apps.set([]);
     } else {
       loadError.set("");

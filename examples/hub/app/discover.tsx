@@ -29,7 +29,7 @@ export default function Discover() {
   const busy = signal(false);
   const hits = signal<SearchHit[]>([]);
   const errors = signal<string[]>([]);
-  const status = signal("Search the sources that this Hub knows (plinth hub source add).");
+  const status = signal("Search the stores that this Hub knows.");
 
   const runSearch = () => {
     busy.set(true);
@@ -44,7 +44,7 @@ export default function Discover() {
       }
       const result = JSON.parse<SearchResult>(json);
       if (result === null) {
-        status.set("A source sent a result that this Hub cannot read.");
+        status.set("A store sent a result that this Hub cannot read.");
         return;
       }
       hits.set(result.hits);
@@ -62,22 +62,22 @@ export default function Discover() {
       return;
     }
     busy.set(true);
-    status.set(`Installing ${h.name}…`);
+    status.set(`Adding ${h.name}…`);
     install(h.id, (error) => {
       busy.set(false);
       if (error === null) {
-        status.set(`${h.name} is in your library.`);
+        status.set(`${h.name} is in your apps.`);
         reload();
       } else {
-        status.set(`Could not install ${h.name}: ${error}`);
+        status.set(`Could not add ${h.name}: ${error}`);
       }
     });
   };
 
   return (
-    <Screen title="Discover">
+    <Screen title="Store">
       <Section title="Search">
-        <TextField label="Search sources" placeholder="App name or category" value={query} onSubmit={runSearch} />
+        <TextField label="Search the store" placeholder="App name or category" value={query} onSubmit={runSearch} />
         <Button label="Search" role="primary" onPress={runSearch} disabled={busy()} />
         {busy() ? <Progress label="Working" /> : null}
         <Text tone="muted">{status()}</Text>
@@ -92,7 +92,7 @@ export default function Discover() {
               title={h.name}
               subtitle={hitSubtitle(h)}
               icon={isInstalled(h.id) ? "check" : "download"}
-              trailing={isInstalled(h.id) ? "In library" : "Install"}
+              trailing={isInstalled(h.id) ? "In your apps" : "Keep"}
               onPress={() => pick(h)}
             />
           )}
