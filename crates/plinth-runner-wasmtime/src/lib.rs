@@ -18,6 +18,10 @@ pub mod net;
 pub mod policy;
 pub mod requests;
 pub mod timers;
+#[cfg(feature = "wasmi")]
+pub mod wasmi_core;
+#[cfg(feature = "wasmi")]
+mod wasmi_engine;
 
 use hub::HubBackend;
 use kv::Kv;
@@ -567,14 +571,36 @@ impl bindings::plinth::app::files::Host for HostState {
     }
 }
 
-/// The engine is shared by all guests. It owns the epoch ticker thread.
+/// Which engine a `Runner` runs apps with (SPEC.md §9.2): wasmtime
+/// (desktop, Android) or the wasmi interpreter (iOS; also
+/// `PLINTH_ENGINE=wasmi` on desktop, for tests). `Runner::new` reads
+/// `PLINTH_ENGINE` once and keeps the engine for its own lifetime.
+enum Backend {
+    Wasmtime { engine: Engine, stop_ticker: Arc<AtomicBool> },
+    #[cfg(feature = "wasmi")]
+    Wasmi { engine: wasmi::Engine },
+}
+
+/// True when `PLINTH_ENGINE=wasmi` (SPEC.md §9.2).
+fn wants_wasmi() -> bool {
+    std::env::var("PLINTH_ENGINE").map(|v| v == "wasmi").unwrap_or(false)
+}
+
+/// The engine is shared by all guests. It owns the epoch ticker thread
+/// (wasmtime backend only).
 pub struct Runner {
-    engine: Engine,
-    stop_ticker: Arc<AtomicBool>,
+    backend: Backend,
 }
 
 impl Runner {
     pub fn new() -> Result<Self> {
+        if wants_wasmi() {
+            #[cfg(feature = "wasmi")]
+            return Ok(Self { backend: Backend::Wasmi { engine: wasmi_engine::new_engine() } });
+            #[cfg(not(feature = "wasmi"))]
+            bail!("PLINTH_ENGINE=wasmi, but this build has no `wasmi` feature (plinth-runner-wasmtime)");
+        }
+
         let mut config = Config::new();
         config.wasm_component_model(true);
         config.epoch_interruption(true);
@@ -591,7 +617,7 @@ impl Runner {
                 }
             }
         })?;
-        Ok(Self { engine, stop_ticker })
+        Ok(Self { backend: Backend::Wasmtime { engine, stop_ticker } })
     }
 
     /// Compiles a component and checks its imports. Grants every capability
@@ -629,47 +655,63 @@ impl Runner {
         clipboard: Box<dyn Clipboard>,
         hub: Option<Box<dyn HubBackend>>,
     ) -> Result<Guest> {
-        let component = Component::new(&self.engine, bytes)
-            .map_err(anyhow::Error::from)
-            .context("the artifact is not a valid component")?;
-        check_imports(&self.engine, &component)?;
+        match &self.backend {
+            Backend::Wasmtime { engine, .. } => {
+                let component = Component::new(engine, bytes)
+                    .map_err(anyhow::Error::from)
+                    .context("the artifact is not a valid component")?;
+                check_imports(engine, &component)?;
 
-        let mut linker = Linker::<HostState>::new(&self.engine);
-        App::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+                let mut linker = Linker::<HostState>::new(engine);
+                App::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
 
-        let state = HostState {
-            commits: Vec::new(),
-            logs: Vec::new(),
-            errors: Vec::new(),
-            limits: Limiter { inner: StoreLimitsBuilder::new().memory_size(limits.memory_bytes).instances(4).build(), memory: 0 },
-            policy,
-            kv,
-            timers: TimerQueue::new(),
-            last_frame: None,
-            clipboard,
-            monotonic_origin: Instant::now(),
-            requests: RequestQueue::new(),
-            dialogs: Vec::new(),
-            net_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            fake_timezone_offset_minutes: None,
-            hub,
-            files: files::Files::unavailable(),
-        };
-        let mut store = Store::new(&self.engine, state);
-        store.limiter(|s| &mut s.limits);
-        store.epoch_deadline_trap();
-        let ticks = (limits.call_timeout.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64;
-        store.set_epoch_deadline(ticks);
-        let app = App::instantiate(&mut store, &component, &linker)
-            .map_err(anyhow::Error::from)
-            .context("instantiate the app")?;
-        Ok(Guest { store, app, deadline_ticks: ticks, poisoned: false })
+                let state = HostState {
+                    commits: Vec::new(),
+                    logs: Vec::new(),
+                    errors: Vec::new(),
+                    limits: Limiter {
+                        inner: StoreLimitsBuilder::new().memory_size(limits.memory_bytes).instances(4).build(),
+                        memory: 0,
+                    },
+                    policy,
+                    kv,
+                    timers: TimerQueue::new(),
+                    last_frame: None,
+                    clipboard,
+                    monotonic_origin: Instant::now(),
+                    requests: RequestQueue::new(),
+                    dialogs: Vec::new(),
+                    net_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+                    fake_timezone_offset_minutes: None,
+                    hub,
+                    files: files::Files::unavailable(),
+                };
+                let mut store = Store::new(engine, state);
+                store.limiter(|s| &mut s.limits);
+                store.epoch_deadline_trap();
+                let ticks = (limits.call_timeout.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64;
+                store.set_epoch_deadline(ticks);
+                let app = App::instantiate(&mut store, &component, &linker)
+                    .map_err(anyhow::Error::from)
+                    .context("instantiate the app")?;
+                Ok(Guest::Wasmtime(WasmtimeGuest { store, app, deadline_ticks: ticks, poisoned: false }))
+            }
+            #[cfg(feature = "wasmi")]
+            Backend::Wasmi { engine } => {
+                wasmi_engine::load(engine, bytes, limits, policy, kv, clipboard, hub).map(Guest::Wasmi)
+            }
+        }
     }
 }
 
 impl Drop for Runner {
+    // Without the `wasmi` feature, `Backend` has one variant, so this `if
+    // let` is irrefutable; that is expected, not a bug.
+    #[allow(irrefutable_let_patterns)]
     fn drop(&mut self) {
-        self.stop_ticker.store(true, Ordering::Relaxed);
+        if let Backend::Wasmtime { stop_ticker, .. } = &self.backend {
+            stop_ticker.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -687,8 +729,18 @@ fn check_imports(engine: &Engine, component: &Component) -> Result<()> {
     Ok(())
 }
 
-/// One running app instance.
-pub struct Guest {
+/// One running app instance. An enum, not a trait object: the host logic
+/// (`HostState`) is one type either way (SPEC.md §9.2); only how the guest
+/// is called differs.
+pub enum Guest {
+    Wasmtime(WasmtimeGuest),
+    #[cfg(feature = "wasmi")]
+    Wasmi(wasmi_engine::WasmiGuest),
+}
+
+/// The wasmtime backend's own state, private so `HostState` (`pub(crate)`)
+/// does not have to be `pub` just because `Guest` is.
+pub struct WasmtimeGuest {
     store: Store<HostState>,
     app: App,
     deadline_ticks: u64,
@@ -697,21 +749,37 @@ pub struct Guest {
 }
 
 impl Guest {
+    fn data(&self) -> &HostState {
+        match self {
+            Guest::Wasmtime(g) => g.store.data(),
+            #[cfg(feature = "wasmi")]
+            Guest::Wasmi(g) => g.store.data(),
+        }
+    }
+
+    fn data_mut(&mut self) -> &mut HostState {
+        match self {
+            Guest::Wasmtime(g) => g.store.data_mut(),
+            #[cfg(feature = "wasmi")]
+            Guest::Wasmi(g) => g.store.data_mut(),
+        }
+    }
+
     /// Returns the `dev.log` messages since the last call.
     pub fn take_logs(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.store.data_mut().logs)
+        std::mem::take(&mut self.data_mut().logs)
     }
 
     /// The size of the guest's linear memory, in bytes. It only grows, so a
     /// long run that keeps it level has no leak (`tests/monkey.rs`).
     pub fn memory_bytes(&self) -> usize {
-        self.store.data().limits.memory
+        self.data().limits.memory
     }
 
     /// Returns the uncaught errors that the guest reported (`error.report`,
     /// SPEC.md §5.6) since the last call. The guest is still running.
     pub fn take_errors(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.store.data_mut().errors)
+        std::mem::take(&mut self.data_mut().errors)
     }
 
     /// Calls `init` and returns the op buffers that the guest committed.
@@ -724,32 +792,40 @@ impl Guest {
         if init_arg::find(&args, init_arg::RANDOM_SEED).is_none() {
             init_arg::push(&mut args, init_arg::RANDOM_SEED, &fresh_seed().to_le_bytes());
         }
-        self.call(|app, store| app.call_init(store, &args))
+        match self {
+            Guest::Wasmtime(_) => self.call_wasmtime(|app, store| app.call_init(store, &args)),
+            #[cfg(feature = "wasmi")]
+            Guest::Wasmi(_) => self.call_wasmi("init", &args),
+        }
     }
 
     /// Calls `on-event` and returns the op buffers that the guest committed.
     pub fn on_event(&mut self, events: &[u8]) -> Result<Vec<Vec<u8>>> {
-        self.call(|app, store| app.call_on_event(store, events))
+        match self {
+            Guest::Wasmtime(_) => self.call_wasmtime(|app, store| app.call_on_event(store, events)),
+            #[cfg(feature = "wasmi")]
+            Guest::Wasmi(_) => self.call_wasmi("on-event", events),
+        }
     }
 
     /// Overrides `timezone-offset` with a fixed value (minutes east of
     /// UTC) for tests, instead of the real OS offset.
     pub fn set_fake_timezone_offset(&mut self, minutes: i32) {
-        self.store.data_mut().fake_timezone_offset_minutes = Some(minutes);
+        self.data_mut().fake_timezone_offset_minutes = Some(minutes);
     }
 
     /// Gives the guest its private space for `plinth:files` (core 1.11,
     /// `docs/STORAGE.md` §2, §3). Without it, every call is
     /// `denied:unsupported`. Call it before `init`.
     pub fn set_files(&mut self, files: files::Files) {
-        self.store.data_mut().files = files;
+        self.data_mut().files = files;
     }
 
     /// The soonest time a timer is due, if any is pending. The desktop
     /// host sleeps until this instant (via `gpui`'s executor timers,
     /// SPEC.md §9.4), then calls `fire_due_timers`.
     pub fn next_timer_deadline(&self) -> Option<Instant> {
-        self.store.data().timers.next_deadline()
+        self.data().timers.next_deadline()
     }
 
     /// Builds one `on-event` buffer with a `timer` event (protocol
@@ -757,7 +833,7 @@ impl Guest {
     /// `now`, dispatches it, and returns the committed op buffers. Returns
     /// `Ok(vec![])` with no call if no timer is due.
     pub fn fire_due_timers(&mut self, now: Instant) -> Result<Vec<Vec<u8>>> {
-        let due = self.store.data_mut().timers.due(now);
+        let due = self.data_mut().timers.due(now);
         if due.is_empty() {
             return Ok(Vec::new());
         }
@@ -772,7 +848,7 @@ impl Guest {
     /// has one, the host draws frames without a pause and calls
     /// `fire_frame` before each frame.
     pub fn wants_frames(&self) -> bool {
-        !self.store.data().timers.frames().is_empty()
+        !self.data().timers.frames().is_empty()
     }
 
     /// Sends one `frame` event (protocol `Event::Frame`) to each frame
@@ -780,7 +856,7 @@ impl Guest {
     /// first), and returns the committed op buffers. Returns `Ok(vec![])`
     /// with no call if the guest has no frame timer.
     pub fn fire_frame(&mut self, now: Instant) -> Result<Vec<Vec<u8>>> {
-        let data = self.store.data_mut();
+        let data = self.data_mut();
         let frames = data.timers.frames();
         if frames.is_empty() {
             data.last_frame = None;
@@ -799,7 +875,7 @@ impl Guest {
     /// answer (SPEC.md §8.4, §8.5). The desktop host polls this the same
     /// way it polls timers; a test reads it to simulate the host answering.
     pub fn pending_dialogs(&self) -> &[PendingDialog] {
-        &self.store.data().dialogs
+        &self.data().dialogs
     }
 
     /// Drains the `net.fetch` requests a worker thread has finished since
@@ -807,7 +883,7 @@ impl Guest {
     /// same way it polls timers and dialogs, and answers each one with
     /// `answer_dialog` (the same generic completion delivery).
     pub fn poll_net_results(&mut self) -> Vec<(u32, plinth_protocol::Value)> {
-        std::mem::take(&mut *self.store.data().net_results.lock().unwrap())
+        std::mem::take(&mut *self.data().net_results.lock().unwrap())
     }
 
     /// Drains the `plinth:hub` `launch` requests the guest made since the
@@ -816,7 +892,7 @@ impl Guest {
     /// the same way it polls timers and dialogs, and opens a window with
     /// `open_app` for each id.
     pub fn take_hub_launches(&mut self) -> Vec<String> {
-        match self.store.data_mut().hub.as_mut() {
+        match self.data_mut().hub.as_mut() {
             Some(hub) => hub.take_launches(),
             None => Vec::new(),
         }
@@ -828,26 +904,54 @@ impl Guest {
     /// id that is not open (already answered, or unknown) is not an error:
     /// the guest ignores it (SPEC.md §8.4).
     pub fn answer_dialog(&mut self, id: u32, result: plinth_protocol::Value) -> Result<Vec<Vec<u8>>> {
-        self.store.data_mut().requests.close(id);
-        self.store.data_mut().dialogs.retain(|d| d.id != id);
+        self.data_mut().requests.close(id);
+        self.data_mut().dialogs.retain(|d| d.id != id);
         let mut w = plinth_protocol::Writer::new();
         w.event(&plinth_protocol::Event::Completion { request: id, result });
         self.on_event(w.as_bytes())
     }
 
-    fn call(&mut self, f: impl FnOnce(&App, &mut Store<HostState>) -> wasmtime::Result<()>) -> Result<Vec<Vec<u8>>> {
-        if self.poisoned {
+    /// Calls `init`/`on-event` on the wasmtime backend. Only valid when
+    /// `self` is `Guest::Wasmtime`.
+    // Without the `wasmi` feature, `Guest` has one variant, so the `else`
+    // below is unreachable; that is expected, not a bug.
+    #[allow(irrefutable_let_patterns, unreachable_patterns)]
+    fn call_wasmtime(&mut self, f: impl FnOnce(&App, &mut Store<HostState>) -> wasmtime::Result<()>) -> Result<Vec<Vec<u8>>> {
+        let Guest::Wasmtime(WasmtimeGuest { store, app, deadline_ticks, poisoned }) = self else {
+            unreachable!("call_wasmtime on a non-wasmtime guest")
+        };
+        if *poisoned {
             bail!("the app stopped earlier");
         }
-        self.store.set_epoch_deadline(self.deadline_ticks);
-        let logs_before = self.store.data().logs.len();
-        let result = f(&self.app, &mut self.store);
-        let commits = std::mem::take(&mut self.store.data_mut().commits);
+        store.set_epoch_deadline(*deadline_ticks);
+        let logs_before = store.data().logs.len();
+        let result = f(app, store);
+        let commits = std::mem::take(&mut store.data_mut().commits);
         if let Err(e) = result {
-            self.poisoned = true;
-            let reason = stop_reason(&e, &self.store.data().logs[logs_before..]);
+            *poisoned = true;
+            let reason = stop_reason(&e, &store.data().logs[logs_before..]);
             log::error!(target: "plinth::app", "the app stopped: {reason}: {e:?}");
             return Err(anyhow::Error::from(e).context(reason));
+        }
+        Ok(commits)
+    }
+
+    /// Calls `init`/`on-event` (`export` is `"init"` or `"on-event"`) on
+    /// the wasmi backend. Only valid when `self` is `Guest::Wasmi`.
+    #[cfg(feature = "wasmi")]
+    fn call_wasmi(&mut self, export: &str, bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
+        let Guest::Wasmi(g) = self else { unreachable!("call_wasmi on a non-wasmi guest") };
+        if g.poisoned {
+            bail!("the app stopped earlier");
+        }
+        let logs_before = g.store.data().logs.len();
+        let result = wasmi_engine::call(g, export, bytes);
+        let commits = std::mem::take(&mut g.store.data_mut().commits);
+        if let Err(e) = result {
+            g.poisoned = true;
+            let reason = wasmi_engine::stop_reason(&e, &g.store.data().logs[logs_before..]);
+            log::error!(target: "plinth::app", "the app stopped: {reason}: {e:?}");
+            return Err(e.context(reason));
         }
         Ok(commits)
     }
