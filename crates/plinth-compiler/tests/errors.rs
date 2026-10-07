@@ -381,7 +381,9 @@ fn endless_allocation_hits_the_memory_limit() {
     let (guest, tree) = start_limited(
         &runner,
         &limit_app("const keep: string[][] = []; while (keep.length >= 0) { keep.push([\"aaaaaaaaaaaaaaaa\" + keep.length]); }"),
-        SHORT,
+        // A long time limit: this test is about the memory cap, and an
+        // interpreter (the wasmi runner for iOS) fills memory slowly.
+        Limits { call_timeout: std::time::Duration::from_secs(30), ..SHORT },
     );
     // The guest fails to grow its memory: wasm `memory.grow` returns -1 and
     // the runtime traps (out of memory), before the time limit.
