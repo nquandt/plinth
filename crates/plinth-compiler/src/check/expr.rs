@@ -1992,7 +1992,7 @@ impl Checker<'_> {
                 let get = self.arr_get_at(values, i_r.clone(), vt, span);
                 prologue.push(TStmt::Let(v, Some(get)));
             }
-            (Mode::Entries, ast::Pattern::Array(elems, pspan)) if elems.len() == 2 => match (&elems[0], &elems[1]) {
+            (Mode::Entries, ast::Pattern::Array(elems, None, pspan)) if elems.len() == 2 => match (&elems[0], &elems[1]) {
                 (Some(ast::Pattern::Ident(kn, kspan)), Some(ast::Pattern::Ident(vn, vspan))) => {
                     let vt = v_ty.clone().unwrap_or(Type::Error);
                     let kv = self.new_var(kn, k_ty.clone(), mutable);

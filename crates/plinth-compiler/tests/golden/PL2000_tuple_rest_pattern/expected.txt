@@ -1,0 +1,3 @@
+app/main.tsx(4,16): error PL2000: `...rest` needs a tuple with a rest element after the fixed ones; `[string, number]` has none here
+    const [s, ...r] = t;
+                 ^

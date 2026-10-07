@@ -685,3 +685,8 @@ frame rate is set by the timer delivery, not by Plinth's cost.
 
 No compiler, runtime or renderer bug was found: the app compiled on the
 first try, and both hosts gave the same layout facts and the same game.
+
+## Found later (2026-10-06, coordinator)
+
+- **Rest patterns in array destructuring: done.** `const [a, , ...r] = xs` on arrays and on tuples with a rest element (`tests/lang.rs` `array_rest_patterns_bind_the_remaining_elements`, golden `PL2000_tuple_rest_pattern`). Not done: rest in object patterns (`const { a, ...o } = x`), default values in patterns.
+- **`join` on a number array is rejected** (`PL3001: join works on string arrays`), although TypeScript allows it. Workaround: `xs.map((n) => `${n}`).join(",")`. Fix: convert each element with the number-to-string rule of template literals.

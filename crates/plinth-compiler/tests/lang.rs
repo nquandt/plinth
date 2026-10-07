@@ -2771,3 +2771,24 @@ function Home() {
     let ops = fire(&mut tree, field, event::SUBMIT, Value::Str("x".into()));
     assert!(ops.iter().any(|op| matches!(op, plinth_protocol::Op::SetProp { prop: p, value: Value::Str(s), .. } if *p == prop::VALUE && s.is_empty())), "{ops:?}");
 }
+
+/// `const [a, ...rest] = xs` (array and tuple rest patterns).
+#[test]
+fn array_rest_patterns_bind_the_remaining_elements() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const nums = [1, 2, 3, 4];
+  const [first, , ...others] = nums;
+  const [w, ...ws] = ["a", "b", "c"];
+  const [only, ...none] = [7];
+  const t: [string, ...number[]] = ["n", 5, 6, 7];
+  const [label, x, ...more] = t;
+  const out = `${first}|${others.map((n) => `${n}`).join(",")}|${w}${ws.join("")}|${only}:${none.length}|${label}${x}:${more.map((n) => `${n}`).join(",")}`;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "1|3,4|abc|7:0|n5:6,7");
+}

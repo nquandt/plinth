@@ -665,10 +665,10 @@ impl Cx<'_> {
                 Some(Pattern::Object(props, self.span(op.span)))
             }
             o::BindingPattern::ArrayPattern(ap) => {
-                if ap.rest.is_some() {
-                    self.err(code::UNSUPPORTED, ap.span, "rest elements in patterns are not supported");
-                    return None;
-                }
+                let rest = match &ap.rest {
+                    Some(r) => Some(Box::new(self.pattern(&r.argument)?)),
+                    None => None,
+                };
                 let mut elems = Vec::new();
                 for e in &ap.elements {
                     elems.push(match e {
@@ -676,7 +676,7 @@ impl Cx<'_> {
                         None => None,
                     });
                 }
-                Some(Pattern::Array(elems, self.span(ap.span)))
+                Some(Pattern::Array(elems, rest, self.span(ap.span)))
             }
             o::BindingPattern::AssignmentPattern(a) => {
                 self.err(code::UNSUPPORTED, a.span, "default values in patterns are not supported");

@@ -440,12 +440,34 @@ impl Checker<'_> {
                     out.extend(self.bind_part(sub, part, mutable));
                 }
             }
-            Pattern::Array(elems, span) => {
+            Pattern::Array(elems, rest, span) => {
                 // A tuple (`[k, v]` of `Map.entries()`): each name reads a field.
                 if let Type::Struct(sid) = src.ty
                     && let Some(shape) = self.tuple_shape(sid)
                 {
                     let n = shape.fixed.len();
+                    // `...rest` of a tuple: the rest elements past the pattern's
+                    // elements, as an array. It needs a rest element in the
+                    // tuple type and at least the fixed elements before it.
+                    if let Some(rest_pat) = rest {
+                        match &shape.rest {
+                            Some(r) if elems.len() >= n => {
+                                let aty = Type::Array(Box::new(r.clone()));
+                                let arr = TExpr::new(TExprKind::Field(Box::new(src.clone()), sid, shape.rest_field()), aty.clone(), *span);
+                                let from = TExpr::new(TExprKind::Coerce(Coercion::NumToI32, Box::new(TExpr::new(TExprKind::Num((elems.len() - n) as f64), Type::Number, *span))), Type::Bool, *span);
+                                let to = TExpr::new(TExprKind::Coerce(Coercion::NumToI32, Box::new(TExpr::new(TExprKind::Num(i32::MAX as f64), Type::Number, *span))), Type::Bool, *span);
+                                let part = TExpr::new(TExprKind::Rt("arr_slice", vec![arr, from, to]), aty, rest_pat.span());
+                                out.extend(self.bind_part(rest_pat, part, mutable));
+                            }
+                            _ => {
+                                let msg = format!(
+                                    "`...rest` needs a tuple with a rest element after the fixed ones; `{}` has none here",
+                                    self.prog.structs[sid as usize].name
+                                );
+                                self.err(code::UNSUPPORTED, rest_pat.span(), msg);
+                            }
+                        }
+                    }
                     if shape.rest.is_none() && elems.len() > n {
                         let msg = format!("`{}` has only {} element(s)", self.prog.structs[sid as usize].name, n);
                         self.err(code::TYPE_MISMATCH, *span, msg);
@@ -478,6 +500,16 @@ impl Checker<'_> {
                     let idx = TExpr::new(TExprKind::Num(i as f64), Type::Number, sub.span());
                     let part = TExpr::new(TExprKind::Index(Box::new(src.clone()), Box::new(idx)), (*elem).clone(), sub.span());
                     out.extend(self.bind_part(sub, part, mutable));
+                }
+                // `...rest`: a new array of the elements after the pattern's elements.
+                if let Some(rest_pat) = rest {
+                    let num = |v: f64| TExpr::new(TExprKind::Coerce(Coercion::NumToI32, Box::new(TExpr::new(TExprKind::Num(v), Type::Number, *span))), Type::Bool, *span);
+                    let part = TExpr::new(
+                        TExprKind::Rt("arr_slice", vec![src.clone(), num(elems.len() as f64), num(i32::MAX as f64)]),
+                        src.ty.clone(),
+                        rest_pat.span(),
+                    );
+                    out.extend(self.bind_part(rest_pat, part, mutable));
                 }
             }
         }

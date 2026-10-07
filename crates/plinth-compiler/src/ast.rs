@@ -165,13 +165,14 @@ pub enum Pattern {
     Ident(String, Span),
     /// `{ a, b: c }`: `(key, pattern)`.
     Object(Vec<(String, Pattern)>, Span),
-    Array(Vec<Option<Pattern>>, Span),
+    /// `[a, , b, ...rest]`: the elements (`None` for a hole) and the rest.
+    Array(Vec<Option<Pattern>>, Option<Box<Pattern>>, Span),
 }
 
 impl Pattern {
     pub fn span(&self) -> Span {
         match self {
-            Pattern::Ident(_, s) | Pattern::Object(_, s) | Pattern::Array(_, s) => *s,
+            Pattern::Ident(_, s) | Pattern::Object(_, s) | Pattern::Array(_, _, s) => *s,
         }
     }
 }
