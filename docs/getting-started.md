@@ -62,7 +62,7 @@ signal's shape does not change (see [language.md](language.md)).
 
 | Path | What |
 |---|---|
-| `plinth.toml` | The app id, name, version, publisher, and declared capabilities. It becomes `manifest.toml` inside the built package. |
+| `plinth.toml` | The app id, name, version, publisher, declared capabilities, and the `core` policy. It becomes `manifest.toml` inside the built package. |
 | `tsconfig.json` | A closed-world TypeScript config: `"noLib": true`, `"types": []`, and `paths` that map `plinth:*` to the typings in `.plinth/types/`. Your editor and `tsc` use it, so you get real autocomplete and real errors. |
 | `app/main.tsx` | The entry point: `export default app({ screens: {...} })`. |
 | `app/*.tsx` | More screens and components. Import them with relative paths. |
@@ -224,6 +224,28 @@ This file bundles the desktop host, a runtime core, and your app. It is
 much larger than the `.plnt` (tens of MB, mostly the host and the
 renderer); the `.plnt` itself stays a few KB and is the file you would
 publish to a hub or a registry.
+
+### 7.1 The `core` policy
+
+A host can run your app on more than one build of the runtime core
+(SPEC.md §10.5): the core your app needs, or a newer one of the same
+major version. `plinth.toml` has a `core` field that says how much of
+that choice you want:
+
+```toml
+core = "follow"   # default: the host takes the newest compatible minor and patch
+# core = "patch"   # only patches of the minor your app was built with
+# core = "pinned"  # the exact core build your app was built with
+```
+
+Most apps leave this at `follow`: the host keeps the core current, and
+a fix in the runtime reaches your users with no action on your part.
+Use `patch` to hold the minor version steady while still taking bug
+fixes. Use `pinned` only when your app depends on the exact behavior of
+one core build; `plinth build` then records that build's digest in the
+package, and a host that lacks it tells the user which core to install.
+An app built before this field existed has no `core` entry, which means
+`follow`.
 
 ## 8. Put your app on the web
 

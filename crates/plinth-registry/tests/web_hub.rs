@@ -111,8 +111,8 @@ fn web_hub_serves_landing_page_index_package_and_core() {
     assert_eq!(pkg.body, bytes);
     assert_eq!(pkg.header("Cache-Control"), Some("no-cache"));
 
-    let (major, minor) = plinth_link::cores::core_version(plinth_link::link::runtime()).unwrap();
-    let core = get(port, &format!("/cores/{major}.{minor}/core.wasm"));
+    let version = plinth_link::cores::core_version(plinth_link::link::runtime()).unwrap();
+    let core = get(port, &format!("/cores/{}/core.wasm", plinth_link::cores::format_version(version)));
     assert_eq!((core.status, core.header("Content-Type")), (200, Some("application/wasm")));
 
     // Nothing outside the folder.

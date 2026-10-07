@@ -25,15 +25,20 @@
 
 extern crate alloc;
 
-/// The core version, `MAJOR.MINOR` (SPEC.md §10.4). A host reads it from the
-/// custom section `plinth-core` and picks a core for each app by it. Inside
-/// one major version a core only adds functions; each addition increments
-/// the minor version. Keep it equal to `CORE_MAJOR`/`CORE_MINOR` in the
-/// compiler's `rt_abi.rs` (a compiler test checks it).
+/// The core version, `MAJOR.MINOR.PATCH` (SPEC.md §10.4, §10.5). A host
+/// reads it from the custom section `plinth-core` and picks a core for each
+/// app by it. Inside one major version a core only adds functions; each
+/// addition increments the minor version. A fix that adds no function
+/// (same imports, same behavior for every existing import) increments only
+/// the patch version. Keep MAJOR.MINOR equal to `CORE_MAJOR`/`CORE_MINOR`,
+/// and PATCH equal to `CORE_PATCH`, in the compiler's `rt_abi.rs` (a
+/// compiler test checks it). There is no automatic check that a patch bump
+/// corresponds to a real change: a maintainer bumps `CORE_PATCH` by hand
+/// for each fix that does not touch `CORE_MINOR`.
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 4] = *b"1.12";
+static CORE_VERSION: [u8; 6] = *b"1.12.0";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;

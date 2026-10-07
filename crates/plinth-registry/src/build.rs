@@ -84,7 +84,8 @@ fn incoming_packages(folder: &Path) -> Result<Vec<PathBuf>> {
 /// steps 1-3).
 fn add_package(folder: &Path, bytes: &[u8], report: &mut Report) -> Result<()> {
     let pkg = plinth_package::Package::read(bytes).context("not a valid .plnt package")?;
-    plinth_link::cores::link_app(&pkg.component).context("the package does not link against an installed core")?;
+    plinth_link::cores::link_app_with_policy(&pkg.component, &pkg.manifest.core, pkg.manifest.core_digest.as_deref())
+        .context("the package does not link against an installed core")?;
     // A signature that does not check out is refused; an unsigned package
     // is still allowed (`docs/HUB.md` §6.1, draft-1 registries keep
     // working with no signatures).
@@ -190,8 +191,8 @@ fn read_app_document(path: &Path) -> Result<Option<AppDocument>> {
 /// (`docs/REGISTRY.md` §8 step 5).
 fn add_core(folder: &Path, _report: &mut Report) -> Result<()> {
     let core = plinth_link::link::runtime();
-    let (major, minor) = plinth_link::cores::core_version(core).context("the built-in core has no version")?;
-    let version = format!("{major}.{minor}");
+    let version_tuple = plinth_link::cores::core_version(core).context("the built-in core has no version")?;
+    let version = plinth_link::cores::format_version(version_tuple);
     let dir = folder.join("cores").join(&version);
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("core.wasm");

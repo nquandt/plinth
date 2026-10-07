@@ -43,6 +43,45 @@ pub struct ProjectConfig {
     pub icon: Option<String>,
     #[serde(default)]
     pub capabilities: Vec<Capability>,
+    /// The author's core policy (SPEC.md §10.5, `docs/UPDATES.md` §4
+    /// item 2). An old `plinth.toml` with no `core` field means `follow`,
+    /// today's only behavior.
+    #[serde(default)]
+    pub core: CorePolicy,
+}
+
+/// The author's policy for which core a built app takes, carried into the
+/// package manifest's `core` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CorePolicy {
+    /// The newest compatible minor and patch version (today's behavior).
+    #[default]
+    Follow,
+    /// Only patches of the minor version the app was built with.
+    Patch,
+    /// The exact core build the app was built with, by digest.
+    Pinned,
+}
+
+impl CorePolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CorePolicy::Follow => "follow",
+            CorePolicy::Patch => "patch",
+            CorePolicy::Pinned => "pinned",
+        }
+    }
+
+    /// Parses a manifest's `core` field. An unrecognized value (from a
+    /// newer author tool) falls back to `follow`, the safe default.
+    pub fn parse(s: &str) -> CorePolicy {
+        match s {
+            "patch" => CorePolicy::Patch,
+            "pinned" => CorePolicy::Pinned,
+            _ => CorePolicy::Follow,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -71,6 +110,20 @@ pub struct Manifest {
     pub digest: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<Capability>,
+    /// The author's core policy, `"follow"`, `"patch"` or `"pinned"`
+    /// (SPEC.md §10.5). A manifest written before this field existed has
+    /// none, which also means `follow`.
+    #[serde(default = "default_core_field")]
+    pub core: String,
+    /// For `core = "pinned"`: the SHA-256 digest, in hex, of the core
+    /// build the app was built with. `None` for the other policies, and
+    /// for a manifest written before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_digest: Option<String>,
+}
+
+fn default_core_field() -> String {
+    CorePolicy::Follow.as_str().to_owned()
 }
 
 impl ProjectConfig {
@@ -101,8 +154,17 @@ impl ProjectConfig {
     }
 
     /// The manifest for a built app module. `runtime` is the id of the
-    /// runtime build that the app needs (SPEC.md §10.2).
+    /// runtime build that the app needs (SPEC.md §10.2). Equivalent to
+    /// `manifest_with_core_digest` with no core digest; use that instead
+    /// when the policy is `pinned` (SPEC.md §10.5).
     pub fn manifest(&self, ui_api: &str, runtime: &str, accent: Option<String>, app: &[u8]) -> Manifest {
+        self.manifest_with_core_digest(ui_api, runtime, accent, app, None)
+    }
+
+    /// Like `manifest`, and records `core_digest` (the SHA-256 digest, in
+    /// hex, of the core used to build the app) when the policy is
+    /// `pinned`. Ignored for the other policies.
+    pub fn manifest_with_core_digest(&self, ui_api: &str, runtime: &str, accent: Option<String>, app: &[u8], core_digest: Option<&str>) -> Manifest {
         Manifest {
             id: self.id.clone(),
             name: self.name.clone(),
@@ -115,6 +177,11 @@ impl ProjectConfig {
             icon: self.icon.clone(),
             digest: hex(&Sha256::digest(app)),
             capabilities: self.capabilities.clone(),
+            core: self.core.as_str().to_owned(),
+            core_digest: match self.core {
+                CorePolicy::Pinned => core_digest.map(str::to_owned),
+                _ => None,
+            },
         }
     }
 }
@@ -357,5 +424,50 @@ mod tests {
         assert!(ProjectConfig::parse("id = \"x\"\nname = \"T\"\nversion = \"0.1.0\"\npublisher = \"me\"\n").is_err());
         assert!(ProjectConfig::parse("id = \"a.b\"\nname = \"T\"\nversion = \"1\"\npublisher = \"me\"\n").is_err());
         assert!(ProjectConfig::parse("id = \"a.b\"\nname = \"T\"\nversion = \"0.1.0\"\npublisher = \"me\"\nextra = 1\n").is_err());
+    }
+
+    #[test]
+    fn an_old_config_with_no_core_field_means_follow() {
+        let cfg = config();
+        assert_eq!(cfg.core, CorePolicy::Follow);
+        assert_eq!(cfg.manifest("1.0", "plinth-rt/test", None, b"abc").core, "follow");
+    }
+
+    #[test]
+    fn core_policy_round_trips_through_plinth_toml() {
+        let text = "id = \"dev.plinth.test\"\nname = \"Test\"\nversion = \"0.1.0\"\npublisher = \"me\"\ncore = \"pinned\"\n";
+        let cfg = ProjectConfig::parse(text).unwrap();
+        assert_eq!(cfg.core, CorePolicy::Pinned);
+        // The digest shows up in the manifest only for `pinned`.
+        let m = cfg.manifest_with_core_digest("1.0", "plinth-rt/test", None, b"abc", Some("deadbeef"));
+        assert_eq!(m.core, "pinned");
+        assert_eq!(m.core_digest, Some("deadbeef".into()));
+        // A `follow` or `patch` manifest never carries a digest, even if given one.
+        let follow = config().manifest_with_core_digest("1.0", "plinth-rt/test", None, b"abc", Some("deadbeef"));
+        assert_eq!(follow.core, "follow");
+        assert_eq!(follow.core_digest, None);
+    }
+
+    #[test]
+    fn an_unknown_core_value_in_plinth_toml_is_rejected() {
+        let text = "id = \"dev.plinth.test\"\nname = \"Test\"\nversion = \"0.1.0\"\npublisher = \"me\"\ncore = \"nightly\"\n";
+        assert!(ProjectConfig::parse(text).is_err());
+    }
+
+    #[test]
+    fn an_old_manifest_toml_with_no_core_field_parses_as_follow() {
+        let toml = r#"
+            id = "dev.plinth.test"
+            name = "Test"
+            version = "0.1.0"
+            publisher = "me"
+            ui-api = "1.0"
+            runtime = "plinth-rt/test"
+            entry = "app.wasm"
+            digest = "abc"
+        "#;
+        let m: Manifest = toml::from_str(toml).unwrap();
+        assert_eq!(m.core, "follow");
+        assert_eq!(m.core_digest, None);
     }
 }

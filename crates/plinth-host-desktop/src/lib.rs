@@ -71,9 +71,12 @@ impl HostApp {
             let owner = package_owner(&pkg, &bytes);
             let capabilities: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
             check_hub_trust(&pkg, &capabilities).with_context(|| format!("load {}", path.display()))?;
+            let core_policy = pkg.manifest.core.clone();
+            let core_digest = pkg.manifest.core_digest.clone();
             let assets = pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
             Ok(HostApp {
-                component: with_runtime(pkg.component, &capabilities).with_context(|| format!("load {}", path.display()))?,
+                component: with_runtime_policy(pkg.component, &capabilities, &core_policy, core_digest.as_deref())
+                    .with_context(|| format!("load {}", path.display()))?,
                 title: pkg.manifest.name,
                 accent: pkg.manifest.accent.unwrap_or_else(|| "teal".into()),
                 app_id: pkg.manifest.id,
@@ -157,10 +160,18 @@ fn key_is_trusted(key: &str) -> bool {
 /// §11, `docs/HUB.md` §7.1 rule 1); `declared` is empty for a bare
 /// `app.wasm`, so it may reach none.
 fn with_runtime(entry: Vec<u8>, declared: &[String]) -> Result<Vec<u8>> {
+    with_runtime_policy(entry, declared, "follow", None)
+}
+
+/// Like `with_runtime`, and honors the app's core policy (SPEC.md §10.5,
+/// `docs/UPDATES.md` §4 item 2): `"follow"` (the default), `"patch"` or
+/// `"pinned"` (`pinned_digest` is the digest the manifest recorded at
+/// build time). A bare `app.wasm` with no manifest always uses `"follow"`.
+fn with_runtime_policy(entry: Vec<u8>, declared: &[String], policy: &str, pinned_digest: Option<&str>) -> Result<Vec<u8>> {
     use plinth_link::{cores, split};
     if split::is_app_module(&entry) {
         split::check_capabilities(&entry, declared)?;
-        cores::link_app(&entry)
+        cores::link_app_with_policy(&entry, policy, pinned_digest)
     } else {
         Ok(entry)
     }
@@ -585,7 +596,9 @@ fn prepare(hub: &plinth_hub::Hub, app_id: &str, pkg: plinth_package::Package, by
     let policy = hub.policy_for(app_id, &declared)?;
     let title = pkg.manifest.name;
     let accent = pkg.manifest.accent.unwrap_or_else(|| "teal".into());
-    let component = with_runtime(pkg.component, &declared)?;
+    let core_policy = pkg.manifest.core.clone();
+    let core_digest = pkg.manifest.core_digest.clone();
+    let component = with_runtime_policy(pkg.component, &declared, &core_policy, core_digest.as_deref())?;
     let assets: std::collections::HashMap<String, Vec<u8>> =
         pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
     let app = HostApp { component, title, accent, app_id: app_id.to_owned(), capabilities: declared, assets, owner };

@@ -285,6 +285,15 @@ pub fn added_in(name: &str) -> u32 {
 }
 pub const CORE_MINOR: u32 = 12;
 
+/// The patch version of this core build (SPEC.md §10.5). A fix that adds
+/// no function (same imports, same behavior for every existing import)
+/// bumps only this constant; a fix that adds a function bumps `CORE_MINOR`
+/// instead and resets this to 0. There is no automatic check that a patch
+/// bump was earned: a maintainer bumps it by hand for each such fix, and
+/// says so in the commit message. Keep it equal to the `PATCH` part of
+/// `CORE_VERSION` in `plinth-rt/src/lib.rs`.
+pub const CORE_PATCH: u32 = 0;
+
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;
 pub const ARR_I32: i32 = 2;

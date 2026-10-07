@@ -48,7 +48,11 @@ fn needing(mut app: Vec<u8>, version: &str) -> Vec<u8> {
 
 #[test]
 fn the_compiler_and_its_core_agree_on_the_version() {
-    assert_eq!(cores::core_version(link::runtime()), cores::parse_version(&split::core_needed()));
+    // The built-in core's MAJOR.MINOR agrees with `core_needed()` (an app
+    // never declares a patch, so that string has none).
+    let have = cores::core_version(link::runtime()).unwrap();
+    let needed = cores::parse_version(&split::core_needed()).unwrap();
+    assert_eq!((have.0, have.1), (needed.0, needed.1));
     assert!(link::layout(link::runtime()).unwrap().missing.is_empty());
 }
 
@@ -68,7 +72,8 @@ fn the_counter_app_module_holds_only_app_code() {
 
 #[test]
 fn a_newer_minor_or_another_major_is_rejected_by_this_core() {
-    assert!(load_error(&needing(counter().app, "1.99")).contains(&format!("needs core 1.99, but this core is {}", split::core_needed())));
+    let have = cores::format_version(cores::core_version(link::runtime()).unwrap());
+    assert!(load_error(&needing(counter().app, "1.99")).contains(&format!("needs core 1.99, but this core is {have}")));
     assert!(load_error(&needing(counter().app, "2.0")).contains("needs core 2.0"));
 }
 
@@ -95,13 +100,19 @@ fn imports_outside_the_core_are_rejected() {
 
 #[test]
 fn cores_are_selected_by_major_and_the_highest_usable_minor() {
-    let core = |major, minor| cores::Core { version: (major, minor), bytes: Vec::new(), path: None };
-    let installed = vec![core(1, 0), core(1, 2), core(1, 5), core(2, 0)];
-    assert_eq!(cores::select(&installed, (1, 1)).map(|c| c.version), Some((1, 5)));
-    assert_eq!(cores::select(&installed, (1, 5)).map(|c| c.version), Some((1, 5)));
-    assert_eq!(cores::select(&installed, (2, 0)).map(|c| c.version), Some((2, 0)));
+    let core = |major, minor, patch| cores::Core { version: (major, minor, patch), digest: String::new(), bytes: Vec::new(), path: None };
+    let installed = vec![core(1, 0, 0), core(1, 2, 0), core(1, 5, 0), core(1, 5, 1), core(2, 0, 0)];
+    assert_eq!(cores::select(&installed, (1, 1)).map(|c| c.version), Some((1, 5, 1)));
+    assert_eq!(cores::select(&installed, (1, 5)).map(|c| c.version), Some((1, 5, 1)));
+    assert_eq!(cores::select(&installed, (2, 0)).map(|c| c.version), Some((2, 0, 0)));
     assert!(cores::select(&installed, (1, 6)).is_none());
     assert!(cores::select(&installed, (3, 0)).is_none());
+    // `patch`: only patches of the exact minor; `pinned`: by digest.
+    assert_eq!(cores::select_patch(&installed, (1, 5)).map(|c| c.version), Some((1, 5, 1)));
+    assert!(cores::select_patch(&installed, (1, 2)).map(|c| c.version) == Some((1, 2, 0)));
+    let pinned = vec![cores::Core { version: (1, 5, 0), digest: "abc".into(), bytes: Vec::new(), path: None }];
+    assert_eq!(cores::select_pinned(&pinned, "abc").map(|c| c.version), Some((1, 5, 0)));
+    assert!(cores::select_pinned(&pinned, "zzz").is_none());
 }
 
 #[test]
@@ -110,8 +121,8 @@ fn install_and_link_through_the_cores_directory() {
     // SAFETY: this test is the only one in this binary that reads the variable.
     unsafe { std::env::set_var("PLINTH_CORES_DIR", &dir) };
     let path = cores::install(link::runtime()).unwrap();
-    // The cores directory has one folder per version: `<major>.<minor>/core.wasm`.
-    let folder = split::core_needed();
+    // The cores directory has one folder per full version: `<major>.<minor>.<patch>/core.wasm`.
+    let folder = cores::format_version(cores::core_version(link::runtime()).unwrap());
     assert!(path.ends_with(format!("{folder}/core.wasm")) || path.ends_with(format!("{folder}\\core.wasm")));
     // Installing the same core again is fine; other contents are not.
     cores::install(link::runtime()).unwrap();

@@ -90,22 +90,24 @@ export function searchApps(apps, query) {
   );
 }
 
+/** Parses `MAJOR.MINOR` or `MAJOR.MINOR.PATCH` (a missing patch is 0). */
 function parseCoreVersion(v) {
-  const m = /^(\d+)\.(\d+)$/.exec(String(v ?? ""));
-  return m ? [Number(m[1]), Number(m[2])] : null;
+  const m = /^(\d+)\.(\d+)(?:\.(\d+))?$/.exec(String(v ?? ""));
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)] : null;
 }
 
 /**
- * The core to run an app that needs core `needed` ("1.9"): the newest core
- * with the same major version and a minor version that is not lower
- * (SPEC.md §10.5). `null` if the registry has none.
+ * The core to run an app that needs core `needed` ("1.9"): under the
+ * `follow` policy (SPEC.md §10.5), the newest core with the same major
+ * version, a minor version that is not lower, then the highest patch.
+ * `null` if the registry has none.
  */
 export function pickCore(cores, needed) {
   const want = parseCoreVersion(needed);
   const fits = (cores ?? [])
     .map((c) => ({ core: c, v: parseCoreVersion(c.version) }))
     .filter(({ v }) => v && (!want || (v[0] === want[0] && v[1] >= want[1])))
-    .sort((a, b) => b.v[0] - a.v[0] || b.v[1] - a.v[1]);
+    .sort((a, b) => b.v[0] - a.v[0] || b.v[1] - a.v[1] || b.v[2] - a.v[2]);
   return fits.length ? fits[0].core : null;
 }
 

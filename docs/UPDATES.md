@@ -1,6 +1,6 @@
 # Updates without a reinstall (design draft)
 
-Status: draft from the owner's brainstorm of 2026-10-07. Nothing in this document is built yet, except the parts that "Today" names. Open questions are marked UP-Q*.
+Status: draft from the owner's brainstorm of 2026-10-07. Nothing in this document is built yet, except the parts that "Today" names and §8 step 1 (done 2026-10-07: core patch versions and the author's `core` policy, SPEC.md §10.5). Open questions are marked UP-Q*.
 
 ## 1. Goal
 
@@ -33,11 +33,13 @@ So the update cases are:
 
 ## 4. What is missing
 
-1. **Core patch versions.** A core fix that adds no function keeps its version today, so two different builds of `1.12` cannot be told apart. Cores need `MAJOR.MINOR.PATCH` and a digest; selection takes the highest patch.
-2. **An author policy for cores** (in `plinth.toml`):
-   - `core = "follow"`: take new patches and minors automatically (the current behavior).
+1. **Core patch versions. Done (2026-10-07).** Cores carry `MAJOR.MINOR.PATCH` and a SHA-256 digest (`plinth-link::cores`); selection takes the highest minor, then the highest patch. `plinth core list` shows version and digest.
+2. **An author policy for cores. Done (2026-10-07)**, in `plinth.toml` and carried into the manifest field `core` (SPEC.md §10.5):
+   - `core = "follow"`: take new patches and minors automatically (the current behavior, and the default).
    - `core = "patch"`: take only patches of the core the app was released with.
-   - `core = "pinned"`: one core build, by digest.
+   - `core = "pinned"`: one core build, by digest (recorded in the manifest at build time).
+
+   The desktop host honors the policy when it links a package. Still open: the web host (today it always follows, SPEC §10.3) and the Hub's update check against a pinned app (it should refuse an update that would change the pinned core, `UP-Q1` follow-up).
 3. **An update feed** for each distributable: a signed `feed.json` at a URL that the author chooses, with the app versions, the core each needs, and where to get packages and cores. The Hub's registry format is the start point (`docs/REGISTRY.md`).
 4. **An updater in the host:** check the feed, download into the per-user data folder, verify, and use the newest set that the native host supports. The embedded `.plnt` and core stay as the fallback.
 5. **A project key** that signs cores (HANDOFF open decisions: "the project Hub key").
@@ -72,7 +74,7 @@ core = "follow"        # "patch" | "pinned"
 
 ## 8. Order of work (proposal)
 
-1. Core patch versions and the `core` policy (the other parts depend on them).
+1. Core patch versions and the `core` policy (the other parts depend on them). **Done (2026-10-07).**
 2. The feed format and its signature (reuse the registry).
 3. The desktop updater for `plinth native`, with rollback.
 4. The web service worker cache.
@@ -83,7 +85,7 @@ core = "follow"        # "patch" | "pinned"
 
 | # | Question |
 |---|---|
-| UP-Q1 | The default core policy: `follow` (users get core fixes with no action from the author) or `patch` (more control for the author)? Proposal: `follow`. |
+| UP-Q1 | **Still open in part.** The default core policy is implemented as `follow` (SPEC.md §10.5, 2026-10-07): users get core fixes with no action from the author. Open: whether `patch` should be the default instead, for more author control, once real-world fixes show how often `follow` matters. |
 | UP-Q2 | `apply = "live"` in the first version, or later? |
 | UP-Q3 | Feeds only at the author's own URL, or also a Plinth-hosted registry service? |
 | UP-Q4 | The project key that signs cores, and its rotation. |

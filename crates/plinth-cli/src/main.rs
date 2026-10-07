@@ -170,7 +170,12 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
                     println!("cores directory: {}", cores::cores_dir().display());
                     for c in cores::installed() {
                         let at = c.path.map(|p| p.display().to_string()).unwrap_or_else(|| "built in".into());
-                        println!("  {}.{}  {} KiB  {at}", c.version.0, c.version.1, c.bytes.len().div_ceil(1024));
+                        println!(
+                            "  {}  {} KiB  digest {}…  {at}",
+                            cores::format_version(c.version),
+                            c.bytes.len().div_ceil(1024),
+                            &c.digest[..16]
+                        );
                     }
                 }
                 Some("install") => {
@@ -181,8 +186,8 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
                 Some("export") => {
                     let file = positional.get(2).context("usage: plinth core export <file>")?;
                     std::fs::write(file, plinth_compiler::link::runtime()).with_context(|| format!("write {file}"))?;
-                    let (major, minor) = cores::core_version(plinth_compiler::link::runtime()).unwrap_or_default();
-                    println!("wrote core {major}.{minor} to {file}");
+                    let version = cores::core_version(plinth_compiler::link::runtime()).unwrap_or_default();
+                    println!("wrote core {} to {file}", cores::format_version(version));
                 }
                 Some(other) => bail!("unknown `plinth core {other}`; use list, install or export"),
             }
@@ -452,7 +457,11 @@ fn build(dir: &Path, out: Option<PathBuf>, sign: bool) -> Result<bool> {
 fn build_package(dir: &Path, out: Option<PathBuf>, sign: bool) -> Result<Option<PathBuf>> {
     let started = std::time::Instant::now();
     let Some(b) = compile(dir)? else { return Ok(None) };
-    let manifest = b.config.manifest(plinth_protocol::UI_API_VERSION, &b.runtime, b.accent, &b.app);
+    // For `core = "pinned"`, the manifest records the digest of the core
+    // build this compile used, so a host can find the exact match later
+    // (SPEC.md §10.5).
+    let core_digest = plinth_compiler::cores::digest_hex(plinth_compiler::link::runtime());
+    let manifest = b.config.manifest_with_core_digest(plinth_protocol::UI_API_VERSION, &b.runtime, b.accent, &b.app, Some(&core_digest));
     let assets: Vec<(String, Vec<u8>)> = read_assets(dir).into_iter().map(|(name, bytes)| (format!("assets/{name}"), bytes)).collect();
     let mut pkg = Package { manifest, component: b.app, assets, signature: None };
     if sign {
@@ -487,8 +496,8 @@ fn build_web(dir: &Path, out: Option<PathBuf>, single_file: bool, sign: bool) ->
     let plnt = std::fs::read(&plnt_path).with_context(|| format!("read {}", plnt_path.display()))?;
     let app = plinth_host_desktop::HostApp::from_bytes(plnt.clone(), &plnt_path)?;
     let core = plinth_compiler::link::runtime();
-    let (major, minor) = plinth_compiler::cores::core_version(core).context("the built-in core has no version")?;
-    let version = format!("{major}.{minor}");
+    let core_version = plinth_compiler::cores::core_version(core).context("the built-in core has no version")?;
+    let version = plinth_compiler::cores::format_version(core_version);
     let file = plnt_path.file_name().and_then(|n| n.to_str()).context("package file name")?.to_owned();
     let web = web_export::WebApp { name: &app.title, plnt: (&plnt, &file), core: (core, &version) };
     let dist = plnt_path.parent().unwrap_or(Path::new("."));
