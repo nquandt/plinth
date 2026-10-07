@@ -3023,3 +3023,94 @@ fn a_required_prop_still_rejects_null() {
     let main = with_app("const t: string | null = null; const e = <Row title={t} />;");
     assert_eq!(codes(&main.replace("import {", "import { Row,")), ["PL3001"]);
 }
+
+#[test]
+fn an_optional_number_or_bool_prop_can_be_left_out_by_a_condition() {
+    let main = r#"import { app, signal, Screen, Box, Button } from "plinth:ui";
+const on = signal(true);
+function Home() {
+  return <Screen title="Home">
+    <Box width={on() ? 40 : undefined} gap={on() ? 2 : undefined}>
+      <Button label="b" disabled={on() ? true : undefined} onPress={() => {}} />
+    </Box>
+    <Button label="flip" onPress={() => on.set(!on())} />
+  </Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| panic!("{}", front.diags.iter().map(|d| front.sources.render(d)).collect::<Vec<_>>().join("\n")));
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for c in guest.init(&[]).unwrap() {
+        assert!(tree.apply(&c).unwrap().is_empty());
+    }
+    let find = |tree: &Tree, kind: ControlKind| {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        while let Some(id) = stack.pop() {
+            let n = tree.get(id).unwrap();
+            if n.kind == Some(kind) {
+                return n.clone();
+            }
+            stack.extend(n.children.iter());
+        }
+        panic!("no {kind:?}");
+    };
+    let find_button = |tree: &Tree| {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        while let Some(id) = stack.pop() {
+            let n = tree.get(id).unwrap();
+            if n.kind == Some(ControlKind::Button) && n.prop(prop::DISABLED).is_some() {
+                return n.clone();
+            }
+            stack.extend(n.children.iter());
+        }
+        panic!("no disabled button");
+    };
+    let b = find(&tree, ControlKind::Box);
+    assert!(b.prop(prop::WIDTH).is_some());
+    assert!(b.prop(prop::GAP).is_some());
+    assert!(find_button(&tree).prop(prop::DISABLED).is_some());
+
+    let handler = {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        let mut found = None;
+        while let Some(id) = stack.pop() {
+            let n = tree.get(id).unwrap();
+            if n.kind == Some(ControlKind::Button) && n.str_prop(prop::LABEL) == Some("flip") {
+                found = n.handler(event::PRESS);
+            }
+            stack.extend(n.children.iter());
+        }
+        found.unwrap()
+    };
+    let mut w = Writer::new();
+    w.event(&Event::Ui { handler, event: event::PRESS, value: Value::Null });
+    for c in guest.on_event(w.as_bytes()).unwrap() {
+        assert!(tree.apply(&c).unwrap().is_empty());
+    }
+    let b = find(&tree, ControlKind::Box);
+    assert_eq!(b.prop(prop::WIDTH), None, "null removes a number prop");
+    assert_eq!(b.prop(prop::GAP), None);
+    let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+    let mut any_disabled = false;
+    while let Some(id) = stack.pop() {
+        let n = tree.get(id).unwrap();
+        if n.kind == Some(ControlKind::Button) {
+            any_disabled |= n.prop(prop::DISABLED).is_some();
+        }
+        stack.extend(n.children.iter());
+    }
+    assert!(!any_disabled, "null removes a bool prop");
+}
+
+#[test]
+fn a_required_prop_still_rejects_null_for_number_and_bool() {
+    let main = with_app(
+        "const n: number | null = null; const v = signal(1); const e = <Slider label=\"x\" value={v} min={n} max={10} />;",
+    );
+    assert_eq!(codes(&main.replace("import {", "import { Slider,")), ["PL3001"]);
+}
