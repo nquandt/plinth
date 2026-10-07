@@ -1143,7 +1143,12 @@ export class DomRenderer {
 
   textFieldView() {
     const input = el("input", "pl-input", { type: "text" });
-    const { wrap, label } = this.field(input);
+    // `error` (SPEC.md §6.3): a message under the input. It is outside the
+    // label's name (aria-hidden) and is the input's description instead.
+    const col = el("span", "pl-input-col");
+    col.appendChild(input);
+    const error = col.appendChild(el("span", "pl-field-error", { "aria-hidden": "true" }));
+    const { wrap, label } = this.field(col);
     let id = 0;
     input.addEventListener("input", () => this.sendChange(id, input.value));
     input.addEventListener("keydown", (e) => {
@@ -1157,6 +1162,12 @@ export class DomRenderer {
         setOptionalText(label, n.props.get(Prop.label));
         setProp(input, "value", n.props.get(Prop.value) ?? "");
         setProp(input, "placeholder", n.props.get(Prop.placeholder) ?? "");
+        // An empty `error` means no error, as on the desktop.
+        const message = n.props.get(Prop.error) || "";
+        setOptionalText(error, message);
+        error.id = `pl-error-${n.id}`;
+        setAttr(input, "aria-invalid", message ? "true" : null);
+        setAttr(input, "aria-describedby", message ? error.id : null);
       },
     };
   }

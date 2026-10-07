@@ -95,16 +95,22 @@ impl Checker<'_> {
             };
             if ps.ty == PropTy::StrList {
                 let Target::Prop(id) = ps.target else { unreachable!("StrList always targets a prop") };
-                if let ExprKind::Array(items) = &value.kind {
+                // The fast path is for an array literal of string literals
+                // only. Any other array (with a `const` name, a spread or a
+                // call in it) takes the run-time path below.
+                let literal = matches!(&value.kind, ExprKind::Array(items)
+                    if items.iter().all(|(spread, it)| !*spread && matches!(it.kind, ExprKind::Str(_))));
+                if let (true, ExprKind::Array(items)) = (literal, &value.kind) {
                     // Literal fast path: join at compile time, and diagnose
                     // a literal item that contains the separator.
                     let mut parts = Vec::new();
-                    for (spread, it) in items {
-                        match &it.kind {
-                            _ if *spread => self.err(code::TYPE_MISMATCH, it.span, "each item must be a string literal"),
-                            ExprKind::Str(s) if !s.contains('\u{1f}') => parts.push(s.clone()),
-                            ExprKind::Str(_) => self.err(code::TYPE_MISMATCH, it.span, "the character U+001F is not allowed here"),
-                            _ => self.err(code::TYPE_MISMATCH, it.span, "each item must be a string literal"),
+                    for (_, it) in items {
+                        if let ExprKind::Str(s) = &it.kind {
+                            if s.contains('\u{1f}') {
+                                self.err(code::TYPE_MISMATCH, it.span, "the character U+001F is not allowed here");
+                            } else {
+                                parts.push(s.clone());
+                            }
                         }
                     }
                     let joined = TExpr::new(TExprKind::Str(parts.join("\u{1f}")), Type::String, value.span);

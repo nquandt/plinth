@@ -42,7 +42,7 @@ done
 
 if [ "$mode" = full ]; then
   step "tsc check of every example"
-  for dir in examples/*/; do
+  for dir in examples/*/ examples/7guis/*/; do
     [ -f "$dir/tsconfig.json" ] || continue
     echo "tsc $dir"
     (cd "$dir" && npx -y -p typescript@7 tsc -p .)
@@ -55,7 +55,7 @@ if [ "$mode" = full ]; then
   "$plinth" core export target/core.wasm
   # Build every Plinth project that a web test can read, so a new test never
   # depends on a list that someone must remember to update.
-  for dir in examples/*/ web/test/fixtures/*/; do
+  for dir in examples/*/ examples/7guis/*/ web/test/fixtures/*/; do
     [ -f "$dir/plinth.toml" ] || continue
     "$plinth" build "$dir" > /dev/null
   done

@@ -1469,7 +1469,8 @@ impl PlinthRoot {
     fn render_text_field(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
         let placeholder = node.str_prop(prop::PLACEHOLDER).unwrap_or("").to_owned();
-        let error = node.str_prop(prop::ERROR).map(str::to_owned);
+        // An empty `error` means no error (an app writes `cond ? "msg" : ""`).
+        let error = node.str_prop(prop::ERROR).filter(|e| !e.is_empty()).map(str::to_owned);
         let Some(field) = self.fields.get(&node.id) else { return div().into_any_element() };
         let id = node.id;
         let input = div()
@@ -1653,7 +1654,8 @@ impl PlinthRoot {
         let title = node.str_prop(prop::TITLE).unwrap_or("").to_owned();
         let subtitle = node.str_prop(prop::SUBTITLE).map(str::to_owned);
         let glyph = node.str_prop(prop::ICON).map(icon_glyph);
-        let trailing = node.str_prop(prop::TRAILING).map(str::to_owned);
+        // An empty `trailing` means none (an app writes `cond ? "text" : ""`).
+        let trailing = node.str_prop(prop::TRAILING).filter(|s| !s.is_empty()).map(str::to_owned);
         let handler = node.handler(event::PRESS).filter(|_| self.stopped.is_none());
         let hover = t.hover;
         let aria_label = match &trailing {

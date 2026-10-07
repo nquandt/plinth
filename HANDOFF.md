@@ -129,12 +129,12 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 ## 9. Next steps (in order)
 
 1. (Done 2026-10-06: the web Hub app runs in its own sandboxed frame with the `plinth:hub` bridge. Small rest: minify `plinth.js`.) **Do not spend most time on the web host** (owner, 2026-10-06): the next steps are mostly outside `web/`.
-2. **7GUIs, tasks 1–5** (`docs/VALIDATION.md` V1) in `examples/7guis/`, on both hosts, with tests; record the numbers in VALIDATION §6.
+2. (Done 2026-10-06: **7GUIs, tasks 1–5** in `examples/7guis/`, tests in `tests/sevenguis.rs` and `web/test/run-7guis.mjs`, numbers in VALIDATION §6. Open: `docs/GAPS.md` 7G-1 to 7G-5, mainly `TextField.disabled` and `Row` selection.)
 3. **Level 2 UI:** U1 (UI API 1.6) and most of U2 (1.7: `hover`, `active`, `focus` and width-class partial styles) are done; `examples/primitives`. Rest of U2: transitions and springs, a `disabled` partial style. Then the gaps that the Pong agent reports (positioning, Canvas = U4, keyboard events), and interned style records (`docs/UI-ADVANCED.md` §4).
 4. **Storage, first slice** (`docs/STORAGE.md` §6): `plinth:files` on a private space and a granted `vault` space, local folder and OPFS providers, host sync to rustfs and Azurite in Docker, Hub UI for spaces, isolation tests. Editor: Markdown source plus a `Markdown` display control. Then the notes app (VALIDATION V2).
 5. **7GUIs tasks 6–7:** `Canvas` (U4) for Circle drawer; Grid virtualization for Cells.
 6. **Experience build order** (`docs/EXPERIENCE.md` §7): plain words and defaults, Try and Keep, the Privacy page, folder sync with encryption and pairing.
-7. **Compiler:** `Promise.race`/`any`/`allSettled`; the web host error banner; the `finally` order bug in `docs/GAPS.md`; smaller async code; tuples with optional or rest elements; `flat(depth > 1)`.
+7. **Compiler:** the web host error banner; smaller async code; rest patterns in array destructuring (`const [a, ...r] = t`). (Done 2026-10-06: `Promise.race`/`any`/`allSettled`, the sync-in-async `finally` order, tuples with optional and rest elements, `flat(depth)` with `Infinity`.)
 8. **Web Hub** (`docs/web-hub.md` §7): PWA, first-use prompts, session grants in browse mode, a notice to the Hub app when the host changes a grant.
 9. **Platforms:** a GUI window on Linux and macOS; then mobile (SPEC Q1, Q3).
 10. **Distribution:** publish the npm packages and a first registry; Hub H2 (signed indexes, transparency log); key rotation.

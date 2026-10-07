@@ -8,4 +8,5 @@
 
 # Build output of the example apps (plinth build, --target web).
 /examples/*/dist/
+/examples/7guis/*/dist/
 /web/test/fixtures/*/dist/

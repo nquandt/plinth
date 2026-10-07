@@ -236,6 +236,7 @@ impl bindings::Guest for Rt {
                 plinth_protocol::Event::Ui { handler, value, .. } => {
                     ui::dispatch(handler, &value);
                     settle();
+                    ui::end_event();
                 }
                 plinth_protocol::Event::Timer { timer } => {
                     host::dispatch_timer(timer);

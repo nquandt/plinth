@@ -26,7 +26,8 @@ struct Region {
 }
 
 enum Handler {
-    User(Callable),
+    /// A user callback, and the node and event it listens to.
+    User(Callable, NodeId, u16),
     Bind(u32),
 }
 
@@ -83,6 +84,10 @@ struct Ui {
     free_handlers: Vec<u32>,
     binds: Vec<Option<Bind>>,
     lists: Vec<Option<List>>,
+    /// While a `change` event runs: its node and the value that the host
+    /// shows already. `set_prop` does not send this value back (no echo of
+    /// a one-way `value` plus `onChange`, SPEC.md §8.4).
+    host_value: Option<(NodeId, Value)>,
 }
 
 static UI: Global<Ui> = Global::new(Ui {
@@ -95,6 +100,7 @@ static UI: Global<Ui> = Global::new(Ui {
     free_handlers: Vec::new(),
     binds: Vec::new(),
     lists: Vec::new(),
+    host_value: None,
 });
 
 fn with<R>(f: impl FnOnce(&mut Ui) -> R) -> R {
@@ -167,6 +173,11 @@ pub fn create(kind: u16) -> NodeId {
             id
         });
         u.ops.op(&Op::Create { id, kind });
+        // A new node with the id of the changed one (ids are used again)
+        // does not show the value of the change.
+        if matches!(&u.host_value, Some((n, _)) if *n == id) {
+            u.host_value = None;
+        }
         id
     });
     reactive::add_cleanup(Cleanup::Node(id));
@@ -174,7 +185,17 @@ pub fn create(kind: u16) -> NodeId {
 }
 
 pub fn set_prop(id: NodeId, prop: u16, value: Value) {
-    with(|u| u.ops.op(&Op::SetProp { id, prop, value }));
+    with(|u| {
+        if prop == prop::VALUE && matches!(&u.host_value, Some((n, v)) if *n == id && *v == value) {
+            return; // The host shows this value already.
+        }
+        u.ops.op(&Op::SetProp { id, prop, value })
+    });
+}
+
+/// Ends one UI event: from now on, `set_prop` sends every value again.
+pub fn end_event() {
+    with(|u| u.host_value = None);
 }
 
 pub fn set_text(id: NodeId, text: &str) {
@@ -288,7 +309,7 @@ fn run_region(id: u32) {
 
 pub fn listen(node: NodeId, ev: u16, callable: Callable) {
     let h = with(|u| {
-        let h = u.add_handler(Handler::User(callable));
+        let h = u.add_handler(Handler::User(callable, node, ev));
         u.ops.op(&Op::Listen { id: node, event: ev, handler: h });
         h
     });
@@ -357,7 +378,12 @@ pub fn dispatch(handler: u32, value: &Value) {
         Bind(u32, BindKind),
     }
     let action = with(|u| match u.handler(handler) {
-        Some(Handler::User(c)) => Some(Action::User(*c)),
+        Some(&Handler::User(c, node, ev)) => {
+            if ev == event::CHANGE {
+                u.host_value = Some((node, value.clone()));
+            }
+            Some(Action::User(c))
+        }
         Some(Handler::Bind(b)) => u.binds[*b as usize].as_ref().map(|bind| Action::Bind(*b, bind.kind)),
         None => None,
     });
@@ -686,7 +712,7 @@ pub fn cleanup(c: Cleanup) {
 pub fn trace_roots(f: &mut dyn FnMut(u32)) {
     with(|u| {
         for h in u.handlers.iter().flatten() {
-            if let Handler::User(c) = h {
+            if let Handler::User(c, _, _) = h {
                 f(c.env);
             }
         }
