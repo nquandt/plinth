@@ -27,9 +27,20 @@ fn codes(main: &str) -> Vec<&'static str> {
     f.diags.iter().map(|d| d.code).collect()
 }
 
-/// Compiles a program and runs it in wasmtime; panics with the diagnostics
-/// on a compile error. Returns the initial semantic tree.
+/// Compiles a program and runs it in wasmtime (or wasmi under
+/// `PLINTH_ENGINE=wasmi`); panics with the diagnostics on a compile
+/// error. Returns the initial semantic tree.
 fn run(main: &str) -> Tree {
+    run_with_limits(main, Limits::default())
+}
+
+/// Like `run`, with its own `Limits`: for one test
+/// (`array_sort_ten_thousand_elements`) that does enough real work to
+/// need a longer `call_timeout` than `Limits::default()` on the wasmi
+/// interpreter (SPEC.md §9.2 step 3; wasmtime finishes it in well under
+/// the default timeout either way, so a longer one here does not weaken
+/// that test on wasmtime).
+fn run_with_limits(main: &str, limits: Limits) -> Tree {
     let fs = MemFs::default().with("app/main.tsx", main);
     let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
     let artifact = artifact.unwrap_or_else(|| {
@@ -37,7 +48,7 @@ fn run(main: &str) -> Tree {
         panic!("compile errors:\n{}", diags.join("\n"))
     });
     let runner = Runner::new().unwrap();
-    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut guest = runner.load(&artifact.component, limits).unwrap();
     let mut tree = Tree::new();
     let commits = guest.init(&[]).unwrap();
     for log in guest.take_logs() {
@@ -910,7 +921,9 @@ function Home() {
 "#
     .to_string()
         + APP;
-    let tree = run(&main);
+    // A real sort of 10,000 elements; the wasmi interpreter needs much
+    // longer than `Limits::default()`'s 2 s to finish it (see `run_with_limits`).
+    let tree = run_with_limits(&main, Limits { call_timeout: std::time::Duration::from_secs(120), ..Limits::default() });
     assert_eq!(text_of(&tree, ControlKind::Text), "true|10000");
 }
 

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use wasmtime::component::{Component, HasSelf, Linker, types::ComponentItem};
-use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
+use wasmtime::{Config, Engine, Store};
 
 pub mod files;
 pub mod hub;
@@ -116,38 +116,89 @@ impl Default for Limits {
     }
 }
 
-/// The store limits, plus the size of the guest's memory (it only grows:
-/// the allocator never gives memory back), for `Guest::memory_bytes`.
+/// The guest's memory cap, plus the size of its memory so far (it only
+/// grows: the allocator never gives memory back), for `Guest::memory_bytes`.
+/// Plain numbers, not a wrapper over one engine's own `StoreLimits`: the
+/// wasmtime and wasmi `ResourceLimiter` traits take different error types,
+/// so `Limiter` gets two trait impls below (SPEC.md §9.2 step 3), both
+/// reading and updating these same fields.
 struct Limiter {
-    inner: StoreLimits,
+    memory_cap: usize,
     memory: usize,
 }
 
+/// Whether growing to `desired` is allowed under `cap` and the module's own
+/// declared `maximum`, shared by both `ResourceLimiter` impls below.
+fn allow_growth(cap: usize, desired: usize, maximum: Option<usize>) -> bool {
+    desired <= cap && maximum.is_none_or(|max| desired <= max)
+}
+
 impl wasmtime::ResourceLimiter for Limiter {
-    fn memory_growing(&mut self, current: usize, desired: usize, maximum: Option<usize>) -> wasmtime::Result<bool> {
-        let ok = self.inner.memory_growing(current, desired, maximum)?;
+    fn memory_growing(&mut self, _current: usize, desired: usize, maximum: Option<usize>) -> wasmtime::Result<bool> {
+        let ok = allow_growth(self.memory_cap, desired, maximum);
         if ok {
             self.memory = self.memory.max(desired);
         }
         Ok(ok)
     }
-    fn memory_grow_failed(&mut self, error: wasmtime::Error) -> wasmtime::Result<()> {
-        self.inner.memory_grow_failed(error)
+    fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
+        Ok(())
     }
-    fn table_growing(&mut self, current: usize, desired: usize, maximum: Option<usize>) -> wasmtime::Result<bool> {
-        self.inner.table_growing(current, desired, maximum)
+    fn table_growing(&mut self, _current: usize, _desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
+        Ok(true)
     }
-    fn table_grow_failed(&mut self, error: wasmtime::Error) -> wasmtime::Result<()> {
-        self.inner.table_grow_failed(error)
+    fn table_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
+        Ok(())
     }
     fn instances(&self) -> usize {
-        self.inner.instances()
+        4
     }
     fn tables(&self) -> usize {
-        self.inner.tables()
+        10_000
     }
     fn memories(&self) -> usize {
-        self.inner.memories()
+        10_000
+    }
+}
+
+/// `wasmi::ResourceLimiter` is a re-export of `wasmi_core::ResourceLimiter`
+/// (the same trait), so this one impl covers the wasmi backend too.
+#[cfg(feature = "wasmi")]
+impl ::wasmi_core::ResourceLimiter for Limiter {
+    fn memory_growing(
+        &mut self,
+        _current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> Result<bool, ::wasmi_core::LimiterError> {
+        let ok = allow_growth(self.memory_cap, desired, maximum);
+        if ok {
+            self.memory = self.memory.max(desired);
+        }
+        Ok(ok)
+    }
+    fn memory_grow_failed(&mut self, _error: &::wasmi_core::MemoryError) -> Result<(), ::wasmi_core::LimiterError> {
+        Ok(())
+    }
+    fn table_growing(
+        &mut self,
+        _current: usize,
+        _desired: usize,
+        _maximum: Option<usize>,
+    ) -> Result<bool, ::wasmi_core::LimiterError> {
+        Ok(true)
+    }
+    fn table_grow_failed(&mut self, _error: &::wasmi_core::TableError) -> Result<(), ::wasmi_core::LimiterError> {
+        Ok(())
+    }
+    fn instances(&self) -> usize {
+        4
+    }
+    fn tables(&self) -> usize {
+        10_000
+    }
+    fn memories(&self) -> usize {
+        10_000
     }
 }
 
@@ -669,10 +720,7 @@ impl Runner {
                     commits: Vec::new(),
                     logs: Vec::new(),
                     errors: Vec::new(),
-                    limits: Limiter {
-                        inner: StoreLimitsBuilder::new().memory_size(limits.memory_bytes).instances(4).build(),
-                        memory: 0,
-                    },
+                    limits: Limiter { memory_cap: limits.memory_bytes, memory: 0 },
                     policy,
                     kv,
                     timers: TimerQueue::new(),

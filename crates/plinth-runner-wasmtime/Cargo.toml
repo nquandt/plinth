@@ -18,11 +18,14 @@ ureq.workspace = true
 time = { version = "0.3.55", default-features = false, features = ["std", "local-offset"] }
 wasmi = { version = "2.0.0", optional = true }
 wasmparser = { workspace = true, optional = true }
+wasmi_core = { version = "2.0.0", optional = true }
 
 [features]
 # The wasmi interpreter engine (SPEC.md §9.2), for iOS and tests. Pulls in
-# wasmparser to pull the linked core module out of the component.
-wasmi = ["dep:wasmi", "dep:wasmparser"]
+# wasmparser to pull the linked core module out of the component, and
+# wasmi_core directly for `LimiterError` (the memory cap's `Limiter`),
+# which wasmi itself does not re-export.
+wasmi = ["dep:wasmi", "dep:wasmparser", "dep:wasmi_core"]
 
 [dev-dependencies]
 wat = "1.261.0"

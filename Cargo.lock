@@ -5088,6 +5088,7 @@ dependencies = [
  "time",
  "ureq 3.4.2",
  "wasmi",
+ "wasmi_core",
  "wasmparser 0.251.0",
  "wasmtime",
  "wat",

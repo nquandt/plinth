@@ -781,3 +781,99 @@ Open:
 | R2 | Web host | No memory cap of its own: the browser's limit applies. | Give the core's memory a `maximum` (an import with a limit) on the web, as `StoreLimits` does on the desktop. |
 | R3 | Compiler | A sum of more than 1000 terms is `PL1000`; `tsc` accepts it. | Convert left-deep binary chains without recursion (an explicit stack in the parser, checker and codegen). Low: hand-written code does not get near the limit. |
 | R4 | Tests | The mutation test only changes valid programs, at the text level. | Add structure-aware changes (swap two expressions of the same kind, change a type annotation) and a nightly run with a large `PLINTH_FUZZ_ITERS`. |
+
+## wasmi engine (2026-10-07)
+
+Step 2 of the wasmi interpreter engine for iOS (SPEC.md §9.2; step 1 added
+the engine selection, the core-module extraction, and six host interfaces
+behind `PLINTH_ENGINE=wasmi` and the `wasmi` cargo feature on
+`plinth-runner-wasmtime`). This pass added the remaining host interfaces,
+the call time limit (fuel), and the memory cap, and ran the bulk of the
+compiler's test suites under both engines.
+
+wasmi 2 is a register-machine interpreter: ahead of a call it compiles
+Wasm to its own register-based bytecode, closer to a simple bytecode VM
+than a tree-walking interpreter, but still well behind wasmtime's
+compiled code. Running `plinth-rt`'s own bytecode interpreter *inside*
+wasmi is two levels of interpretation, which is why the gap below is
+large on CPU-heavy work and small on ordinary UI event handling.
+
+**What works:**
+
+- Every `plinth:app` interface is wired: `ui`, `dev`, `error`, `time`,
+  `store`, `clipboard` (step 1), and now `dialog`, `net`, `files`, `hub`
+  (`crates/plinth-runner-wasmtime/src/wasmi_engine.rs`), each calling the
+  same `HostState` method the wasmtime `bindings::...::Host` trait impls
+  call. The core ABI layouts (ptr/len pairs, `retptr`-based results) match
+  `web/plinth-web.js`'s `hostImports` byte for byte.
+- The call time limit uses fuel (wasmi has no epoch-interruption
+  primitive): `Config::consume_fuel(true)`, and `Store::set_fuel` before
+  every `init`/`on-event` call, from a budget `FUEL_PER_MS *
+  Limits::call_timeout.as_millis()`. Running out of fuel maps to the
+  same plain reason as wasmtime's epoch interrupt: "the app is not
+  responding (time limit reached)".
+- The memory cap reuses `crate::Limiter` (plain `memory_cap`/`memory`
+  fields, no longer wrapped around wasmtime's own `StoreLimits` type) through
+  `wasmi_core::ResourceLimiter`, the same trait `wasmi::ResourceLimiter`
+  re-exports; `Guest::memory_bytes` now works on both engines.
+- `FUEL_PER_MS` is **not** a wall-clock-accurate conversion: real fuel
+  consumption per millisecond varied about 15x between workloads measured
+  here (roughly 11,000 fuel/ms for a tight add-and-branch TS `while` loop
+  running through `plinth-rt`'s own interpreter, versus roughly 172,000
+  fuel/ms during a 10,000-element `Array.sort`). The constant
+  (`150_000`) is picked low enough that the slowest case still trips
+  within a few seconds for `Limits::default()`-sized timeouts, which
+  means a legitimately heavy computation (`array_sort_ten_thousand_elements`
+  in `tests/lang.rs`) needs its own longer `call_timeout` under wasmi,
+  added via a new `run_with_limits` test helper; it still passes well
+  inside `Limits::default()` on wasmtime.
+
+**Build note:** optimizing the `wasmi` crate itself at `opt-level = 3` in
+a `[profile.dev]` package override **crashes** (`STATUS_ACCESS_VIOLATION`)
+on Windows/MSVC debug builds, reproduced with `debug-assertions = false`
+and `overflow-checks = false` too (so it is not those two interacting
+with `-O3`; it is specific to the `wasmi` crate's own code at `-O3`
+outside a full `release` profile). The workaround in the root `Cargo.toml`
+optimizes `wasmi_core`, `wasmi_ir` and `wasmi_collections` (the bytecode
+and numeric-op crates, where the hot loop lives) and leaves `wasmi` itself
+at `opt-level = 0`; `wasmi` is mostly glue (`Store`, `Linker`, `Caller`)
+so this still captures most of the speedup without the crash.
+
+**Test results**, `cargo test -p plinth-compiler`:
+
+| Suite | wasmtime | `PLINTH_ENGINE=wasmi` |
+|---|---|---|
+| `--test errors` (incl. all four "Limits" tests: endless loop, loop at start, recursion, memory) | 28/28, 6 s | 28/28, 69 s |
+| `--test lang` | 171/171, 29 s | 171/171, 696 s (696 s is almost all one test, the 10k-element sort, at its own 120 s `call_timeout`) |
+
+Also passing under `PLINTH_ENGINE=wasmi` in this pass (not re-confirmed in
+the final wrap-up run, see "Left for the next agent" below): `--test
+sevenguis` (7/7, 336 s, `cells_formulas_propagate_and_find_cycles` is most
+of it), `--test apps` (7/7, 1.6 s, includes `pong_plays_a_point`).
+`cargo test -p plinth-runner-wasmtime --features wasmi` (29/29, incl. the
+two `wasmi_core::extract_core_module` unit tests) and the default-engine
+`cargo test -p plinth-runner-wasmtime` (29/29) both pass.
+
+**Left for the next agent:**
+
+- `--test monkey`, `--test async_await`, `--test files`, `--test hub_api`,
+  and `--test net` have not been run yet under `PLINTH_ENGINE=wasmi`
+  (`monkey` was still running, over 10 minutes in, when this pass was cut
+  short to hand off; it is long even on wasmtime). `files` and `hub_api`
+  and `net` exercise the interfaces this pass just wired for the first
+  time, so they are the most likely to need a fix.
+- No speed comparison numbers (wasmtime vs wasmi, release build: one Pong
+  tick, one Cells formula change, `init` of the 10,000-row List example)
+  were produced. `crates/plinth-compiler/tests/apps.rs`'s
+  `pong_plays_a_point` and `tests/sevenguis.rs`'s
+  `cells_formulas_propagate_and_find_cycles` already print a timing line
+  each (`eprintln!`); `tests/perf.rs`'s `#[ignore]`d `list_10k_perf` prints
+  one for `init`. Running each once per engine in `--release` (`Runner::new`
+  already reads `PLINTH_ENGINE`, so no new code is needed) would answer
+  this without a new bench file.
+- `FUEL_PER_MS` is calibrated from exactly two data points (see above); a
+  third workload (e.g. one of the still-unrun suites) could easily fall
+  outside the 15x spread already seen and need either a higher constant
+  or another test-specific `call_timeout` override.
+- `scripts/ci-local.sh full` was run once at the end of this pass with the
+  default engine (wasmtime); see the commit log for the result.
