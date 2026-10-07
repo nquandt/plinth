@@ -45,7 +45,13 @@ impl Node {
         self.listeners.iter().find(|(e, _)| *e == event).map(|(_, h)| *h)
     }
 
+    /// Sets a prop; `Null` removes it, so the control shows its default
+    /// (`icon={c ? "check" : undefined}`, GAPS 7G-3).
     fn set_prop(&mut self, prop: u16, value: Value) {
+        if value == Value::Null {
+            self.props.retain(|(p, _)| *p != prop);
+            return;
+        }
         match self.props.iter_mut().find(|(p, _)| *p == prop) {
             Some(slot) => slot.1 = value,
             None => self.props.push((prop, value)),

@@ -2898,3 +2898,128 @@ export default app({ screens: { home: { title: "Home", component: Home } } });
 "#);
     assert_eq!(text_of(&tree, ControlKind::Text), "107");
 }
+
+// -- Default values in patterns ---------------------------------------------
+
+fn shown_with(top: &str, body: &str, out: &str) -> String {
+    let main = format!(
+        "import {{ app, Screen, Text }} from \"plinth:ui\";\n{top}\nfunction Home() {{\n{body}\n  return <Screen title=\"Home\"><Text>{{{out}}}</Text></Screen>;\n}}\n"
+    ) + APP;
+    text_of(&run(&main), ControlKind::Text)
+}
+
+#[test]
+fn object_pattern_defaults_apply_to_missing_and_null_fields() {
+    let top = "interface Opts { size?: number; name: string | null; tag: string; }";
+    let body = "const a: Opts = { tag: \"t\", name: null };\n  const b: Opts = { size: 7, name: \"n\", tag: \"u\" };\n  const { size = 2, name = \"anon\", tag = \"never\" } = a;\n  const { size: s2 = 2, name: n2 = \"anon\" } = b;";
+    assert_eq!(shown_with(top, body, "`${size} ${name} ${tag} ${s2} ${n2}`"), "2 anon t 7 n");
+}
+
+#[test]
+fn parameter_pattern_defaults() {
+    let top = "function area({ w = 1, h = 1 }: { w?: number; h?: number }): number { return w * h; }";
+    assert_eq!(shown_with(top, "", "`${area({})} ${area({ w: 3 })} ${area({ w: 3, h: 4 })}`"), "1 3 12");
+}
+
+#[test]
+fn array_pattern_defaults_apply_past_the_end() {
+    let body = "const xs: number[] = [5];\n  const [a = 1, b = 2, c = 3] = xs;\n  const ys: (string | null)[] = [null, \"y\"];\n  const [p = \"p\", q = \"q\", r = \"r\"] = ys;";
+    assert_eq!(shown_with("", body, "`${a} ${b} ${c} ${p} ${q} ${r}`"), "5 2 3 p y r");
+}
+
+#[test]
+fn nested_pattern_defaults_and_for_of() {
+    let top = "interface Pt { x?: number; y?: number; }\ninterface Shape { at: Pt; label?: string; }";
+    let body = "const shapes: Shape[] = [{ at: { x: 1 } }, { at: {}, label: \"b\" }];\n  let out = \"\";\n  for (const { at: { x = 0, y = 0 }, label = \"-\" } of shapes) { out += `${label}(${x},${y}) `; }";
+    assert_eq!(shown_with(top, body, "out"), "-(1,0) b(0,0) ");
+}
+
+#[test]
+fn a_pattern_default_of_the_wrong_type_is_an_error() {
+    let main = "import { app, Screen } from \"plinth:ui\";\ninterface O { n?: number; }\nfunction Home() { const o: O = {}; const { n = \"x\" } = o; return <Screen title={\"\" + n}></Screen>; }\n".to_string() + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let front = plinth_compiler::driver::frontend(&fs);
+    assert!(front.has_errors(), "a string default for a number field must be an error");
+}
+
+// -- Rest in object patterns -------------------------------------------------
+
+#[test]
+fn object_rest_pattern_holds_the_other_fields() {
+    let top = "import { JSON } from \"plinth:core\";
+interface User { id: number; name: string; tags: string[]; admin?: boolean; }\ninterface Shown { name: string; tags: string[]; admin?: boolean; }\nfunction label(s: Shown): string { return s.name + \":\" + s.tags.join(\"+\"); }";
+    let body = "const u: User = { id: 4, name: \"ann\", tags: [\"a\", \"b\"] };\n  const { id, ...rest } = u;\n  const again: User = { ...rest, id: id + 1 };";
+    assert_eq!(
+        shown_with(top, body, "`${id} ${label(rest)} ${JSON.stringify(rest)} ${again.id}`"),
+        "4 ann:a+b {\"name\":\"ann\",\"tags\":[\"a\",\"b\"],\"admin\":null} 5"
+    );
+}
+
+#[test]
+fn object_rest_in_a_parameter_and_with_defaults() {
+    let top = "function split({ size = 1, ...more }: { size?: number; a: string; b: number }): string { return `${size}|${more.a}|${more.b}`; }";
+    assert_eq!(shown_with(top, "", "split({ a: \"x\", b: 2 }) + \" \" + split({ size: 3, a: \"y\", b: 4 })"), "1|x|2 3|y|4");
+}
+
+// -- An optional prop left out by a condition (GAPS 7G-3) --------------------
+
+/// `prop={c ? x : undefined}`: `null` removes the prop on the host, so the
+/// control shows its default. Checks a string prop (`subtitle`), a
+/// string-literal prop (`icon`) and an enum prop (`tone`), set and then
+/// removed by an event.
+#[test]
+fn an_optional_prop_can_be_left_out_by_a_condition() {
+    let main = r#"import { app, signal, Screen, List, Row, Text, Button } from "plinth:ui";
+const on = signal(true);
+function Home() {
+  return <Screen title="Home">
+    <Row title="r" subtitle={on() ? "sub" : undefined} icon={on() ? "check" : undefined} />
+    <Text tone={on() ? "danger" : undefined}>t</Text>
+    <Button label="flip" onPress={() => on.set(!on())} />
+  </Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| panic!("{}", front.diags.iter().map(|d| front.sources.render(d)).collect::<Vec<_>>().join("\n")));
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for c in guest.init(&[]).unwrap() {
+        assert!(tree.apply(&c).unwrap().is_empty());
+    }
+    let find = |tree: &Tree, kind: ControlKind| {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        while let Some(id) = stack.pop() {
+            let n = tree.get(id).unwrap();
+            if n.kind == Some(kind) {
+                return n.clone();
+            }
+            stack.extend(n.children.iter());
+        }
+        panic!("no {kind:?}");
+    };
+    let row = find(&tree, ControlKind::Row);
+    assert_eq!(row.str_prop(prop::SUBTITLE), Some("sub"));
+    assert_eq!(row.str_prop(prop::ICON), Some("check"));
+    assert!(find(&tree, ControlKind::Text).prop(prop::TONE).is_some());
+
+    let handler = find(&tree, ControlKind::Button).handler(event::PRESS).unwrap();
+    let mut w = Writer::new();
+    w.event(&Event::Ui { handler, event: event::PRESS, value: Value::Null });
+    for c in guest.on_event(w.as_bytes()).unwrap() {
+        assert!(tree.apply(&c).unwrap().is_empty());
+    }
+    let row = find(&tree, ControlKind::Row);
+    assert_eq!(row.prop(prop::SUBTITLE), None, "null removes the prop");
+    assert_eq!(row.prop(prop::ICON), None);
+    assert_eq!(find(&tree, ControlKind::Text).prop(prop::TONE), None);
+}
+
+#[test]
+fn a_required_prop_still_rejects_null() {
+    let main = with_app("const t: string | null = null; const e = <Row title={t} />;");
+    assert_eq!(codes(&main.replace("import {", "import { Row,")), ["PL3001"]);
+}

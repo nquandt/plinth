@@ -494,13 +494,19 @@ abi! {
 
     // -- UI ----------------------------------------------------------------------
     fn __plinth_rt_node(kind: i32) -> i32 { ui::create(kind as u16) as i32 }
+    // A null string (0) or enum id -1 removes the prop: an optional prop
+    // set to `null`/`undefined` (GAPS 7G-3).
     fn __plinth_rt_prop_str(id: i32, prop: i32, s: i32) {
-        ui::set_prop(id as u32, prop as u16, plinth_protocol::Value::Str(strings::as_str(ptr(s)).to_owned()))
+        let value = if s == 0 { plinth_protocol::Value::Null } else { plinth_protocol::Value::Str(strings::as_str(ptr(s)).to_owned()) };
+        ui::set_prop(id as u32, prop as u16, value)
     }
     fn __plinth_rt_prop_f64(id: i32, prop: i32, v: f64) { ui::set_prop(id as u32, prop as u16, plinth_protocol::Value::Number(v)) }
     fn __plinth_rt_prop_int(id: i32, prop: i32, v: i32) { ui::set_prop(id as u32, prop as u16, plinth_protocol::Value::Int(v)) }
     fn __plinth_rt_prop_bool(id: i32, prop: i32, v: i32) { ui::set_prop(id as u32, prop as u16, plinth_protocol::Value::Bool(v != 0)) }
-    fn __plinth_rt_prop_enum(id: i32, prop: i32, v: i32) { ui::set_prop(id as u32, prop as u16, plinth_protocol::Value::Enum(v as u16)) }
+    fn __plinth_rt_prop_enum(id: i32, prop: i32, v: i32) {
+        let value = if v < 0 { plinth_protocol::Value::Null } else { plinth_protocol::Value::Enum(v as u16) };
+        ui::set_prop(id as u32, prop as u16, value)
+    }
     fn __plinth_rt_text(id: i32, s: i32) { ui::set_text(id as u32, strings::as_str(ptr(s))) }
     fn __plinth_rt_append(parent: i32, child: i32) { ui::append(parent as u32, child as u32) }
     fn __plinth_rt_region(parent: i32, thunk: i32, env: i32) {

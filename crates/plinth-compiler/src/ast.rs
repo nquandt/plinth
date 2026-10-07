@@ -163,16 +163,19 @@ pub enum VarKind {
 #[derive(Debug, Clone)]
 pub enum Pattern {
     Ident(String, Span),
-    /// `{ a, b: c }`: `(key, pattern)`.
-    Object(Vec<(String, Pattern)>, Span),
+    /// `{ a, b: c, ...rest }`: `(key, pattern)` and the rest.
+    Object(Vec<(String, Pattern)>, Option<Box<Pattern>>, Span),
     /// `[a, , b, ...rest]`: the elements (`None` for a hole) and the rest.
     Array(Vec<Option<Pattern>>, Option<Box<Pattern>>, Span),
+    /// `a = 1` inside an object or array pattern: the default value is
+    /// used when the part is `null` (`undefined` is the same value).
+    Default(Box<Pattern>, Box<Expr>, Span),
 }
 
 impl Pattern {
     pub fn span(&self) -> Span {
         match self {
-            Pattern::Ident(_, s) | Pattern::Object(_, s) | Pattern::Array(_, _, s) => *s,
+            Pattern::Ident(_, s) | Pattern::Object(_, _, s) | Pattern::Array(_, _, s) | Pattern::Default(_, _, s) => *s,
         }
     }
 }

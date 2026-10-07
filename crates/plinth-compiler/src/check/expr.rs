@@ -1819,7 +1819,7 @@ impl Checker<'_> {
         TExpr::new(TExprKind::Rt("arr_slice", vec![arr, zero, max]), ty, span)
     }
 
-    fn arr_len_of(&self, arr: TExpr, span: Span) -> TExpr {
+    pub(super) fn arr_len_of(&self, arr: TExpr, span: Span) -> TExpr {
         let len = TExpr::new(TExprKind::Rt("arr_len", vec![arr]), Type::Bool, span);
         TExpr::new(TExprKind::Coerce(Coercion::I32ToNum, bx(len)), Type::Number, span)
     }
@@ -2772,39 +2772,44 @@ impl Checker<'_> {
         TExpr::new(TExprKind::Cmp(CmpOp::Eq, eq, bx(a), bx(b)), Type::Bool, span)
     }
 
+    /// `lt ?? r`: `r` when `lt` is `null`, else `lt` without `null`. A
+    /// pattern default (`{ a = 1 }`) uses it too.
+    pub(super) fn coalesce(&mut self, lt: TExpr, r: &Expr, span: Span, expected: Option<&Type>) -> TExpr {
+        let l_span = lt.span;
+        let inner = match &lt.ty {
+            Type::Nullable(t) => (**t).clone(),
+            t => t.clone(),
+        };
+        let want = expected.cloned().unwrap_or(inner.clone());
+        let rt = self.expr(r, Some(&want));
+        let ty = self.join(&inner, &rt.ty, span);
+        let tmp = self.temp(lt.ty.clone());
+        let read = TExpr::new(TExprKind::Var(tmp), lt.ty.clone(), l_span);
+        let unwrapped = if !matches!(lt.ty, Type::Nullable(_)) {
+            TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(read.clone())), inner, l_span)
+        } else {
+            match inner.repr() {
+                crate::types::Repr::F64 => TExpr::new(TExprKind::Coerce(Coercion::UnboxNum, bx(read.clone())), inner, l_span),
+                crate::types::Repr::I32 => TExpr::new(TExprKind::Coerce(Coercion::UnboxI32, bx(read.clone())), inner, l_span),
+                _ => TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(read.clone())), inner, l_span),
+            }
+        };
+        let unwrapped = self.coerce(unwrapped, &ty);
+        let rt = self.coerce(rt, &ty);
+        let test = TExpr::new(TExprKind::IsNull(bx(read)), Type::Bool, span);
+        let cond = TExpr::new(TExprKind::Cond(bx(test), bx(rt), bx(unwrapped)), ty.clone(), span);
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(tmp, Some(lt))], bx(cond)), ty, span)
+    }
+
     fn logical(&mut self, op: LogicOp, l: &Expr, r: &Expr, span: Span, expected: Option<&Type>) -> TExpr {
         match op {
             LogicOp::Nullish => {
                 let lt = self.expr(l, None);
-                let inner = match &lt.ty {
-                    Type::Nullable(t) => (**t).clone(),
-                    t => {
-                        if !t.is_error() {
-                            let msg = format!("the left side has type `{}`, which is never null", self.show(t));
-                            self.err(code::TYPE_MISMATCH, l.span, msg);
-                        }
-                        t.clone()
-                    }
-                };
-                let want = expected.cloned().unwrap_or(inner.clone());
-                let rt = self.expr(r, Some(&want));
-                let ty = self.join(&inner, &rt.ty, span);
-                let tmp = self.temp(lt.ty.clone());
-                let read = TExpr::new(TExprKind::Var(tmp), lt.ty.clone(), l.span);
-                let unwrapped = if !matches!(lt.ty, Type::Nullable(_)) {
-                    TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(read.clone())), inner, l.span)
-                } else {
-                    match inner.repr() {
-                        crate::types::Repr::F64 => TExpr::new(TExprKind::Coerce(Coercion::UnboxNum, bx(read.clone())), inner, l.span),
-                        crate::types::Repr::I32 => TExpr::new(TExprKind::Coerce(Coercion::UnboxI32, bx(read.clone())), inner, l.span),
-                        _ => TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(read.clone())), inner, l.span),
-                    }
-                };
-                let unwrapped = self.coerce(unwrapped, &ty);
-                let rt = self.coerce(rt, &ty);
-                let test = TExpr::new(TExprKind::IsNull(bx(read)), Type::Bool, span);
-                let cond = TExpr::new(TExprKind::Cond(bx(test), bx(rt), bx(unwrapped)), ty.clone(), span);
-                TExpr::new(TExprKind::Block(vec![TStmt::Let(tmp, Some(lt))], bx(cond)), ty, span)
+                if !matches!(lt.ty, Type::Nullable(_)) && !lt.ty.is_error() {
+                    let msg = format!("the left side has type `{}`, which is never null", self.show(&lt.ty));
+                    self.err(code::TYPE_MISMATCH, l.span, msg);
+                }
+                self.coalesce(lt, r, span, expected)
             }
             LogicOp::And | LogicOp::Or => {
                 let lt = self.expr(l, None);

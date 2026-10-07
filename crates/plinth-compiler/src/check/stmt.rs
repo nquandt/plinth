@@ -422,12 +422,26 @@ impl Checker<'_> {
     pub(super) fn destructure(&mut self, pat: &Pattern, src: TExpr, mutable: bool) -> Vec<TStmt> {
         let mut out = Vec::new();
         match pat {
+            Pattern::Default(inner, value, span) => {
+                // `a = v`: `v` when the part is null (JS: undefined). On a
+                // part that is never null the default never applies; it is
+                // still checked against the part's type.
+                let part = if matches!(src.ty, Type::Nullable(_)) {
+                    self.coalesce(src, value, *span, None)
+                } else {
+                    let want = src.ty.clone();
+                    let v = self.expr(value, Some(&want));
+                    let _ = self.coerce(v, &want);
+                    src
+                };
+                out.extend(self.bind_part(inner, part, mutable));
+            }
             Pattern::Ident(name, span) => {
                 let v = self.new_var(name, src.ty.clone(), mutable);
                 self.define(name, *span, Binding::Var(v));
                 out.push(TStmt::Let(v, Some(src)));
             }
-            Pattern::Object(props, span) => {
+            Pattern::Object(props, rest, span) => {
                 let Type::Struct(sid) = src.ty else {
                     if !src.ty.is_error() {
                         let msg = format!("cannot destructure a value of type `{}`", self.show(&src.ty));
@@ -444,6 +458,27 @@ impl Checker<'_> {
                     let part =
                         TExpr::new(TExprKind::Field(Box::new(src.clone()), sid, idx as u32), field.ty.clone(), sub.span());
                     out.extend(self.bind_part(sub, part, mutable));
+                }
+                // `...rest`: a new object with the other fields, of an
+                // object type with just those fields.
+                if let Some(rest_pat) = rest {
+                    if self.tuple_shape(sid).is_some() {
+                        self.err(code::UNSUPPORTED, rest_pat.span(), "`...rest` in an object pattern needs an object, not a tuple");
+                        return out;
+                    }
+                    let all = self.prog.structs[sid as usize].fields.clone();
+                    let (mut fields, mut values) = (Vec::new(), Vec::new());
+                    for (i, f) in all.iter().enumerate() {
+                        if props.iter().any(|(k, _)| *k == f.name) {
+                            continue;
+                        }
+                        values.push(TExpr::new(TExprKind::Field(Box::new(src.clone()), sid, i as u32), f.ty.clone(), rest_pat.span()));
+                        fields.push(f.clone());
+                    }
+                    let ty = self.anon_struct(fields);
+                    let Type::Struct(rest_sid) = ty else { unreachable!("anon_struct gives a struct") };
+                    let part = TExpr::new(TExprKind::StructLit(rest_sid, values), ty, rest_pat.span());
+                    out.extend(self.bind_part(rest_pat, part, mutable));
                 }
             }
             Pattern::Array(elems, rest, span) => {
@@ -505,6 +540,26 @@ impl Checker<'_> {
                     let Some(sub) = sub else { continue };
                     let idx = TExpr::new(TExprKind::Num(i as f64), Type::Number, sub.span());
                     let part = TExpr::new(TExprKind::Index(Box::new(src.clone()), Box::new(idx)), (*elem).clone(), sub.span());
+                    if let Pattern::Default(inner, value, dspan) = sub {
+                        // `[a = v] = xs`: JS gives `v` past the end (the
+                        // element is undefined), where a read would trap.
+                        let len = self.arr_len_of(src.clone(), *dspan);
+                        let k = TExpr::new(TExprKind::Num(i as f64), Type::Number, *dspan);
+                        let inside = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, Box::new(k), Box::new(len)), Type::Bool, *dspan);
+                        if matches!(*elem, Type::Nullable(_)) {
+                            // Past the end is null; the default then
+                            // applies to it as to a null element.
+                            let none = TExpr::new(TExprKind::Null, (*elem).clone(), *dspan);
+                            let read = TExpr::new(TExprKind::Cond(Box::new(inside), Box::new(part), Box::new(none)), (*elem).clone(), *dspan);
+                            out.extend(self.bind_part(sub, read, mutable));
+                        } else {
+                            let v = self.expr(value, Some(&elem));
+                            let v = self.coerce(v, &elem);
+                            let read = TExpr::new(TExprKind::Cond(Box::new(inside), Box::new(part), Box::new(v)), (*elem).clone(), *dspan);
+                            out.extend(self.bind_part(inner, read, mutable));
+                        }
+                        continue;
+                    }
                     out.extend(self.bind_part(sub, part, mutable));
                 }
                 // `...rest`: a new array of the elements after the pattern's elements.

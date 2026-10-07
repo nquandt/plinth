@@ -722,6 +722,17 @@ impl Cx<'_> {
     /// Maps a string literal union value to its enum id.
     fn enum_value(&mut self, value: TExpr, table: &[(String, u16)]) -> TExpr {
         let span = value.span;
+        if let Type::Nullable(inner) = &value.ty {
+            // An optional prop set to null: -1 removes the prop (GAPS 7G-3).
+            let ty = value.ty.clone();
+            let tmp = self.new_var("$enum_or_null", ty.clone());
+            let read = TExpr::new(TExprKind::Var(tmp), ty, span);
+            let is_null = TExpr::new(TExprKind::IsNull(Box::new(read.clone())), Type::Bool, span);
+            let unwrapped = TExpr::new(TExprKind::Coerce(Coercion::Retag, Box::new(read)), (**inner).clone(), span);
+            let id = self.enum_value(unwrapped, table);
+            let pick = TExpr::new(TExprKind::Cond(Box::new(is_null), Box::new(i32c(-1)), Box::new(id)), Type::Bool, span);
+            return TExpr::new(TExprKind::Block(vec![TStmt::Let(tmp, Some(value))], Box::new(pick)), Type::Bool, span);
+        }
         let inner = match &value.kind {
             TExprKind::Coerce(Coercion::Retag, inner) => inner.as_ref(),
             _ => &value,

@@ -2434,7 +2434,10 @@ class Tree {
       case "set-prop": {
         const n = this.nodes.get(op.id);
         if (!n) break;
-        n.props.set(op.prop, op.value);
+        // `null` removes the prop, so the control shows its default
+        // (`icon={c ? "check" : undefined}`, GAPS 7G-3), as on the desktop.
+        if (op.value === null) n.props.delete(op.prop);
+        else n.props.set(op.prop, op.value);
         ch.dirty.add(op.id);
         // A screen title is also the nav item's text and the page title.
         if (op.prop === Prop.title && n.kind === ControlKind.screen) ch.nav = true;

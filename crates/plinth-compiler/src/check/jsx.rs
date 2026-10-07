@@ -244,7 +244,7 @@ impl Checker<'_> {
             };
             let (target, te) = match ps.ty {
                 PropTy::Str => {
-                    let te = self.typed(&value, &Type::String);
+                    let te = self.typed_prop(&value, &Type::String, ps.required);
                     if ps.name == "alt" {
                         match &value.kind {
                             ExprKind::Str(s) if s.trim().is_empty() => self.err_help(
@@ -278,8 +278,16 @@ impl Checker<'_> {
                 }
                 PropTy::StrOneOf(names) => {
                     let t = Type::str_lits(names.iter().map(|s| s.to_string()).collect());
-                    let te = self.typed(&value, &t);
-                    (PropTarget::Str(id), self.coerce(te, &Type::String))
+                    let te = self.typed_prop(&value, &t, ps.required);
+                    if matches!(te.ty, Type::Nullable(_)) {
+                        // `"a" | "b" | null` and `string | null` are the same
+                        // string pointer (null is 0).
+                        let s = Type::Nullable(Box::new(Type::String));
+                        let span = te.span;
+                        (PropTarget::Str(id), TExpr::new(TExprKind::Coerce(Coercion::Retag, Box::new(te)), s, span))
+                    } else {
+                        (PropTarget::Str(id), self.coerce(te, &Type::String))
+                    }
                 }
                 PropTy::Size(fraction_id) => match &value.kind {
                     // A string is a fraction (`"1/2"`, `"full"`, ...): an
@@ -298,7 +306,7 @@ impl Checker<'_> {
                 PropTy::Bool => (PropTarget::Bool(id), self.typed(&value, &Type::Bool)),
                 PropTy::Enum(table) => {
                     let t = Type::str_lits(table.iter().map(|(s, _)| s.to_string()).collect());
-                    let te = self.typed(&value, &t);
+                    let te = self.typed_prop(&value, &t, ps.required);
                     (PropTarget::Enum(id, table.iter().map(|(s, v)| (s.to_string(), *v)).collect()), te)
                 }
                 PropTy::Callback0 | PropTy::CallbackStr | PropTy::CallbackBool | PropTy::CallbackNum | PropTy::CallbackPoint => {
@@ -425,6 +433,22 @@ impl Checker<'_> {
             }
         }
         TJsx::Control { kind: spec.kind, props, children, span: el.span }
+    }
+
+    /// Like `typed`, but an optional prop also takes `T | null`
+    /// (`icon={c ? "check" : undefined}`): null removes the prop, so the
+    /// control shows its default (GAPS 7G-3).
+    fn typed_prop(&mut self, e: &Expr, ty: &Type, required: bool) -> TExpr {
+        if required {
+            return self.typed(e, ty);
+        }
+        let nullable = Type::Nullable(Box::new(ty.clone()));
+        let te = self.expr(e, Some(&nullable));
+        if matches!(te.ty, Type::Nullable(_) | Type::Null) {
+            self.coerce(te, &nullable)
+        } else {
+            self.coerce(te, ty)
+        }
     }
 
     fn typed(&mut self, e: &Expr, ty: &Type) -> TExpr {

@@ -34,6 +34,14 @@ assert.deepEqual([...ch.dirty], [11]);
 assert.equal(ch.children.size, 0);
 assert.equal(ch.nav, false);
 
+// A null value removes the prop, so the control shows its default
+// (`subtitle={c ? "x" : undefined}`, GAPS 7G-3), as on the desktop.
+tree.apply([{ op: "set-prop", id: 11, prop: Prop.subtitle, value: "sub" }]);
+assert.equal(tree.node(11).props.get(Prop.subtitle), "sub");
+tree.apply([{ op: "set-prop", id: 11, prop: Prop.subtitle, value: null }]);
+assert.equal(tree.node(11).props.has(Prop.subtitle), false);
+assert.deepEqual([...tree.takeChanges().dirty], [11]);
+
 // A move inside the parent, and an insert before an anchor.
 tree.apply([{ op: "move", parent: 2, id: 12, before: 10 }]);
 assert.deepEqual(tree.node(2).children, [12, 10, 11]);

@@ -51,7 +51,15 @@ members, getters/setters, generic classes.
 - Arithmetic, comparison (`===`/`!==` only, no `==`/`!=`), logical
   operators, `??`, `?.`, the ternary operator, template literals.
 - Object literals, array literals, destructuring, spread into arrays and
-  objects of a known shape.
+  objects of a known shape. Patterns can have **default values**
+  (`const { size = 2 } = opts`, `function f({ w = 1 }: P)`,
+  `const [a = 0] = xs`): the default applies when the part is `null` or
+  `undefined` (one value in Plinth), and past the end of an array (a read
+  there would trap). **Rest in object patterns** (`const { id, ...rest } =
+  user`) makes a new object of the other fields; its type is an object
+  type with just those fields.
+- An optional prop takes `T | null`: `icon={done ? "check" : undefined}`.
+  `null` removes the prop, so the control shows its default.
 - `interface`, `type` aliases, string literal unions, `enum`.
 - JSX with Plinth control tags only (see [ui.md](ui.md)). A fragment
   (`<>...</>`) is allowed directly in a JSX child position — it

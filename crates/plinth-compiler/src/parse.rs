@@ -691,10 +691,10 @@ impl Cx<'_> {
         match p {
             o::BindingPattern::BindingIdentifier(id) => Some(Pattern::Ident(id.name.to_string(), self.span(id.span))),
             o::BindingPattern::ObjectPattern(op) => {
-                if op.rest.is_some() {
-                    self.err(code::UNSUPPORTED, op.span, "rest elements in patterns are not supported");
-                    return None;
-                }
+                let rest = match &op.rest {
+                    Some(r) => Some(Box::new(self.pattern(&r.argument)?)),
+                    None => None,
+                };
                 let mut props = Vec::new();
                 for prop in &op.properties {
                     let Some(key) = prop.key.static_name() else {
@@ -703,7 +703,7 @@ impl Cx<'_> {
                     };
                     props.push((key.to_string(), self.pattern(&prop.value)?));
                 }
-                Some(Pattern::Object(props, self.span(op.span)))
+                Some(Pattern::Object(props, rest, self.span(op.span)))
             }
             o::BindingPattern::ArrayPattern(ap) => {
                 let rest = match &ap.rest {
@@ -720,8 +720,9 @@ impl Cx<'_> {
                 Some(Pattern::Array(elems, rest, self.span(ap.span)))
             }
             o::BindingPattern::AssignmentPattern(a) => {
-                self.err(code::UNSUPPORTED, a.span, "default values in patterns are not supported");
-                None
+                let inner = self.pattern(&a.left)?;
+                let value = self.expr(&a.right)?;
+                Some(Pattern::Default(Box::new(inner), Box::new(value), self.span(a.span)))
             }
         }
     }

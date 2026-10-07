@@ -1307,7 +1307,7 @@ impl Checker<'_> {
         ])
     }
 
-    fn anon_struct(&mut self, fields: Vec<Field>) -> Type {
+    pub(super) fn anon_struct(&mut self, fields: Vec<Field>) -> Type {
         let key: Vec<String> = fields.iter().map(|f| format!("{}:{}", f.name, self.show(&f.ty))).collect();
         let key = key.join(",");
         if let Some(id) = self.anon_structs.get(&key) {
