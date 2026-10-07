@@ -342,8 +342,14 @@ fn cells_scroll_frame_times() {
     for _ in 0..3 {
         draw(&mut cx);
     }
+    // 30 frames with AccessKit on (as with a screen reader), then 30 with it
+    // off (the normal case); the checks below need it on again.
     let mut times = Vec::new();
-    for _ in 0..30 {
+    let mut plain = Vec::new();
+    for frame in 0..60 {
+        if frame == 30 {
+            cx.update(|cx| window.update(cx, |_, window, _| window.set_a11y_forced(false))).unwrap();
+        }
         cx.update_window(handle, |_, window, cx| {
             window.dispatch_event(
                 PlatformInput::ScrollWheel(ScrollWheelEvent {
@@ -357,18 +363,48 @@ fn cells_scroll_frame_times() {
         })
         .unwrap();
         cx.run_until_parked();
-        times.push(draw(&mut cx));
+        let ms = draw(&mut cx);
+        if frame < 30 { times.push(ms) } else { plain.push(ms) }
     }
+    cx.update(|cx| window.update(cx, |_, window, _| window.set_a11y_forced(true))).unwrap();
+    draw(&mut cx);
     cx.run_until_parked();
     let shots = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/shots");
     std::fs::create_dir_all(&shots).unwrap();
     cx.capture_screenshot(handle).expect("render cells").save(shots.join("cells-scrolled.png")).expect("write the screenshot");
-    let a5_after = bounds(&mut cx, Role::Button, "A5").y0;
-    assert!(a5_after < a5_before - 100.0, "the rows scrolled: A5 at {a5_before} then {a5_after}");
+    // The rows scrolled: row 5 is no longer built (the renderer builds only
+    // the rows near the viewport, GAPS 7G-12), and a later row is in view
+    // where row 5 was, give or take a few rows.
+    let tree = cx.update(|cx| window.update(cx, |_, window, _| window.a11y_tree().cloned())).unwrap().unwrap();
+    // The wheel also scrolls the outer, horizontal scroll, so any column.
+    let cells_built: Vec<(i32, f64)> = tree
+        .nodes
+        .iter()
+        .filter_map(|(_, n)| {
+            let l = n.label()?;
+            let row = l.get(1..)?.parse::<i32>().ok().filter(|_| n.role() == Role::Button && l.starts_with(|c: char| c.is_ascii_uppercase()))?;
+            Some((row, n.bounds().map_or(0.0, |b| b.y0)))
+        })
+        .collect();
+    let mut rows_built: Vec<(i32, f64)> = cells_built.clone();
+    rows_built.dedup_by_key(|r| r.0);
+    eprintln!("cells built: {} in {} rows", cells_built.len(), rows_built.len());
+    assert!(cells_built.len() < 26 * 30, "only the cells near the viewport are built: {}", cells_built.len());
+    assert!(!rows_built.iter().any(|(r, _)| *r == 5), "row 5 scrolled out");
+    let (row, y) = rows_built.iter().min_by(|a, b| (a.1 - a5_before).abs().total_cmp(&(b.1 - a5_before).abs())).copied().unwrap();
+    assert!(row > 20, "a later row is where row 5 was: row {row} at {y}");
     times.sort_by(f64::total_cmp);
+    plain.sort_by(f64::total_cmp);
     let build = if cfg!(debug_assertions) { "debug" } else { "release" };
     eprintln!(
-        "cells scroll ({build} build): draw median {:.1} ms, p95 {:.1} ms, max {:.1} ms over {} frames",
+        "cells scroll ({build} build, AccessKit off): draw median {:.1} ms, p95 {:.1} ms, max {:.1} ms over {} frames",
+        plain[plain.len() / 2],
+        plain[plain.len() * 95 / 100],
+        plain[plain.len() - 1],
+        plain.len()
+    );
+    eprintln!(
+        "cells scroll ({build} build, AccessKit on): draw median {:.1} ms, p95 {:.1} ms, max {:.1} ms over {} frames",
         times[times.len() / 2],
         times[times.len() * 95 / 100],
         times[times.len() - 1],

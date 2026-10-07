@@ -66,7 +66,7 @@ function Cells() {
             </Box>
             <Scroll label="Rows" maxHeight={110}>
               {ROW_IDS.map((r) => (
-                <Box direction="row">
+                <Box direction="row" height={CELL_H}>
                   <Box width={HEAD_W} height={CELL_H} paddingX={1} bg="surface.alt" justify="center">
                     <Span weight="semibold" size="sm">{`${r}`}</Span>
                   </Box>

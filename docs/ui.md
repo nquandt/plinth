@@ -276,6 +276,11 @@ the default, or `"row"`), `wrap`, `gap`, `padding`, `paddingX`, `paddingY`,
   raw colors and no raw pixels.
 - **`.map()` children** (and a `List`) inside a primitive take part in its
   layout: mapped cards in a row `Box` are a row.
+- **Long scrolls.** On the desktop, a column `Scroll` with 40 or more
+  children that each have a fixed `height` builds only the children near
+  its viewport; a row with 16 or more fixed-`width` children inside a
+  horizontal `Scroll` builds only the ones in view. Give the rows of a long
+  table a `height` and its cells a `width` (`examples/7guis/cells`).
 - **Positioning (UI API 1.9).** `position="absolute"` takes a box out of
   the flow; `top`, `left`, `right` and `bottom` (spacing units) place it in
   its parent primitive. Later children are drawn over earlier ones.

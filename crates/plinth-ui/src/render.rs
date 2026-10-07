@@ -19,7 +19,7 @@ use crate::calendar;
 use crate::primitives;
 use plinth_protocol::{
     ControlKind, Event, NodeId, Op, Value, Writer, aspect, axis, button_role, button_size, chart_kind, date_picker_mode,
-    decode_ops, event, lifecycle_kind, pressable_role, prop, text_align, text_style, tone,
+    cross_align, decode_ops, event, justify, lifecycle_kind, pressable_role, prop, text_align, text_style, tone,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -28,6 +28,38 @@ use std::time::Instant;
 /// §7.3): only the rows near the viewport become elements, so a list of
 /// thousands of rows no longer costs one element per row per frame.
 const VIRTUAL_LIST_THRESHOLD: usize = 200;
+
+/// A column `Scroll` with this many children or more, each with a fixed
+/// height, builds only the children near its viewport.
+const CULL_MIN_CHILDREN: usize = 40;
+/// A row in a horizontal `Scroll` with this many fixed-width children or
+/// more builds only the ones in view (a short row of cards builds all).
+const CULL_MIN_ROW: usize = 16;
+
+/// Spacing units as pixels, for the culling arithmetic.
+fn px_of_units(units: f64) -> f32 {
+    units.clamp(0.0, primitives::MAX_UNITS as f64) as f32 * primitives::UNIT
+}
+
+/// The width of fixed-width children in a row with `gap` between them.
+fn total_extent(widths: &[f32], gap: f32) -> f32 {
+    widths.iter().sum::<f32>() + gap * widths.len().saturating_sub(1) as f32
+}
+
+/// The x range for the children of a column box: they start at the left
+/// padding when they stretch or align to the start; else no range.
+fn column_child_range(range: Option<(f32, f32)>, style: &primitives::Style) -> Option<(f32, f32)> {
+    let (lo, hi) = range?;
+    if !matches!(style.enum_(prop::CROSS_ALIGN), cross_align::STRETCH | cross_align::START) {
+        return None;
+    }
+    let pad_left = style.get_f(prop::PADDING_X).or_else(|| style.get_f(prop::PADDING)).map_or(0.0, px_of_units);
+    Some((lo - pad_left, hi - pad_left))
+}
+/// The extra height above and below the viewport that is built too, in pixels.
+const CULL_OVERSCAN: f32 = 200.0;
+/// The viewport height to assume before the first frame, in pixels.
+const CULL_FIRST_FRAME: f32 = 1200.0;
 
 /// The host side of the guest connection. `dispatch` sends one event buffer
 /// and returns the op buffers that the guest committed while it ran.
@@ -245,6 +277,14 @@ pub struct PlinthRoot {
     /// by node id. `render_list` takes `&self`, so this needs a `RefCell`;
     /// entries are dropped in `apply_commits` when the node is removed.
     list_states: std::cell::RefCell<HashMap<NodeId, gpui::ListState>>,
+    /// The scroll position of each Level 2 `Scroll`, by node id: the
+    /// renderer builds only the children near the viewport (`culled_scroll_children`).
+    scroll_handles: std::cell::RefCell<HashMap<NodeId, gpui::ScrollHandle>>,
+    /// While a box's children are built: the x range, in pixels from the
+    /// box's left edge, that a horizontal `Scroll` above it shows (with
+    /// overscan). A row box with fixed-width children builds only the ones
+    /// in it. `None`: build all (docs/GAPS.md 7G-12).
+    cull_x: Cell<Option<(f32, f32)>>,
 }
 
 impl PlinthRoot {
@@ -285,6 +325,8 @@ impl PlinthRoot {
             assets,
             date_cursor: HashMap::new(),
             list_states: std::cell::RefCell::new(HashMap::new()),
+            scroll_handles: std::cell::RefCell::new(HashMap::new()),
+            cull_x: Cell::new(None),
         };
         root.apply_commits(initial_commits);
         root.sync_dialog(cx);
@@ -312,6 +354,8 @@ impl PlinthRoot {
             assets: Arc::new(HashMap::new()),
             date_cursor: HashMap::new(),
             list_states: std::cell::RefCell::new(HashMap::new()),
+            scroll_handles: std::cell::RefCell::new(HashMap::new()),
+            cull_x: Cell::new(None),
         }
     }
 
@@ -398,6 +442,7 @@ impl PlinthRoot {
         for id in self.tree.take_removed() {
             self.fields.remove(&id);
             self.list_states.borrow_mut().remove(&id);
+            self.scroll_handles.borrow_mut().remove(&id);
         }
         self.app_errors.extend(self.guest.take_errors());
     }
@@ -1332,12 +1377,89 @@ impl PlinthRoot {
     /// node that `.map()` children make) take part in the layout of the box
     /// itself, so a row of mapped cards is a row.
     fn render_box_children(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut out = Vec::new();
+        let ids = self.box_child_ids(node);
+        let style = self.primitive_style(node);
+        let range = self.cull_x.get();
+        if primitives::is_row(&style) {
+            self.row_children(&ids, &style, range, t, cx)
+        } else {
+            let inner = column_child_range(range, &style);
+            ids.iter().map(|&c| self.render_child_in(c, inner, t, cx)).collect()
+        }
+    }
+
+    /// The children of a box as it lays them out: the items of a `List`
+    /// child (`.map()`) are children of the box itself.
+    fn box_child_ids(&self, node: &Node) -> Vec<NodeId> {
+        let mut ids = Vec::new();
         for &c in &node.children {
             match self.tree.get(c) {
-                Some(child) if child.kind == Some(ControlKind::List) => out.extend(self.render_children(child, t, cx)),
-                _ => out.push(self.render_node(c, t, cx)),
+                Some(child) if child.kind == Some(ControlKind::List) => ids.extend(child.children.iter().copied()),
+                _ => ids.push(c),
             }
+        }
+        ids
+    }
+
+    /// Builds the child `id` with the visible x range `range` (in the
+    /// child's own coordinates). Only boxes and scrolls use the range;
+    /// every other control builds its subtree with none.
+    fn render_child_in(&self, id: NodeId, range: Option<(f32, f32)>, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let is_box = self.tree.get(id).is_some_and(|n| matches!(n.kind, Some(ControlKind::Box | ControlKind::Scroll)));
+        let prev = self.cull_x.replace(if is_box { range } else { None });
+        let e = self.render_node(id, t, cx);
+        self.cull_x.set(prev);
+        e
+    }
+
+    /// The children of a row (a row box or a row `Scroll`). With a visible
+    /// x range and fixed-width children (justified to the start), it builds
+    /// only the children in the range, with a spacer on each side.
+    fn row_children(
+        &self,
+        ids: &[NodeId],
+        style: &primitives::Style,
+        range: Option<(f32, f32)>,
+        t: &Tokens,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let pad_left = style.get_f(prop::PADDING_X).or_else(|| style.get_f(prop::PADDING)).map_or(0.0, px_of_units);
+        let start = style.enum_(prop::JUSTIFY) == justify::START && !style.flag(prop::WRAP);
+        let widths: Option<Vec<f32>> = if start {
+            ids.iter().map(|&c| self.tree.get(c).and_then(|n| self.primitive_style(n).get_f(prop::WIDTH)).map(px_of_units)).collect()
+        } else {
+            None
+        };
+        let (Some((lo, hi)), Some(widths)) = (range.filter(|_| ids.len() >= CULL_MIN_ROW), widths) else {
+            // One child of a start-justified row is at the padding: it can
+            // still pass the range on (the content of a horizontal Scroll).
+            let one = (start && ids.len() == 1).then(|| range.map(|(lo, hi)| (lo - pad_left, hi - pad_left))).flatten();
+            return ids.iter().map(|&c| self.render_child_in(c, one, t, cx)).collect();
+        };
+        let gap = style.get_f(prop::GAP).map_or(0.0, px_of_units);
+        let starts: Vec<f32> = widths
+            .iter()
+            .scan(pad_left, |x, w| {
+                let s = *x;
+                *x += w + gap;
+                Some(s)
+            })
+            .collect();
+        let shown: Vec<usize> = (0..ids.len()).filter(|&i| starts[i] + widths[i] >= lo && starts[i] <= hi).collect();
+        let (Some(&first), Some(&last)) = (shown.first(), shown.last()) else {
+            return vec![div().flex_shrink_0().w(px(total_extent(&widths, gap))).into_any_element()];
+        };
+        let mut out = Vec::with_capacity(last - first + 3);
+        if first > 0 {
+            out.push(div().flex_shrink_0().w(px((starts[first] - pad_left - gap).max(0.0))).into_any_element());
+        }
+        for i in first..=last {
+            out.push(self.render_child_in(ids[i], Some((lo - starts[i], hi - starts[i])), t, cx));
+        }
+        if last + 1 < ids.len() {
+            let end = starts[last] + widths[last];
+            let total = pad_left + total_extent(&widths, gap);
+            out.push(div().flex_shrink_0().w(px((total - end - gap).max(0.0))).into_any_element());
         }
         out
     }
@@ -1551,15 +1673,129 @@ impl PlinthRoot {
     fn render_scroll(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let label = node.str_prop(prop::LABEL).map(str::to_owned);
         let style = self.primitive_style(node);
-        let d = div().id(eid("scroll", node.id)).role(accesskit::Role::ScrollView);
+        let handle = self.scroll_handles.borrow_mut().entry(node.id).or_default().clone();
+        let d = div().id(eid("scroll", node.id)).role(accesskit::Role::ScrollView).track_scroll(&handle);
         let d = primitives::box_style(d, &style, t, false);
         let d = if primitives::is_row(&style) { d.overflow_x_scroll() } else { d.overflow_y_scroll() };
         let d = self.key_handlers(d, node, cx);
+        // A row scroll shows the x range from its offset: its content builds
+        // only what is in it (with overscan). A column scroll keeps the range
+        // that it got and builds only the rows near its viewport.
+        let viewport = handle.bounds().size;
+        let outer = self.cull_x.get();
+        if primitives::is_row(&style) {
+            let w = f32::from(viewport.width);
+            let w = if w > 0.0 { w } else { CULL_FIRST_FRAME };
+            let lo = -f32::from(handle.offset().x) - CULL_OVERSCAN;
+            self.cull_x.set(Some((lo, lo + w + 2.0 * CULL_OVERSCAN)));
+        }
+        let children = match self.culled_scroll_children(node, &style, &handle, t, cx) {
+            Some(children) => children,
+            None => self.render_box_children(node, t, cx),
+        };
+        self.cull_x.set(outer);
+        let watch = self.viewport_watch(viewport, cx);
         self.state_styles(d, node, t)
             .when_some(label, |d, l| d.aria_label(l))
             .children(self.pointer_layer(node, None, cx))
-            .children(self.render_box_children(node, t, cx))
+            .child(watch)
+            .children(children)
             .into_any_element()
+    }
+
+    /// An empty layer the size of a `Scroll`: when the scroll's size differs
+    /// from `used` (the size that the culling used: unknown before the first
+    /// frame, or changed by a resize), it asks for one more frame, so the
+    /// built rows and columns follow the new size.
+    fn viewport_watch(&self, used: gpui::Size<Pixels>, cx: &mut Context<Self>) -> AnyElement {
+        let entity = cx.entity().downgrade();
+        canvas(
+            move |bounds: Bounds<Pixels>, _, cx| {
+                let d = bounds.size - used;
+                // The layer is the padding box: a border makes it up to 2 px smaller.
+                if f32::from(d.width).abs() > 3.0 || f32::from(d.height).abs() > 3.0 {
+                    let entity = entity.clone();
+                    cx.defer(move |cx| {
+                        let _ = entity.update(cx, |_, cx| cx.notify());
+                    });
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .into_any_element()
+    }
+
+    /// The children of a column `Scroll` whose children all have a fixed
+    /// height in spacing units (a table, a long list of rows): only the
+    /// ones in or near the viewport, with a spacer above and below for the
+    /// others, so the scroll range stays the same (docs/GAPS.md 7G-12: 100
+    /// rows of 26 cells cost 85 ms a frame when every row was built). The
+    /// accessibility tree has only the built rows, as for a virtual `List`.
+    /// `None`: build every child (a row scroll, few children, or a child
+    /// with no fixed height).
+    fn culled_scroll_children(
+        &self,
+        node: &Node,
+        style: &primitives::Style,
+        handle: &gpui::ScrollHandle,
+        t: &Tokens,
+        cx: &mut Context<Self>,
+    ) -> Option<Vec<AnyElement>> {
+        if primitives::is_row(style) {
+            return None;
+        }
+        let ids = self.box_child_ids(node);
+        if ids.len() < CULL_MIN_CHILDREN {
+            return None;
+        }
+        let px_of = px_of_units;
+        let inner = column_child_range(self.cull_x.get(), style);
+        let mut heights = Vec::with_capacity(ids.len());
+        for &c in &ids {
+            let child = self.tree.get(c)?;
+            heights.push(px_of(self.primitive_style(child).get_f(prop::HEIGHT)?));
+        }
+        let gap = style.get_f(prop::GAP).map_or(0.0, px_of);
+        let pad_top = style.get_f(prop::PADDING_Y).or_else(|| style.get_f(prop::PADDING)).map_or(0.0, px_of);
+        // Before the first frame the viewport is unknown: build a screenful.
+        let view_h = f32::from(handle.bounds().size.height);
+        let view_h = if view_h > 0.0 { view_h } else { CULL_FIRST_FRAME };
+        let view_top = -f32::from(handle.offset().y) - pad_top;
+        let (lo, hi) = (view_top - CULL_OVERSCAN, view_top + view_h + CULL_OVERSCAN);
+        // The visible range [first, last] and the space before and after it.
+        let (mut y, mut first, mut last, mut before) = (0.0f32, None, 0, 0.0f32);
+        for (i, h) in heights.iter().enumerate() {
+            let end = y + h;
+            if end >= lo && y <= hi {
+                if first.is_none() {
+                    first = Some(i);
+                    before = y;
+                }
+                last = i;
+            }
+            y = end + gap;
+        }
+        let total = y - gap;
+        let first = first.unwrap_or(ids.len());
+        let mut out = Vec::with_capacity(last.saturating_sub(first) + 3);
+        // The box's gap also goes after a spacer, so a spacer is one gap shorter.
+        if first > 0 {
+            out.push(div().flex_shrink_0().h(px((before - gap).max(0.0))).into_any_element());
+        }
+        if first < ids.len() {
+            let after_last: f32 = heights[..=last].iter().sum::<f32>() + gap * last as f32;
+            for &c in &ids[first..=last] {
+                out.push(self.render_child_in(c, inner, t, cx));
+            }
+            if last + 1 < ids.len() {
+                out.push(div().flex_shrink_0().h(px((total - after_last - gap).max(0.0))).into_any_element());
+            }
+        }
+        Some(out)
     }
 
     fn render_section(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {

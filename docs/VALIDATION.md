@@ -89,7 +89,7 @@ Fill in this section as the apps are done.
 | 7GUIs 4 Timer | 46 (33) | 1490 B (2006 B) | 22 ms | 2.4 ms | 1152 KiB | |
 | 7GUIs 5 CRUD | 120 (98) | 2489 B (4409 B) | 28 ms | 2.8 ms | 1152 KiB | Selection shown with `trailing` (7G-2). |
 | 7GUIs 6 Circle drawer | 220 (200) | 2916 B (5537 B) | not measured | not measured | not measured | A button instead of a right-click menu (GAPS 7G-6); the slider in a `Sheet` (7G-7). Pointer events (UI API 1.12), outlines (UI API 1.13). |
-| 7GUIs 7 Cells | 497 (440) | 6 KiB (12624 B) | 445 ms debug | not measured | not measured | A formula field, not edit in place (GAPS 7G-11). One edit 2 ms, at most 4 text ops. **A scroll frame on the desktop: 85.6 ms (release), not under 16 ms (GAPS 7G-12).** |
+| 7GUIs 7 Cells | 497 (440) | 6 KiB (12624 B) | 445 ms debug | not measured | not measured | A formula field, not edit in place (GAPS 7G-11). One edit 2 ms, at most 4 text ops. A scroll frame on the desktop (release): 8.6 ms, 12.4 ms with AccessKit (was 85.6 ms before the scroll culling, GAPS 7G-12). |
 
 How these numbers were measured (2026-10-06, Windows, one machine):
 
