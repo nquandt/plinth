@@ -72,7 +72,8 @@ export declare const navigate: {
 // -- Controls -----------------------------------------------------------------
 
 type Element = JSX.Element;
-type Child = Element | false | null;
+/** A child; a `.map()` result (`Element[]`) can stand next to other children. */
+type Child = Element | Element[] | false | null;
 type Children = Child | Child[];
 type TextContent = string | number | (string | number)[];
 

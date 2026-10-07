@@ -660,6 +660,22 @@ immutable list. Tests: `circle_drawer_draws_adjusts_and_undoes`
 | 7G-7 | UI API | A `Dialog` holds only a title, a message and actions: no slider. | The slider is in a `Sheet`. | Children in `Dialog` (a small form). |
 | 7G-8 | Canvas | **Fixed (UI API 1.13):** `strokeRect` and `strokeCircle` (compile-time encodings, kinds "R" and "C"); the circle drawer uses them. Before: no stroke shapes: a circle outline is two filled circles. | A border-color circle with a smaller fill circle on it. | `stroke` and `strokeWidth` on `circle` and `rect` (compile-time encoding, no core change). |
 
+## Found by 7GUIs task 7, Cells (2026-10-06)
+
+`examples/7guis/cells`: 26 x 100 cells as Level 2 boxes in two `Scroll`s,
+one formula signal and one `computed` value for each cell, a recursive
+descent parser (`app/formula.ts`) and a cycle check on the formulas. Tests:
+`cells_formulas_propagate_and_find_cycles` (`tests/sevenguis.rs`), `cells`
+(`run-7guis.mjs`), `cells_scroll_frame_times` (`plinth-shoot`, wheel events
+and `Window::draw` times).
+
+| # | Area | What failed | Workaround | Suggested fix |
+|---|---|---|---|---|
+| 7G-9 | Checker | A recursive union type alias (`type Expr = {...} \| { args: Expr[] }`) is `PL2012`. | **Help added:** each variant is an `interface`, and the alias is a union of them (an interface can name the alias). | Recursive aliases of object literal types. Low: the interface form is normal TypeScript. |
+| 7G-10 | Checker | **Fixed:** a narrowed union (`Num \| Call` after `kind !== "range"`) was not assignable to the full union. A subset union is now a `Retag` (no code). Test: `a_narrowed_union_converts_back_to_the_full_union`. | — | — |
+| 7G-11 | UI API | No edit in place: the task edits a cell on a double-click. | A formula field above the sheet (select a cell, edit, Enter or Set). | A small text field that the app can put in a cell (Level 2 `Input`), and `onDoublePress`. |
+| 7G-12 | Desktop performance | **Open, large.** The desktop renderer builds, lays out and paints every element on every frame. 2,600 cells are about 5,500 elements: a scroll frame takes about 855 ms in a debug build and 85.6 ms (median, p95 88 ms) in a release build: five times the 16 ms budget. An edit in the runtime is 2 ms and sends at most 4 text ops (only the dependent cells), so the cost is all in the renderer. | None. | Cache the elements of unchanged nodes (gpui cached views for subtrees with a definite size), and do not build the elements of rows that are outside a `Scroll`'s viewport. HANDOFF §9 step 6. |
+
 ## Games (Pong, 2026-10-06)
 
 Found while building `examples/pong` (a one-player Pong against a

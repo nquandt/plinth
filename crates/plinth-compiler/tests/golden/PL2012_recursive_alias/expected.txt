@@ -1,0 +1,4 @@
+app/main.tsx(3,67): error PL2012: recursive type aliases are not supported
+  type Expr = { kind: "num"; value: number } | { kind: "add"; args: Expr[] };
+                                                                    ^^^^
+  help: declare each object type as an `interface` (an interface can name the alias): `interface Call { kind: "call"; args: Expr[] }` and `type Expr = Num | Call`

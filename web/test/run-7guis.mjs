@@ -1,4 +1,4 @@
-// Node test (docs/VALIDATION.md V1): the 7GUIs tasks 1-6 in
+// Node test (docs/VALIDATION.md V1): the 7GUIs tasks 1-7 in
 // examples/7guis/, on the web host's code: the same PlinthApp and the same
 // semantic tree (dom-renderer.js `Tree`) that the browser uses, with no DOM.
 // A `change` is sent as `DomRenderer.sendChange` sends it: the host keeps
@@ -278,8 +278,34 @@ async function circleDrawer() {
   assert.ok(h.disabled("Redo"));
 }
 
+async function cells() {
+  const h = await Harness.start("cells");
+  const cell = (name) => h.labeled(ControlKind.pressable, name);
+  const shown = (name) => String(h.tree.node(cell(name).children[0]).text ?? "");
+  const formula = () => h.one(ControlKind.textField);
+  const set = (name, text) => {
+    h.send(cell(name), Event.press, null);
+    h.type(formula(), text);
+    h.press("Set");
+    return h.ops.filter((op) => op.op === "text").length;
+  };
+  assert.equal(h.find(ControlKind.pressable).length, 26 * 100);
+  assert.equal(shown("B4"), "3.75");
+  const texts = set("B2", "10");
+  assert.equal(shown("B4"), "12.25");
+  assert.ok(texts <= 4, `only the dependent cells change: ${texts} texts`);
+  set("C0", "=2+3*4");
+  set("C1", "=sum(B2:B3) / C0");
+  assert.deepEqual([shown("C0"), shown("C1")], ["14", "0.875"]);
+  set("D0", "=D1");
+  set("D1", "=D0");
+  assert.deepEqual([shown("D0"), shown("D1")], ["#ERR", "#ERR"]);
+  set("D1", "2");
+  assert.deepEqual([shown("D0"), shown("D1")], ["2", "2"]);
+}
+
 async function main() {
-  for (const [name, test] of Object.entries({ counter, temperature, flightBooker, timer, crud, circleDrawer })) {
+  for (const [name, test] of Object.entries({ counter, temperature, flightBooker, timer, crud, circleDrawer, cells })) {
     await test();
     console.log(`run-7guis.mjs: ${name} ok`);
   }

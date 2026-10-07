@@ -280,3 +280,99 @@ fn circle_drawer_draws_where_clicked() {
     let image = cx.capture_screenshot(window.into()).expect("render the circle drawer");
     image.save(shots.join("circle-drawer.png")).expect("write the screenshot");
 }
+
+/// 7GUIs task 7 on the desktop (docs/VALIDATION.md §2: "a scroll through
+/// 26 x 100 cells stays under 16 ms for each frame"): scrolls the rows with
+/// wheel events and times `Window::draw` (render, layout, prepaint, paint)
+/// for each frame. Prints the numbers; asserts only that the rows scroll,
+/// because a debug build is much slower than a release build. Run with
+/// `--release -- --nocapture` for the VALIDATION numbers.
+#[test]
+fn cells_scroll_frame_times() {
+    use gpui::{PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase, point};
+    use std::time::Instant;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/7guis/cells");
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&DiskFs { root }, &[]).expect("compile");
+    let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+    let artifact = artifact.unwrap_or_else(|| panic!("cells has errors:\n{}", diags.join("\n")));
+    let platform = gpui_platform::current_platform(true);
+    let mut cx = HeadlessAppContext::with_platform(platform.text_system(), std::sync::Arc::new(()), || {
+        gpui_wgpu::WgpuHeadlessRenderer::new()
+            .map(|r| Box::new(r) as Box<dyn PlatformHeadlessRenderer>)
+            .map_err(|e| log::error!("no headless renderer: {e:#}"))
+            .ok()
+    });
+    cx.update(plinth_ui::init);
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let commits = guest.init(&[]).unwrap();
+    let port = Box::new(WasmGuest { guest, _runner: runner });
+    let window = cx.open_window(size(px(1000.), px(800.)), move |_, cx| cx.new(|cx| PlinthRoot::new(port, commits, "indigo", cx))).unwrap();
+    let handle = window.into();
+    cx.update(|cx| window.update(cx, |_, window, _| window.set_a11y_forced(true))).unwrap();
+    cx.run_until_parked();
+
+    let scale = f64::from(cx.update(|cx| window.update(cx, |_, window, _| window.scale_factor())).unwrap());
+    let bounds = |cx: &mut HeadlessAppContext, role: Role, name: &str| {
+        let tree = cx.update(|cx| window.update(cx, |_, window, _| window.a11y_tree().cloned())).unwrap().unwrap();
+        tree.nodes.iter().find(|(_, n)| n.role() == role && n.label() == Some(name)).and_then(|(_, n)| n.bounds()).unwrap_or_else(|| panic!("no {role:?} {name:?}"))
+    };
+    // The pointer over cell B5: the "Rows" box is as wide as all 26
+    // columns (most of it is outside the window), so not its center.
+    let b5 = bounds(&mut cx, Role::Button, "B5");
+    let a5_before = bounds(&mut cx, Role::Button, "A5").y0;
+    let over = point(px(((b5.x0 + b5.x1) / 2.0 / scale) as f32), px(((b5.y0 + b5.y1) / 2.0 / scale) as f32));
+    let draw = |cx: &mut HeadlessAppContext| -> f64 {
+        cx.update_window(handle, |_, window, cx| {
+            window.refresh();
+            let t = Instant::now();
+            let arena = window.draw(cx);
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            arena.clear(cx);
+            ms
+        })
+        .unwrap()
+    };
+    // The pointer goes over the rows first: gpui scrolls the hovered box.
+    cx.update_window(handle, |_, window, cx| {
+        window.dispatch_event(PlatformInput::MouseMove(gpui::MouseMoveEvent { position: over, pressed_button: None, modifiers: Default::default() }), cx);
+    })
+    .unwrap();
+    // Warm up (text shaping caches), then scroll 30 frames of two lines.
+    for _ in 0..3 {
+        draw(&mut cx);
+    }
+    let mut times = Vec::new();
+    for _ in 0..30 {
+        cx.update_window(handle, |_, window, cx| {
+            window.dispatch_event(
+                PlatformInput::ScrollWheel(ScrollWheelEvent {
+                    position: over,
+                    delta: ScrollDelta::Lines(point(0., -2.)),
+                    modifiers: Default::default(),
+                    touch_phase: TouchPhase::Moved,
+                }),
+                cx,
+            );
+        })
+        .unwrap();
+        cx.run_until_parked();
+        times.push(draw(&mut cx));
+    }
+    cx.run_until_parked();
+    let shots = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/shots");
+    std::fs::create_dir_all(&shots).unwrap();
+    cx.capture_screenshot(handle).expect("render cells").save(shots.join("cells-scrolled.png")).expect("write the screenshot");
+    let a5_after = bounds(&mut cx, Role::Button, "A5").y0;
+    assert!(a5_after < a5_before - 100.0, "the rows scrolled: A5 at {a5_before} then {a5_after}");
+    times.sort_by(f64::total_cmp);
+    let build = if cfg!(debug_assertions) { "debug" } else { "release" };
+    eprintln!(
+        "cells scroll ({build} build): draw median {:.1} ms, p95 {:.1} ms, max {:.1} ms over {} frames",
+        times[times.len() / 2],
+        times[times.len() * 95 / 100],
+        times[times.len() - 1],
+        times.len()
+    );
+}
+

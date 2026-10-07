@@ -1,4 +1,4 @@
-//! 7GUIs tasks 1-5 (docs/VALIDATION.md V1): compiles each app in
+//! 7GUIs tasks 1-7 (docs/VALIDATION.md V1): compiles each app in
 //! `examples/7guis/` and drives it in wasmtime, as `tests/apps.rs` does for
 //! the other examples. `web/test/run-7guis.mjs` checks the same behavior on
 //! the web host.
@@ -477,4 +477,81 @@ fn circle_drawer_draws_adjusts_and_undoes() {
     h.fire(canvas, event::POINTER_DOWN, at(300.0, 60.0));
     assert!(h.disabled("Redo"));
     assert_eq!(outlines(&h).len(), 3);
+}
+
+/// 7GUIs task 7: formulas, references and ranges, change propagation that
+/// touches only the dependent cells, cycles and parse errors. Prints the
+/// start time and the time of one edit (run with `--nocapture`).
+#[test]
+fn cells_formulas_propagate_and_find_cycles() {
+    let art = build("cells");
+    let mut h = Harness::start(&art.component);
+    let cell = |h: &Harness, name: &str| h.labeled(ControlKind::Pressable, name);
+    let shown = |h: &Harness, name: &str| {
+        let c = cell(h, name);
+        let span = h.node(c).children[0];
+        h.node(span).text.clone().unwrap_or_default()
+    };
+    let formula = |h: &Harness| h.one(ControlKind::TextField, |_| true);
+    let info = |h: &Harness| h.find(ControlKind::Span, |n| n.text.as_deref().is_some_and(|t| t.contains(" = ") || t.contains(": "))).first().map(|id| h.node(*id).text.clone().unwrap_or_default()).unwrap_or_default();
+    // Sets the content of a cell as a user does: select it, type, press Set.
+    let set = |h: &mut Harness, name: &str, text: &str| -> usize {
+        let c = cell(h, name);
+        h.fire(c, event::PRESS, Value::Null);
+        let f = formula(h);
+        h.type_text(f, text);
+        let set = h.button("Set");
+        let commits = h.fire(set, event::PRESS, Value::Null);
+        // The number of cell texts that the edit sent.
+        commits.iter().flat_map(|c| plinth_protocol::decode_ops(c).unwrap()).filter(|op| matches!(op, plinth_protocol::Op::Text { .. })).count()
+    };
+
+    assert_eq!(h.find(ControlKind::Pressable, |_| true).len(), 26 * 100);
+    assert_eq!((shown(&h, "A4").as_str(), shown(&h, "B4").as_str()), ("Total", "3.75"));
+
+    // Select B2: its content is in the formula field.
+    let b2 = cell(&h, "B2");
+    h.fire(b2, event::PRESS, Value::Null);
+    assert_eq!(h.value(formula(&h)), "1.5");
+
+    // An edit updates the cell and the cells that depend on it, and no others.
+    let t = Instant::now();
+    let texts = set(&mut h, "B2", "10");
+    eprintln!("cells: one edit (select, type, set) {:.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+    assert_eq!((shown(&h, "B2").as_str(), shown(&h, "B4").as_str()), ("10", "12.25"));
+    assert!(texts <= 4, "only B2, B4 and the info line change: {texts} texts");
+
+    // Formulas: arithmetic with precedence, functions, references.
+    set(&mut h, "C0", "=2+3*4");
+    set(&mut h, "C1", "=(B2 - B3) / 2");
+    set(&mut h, "C2", "=avg(B2:B3)");
+    set(&mut h, "C3", "=max(B2, C0, 3)");
+    set(&mut h, "C4", "=-C0 + sum(B2:B3, 1)");
+    let got: Vec<String> = ["C0", "C1", "C2", "C3", "C4"].iter().map(|n| shown(&h, n)).collect();
+    assert_eq!(got, ["14", "3.875", "6.125", "14", "-0.75"]);
+
+    // A cycle is an error in each cell on it; breaking it fixes them.
+    set(&mut h, "D0", "=D1 + 1");
+    set(&mut h, "D1", "=D2");
+    set(&mut h, "D2", "=D0");
+    assert_eq!([shown(&h, "D0"), shown(&h, "D1"), shown(&h, "D2")], ["#ERR", "#ERR", "#ERR"]);
+    assert_eq!(info(&h), "D2: a cycle");
+    set(&mut h, "D2", "5");
+    assert_eq!([shown(&h, "D0"), shown(&h, "D1"), shown(&h, "D2")], ["6", "5", "5"]);
+
+    // A parse error shows in the cell and in the info line; a reference to
+    // an error is an error.
+    set(&mut h, "E0", "=sum(B2");
+    set(&mut h, "E1", "=E0 * 2");
+    assert_eq!((shown(&h, "E0").as_str(), shown(&h, "E1").as_str()), ("#ERR", "#ERR"));
+    assert_eq!(info(&h), "E1: expected \")\"");
+    set(&mut h, "E0", "=bad(1)");
+    assert_eq!(info(&h), "E0: no function \"bad\"");
+    set(&mut h, "E0", "=1/0");
+    assert_eq!(shown(&h, "E1"), "#ERR");
+    // Text is not a number; an empty cell is 0.
+    set(&mut h, "E0", "=A2 + 1");
+    assert_eq!(info(&h), "E0: not a number");
+    set(&mut h, "E0", "=Z99 + 1");
+    assert_eq!(shown(&h, "E1"), "2");
 }

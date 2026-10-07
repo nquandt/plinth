@@ -1087,7 +1087,13 @@ impl Checker<'_> {
     /// `self.generic_bindings` already set for a generic alias.
     fn resolve_alias_body(&mut self, m: usize, idx: usize, span: Span) -> Type {
         if !self.resolving_alias.insert((m, idx)) {
-            self.err(code::ADVANCED_TYPE, span, "recursive type aliases are not supported");
+            // Found by 7GUIs Cells: a recursive union of object literal types.
+            self.err_help(
+                code::ADVANCED_TYPE,
+                span,
+                "recursive type aliases are not supported",
+                "declare each object type as an `interface` (an interface can name the alias): `interface Call { kind: \"call\"; args: Expr[] }` and `type Expr = Num | Call`",
+            );
             return Type::Error;
         }
         let ann = self.aliases[m][idx].ty.clone();
@@ -1398,6 +1404,14 @@ impl Checker<'_> {
             }
             (T::Func(f), T::Func(g)) => self.func_compatible(f, g).then_some(Some(Coercion::Retag)),
             (t, T::Union(members)) if members.iter().any(|m| m == t) => Some(Some(Coercion::Retag)),
+            // A narrowed union (a subset of the members) is still a value of
+            // the full union: a union value is a reference with its own type
+            // id, so no code is needed. Found by 7GUIs Cells.
+            (T::Union(from_members), T::Union(_))
+                if from_members.iter().all(|m| self.conversion(m, to).is_some_and(|c| c.is_none_or(|c| c == Coercion::Retag))) =>
+            {
+                Some(Some(Coercion::Retag))
+            }
             (T::StrLits(_), T::Union(members)) if members.contains(&T::String) => Some(Some(Coercion::Retag)),
             _ => None,
         }

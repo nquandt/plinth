@@ -2810,3 +2810,44 @@ function Home() {
     let tree = run(&main);
     assert_eq!(text_of(&tree, ControlKind::Text), "1, 2.5, -3|true,false|0.30000000000000004|");
 }
+
+/// A narrowed union is a value of the full union again (found by 7GUIs
+/// Cells): after `if (e.kind === "range") ... else`, `e` passes to a
+/// function that takes the whole union; also through recursive interfaces.
+#[test]
+fn a_narrowed_union_converts_back_to_the_full_union() {
+    let tree = run(r#"
+import { app, Screen, Text } from "plinth:ui";
+
+interface Num { kind: "num"; value: number }
+interface Range { kind: "range"; from: number; to: number }
+interface Add { kind: "add"; args: Expr[] }
+type Expr = Num | Range | Add;
+
+function value(e: Expr): number {
+  if (e.kind === "num") {
+    return e.value;
+  }
+  if (e.kind === "range") {
+    return e.to - e.from;
+  }
+  let t = 0;
+  for (const a of e.args) {
+    t = t + (a.kind === "range" ? 100 : value(a));
+  }
+  return t;
+}
+
+function Home() {
+  const e: Expr = { kind: "add", args: [{ kind: "num", value: 2 }, { kind: "range", from: 1, to: 4 }, { kind: "add", args: [{ kind: "num", value: 5 }] }] };
+  return (
+    <Screen title="Home">
+      <Text>{`${value(e)}`}</Text>
+    </Screen>
+  );
+}
+
+export default app({ screens: { home: { title: "Home", component: Home } } });
+"#);
+    assert_eq!(text_of(&tree, ControlKind::Text), "107");
+}
