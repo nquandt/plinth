@@ -134,7 +134,7 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 4. **Storage, first slice** (`docs/STORAGE.md` §6): `plinth:files` on a private space and a granted `vault` space, local folder and OPFS providers, host sync to rustfs and Azurite in Docker, Hub UI for spaces, isolation tests. Editor: Markdown source plus a `Markdown` display control. Then the notes app (VALIDATION V2).
 5. **7GUIs tasks 6–7:** `Canvas` (U4) for Circle drawer; Grid virtualization for Cells.
 6. **Experience build order** (`docs/EXPERIENCE.md` §7): plain words and defaults, Try and Keep, the Privacy page, folder sync with encryption and pairing.
-7. **Compiler:** the web host error banner; smaller async code; `join` on number arrays; rest in object patterns. (Done: rest patterns in array destructuring.) (Done 2026-10-06: `Promise.race`/`any`/`allSettled`, the sync-in-async `finally` order, tuples with optional and rest elements, `flat(depth)` with `Infinity`.)
+7. **Compiler:** the web host error banner; smaller async code; rest in object patterns. (Done: rest patterns in array destructuring, `join` on number arrays.) (Done 2026-10-06: `Promise.race`/`any`/`allSettled`, the sync-in-async `finally` order, tuples with optional and rest elements, `flat(depth)` with `Infinity`.)
 8. **Web Hub** (`docs/web-hub.md` §7): PWA, first-use prompts, session grants in browse mode, a notice to the Hub app when the host changes a grant.
 9. **Platforms:** a GUI window on Linux and macOS; then mobile (SPEC Q1, Q3).
 10. **Distribution:** publish the npm packages and a first registry; Hub H2 (signed indexes, transparency log); key rotation.

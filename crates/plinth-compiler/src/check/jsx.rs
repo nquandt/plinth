@@ -618,7 +618,7 @@ impl Checker<'_> {
 
     /// A loop over the array `arr` that joins `piece(element)` with `sep`.
     /// `None` when `piece` gives `None` (a wrong element type).
-    fn encode_each(&mut self, arr: TExpr, sep: &str, piece: impl FnOnce(&mut Self, TExpr) -> Option<TExpr>) -> Option<TExpr> {
+    pub(super) fn encode_each(&mut self, arr: TExpr, sep: &str, piece: impl FnOnce(&mut Self, TExpr) -> Option<TExpr>) -> Option<TExpr> {
         let span = arr.span;
         let arr_ty = arr.ty.clone();
         let Type::Array(elem) = &arr_ty else { return None };

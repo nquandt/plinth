@@ -1232,6 +1232,19 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Block(vec![TStmt::Let(tmp, Some(o)), TStmt::Expr(rev)], bx(read)), arr_ty, span)
             }
             "join" => {
+                // A number or boolean array with a literal separator: convert
+                // each element as a template literal does, in one loop.
+                let lit_sep = match args.first().map(|a| &a.kind) {
+                    None => Some(",".to_owned()),
+                    Some(ExprKind::Str(s)) => Some(s.clone()),
+                    _ => None,
+                };
+                if matches!(elem, Type::Number | Type::Int | Type::Bool)
+                    && let Some(sep) = lit_sep
+                    && let Some(joined) = self.encode_each(o.clone(), &sep, |c, x| Some(c.to_str(x)))
+                {
+                    return joined;
+                }
                 if !elem.is_stringish() && !elem.is_error() {
                     self.err_help(code::TYPE_MISMATCH, span, "`join` works on string arrays", "map the items to strings first");
                 }

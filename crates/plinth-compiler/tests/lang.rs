@@ -2792,3 +2792,21 @@ function Home() {
     let tree = run(&main);
     assert_eq!(text_of(&tree, ControlKind::Text), "1|3,4|abc|7:0|n5:6,7");
 }
+
+/// `join` on number and boolean arrays (a literal separator), as JavaScript.
+#[test]
+fn join_converts_numbers_and_booleans() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const xs = [1, 2.5, -3];
+  const flags = [true, false];
+  const empty: number[] = [];
+  const out = `${xs.join(", ")}|${flags.join()}|${[0.1 + 0.2].join("")}|${empty.join("-")}`;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "1, 2.5, -3|true,false|0.30000000000000004|");
+}
