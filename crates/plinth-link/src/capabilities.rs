@@ -29,6 +29,10 @@ pub const NET: &str = "net";
 /// fixed name, in addition to any `net:<host>` entry, before a request to
 /// a private/loopback address is allowed.
 pub const NET_LOCAL: &str = "net.local";
+/// `plinth:files` on the app's own private space (`docs/STORAGE.md` §2
+/// item 3, §3). Low risk: the space belongs to this app only, like the kv
+/// store, so it is granted with no question.
+pub const FILES_PRIVATE: &str = "files.private";
 /// Privileged Hub management (`docs/HUB.md` §4.1, §12.2): `list-apps`,
 /// `launch`, `set-grant`, `block`, `unblock`. The host grants this only to
 /// a package signed by a trusted Hub key (`docs/HUB.md` §4.1); it is not
@@ -64,6 +68,7 @@ pub struct CapabilityInfo {
 /// its risk level and description (`docs/HUB.md` §7.1, §7.2).
 pub const CAPABILITIES: &[CapabilityInfo] = &[
     CapabilityInfo { name: STORE_KV, risk: Risk::Low, description: "save data on this device" },
+    CapabilityInfo { name: FILES_PRIVATE, risk: Risk::Low, description: "save files on this device" },
     CapabilityInfo { name: CLIPBOARD_WRITE, risk: Risk::Low, description: "write to the clipboard" },
     CapabilityInfo { name: CLIPBOARD_READ, risk: Risk::Medium, description: "read the clipboard" },
     CapabilityInfo { name: NET_LOCAL, risk: Risk::Medium, description: "connect to devices on your local network" },
@@ -86,6 +91,7 @@ pub const FUNCTION_CAPABILITIES: &[(&str, &str)] = &[
     ("kv_set", STORE_KV),
     ("kv_delete", STORE_KV),
     ("kv_keys", STORE_KV),
+    ("files_call", FILES_PRIVATE),
     ("clipboard_write_text", CLIPBOARD_WRITE),
     ("clipboard_read_text", CLIPBOARD_READ),
     // `kv_last_error` and `clipboard_last_error` read a local, harmless

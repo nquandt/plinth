@@ -5068,6 +5068,7 @@ dependencies = [
  "plinth-protocol",
  "serde",
  "serde_json",
+ "sha2",
  "time",
  "ureq 3.4.2",
  "wasmtime",

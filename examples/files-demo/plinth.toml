@@ -1,0 +1,8 @@
+id = "dev.plinth.examples.files-demo"
+name = "Files"
+version = "0.1.0"
+publisher = "plinth"
+
+[[capabilities]]
+name = "files.private"
+rationale = "Save your text files on this device."

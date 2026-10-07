@@ -518,6 +518,7 @@ accurate.
 | `plinth:clipboard` | `writeText`, `readText`, `lastError()` | `clipboard.write` / `clipboard.read` |
 | `plinth:dialog` | `alert`, `confirm`, `prompt` (host-owned modal dialogs) | none |
 | `plinth:net` | `fetch` (HTTP, text bodies), with a `done` callback or as a `Promise` | `net:<host>` or `net:*`, and `net.local` for a private address |
+| `plinth:files` | `read`, `write`, `list`, `stat`, `remove` (text files in the app's private space, core 1.11), with a `done(error, value)` callback or as a `Promise` that rejects with an `Error` | `files.private` |
 | `plinth:hub` | `listApps`, `appInfo`, `launch`, `setGrant`, `block`/`unblock`, `blockPublisher`/`unblockPublisher`, `pin`, `listGroups`, `createGroup`, `setGroup`, `remove`, `search`, `install`, `checkUpdates`, `update`, `lastError` (the Hub UI only, see [host-apis.md](host-apis.md)) | `hub.manage`, for a package that a trusted Hub key signed |
 
 See [host-apis.md](host-apis.md) for how capabilities, denial, and the

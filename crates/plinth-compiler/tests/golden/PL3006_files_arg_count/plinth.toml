@@ -1,0 +1,8 @@
+id = "dev.test.files"
+name = "T"
+version = "0.1.0"
+publisher = "t"
+
+[[capabilities]]
+name = "files.private"
+rationale = "test"

@@ -48,6 +48,7 @@ pub const STORE_NAMES: &[&str] = &["kv"];
 pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
 pub const DIALOG_NAMES: &[&str] = &["alert", "confirm", "prompt"];
 pub const NET_NAMES: &[&str] = &["fetch", "Response", "FetchOptions"];
+pub const FILES_NAMES: &[&str] = &["read", "write", "list", "stat", "remove", "FileEntry"];
 pub const HUB_NAMES: &[&str] = &[
     "listApps",
     "launch",
@@ -73,7 +74,7 @@ pub const HUB_NAMES: &[&str] = &[
 /// `capabilities` module, `docs/HUB.md` §12.3) rather than a duplicated
 /// list here.
 pub use plinth_link::capabilities::{
-    CLIPBOARD_READ as CAP_CLIPBOARD_READ, CLIPBOARD_WRITE as CAP_CLIPBOARD_WRITE, HUB_MANAGE as CAP_HUB_MANAGE, STORE_KV as CAP_STORE_KV,
+    CLIPBOARD_READ as CAP_CLIPBOARD_READ, CLIPBOARD_WRITE as CAP_CLIPBOARD_WRITE, FILES_PRIVATE as CAP_FILES_PRIVATE, HUB_MANAGE as CAP_HUB_MANAGE, STORE_KV as CAP_STORE_KV,
 };
 
 pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
@@ -120,6 +121,17 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             // see the name declared; the editor's own types come from
             // `net.d.ts` directly.
             "Response" | "FetchOptions" => Binding::Type(Type::Error),
+            _ => return None,
+        }),
+        StdModule::Files => Some(match name {
+            "read" => Binding::Std(StdFn::FilesRead),
+            "write" => Binding::Std(StdFn::FilesWrite),
+            "list" => Binding::Std(StdFn::FilesList),
+            "stat" => Binding::Std(StdFn::FilesStat),
+            "remove" => Binding::Std(StdFn::FilesRemove),
+            // Shaped structurally, like `net`'s `Response` (the editor's
+            // type comes from `files.d.ts`).
+            "FileEntry" => Binding::Type(Type::Error),
             _ => return None,
         }),
         StdModule::Hub => Some(match name {
@@ -644,6 +656,7 @@ impl Checker<'_> {
                 let key = self.coerce(key, &Type::String);
                 TExpr::new(TExprKind::Rt(rt_fn, vec![key]), Type::Void, span)
             }
+            StdFn::FilesRead | StdFn::FilesWrite | StdFn::FilesList | StdFn::FilesStat | StdFn::FilesRemove => self.files_call(f, args, span),
             StdFn::HubSearch | StdFn::HubInstall | StdFn::HubCheckUpdates | StdFn::HubUpdate => {
                 self.require_capability(CAP_HUB_MANAGE, span);
                 let (name, rt_fn, what) = match f {
@@ -700,6 +713,123 @@ impl Checker<'_> {
             Type::Void,
             span,
         )
+    }
+
+    /// A `plinth:files` call (core 1.11, `docs/STORAGE.md` §2, §3). With a
+    /// `done` callback, `done(error, value)` (`done(error)` for `write` and
+    /// `remove`); without it, a `Promise` of the value that rejects with an
+    /// `Error` whose message is the error text (for example
+    /// `"denied:refused"` or `"not-found"`). Both forms use one wrapper
+    /// closure that reads the completion list with `net_result_*`.
+    fn files_call(&mut self, f: StdFn, args: &[Expr], span: Span) -> TExpr {
+        self.require_capability(CAP_FILES_PRIVATE, span);
+        let entry = Type::Struct(self.file_entry_struct());
+        // (name, op code of `files_call`, the value type, takes text)
+        let (name, op, value_ty, has_text) = match f {
+            StdFn::FilesRead => ("read", 0, Type::String, false),
+            StdFn::FilesWrite => ("write", 1, Type::Void, true),
+            StdFn::FilesList => ("list", 2, Type::Array(Box::new(entry.clone())), false),
+            StdFn::FilesStat => ("stat", 3, entry.nullable(), false),
+            _ => ("remove", 4, Type::Void, false),
+        };
+        let fixed = if has_text { 2 } else { 1 };
+        if args.len() != fixed && args.len() != fixed + 1 {
+            let what = if has_text { "a path, the text" } else { "a path" };
+            self.err(code::ARG_COUNT, span, format!("`{name}` takes {what} and an optional done callback"));
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        let path = self.expr_with(&args[0], &Type::String);
+        let path = self.coerce(path, &Type::String);
+        let text = if has_text {
+            let t = self.expr_with(&args[1], &Type::String);
+            let t = self.coerce(t, &Type::String);
+            self.coerce(t, &Type::String.nullable())
+        } else {
+            TExpr::new(TExprKind::Null, Type::String.nullable(), span)
+        };
+        let done = args.get(fixed).map(|d| {
+            let mut params = vec![Type::String.nullable()];
+            if value_ty != Type::Void {
+                params.push(value_ty.clone());
+            }
+            self.callback(d, &params, Some(Type::Void))
+        });
+
+        // The wrapper: `e = error; t = text; v = decode(t); ...`.
+        let fid = self.prog.new_func(FuncDef {
+            name: format!("<files_{name}_done>"),
+            kind: FuncKind::Closure,
+            params: Vec::new(),
+            ret: Type::Void,
+            body: Vec::new(),
+            span,
+        });
+        let e_ty = Type::String.nullable();
+        let ev = self.temp(e_ty.clone());
+        let tv = self.temp(Type::String);
+        let e = TExpr::new(TExprKind::Var(ev), e_ty.clone(), span);
+        let t = TExpr::new(TExprKind::Var(tv), Type::String, span);
+        let mut body = vec![
+            TStmt::Let(ev, Some(TExpr::new(TExprKind::Rt("net_result_error", Vec::new()), e_ty.clone(), span))),
+            TStmt::Let(tv, Some(TExpr::new(TExprKind::Rt("net_result_text", Vec::new()), Type::String, span))),
+        ];
+        let value = match f {
+            StdFn::FilesRead => Some(t),
+            StdFn::FilesStat => Some(self.json_parse_value(t, &value_ty, span)),
+            StdFn::FilesList => {
+                // `JSON.parse<FileEntry[]>(t) ?? []`.
+                let parsed = self.json_parse_value(t, &value_ty, span);
+                let lv = self.temp(parsed.ty.clone());
+                let l = TExpr::new(TExprKind::Var(lv), parsed.ty.clone(), span);
+                body.push(TStmt::Let(lv, Some(parsed)));
+                let is_null = TExpr::new(TExprKind::IsNull(Box::new(l.clone())), Type::Bool, span);
+                let empty = TExpr::new(TExprKind::ArrayLit(Vec::new()), value_ty.clone(), span);
+                let some = TExpr::new(TExprKind::Coerce(Coercion::Retag, Box::new(l)), value_ty.clone(), span);
+                Some(TExpr::new(TExprKind::Cond(Box::new(is_null), Box::new(empty), Box::new(some)), value_ty.clone(), span))
+            }
+            _ => None,
+        };
+        let vv = value.map(|v| {
+            let vv = self.temp(value_ty.clone());
+            body.push(TStmt::Let(vv, Some(v)));
+            TExpr::new(TExprKind::Var(vv), value_ty.clone(), span)
+        });
+        let result = match done {
+            Some((cb, n)) => {
+                let mut call_args = vec![e];
+                call_args.extend(vv);
+                call_args.truncate(n);
+                body.push(TStmt::Expr(TExpr::new(TExprKind::CallClosure(Box::new(cb), call_args), Type::Void, span)));
+                None
+            }
+            None => {
+                let info = self.promise_info(&value_ty);
+                let pty = Type::Struct(info.sid);
+                let pv = self.temp(pty.clone());
+                let p = TExpr::new(TExprKind::Var(pv), pty.clone(), span);
+                let (_, reject) = self.promise_then_reject();
+                let resolved = vv.unwrap_or_else(|| TExpr::new(TExprKind::Bool(false), Type::Bool, span));
+                let resolve = TStmt::Expr(TExpr::new(TExprKind::Call(info.resolve, vec![p.clone(), resolved]), Type::Void, span));
+                let err = self.new_error(e.clone());
+                let base = self.as_base(p.clone());
+                let reject = TStmt::Expr(TExpr::new(TExprKind::Call(reject, vec![base, err]), Type::Void, span));
+                let is_null = TExpr::new(TExprKind::IsNull(Box::new(e)), Type::Bool, span);
+                body.push(TStmt::If(is_null, vec![resolve], vec![reject]));
+                Some((pv, p, info))
+            }
+        };
+        super::asyncfn::reown(&mut self.prog, &body, fid, None);
+        self.prog.funcs[fid as usize].body = body;
+        let ft = crate::types::FuncType { params: Vec::new(), required: 0, ret: Type::Void };
+        let wrapper = TExpr::new(TExprKind::Closure(fid), Type::Func(std::rc::Rc::new(ft)), span);
+        let call = TExpr::new(TExprKind::FilesCall(op, Box::new(path), Box::new(text), Box::new(wrapper)), Type::Void, span);
+        match result {
+            None => call,
+            Some((pv, p, info)) => {
+                let pty = Type::Struct(info.sid);
+                TExpr::new(TExprKind::Block(vec![TStmt::Let(pv, Some(self.new_promise(&info, span))), TStmt::Expr(call)], Box::new(p)), pty, span)
+            }
+        }
     }
 
     /// `fetch`'s `options`: `null`, or an object literal with optional

@@ -3,8 +3,8 @@
 A Plinth app cannot reach the outside world by itself. Every effect
 outside its own UI — storage, the clipboard, the network, even a modal
 dialog — goes through a **host API module** (`plinth:time`,
-`plinth:store`, `plinth:clipboard`, `plinth:dialog`, and, in progress,
-`plinth:net`). Most of these modules are gated by a **capability**:
+`plinth:store`, `plinth:clipboard`, `plinth:dialog`, `plinth:net` and
+`plinth:files`). Most of these modules are gated by a **capability**:
 a named permission that the app must declare in `plinth.toml`, and that
 the user grants before the app can use it.
 
@@ -113,6 +113,93 @@ Without `done`, `fetch(url, options)` returns a `Promise<Response>` for
 rejects: `ok` is `false` and `error` gives the reason. WebSocket is not
 implemented.
 
+## `plinth:files`
+
+Text files in the app's **private space** (core 1.11, `docs/STORAGE.md`
+§2 item 3 and §3). Needs the `files.private` capability. Its risk is Low
+("save files on this device"): the Hub grants it with no question, as it
+does `store.kv`. Only this app can read its private space.
+
+```ts
+import { read, write, list, stat, remove } from "plinth:files";
+
+await write("notes/today.md", "# Today");   // makes the folder "notes"
+const text = await read("notes/today.md");  // string
+const entries = await list("notes");        // FileEntry[]: { name, kind, size }
+const entry = await stat("notes/today.md"); // FileEntry | null
+await remove("notes");                      // a file, or a folder and its contents
+```
+
+| Call | Result | Notes |
+|---|---|---|
+| `read(path)` | `Promise<string>` | The whole file. |
+| `write(path, text)` | `Promise<void>` | Replaces the file. Makes the parent folders. |
+| `list(dir)` | `Promise<FileEntry[]>` | Sorted by name. `""` is the root. `kind` is `"file"` or `"dir"`; `size` is the size of a file in UTF-8 bytes (`0` for a folder). |
+| `stat(path)` | `Promise<FileEntry \| null>` | `null` if nothing is at `path`. |
+| `remove(path)` | `Promise<void>` | A path that does not exist is not an error. |
+
+Each call also has a callback form: the last argument is `done(error,
+value)` (`done(error)` for `write` and `remove`); `error` is `null` on
+success.
+
+**Errors.** A failed call rejects the promise with an `Error`. Its
+`message` is one of: `"denied:undeclared"`, `"denied:refused"`,
+`"denied:unsupported"`, `"invalid-path: <rule>"`, `"not-found"`,
+`"not-a-file"`, `"not-a-directory"`, `"not-text"` (the file is not UTF-8),
+`"too-large"` (more than 8 MiB), `"quota"` (the space is full) or `"io:
+<detail>"`. A failed call never traps the app; an uncaught rejection is
+reported like any other (see "Uncaught errors").
+
+**Folders.** A folder exists only while it holds a file: `write` makes the
+parent folders, and when `remove` takes the last file out of a folder, the
+empty folders go too. There is no `mkdir`. (The web host has no real
+folders, so this keeps both hosts the same.)
+
+**Path rules** (`docs/STORAGE.md` §3 rule 1). The host checks each path
+itself; it does not trust a check in the app. A path is relative, with `/`
+between segments, for example `notes/2026/today.md`. The host refuses:
+
+- an empty path (except `""` for `list`), a path that starts with `/`,
+  and a backslash anywhere;
+- an empty segment (`a//b`, `a/`), and the segments `.` and `..`;
+- control characters (U+0000–U+001F, U+007F–U+009F), NUL included;
+- the characters `: * ? " < > |` (so no drive letters such as `C:` and no
+  Windows streams such as `file:stream`);
+- a segment that ends with a dot or a space;
+- the Windows device names `CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9`,
+  `LPT0`–`LPT9` (also with an extension, for example `nul.txt`);
+- a path longer than 1024 UTF-8 bytes, a segment longer than 255 bytes,
+  or more than 32 segments.
+
+The rules are the same on every host, also where a file system would
+accept a name, so that a space can move between hosts. The host does not
+decode a path: `%2e%2e` is a plain name. The host does not normalize
+Unicode (there is no normalization crate in the workspace, and the core
+must stay small): the refused characters are all ASCII, and NFC cannot make
+or remove an ASCII character, so normalization cannot open a way out of the
+space. Two spellings of one name (NFC and NFD) can be two files on one host
+and one file on another (macOS); write names in NFC. File names are
+case-sensitive on the web and not on Windows and macOS.
+
+**Where the files are.**
+
+- Desktop: `<data dir>/spaces/private/<owner>/<app id>/` (the data dir is
+  `%APPDATA%\plinth` on Windows). `<owner>` is `key-<hash of the publisher
+  key>` for a signed package, so a package with the same id from another
+  publisher gets another folder (`docs/STORAGE.md` §3 rule 2), or
+  `pkg-<package digest>` for an unsigned package (a new build is a new
+  space), or `dev` for `plinth dev`. The app id is in lower case. The calls
+  of one app run on one worker thread, in the order the app made them,
+  never on the UI thread.
+- Web: in a sandboxed app frame (the web Hub, a web export), the page keeps
+  the files in its IndexedDB (database `plinth-files`), one namespace for
+  each app id; the frame asks for each call through the `files-*` bridge
+  messages (`web/README.md`). On the stand-alone page and in Node tests:
+  in memory.
+
+**Limits.** 8 MiB for one file; 50 MiB for the private space of one app
+(the sum of the file sizes).
+
 ## `plinth:hub` (privileged)
 
 The Hub UI (`examples/hub`, `docs/HUB.md` §4.1) uses this module. It needs
@@ -203,6 +290,7 @@ call never throws or traps your app — it fails quietly, in a fixed way:
 |---|---|
 | `plinth:store` | `kv.get` returns `null`; `kv.set`/`kv.remove` do nothing; `kv.keys()` returns `[]`. |
 | `plinth:clipboard` | `readText()` returns `null`; `writeText()` does nothing. |
+| `plinth:files` | The promise rejects with `Error("denied:<reason>")`; a `done` callback gets the reason as `error`. |
 
 Each denied module exposes `lastError()` (`kv.lastError()`,
 `clipboard`'s module-level `lastError()`), which returns one of:

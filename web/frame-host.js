@@ -15,6 +15,8 @@
 //   page's real origin, not "null"), after the same `net:` check;
 // - the clipboard, through the page;
 // - dialogs (`plinth:dialog`), drawn by the page;
+// - the private space of `plinth:files`, in the page's IndexedDB (one
+//   namespace for each app id), with the same checks as the desktop host;
 // - the content height that the frame reports (`autoHeight`).
 //
 // The page decides what the app may do (consent, grants) and gives the
@@ -22,6 +24,7 @@
 
 import { checkFrameMessage, applyKvMessage, startMessage, CHANNEL, KV_QUOTA } from "./hub-storage.js";
 import { netDenied, httpFetch } from "./plinth-web.js";
+import { FileSpace, idbFileBackend, memoryFileBackend, FILES_CAPABILITY } from "./files.js";
 
 /** `el("p", { class: "x" }, "text", child)`: a small DOM builder (text is never parsed as HTML). */
 function el(tag, attrs = {}, ...children) {
@@ -84,6 +87,8 @@ export function hostDialog(kind, message, title = "") {
  *   on a copy (`FrameHub`); this side keeps the page's copy up to date.
  * - `askDialog(kind, message)`: default `hostDialog`.
  * - `fetchImpl`: default `fetch`.
+ * - `files`: the `FileSpace` of this app for `plinth:files`; default: the
+ *   page's IndexedDB (`idbFileBackend(appId)`), or memory without IndexedDB.
  * - `onStarted()`, `onFailed(message)`.
  *
  * `element` is the iframe; put it in the page. `destroy()` removes it.
@@ -94,6 +99,8 @@ export class AppFrame {
     this.declared = new Set(opts.declared ?? []);
     this.refused = new Set(opts.refused ?? []);
     this.sent = false;
+    this.files =
+      opts.files ?? new FileSpace(typeof indexedDB !== "undefined" ? idbFileBackend(opts.appId) : memoryFileBackend());
     // `allow-scripts` only: an opaque origin, no forms, no popups, no modal
     // dialogs, no top navigation, no same-origin access.
     this.element = el("iframe", { class: "host-frame", sandbox: "allow-scripts", title: opts.title ?? opts.appId });
@@ -180,6 +187,19 @@ export class AppFrame {
         const denied = netDenied(msg.url, this.declared, this.refused);
         if (denied) this.answer(msg.id, [false, 0, "", denied]);
         else httpFetch(msg.url, msg.method, msg.headers, msg.body, this.opts.fetchImpl).then((r) => this.answer(msg.id, r));
+        break;
+      }
+      case "files-read":
+      case "files-write":
+      case "files-list":
+      case "files-stat":
+      case "files-remove": {
+        if (!this.allowed(FILES_CAPABILITY)) {
+          this.answer(msg.id, [false, 0, "", this.declared.has(FILES_CAPABILITY) ? "denied:refused" : "denied:undeclared"]);
+          break;
+        }
+        const op = msg.type.slice("files-".length);
+        this.files.call(op, msg.path, op === "write" ? msg.text : null).then((r) => this.answer(msg.id, r));
         break;
       }
       case "hub-save":

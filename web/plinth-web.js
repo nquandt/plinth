@@ -15,6 +15,7 @@
 
 import { openZip } from "./zip.js";
 import { decodeOps, encodeEvent, encodeInitArgs } from "./protocol.js";
+import { FileSpace, memoryFileBackend, FILES_CAPABILITY } from "./files.js";
 
 const RT_PREFIX = "__plinth_rt_";
 
@@ -271,6 +272,7 @@ function hostImports(
     clipboard = null,
     hub = null,
     netFetch = null,
+    files = null,
   } = {},
 ) {
   // A capability is usable when the manifest declares it and the user did
@@ -310,6 +312,24 @@ function hostImports(
           .then(() => netFetch(url, method, headers, body))
           .catch((e) => [false, 0, "", `network: ${e?.message ?? e}`])
       : httpFetch(url, method, headers, body);
+    run.then((result) => completeRequest?.(id, result));
+    return id;
+  }
+  // plinth:files (core 1.11, docs/STORAGE.md §2, §3): the same request id
+  // and `[ok, 0, text, error]` completion as `net.fetch`. `files` is a
+  // `FileSpace` (or anything with its `call(op, path, text)`): in memory by
+  // default, the page's store in a sandboxed frame. It checks each path
+  // again; the frame's parent checks the capability again.
+  function openFiles(op, path, text) {
+    const id = nextRequest++;
+    let reason = capReason(FILES_CAPABILITY);
+    if (reason === null && !files) reason = DeniedReason.unsupported;
+    const run =
+      reason !== null
+        ? Promise.resolve([false, 0, "", deniedText(reason)])
+        : Promise.resolve()
+            .then(() => files.call(op, path, text))
+            .catch((e) => [false, 0, "", `io: ${e?.message ?? e}`]);
     run.then((result) => completeRequest?.(id, result));
     return id;
   }
@@ -554,6 +574,25 @@ function hostImports(
         return openNetFetch(url, method, headers, body);
       },
     },
+    // Core 1.11: each call returns a request id directly (string params are
+    // (ptr, len) pairs).
+    "plinth:app/files@1.0.0": {
+      read(ptr, len) {
+        return openFiles("read", readString(ptr, len), null);
+      },
+      write(ptr, len, textPtr, textLen) {
+        return openFiles("write", readString(ptr, len), readString(textPtr, textLen));
+      },
+      "list-dir"(ptr, len) {
+        return openFiles("list", readString(ptr, len), null);
+      },
+      stat(ptr, len) {
+        return openFiles("stat", readString(ptr, len), null);
+      },
+      remove(ptr, len) {
+        return openFiles("remove", readString(ptr, len), null);
+      },
+    },
     "plinth:app/clipboard@1.0.0": {
       "write-text"(ptr, len, retptr) {
         const reason = capReason("clipboard.write");
@@ -759,6 +798,9 @@ export class PlinthApp {
       refused: opts.refused ?? new Set(),
       hub: opts.hub ?? null,
       kvStore,
+      // `plinth:files`: the caller's space (the frame's bridge to the page),
+      // else a space in memory for this app (Node, the stand-alone page).
+      files: opts.files ?? new FileSpace(memoryFileBackend(opts.filesMap)),
       onCommit: (ops) => this.onCommit(ops),
     });
     this.appInstance = await linkApp(this.core, appBytes);

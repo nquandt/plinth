@@ -842,8 +842,8 @@ function startHubServer(exe, dir) {
   });
 }
 
-const HUB_APPS = ["counter", "notes", "budget", "utility", "todo", "timer", "calculator", "hub"];
-const ID = (app) => (app === "hub" ? "dev.plinth.hub" : `dev.plinth.examples.${app}`);
+const HUB_APPS = ["counter", "notes", "budget", "utility", "todo", "timer", "calculator", "files-demo", "hub"];
+const ID = (app) => (app === "hub" ? "dev.plinth.hub" : app === "files-fixture" ? "dev.plinth.test.files-fixture" : `dev.plinth.examples.${app}`);
 
 /**
  * The web App Hub in headless Edge (docs/web-hub.md): `hub.html` runs the
@@ -865,6 +865,8 @@ async function checkHub(cdpPort) {
   for (const app of HUB_APPS) {
     await copyFile(path.join(root, "examples", app, "dist", `${app}.plnt`), path.join(reg, `${app}.plnt`));
   }
+  // A second app with `plinth:files`, for the isolation check.
+  await copyFile(path.join(root, "web/test/fixtures/files-fixture/dist/files-fixture.plnt"), path.join(reg, "files-fixture.plnt"));
   const env = { ...process.env, PLINTH_PUBLISHER_DIR: path.join(dir, "publisher") };
   execFileSync(exe, ["publisher", "init", "--name", "you"], { env, stdio: "ignore" });
   const key = execFileSync(exe, ["publisher", "show"], { env, encoding: "utf8" }).trim().split(/\s+/).pop();
@@ -941,7 +943,8 @@ async function checkHub(cdpPort) {
       if ((await page.eval(`document.getElementById("hub-frame")?.getAttribute("sandbox")`)) !== "allow-scripts") throw new Error("the Hub app is not in a sandboxed frame");
       await hub.waitFor(`document.querySelectorAll("#app .pl-row").length > 0 ? true : null`, 10000);
       const rows = await hub.eval(`[...document.querySelectorAll("#app .pl-row-title")].map((t) => t.textContent).join(",")`);
-      if (rows !== "Calculator,Counter,Notes,Stopwatch,Todo,Utility,Budget".split(",").sort().join(",")) {
+      // By app id: the examples, then the test fixture.
+      if (rows !== "Budget,Calculator,Counter,Files,Notes,Stopwatch,Todo,Utility,Files Fixture") {
         throw new Error(`the Hub library shows ${rows}`);
       }
       await hubAxe(`hub library (${scheme})`);
@@ -1050,6 +1053,46 @@ async function checkHub(cdpPort) {
     if ((await frame.eval(`document.getElementById("app").innerText`)).includes("Isolated note")) throw new Error("notes reads its data with store.kv denied");
     await closeApp();
 
+    // plinth:files: Files saves a file; the page keeps it in its IndexedDB,
+    // in the namespace of Files; Files Fixture (another app) cannot list or
+    // read it.
+    await openApp("Files");
+    await waitRunning(ID("files-demo"));
+    await frame.waitFor(`document.querySelector("#app textarea") ? true : null`, 10000);
+    await frame.eval(`(() => {
+      const set = (label, v) => { const i = [...document.querySelectorAll("#app input, #app textarea")].find((e) => e.labels?.[0]?.textContent.trim() === label || e.getAttribute("aria-label") === label);
+        i.value = v; i.dispatchEvent(new Event("input", { bubbles: true })); };
+      set("File name", "secret.md"); set("Text", "A file of Files");
+    })()`);
+    await frame.eval(`${button("Save")}.click()`);
+    await frame.waitFor(`document.getElementById("app").innerText.includes("Saved secret.md.") ? true : null`, 10000).catch(async () => {
+      throw new Error(`Files did not save: ${await frame.eval(`document.getElementById("app").innerText`)}`);
+    });
+    const idbKeys = () =>
+      page.eval(`new Promise((resolve, reject) => { const r = indexedDB.open("plinth-files", 1); r.onupgradeneeded = () => r.result.createObjectStore("files");
+        r.onsuccess = () => { const q = r.result.transaction("files").objectStore("files").getAllKeys(); q.onsuccess = () => { resolve(JSON.stringify(q.result)); r.result.close(); }; q.onerror = () => reject(q.error); };
+        r.onerror = () => reject(r.error); })`);
+    const keys = await idbKeys();
+    if (keys !== JSON.stringify([[ID("files-demo"), "notes/secret.md"]])) throw new Error(`the page's files are ${keys}`);
+    await closeApp();
+    await openApp("Files Fixture");
+    await waitRunning(ID("files-fixture"));
+    const fixture = async (label, want) => {
+      await frame.waitFor(`${button(label)} ? true : null`, 10000);
+      await frame.eval(`${button(label)}.click()`);
+      await frame.waitFor(`document.getElementById("app").innerText.includes("done:") ? true : null`, 10000);
+      const got = (await frame.eval(`document.getElementById("app").innerText`)).match(/done:[^\n]*/)[0];
+      if (got !== want) throw new Error(`Files Fixture ${label}: ${got}, not ${want}`);
+    };
+    await fixture("list", "done:list:0");
+    await fixture("read", "done:err:not-found");
+    await closeApp();
+    // Files again: its file is still there (from the page).
+    await openApp("Files");
+    await waitRunning(ID("files-demo"));
+    await frame.waitFor(`[...document.querySelectorAll("#app .pl-row-title")].some((t) => t.textContent === "secret.md") ? true : null`, 10000);
+    await closeApp();
+
     // A package that does not match the registry digest does not open.
     await openApp("Calculator");
     await page.waitFor(`document.body.dataset.notice ? true : null`, 10000);
@@ -1096,7 +1139,7 @@ async function checkHub(cdpPort) {
     await hubAxe("hub library (phone)");
     await shot("library-phone");
     await page.send("Emulation.clearDeviceMetricsOverride");
-    console.log("  Hub app from the registry, Discover, sandboxed frame, consent window, kv isolation, grant from the Hub app, digest check, typing and stopwatch in the frame, phone width: ok");
+    console.log("  Hub app from the registry, Discover, sandboxed frame, consent window, kv isolation, files isolation, grant from the Hub app, digest check, typing and stopwatch in the frame, phone width: ok");
   } finally {
     await page.close();
     child.kill();
