@@ -31,6 +31,8 @@ pub enum EffectKind {
 /// Something that a scope must release when it is disposed.
 #[derive(Clone, Copy)]
 pub enum Cleanup {
+    /// `onCleanup` (core 1.12): app code to run when the scope goes away.
+    User(Callable),
     Handler(u32),
     Node(u32),
     List(u32),
@@ -603,6 +605,14 @@ pub fn trace_roots(f: &mut dyn FnMut(u32)) {
                 }
                 RNode::Effect { kind: EffectKind::User(c), .. } => f(c.env),
                 _ => {}
+            }
+        }
+        // `onCleanup` callbacks wait in their scope until it goes away.
+        for sc in s.scopes.iter().flatten() {
+            for c in &sc.cleanups {
+                if let Cleanup::User(c) = c {
+                    f(c.env);
+                }
             }
         }
     });

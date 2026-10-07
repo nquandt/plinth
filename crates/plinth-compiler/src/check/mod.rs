@@ -69,6 +69,10 @@ pub enum StdFn {
     Signal,
     Computed,
     Effect,
+    /// `onCleanup(fn)` (core 1.12): runs `fn` when the current component or region goes away.
+    OnCleanup,
+    /// `isActive()` (core 1.12): a reactive boolean, true while the app's window is in the foreground.
+    IsActive,
     App,
     Navigate,
     ParseNumber,

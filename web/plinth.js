@@ -2630,6 +2630,27 @@ class DomRenderer {
     this.main = el("main", "pl-screen");
     this.shown = null; // the root view in `main`
     tree.onChange = () => this.render();
+    this.watchForeground(container.ownerDocument);
+  }
+
+  /**
+   * Core 1.12 (`isActive`): sends a `lifecycle` event when the page goes to
+   * the background (a hidden tab, or the focus leaves the window or the app
+   * frame) and when it comes back, as the desktop host does for its window.
+   */
+  watchForeground(doc) {
+    const win = doc?.defaultView;
+    if (!win) return;
+    let active = true;
+    const update = () => {
+      const now = doc.visibilityState !== "hidden" && doc.hasFocus();
+      if (now === active) return;
+      active = now;
+      this.app.onEvent({ kind: "lifecycle", lifecycleKind: now ? 0 : 1 });
+    };
+    doc.addEventListener("visibilitychange", update);
+    win.addEventListener("focus", update);
+    win.addEventListener("blur", update);
   }
 
   assetUrl(path) {

@@ -20,6 +20,16 @@ export declare function signal<T>(initial: T): Signal<T>;
 export declare function computed<T>(f: () => T): Computed<T>;
 export declare function effect(f: () => void): void;
 
+/** Runs `f` when the current component (or the part of the UI that a
+ * condition or a list row made) goes away: stop a timer or a frame loop
+ * there (core 1.12). */
+export declare function onCleanup(f: () => void): void;
+
+/** True while the app's window is in the foreground: visible and active
+ * (core 1.12). It is reactive: an `effect` that reads it runs again when the
+ * window goes to the background or comes back. Pause a game there. */
+export declare function isActive(): boolean;
+
 // -- App ----------------------------------------------------------------------
 
 export type Accent = "teal" | "blue" | "indigo" | "purple" | "pink" | "red" | "orange" | "green";

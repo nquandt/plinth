@@ -124,6 +124,14 @@ tickAll();
 assert.deepEqual(ball(), paused);
 press("Resume");
 assert.equal(frames.size, 1);
+// Core 1.12: the game pauses when the window goes to the background (`isActive`).
+app.onEvent({ kind: "lifecycle", lifecycleKind: 1 });
+assert.equal(frames.size, 0, "the background pauses the game");
+assert.ok(texts().includes("Paused"));
+app.onEvent({ kind: "lifecycle", lifecycleKind: 0 });
+assert.equal(frames.size, 0, "the game stays paused in the foreground");
+press("Resume");
+assert.equal(frames.size, 1);
 
 // -- The player's paddle -------------------------------------------------------
 press("Up");

@@ -19,7 +19,7 @@ use crate::calendar;
 use crate::primitives;
 use plinth_protocol::{
     ControlKind, Event, NodeId, Op, Value, Writer, aspect, axis, button_role, button_size, chart_kind, date_picker_mode,
-    decode_ops, event, pressable_role, prop, text_align, text_style, tone,
+    decode_ops, event, lifecycle_kind, pressable_role, prop, text_align, text_style, tone,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -231,6 +231,10 @@ pub struct PlinthRoot {
     /// The node that got the last pointer-down (UI API 1.12): it gets the
     /// moves outside its bounds and the pointer-up, until the button goes up.
     pointer_owner: Rc<Cell<Option<u32>>>,
+    /// The last foreground state sent to the guest (`None` before the
+    /// first), and the window activation observer that sends it.
+    active: Option<bool>,
+    activation: Option<Subscription>,
     /// The package's assets (SPEC.md §10.1), by path under `assets/`
     /// (without the prefix), for `<Image>`.
     assets: Arc<HashMap<String, Vec<u8>>>,
@@ -276,6 +280,8 @@ impl PlinthRoot {
             focus: cx.focus_handle(),
             focused_once: false,
             pointer_owner: Rc::new(Cell::new(None)),
+            active: None,
+            activation: None,
             assets,
             date_cursor: HashMap::new(),
             list_states: std::cell::RefCell::new(HashMap::new()),
@@ -301,6 +307,8 @@ impl PlinthRoot {
             focus: cx.focus_handle(),
             focused_once: false,
             pointer_owner: Rc::new(Cell::new(None)),
+            active: None,
+            activation: None,
             assets: Arc::new(HashMap::new()),
             date_cursor: HashMap::new(),
             list_states: std::cell::RefCell::new(HashMap::new()),
@@ -392,6 +400,28 @@ impl PlinthRoot {
             self.list_states.borrow_mut().remove(&id);
         }
         self.app_errors.extend(self.guest.take_errors());
+    }
+
+    /// Tells the guest that its window went to the foreground or the
+    /// background (the `lifecycle` event, core 1.12 `isActive`).
+    fn send_lifecycle(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.stopped.is_some() || self.active == Some(active) {
+            return;
+        }
+        self.active = Some(active);
+        let kind = if active { lifecycle_kind::FOREGROUND } else { lifecycle_kind::BACKGROUND };
+        let mut w = Writer::new();
+        w.event(&Event::Lifecycle { kind });
+        match self.guest.dispatch(w.as_bytes()) {
+            Ok(commits) => self.apply_commits(commits),
+            Err(e) => {
+                log::error!("the app stopped: {e:#}");
+                self.stopped = Some(format!("{e:#}"));
+            }
+        }
+        self.sync_fields(cx);
+        self.sync_dialog(cx);
+        cx.notify();
     }
 
     /// Sends one `ui` event to the guest and applies what it commits.
@@ -832,6 +862,12 @@ impl Render for PlinthRoot {
         #[cfg(debug_assertions)]
         let trace_start = std::env::var_os("PLINTH_TRACE_RENDER").is_some().then(Instant::now);
 
+        // The window's activation is the app's foreground state (`isActive`).
+        if self.activation.is_none() {
+            self.activation = Some(cx.observe_window_activation(window, |this, window, cx| {
+                this.send_lifecycle(window.is_window_active(), cx);
+            }));
+        }
         self.drive_frames(window, cx);
         self.class = WidthClass::from_width(window.viewport_size().width);
         self.ensure_fields(cx);

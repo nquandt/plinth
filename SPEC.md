@@ -532,7 +532,7 @@ The `kind`, `prop`, `event`, and enum ids are generated from one table in `wit/p
 | `ui` | `0x01` | `handler: u32`, `event: u16`, `value: Value` (for example the new text or the toggle state) |
 | `completion` | `0x02` | `request: u32`, `result: Value` (async host call result) |
 | `timer` | `0x03` | `timer: u32` |
-| `lifecycle` | `0x04` | `kind: u8` (foreground, background, low-memory, before-quit) |
+| `lifecycle` | `0x04` | `kind: u8`: 0 foreground, 1 background, 2 low-memory, 3 before-quit. Core 1.12 handles 0 and 1 (`isActive`). |
 | `visible-rows` | `0x05` | `list: u32`, `from: u32`, `to: u32` (if host-side virtualization asks for rows) |
 | `frame` | `0x07` | `timer: u32`, `dt: Value` (a number: the milliseconds since the previous frame, 0 for the first). Core 1.12: the host sends it before each frame that it draws, for each frame timer (`time.set-frame-timer`, `plinth:time` `onFrame`). |
 

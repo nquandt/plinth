@@ -8,7 +8,7 @@
 // paddle, Space starts and pauses (UI API 1.9 onKeyDown/onKeyUp). Drag on
 // the court with a mouse or a finger to move the paddle (UI API 1.12). The
 // buttons below the court do the same for touch and pointer users.
-import { app, signal, computed, Screen, Section, Box, Span, Pressable } from "plinth:ui";
+import { app, signal, computed, effect, onCleanup, isActive, Screen, Section, Box, Span, Pressable } from "plinth:ui";
 import { onFrame, cancelFrame, monotonicNow } from "plinth:time";
 import { Math } from "plinth:core";
 import {
@@ -91,6 +91,15 @@ function Pong() {
       stopLoop();
     }
   };
+
+  // Core 1.12: the game pauses when the window goes to the background, and
+  // the frame loop stops when the screen goes away.
+  effect(() => {
+    if (!isActive() && game().phase === "playing") {
+      startStop();
+    }
+  });
+  onCleanup(stopLoop);
 
   const status = computed(() => {
     const g = game();

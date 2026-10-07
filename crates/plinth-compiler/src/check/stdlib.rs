@@ -28,6 +28,8 @@ pub const UI_NAMES: &[&str] = &[
     "Chart", "ChartPoint", "ChartSeriesDef",
     // UI API 1.13
     "strokeRect", "strokeCircle",
+    // Core 1.12: lifecycle (docs/GAPS.md G10)
+    "onCleanup", "isActive",
 ];
 pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int", "JSON", "seedRandom"];
 pub const TIME_NAMES: &[&str] = &[
@@ -165,6 +167,9 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "signal" => Binding::Std(StdFn::Signal),
             "computed" => Binding::Std(StdFn::Computed),
             "effect" => Binding::Std(StdFn::Effect),
+            // Core 1.12 (docs/GAPS.md G10).
+            "onCleanup" => Binding::Std(StdFn::OnCleanup),
+            "isActive" => Binding::Std(StdFn::IsActive),
             "app" => Binding::Std(StdFn::App),
             "navigate" => Binding::StdObj(StdObj::Navigate),
             "Signal" => Binding::Type(Type::Signal(Box::new(Type::Error))),
@@ -266,6 +271,20 @@ impl Checker<'_> {
                 }
                 TExpr::new(TExprKind::ComputedNew(Box::new(f)), Type::Computed(Box::new(inner)), span)
             }
+            StdFn::OnCleanup => {
+                if args.len() != 1 {
+                    self.err(code::ARG_COUNT, span, "`onCleanup` takes a callback");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let (cb, _) = self.callback(&args[0], &[], Some(Type::Void));
+                TExpr::new(TExprKind::RtCallback("on_cleanup", Box::new(cb)), Type::Void, span)
+            }
+            StdFn::IsActive => {
+                if !args.is_empty() {
+                    self.err(code::ARG_COUNT, span, "`isActive` takes no arguments");
+                }
+                TExpr::new(TExprKind::Rt("app_active", Vec::new()), Type::Bool, span)
+            }
             StdFn::Effect => {
                 if !one_arg(self, "effect") {
                     return TExpr::new(TExprKind::Null, Type::Error, span);
@@ -351,7 +370,7 @@ impl Checker<'_> {
                     return TExpr::new(TExprKind::Num(0.0), Type::Number, span);
                 }
                 let (cb, _) = self.callback(&args[0], &[Type::Number], Some(Type::Void));
-                TExpr::new(TExprKind::FrameNew(Box::new(cb)), Type::Number, span)
+                TExpr::new(TExprKind::RtCallback("set_frame", Box::new(cb)), Type::Number, span)
             }
             StdFn::ClearTimer => {
                 if !one_arg(self, "clearTimeout/clearInterval") {

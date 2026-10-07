@@ -137,6 +137,18 @@ pub fn invoke_args(c: Callable, args: &[Val]) -> Val {
     RESULT.take()
 }
 
+/// The signal behind `isActive()` (core 1.12): 1 while the app's window is in
+/// the foreground. It lives in the root scope, so no component disposes it;
+/// the `lifecycle` event sets it.
+static ACTIVE: GlobalCell<u32> = GlobalCell::new(u32::MAX);
+
+fn active_signal() -> reactive::RId {
+    if ACTIVE.get() == u32::MAX {
+        ACTIVE.set(reactive::with_scope(0, || reactive::signal_new(Val::I32(1))));
+    }
+    ACTIVE.get()
+}
+
 /// The argument at `i` of the current call (`None` past the end).
 fn arg_at(i: i32) -> Val {
     usize::try_from(i).ok().and_then(|i| ARGS.get().get(i).copied()).unwrap_or(Val::None)
@@ -273,6 +285,13 @@ impl bindings::Guest for Rt {
                 plinth_protocol::Event::Frame { timer, dt } => {
                     host::dispatch_frame(timer, dt);
                     settle();
+                }
+                plinth_protocol::Event::Lifecycle { kind } => {
+                    use plinth_protocol::lifecycle_kind::{BACKGROUND, FOREGROUND};
+                    if kind == FOREGROUND || kind == BACKGROUND {
+                        reactive::signal_set(active_signal(), Val::I32(i32::from(kind == FOREGROUND)));
+                        settle();
+                    }
                 }
                 plinth_protocol::Event::Completion { request, result } => {
                     host::dispatch_completion(request, &result);
@@ -600,6 +619,11 @@ abi! {
     // -- Math.random and seedRandom (core 1.12, docs/GAPS.md G6) ---------------
     fn __plinth_rt_math_random() -> f64 { random::next() }
     fn __plinth_rt_math_seed(seed: f64) { random::seed(seed.to_bits()) }
+    // -- onCleanup and isActive (core 1.12, docs/GAPS.md G10) ------------------
+    fn __plinth_rt_on_cleanup(thunk: i32, env: i32) {
+        reactive::add_cleanup(reactive::Cleanup::User(Callable { thunk: thunk as u32, env: env as u32 }))
+    }
+    fn __plinth_rt_app_active() -> i32 { reactive::signal_get(active_signal()).i32() }
 
     // -- plinth:time date/time additions (SPEC.md §8.5, docs/GAPS.md gap #5) --
     fn __plinth_rt_tz_offset_minutes(ms: f64) -> f64 { host::timezone_offset(ms as i64) as f64 }

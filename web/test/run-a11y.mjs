@@ -768,7 +768,15 @@ async function checkPong(cdpPort, base) {
       throw new Error(`a drag below the court did not take the paddle to the bottom: ${(await top()) - court.y} px`);
     });
     await mouse("mouseReleased", court.y + court.h + 24, 0);
-    return `moved ${Math.round(before - held)} px while ArrowUp was held; a mouse drag aims the paddle`;
+    // Core 1.12 (`isActive`): a hidden page pauses the game (the `lifecycle`
+    // event from `visibilitychange`). Headless Edge keeps a background tab
+    // "visible", so the page says that it is hidden.
+    await page.eval(`(() => { Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+      document.dispatchEvent(new Event("visibilitychange")); })()`);
+    await page.waitFor(`document.getElementById("app").innerText.includes("Paused") ? true : null`, 5000).catch(() => {
+      throw new Error("a hidden page did not pause the game");
+    });
+    return `moved ${Math.round(before - held)} px while ArrowUp was held; a mouse drag aims the paddle; a hidden page pauses`;
   } finally {
     await page.close();
   }

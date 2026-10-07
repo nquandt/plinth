@@ -166,7 +166,7 @@ fn visit_expr(e: &TExpr, f: &mut dyn FnMut(&TExpr)) {
         | TExprKind::ComputedNew(o)
         | TExprKind::ComputedGet(o)
         | TExprKind::EffectNew(o)
-        | TExprKind::FrameNew(o)
+        | TExprKind::RtCallback(_, o)
         | TExprKind::UnionTag(o) => go(o),
         TExprKind::UnionIs(o, _) => go(o),
         TExprKind::Index(a, b)
@@ -454,10 +454,10 @@ impl Cx<'_> {
                 let thunk = thunk_of(&f);
                 TExprKind::Rt("effect", vec![thunk, f])
             }
-            TExprKind::FrameNew(f) => {
+            TExprKind::RtCallback(name, f) => {
                 let f = self.expr(*f);
                 let thunk = thunk_of(&f);
-                TExprKind::Rt("set_frame", vec![thunk, f])
+                TExprKind::Rt(name, vec![thunk, f])
             }
             TExprKind::TimerNew(ms, repeat, f) => {
                 let ms = self.expr(*ms);

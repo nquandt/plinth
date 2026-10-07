@@ -26,6 +26,8 @@ not a height in points.
 | `signal<T>(initial)` | `(initial: T) => Signal<T>` | `Signal<T>` is callable (`sig()` reads) and has `.set(value)`/`.update(f)`. |
 | `computed<T>(f)` | `(f: () => T) => Computed<T>` | Read-only, derived, callable. |
 | `effect(f)` | `(f: () => void) => void` | Reruns when a signal it read changes. |
+| `onCleanup(f)` | `(f: () => void) => void` | Core 1.12. Runs `f` when the current component, or the part of the UI that a condition or a list row made, goes away. Stop a timer or a frame loop there. |
+| `isActive()` | `() => boolean` | Core 1.12. True while the app's window is in the foreground (desktop: the window is active; web: the page is visible and has the focus). Reactive: an `effect` that reads it runs again on a change. `examples/pong` pauses there. |
 
 ## App entry and navigation
 

@@ -373,6 +373,22 @@ fn pong_plays_a_point() {
     assert!(!h.guest.wants_frames(), "Pause stops the loop");
     press(&mut h, "Resume");
 
+    // Core 1.12: the game pauses when the window goes to the background
+    // (`isActive`), and stays paused when it comes back.
+    let lifecycle = |h: &mut Harness, kind: u8| {
+        let mut w = Writer::new();
+        w.event(&Event::Lifecycle { kind });
+        for commit in h.guest.on_event(w.as_bytes()).unwrap() {
+            h.tree.apply(&commit).unwrap();
+        }
+    };
+    lifecycle(&mut h, plinth_protocol::lifecycle_kind::BACKGROUND);
+    assert!(!h.guest.wants_frames(), "the background pauses the game");
+    lifecycle(&mut h, plinth_protocol::lifecycle_kind::FOREGROUND);
+    assert!(!h.guest.wants_frames(), "the game stays paused in the foreground");
+    press(&mut h, "Resume");
+    assert!(h.guest.wants_frames());
+
     press(&mut h, "Up");
     for _ in 0..5 {
         tick(&mut h);
@@ -619,4 +635,67 @@ export default app({ screens: { home: { title: "Home", component: Home } } });
     }
     assert_eq!(text(&a), text(&c));
     assert!(text(&a).ends_with(" true"), "{}", text(&a));
+}
+
+/// Core 1.12 (docs/GAPS.md G10): `onCleanup` runs when the part of the UI
+/// that registered it goes away, and `isActive()` follows the `lifecycle`
+/// events of the host (an effect that reads it runs again).
+#[test]
+fn on_cleanup_and_is_active() {
+    const APP: &str = r#"
+import { app, signal, effect, onCleanup, isActive, Screen, Text, Button } from "plinth:ui";
+
+const cleaned = signal(0);
+const changes = signal(0);
+
+function Child() {
+  onCleanup(() => cleaned.set(cleaned() + 1));
+  return <Text>child</Text>;
+}
+
+function Home() {
+  const show = signal(true);
+  effect(() => {
+    isActive();
+    changes.update((n) => n + 1);
+  });
+  return (
+    <Screen title="Home">
+      {show() ? <Child /> : null}
+      <Text>{`cleaned ${cleaned()}, active ${isActive()}, changes ${changes()}`}</Text>
+      <Button label="Toggle" onPress={() => show.set(!show())} />
+    </Screen>
+  );
+}
+
+export default app({ screens: { home: { title: "Home", component: Home } } });
+"#;
+    let fs = plinth_compiler::driver::MemFs::default().with("app/main.tsx", APP);
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &[]).expect("compile");
+    let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+    let art = artifact.unwrap_or_else(|| panic!("errors:\n{}", diags.join("\n")));
+    let mut h = Harness::start(&art.component);
+    let status = |h: &Harness| h.find(ControlKind::Text, |_| true).into_iter().map(|id| h.text_of(id)).find(|t| t.starts_with("cleaned")).unwrap();
+    let lifecycle = |h: &mut Harness, kind: u8| {
+        let mut w = Writer::new();
+        w.event(&Event::Lifecycle { kind });
+        for commit in h.guest.on_event(w.as_bytes()).unwrap() {
+            h.tree.apply(&commit).unwrap();
+        }
+    };
+    assert_eq!(status(&h), "cleaned 0, active true, changes 1");
+
+    let toggle = h.find(ControlKind::Button, |_| true)[0];
+    h.fire(toggle, event::PRESS, Value::Null);
+    assert_eq!(status(&h), "cleaned 1, active true, changes 1", "the child's cleanup ran");
+    h.fire(toggle, event::PRESS, Value::Null);
+    h.fire(toggle, event::PRESS, Value::Null);
+    assert_eq!(status(&h), "cleaned 2, active true, changes 1", "a new child registers a new cleanup");
+
+    lifecycle(&mut h, plinth_protocol::lifecycle_kind::BACKGROUND);
+    assert_eq!(status(&h), "cleaned 2, active false, changes 2");
+    lifecycle(&mut h, plinth_protocol::lifecycle_kind::BACKGROUND);
+    assert_eq!(status(&h), "cleaned 2, active false, changes 2", "the same state again changes nothing");
+    lifecycle(&mut h, plinth_protocol::lifecycle_kind::FOREGROUND);
+    assert_eq!(status(&h), "cleaned 2, active true, changes 3");
 }

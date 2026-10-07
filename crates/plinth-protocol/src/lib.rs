@@ -58,6 +58,16 @@ pub mod event_code {
     pub const FRAME: u8 = 0x07;
 }
 
+/// `kind` values of the `lifecycle` event (SPEC.md §8.4).
+pub mod lifecycle_kind {
+    /// The app's window is in the foreground (visible and active).
+    pub const FOREGROUND: u8 = 0;
+    /// The app's window is hidden, minimized or not active.
+    pub const BACKGROUND: u8 = 1;
+    pub const LOW_MEMORY: u8 = 2;
+    pub const BEFORE_QUIT: u8 = 3;
+}
+
 /// `kind` values of the `navigate` op.
 /// The `init` args buffer (SPEC.md §8.1): a sequence of records, each a
 /// `tag: u8`, a `len: u32` and `len` bytes. An empty buffer is a normal

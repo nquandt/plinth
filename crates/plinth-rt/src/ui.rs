@@ -723,6 +723,9 @@ pub fn run_effect(kind: EffectKind) {
 
 pub fn cleanup(c: Cleanup) {
     match c {
+        Cleanup::User(c) => {
+            reactive::untracked(|| invoke(c, Val::None));
+        }
         Cleanup::Handler(h) => with(|u| {
             if let Some(slot) = u.handlers.get_mut((h as usize).wrapping_sub(1))
                 && slot.take().is_some()
