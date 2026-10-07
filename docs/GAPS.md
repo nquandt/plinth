@@ -643,3 +643,45 @@ Open (workarounds in the apps):
 | 7G-3 | Checker | An optional prop cannot be left out by a condition: `icon={c ? "check" : undefined}` is valid for `tsc` but is `PL3001: type "check" \| null is not assignable to ...`. | Use a prop that accepts `""` (see 7G-2). | Accept `T \| null` for an optional prop, and send a "remove prop" (or the default) for `null`. Needs a host op or a default value for each prop. |
 | 7G-4 | Std (`plinth:time`) | `parseDate` reads only ISO text; `makeDate(2027, 4, 31)` rolls over to 1 May, as JS does. | `examples/7guis/flight-booker/app/dates.ts` splits `DD.MM.YYYY` and checks the day with a `dateParts(makeDate(...))` round trip. | Low. A `parseDate(text, pattern)` would remove 30 lines. |
 | 7G-5 | Tests | The Node tests cannot hold a mouse button or type keys; VALIDATION asks for held clicks on the timer. | Not covered for 7GUIs. `run-a11y.mjs` covers held clicks and typing on other apps. | Add the 7GUIs apps to `run-a11y.mjs`. |
+
+## Games (Pong, 2026-10-06)
+
+Found while building `examples/pong` (a one-player Pong against a
+computer paddle) with what exists today: the Level 2 primitives (UI API
+1.6), `setInterval` from `plinth:time`, and signals. The rules are a plain
+module (`app/game.ts`, 198 lines, no UI import); the court and the loop
+are `app/main.tsx` (182 lines). Tests: `web/test/run-pong.mjs` (web host,
+fake timers) and `pong_plays_a_point` in
+`crates/plinth-compiler/tests/apps.rs` (wasmtime, fake clock).
+
+**Measurements.**
+
+| What | Value |
+|---|---|
+| `.plnt` size | 4629 B (app code 11067 B before compression) |
+| Timer interval | 16 ms (a 60 Hz target) |
+| One tick on the web host (Node, event + game step + commit + tree apply, no DOM) | 0.05 ms median, 0.1 ms p95 |
+| One tick in wasmtime (debug build, event + commit + tree apply) | 0.08 ms median, 0.09 ms p95 |
+| Desktop render of the Pong tree (`PLINTH_TRACE_RENDER=1`, debug build, element build only) | 0.35-0.6 ms per frame |
+| Ticks delivered per second, desktop (`plinth run`, debug build, measured by the app with `monotonicNow`) | 45-51 in the first two seconds, then 60-62 |
+| Ticks delivered per second, web host code with real timers (Node) | 61 |
+| Ops per tick | 13, of which about 4 change a value (see G8) |
+
+So the game logic and the op stream are far below the frame budget; the
+frame rate is set by the timer delivery, not by Plinth's cost.
+
+| # | Missing feature | What the game needed | Workaround used | Cost of the workaround |
+|---|---|---|---|---|
+| G1 | **Absolute or relative positioning** (`position`, insets; UI-ADVANCED §2 lists it, not built) | Put the ball and two paddles at (x, y) inside the court, over the net. | The court is a row of fixed-size columns (paddle, left half, net, right half, paddle). Each moving part has an empty spacer `Box` above it (the paddle top, the ball row) and, for the ball, a spacer beside it. Because the net takes layout space, the ball cannot cross it: there is one ball box in each half, and the half that does not hold the ball draws it with `bg="none"`. | 3 extra boxes per moving object, 2 ball elements, a ball that jumps across the 1-unit net and sits on its edge when it is "on" the net, layout math in the app (`inLeft`, `leftBallX`, `rightBallX`), and a test that must walk spacers to find the ball. Nothing can overlap: no score over the court, no "Paused" banner over the field, no ball over a paddle. |
+| G2 | **A `Canvas` control** (U4) | Draw the court, ball and net in one element, at any resolution. | Boxes with theme tokens. The net is 12 boxes in a column with `justify="between"`. | 4 px resolution only: sizes are whole spacing units, so the ball moves in 4 px steps and looks jerky at low speeds. Positions are rounded in the app (`cell`). No circle (only `radius="full"`), no lines at an angle, no trail. About 30 nodes for a picture that is one draw call. |
+| G3 | **Keyboard events for apps** (key down, key up, key repeat, with a focus target) | Hold W/S or the arrow keys to move the paddle. | Three `Pressable` buttons: "Up" and "Down" set a direction that stays until "Stop" or the wall. A keyboard user can Tab to them and press Enter. | Not how Pong is played: the player cannot hold a key, and must press a different button to stop. Fine control is hard; a mouse user moves the pointer away from the court to steer. |
+| G4 | **Pointer move and drag** (U3 `onDrag`) | Drag the paddle, or follow the pointer or a finger over the court (the natural control on a phone). | None (the buttons of G3). | On a phone the game needs three buttons below the court instead of a touch on the court. |
+| G5 | **An animation-frame timer** (a callback per display frame with the frame time, like `requestAnimationFrame`, paused when the window is hidden) | Move the game once per frame, by the real time since the last frame. | `setInterval(tick, 16)` and a fixed time step: each tick moves the game by the same amount. | The desktop host polls timers every 15 ms and gives at most one firing per poll, so ticks are not in step with the display (45-62 per second measured). The game runs slower when ticks are late (fixed step), or it must use `monotonicNow` for a delta and then becomes hard to test. On the web, background tabs throttle `setInterval` to 1/s. The app also has no way to know that its window is hidden, so the loop runs while nobody sees it (only "Pause" stops it). |
+| G6 | **Random numbers** (`Math.random` or a seeded generator in `plinth:core`) | A random serve angle. | A fixed list of 8 serve angles in `game.ts`. | Every game is the same. (The fixed list made the tests deterministic, so a seeded generator is the better API.) |
+| G7 | **Sound** (a short sound from package assets) | A blip on each hit and a tone on a point. | None. | A silent game. |
+| G8 | **Skip unchanged values in reactive updates** | Change only the parts of the court that moved. | None needed for Pong. | Each tick sends 13 ops, but only about 4 values change. A `computed` that gives the same value still runs its effects, and an effect sends `set-prop`/`text` even when the value is the same as before (the score `"0"`, the label `"Pause"`, the hidden ball's `bg`). Cheap here (0.05 ms per tick), but it grows with every element that reads the game signal; a game with many sprites would send hundreds of no-op ops per frame. Workaround if it matters: split the state into many signals. |
+| G9 | **Scale to the window** (width-class styles, U2, or a size that fills the parent while the content keeps its aspect ratio) | A court that fills the window on a desktop and fits a phone. | A fixed court of 79 x 48 units (316 x 192 px), sized to fit the compact window. | On a wide window the court is small in a large card (see `plinth-shoot` `screen0-wide.png`). Fractions (`"1/2"`, `"full"`) exist for sizes, but the spacers need units, so a court with a fraction width cannot place the ball. |
+| G10 | **Lifecycle hooks** (`onMount`/`onCleanup` for a component, window focus and visibility) | Stop the loop when the screen goes away or the window loses focus; pause the game automatically. | The timer id is kept in a signal and cleared on Pause and at the end of the game. | A loop that runs until the user presses Pause, also in a hidden window. |
+
+No compiler, runtime or renderer bug was found: the app compiled on the
+first try, and both hosts gave the same layout facts and the same game.
