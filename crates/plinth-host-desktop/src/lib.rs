@@ -391,11 +391,24 @@ pub fn open_app_with_hub(
 
     // Drives this window's `plinth:time` timers (SPEC.md §8.4, §8.5,
     // §9.4). Each app window polls its own guest independently
-    // (`docs/HUB.md` §4.2): one app's timers never touch another's.
-    cx.spawn(async move |cx| loop {
-        cx.background_executor().timer(Duration::from_millis(15)).await;
-        if window.update(cx, |root, _, cx| root.poll_timers(cx)).is_err() {
-            return;
+    // (`docs/HUB.md` §4.2): one app's timers never touch another's. The
+    // loop wakes at the next timer deadline, and at least every
+    // `POLL_MAX` for `plinth:net` results (they have no deadline); each
+    // wake fires every due timer. Frame timers (`onFrame`) run in the
+    // frame itself (`PlinthRoot::drive_frames`), not here.
+    const POLL_MAX: Duration = Duration::from_millis(15);
+    const POLL_MIN: Duration = Duration::from_millis(1);
+    cx.spawn(async move |cx| {
+        let mut wait = POLL_MAX;
+        loop {
+            cx.background_executor().timer(wait).await;
+            let Ok(next) = window.update(cx, |root, _, cx| {
+                root.poll_timers(cx);
+                root.next_timer_deadline()
+            }) else {
+                return;
+            };
+            wait = next.map_or(POLL_MAX, |at| at.saturating_duration_since(std::time::Instant::now()).clamp(POLL_MIN, POLL_MAX));
         }
     })
     .detach();

@@ -25,9 +25,10 @@ import { now, monotonicNow, setTimeout, setInterval, clearTimeout, clearInterval
 | `onFrame(callback)` | Core 1.12. Calls `callback(dt)` before each frame that the host draws, with `dt`, the milliseconds since the previous frame (0 for the first). Returns a timer id. Use it for motion and games: move by `speed * dt`. |
 | `cancelFrame(id)` | Stops a frame timer. |
 
-The desktop host polls timers every 15 ms and delivers one firing per
-poll; it does not catch up missed ticks. Frame timers do not use this
-poll: the desktop host fires them in the gpui frame (it asks for the next
+The desktop host wakes at the next timer deadline (and at least every
+15 ms, for net results) and fires every due timer. A late repeating timer
+does not catch up missed ticks: after a stall it fires one time and then
+keeps its period. Frame timers do not use this loop: the desktop host fires them in the gpui frame (it asks for the next
 frame while a frame timer runs), and the web host uses
 `requestAnimationFrame`. Both hosts send no frames while the window is
 hidden or minimized (the browser stops animation frames in a hidden tab),

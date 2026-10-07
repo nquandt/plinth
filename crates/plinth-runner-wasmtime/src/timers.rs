@@ -62,8 +62,10 @@ impl TimerQueue {
     }
 
     /// The ids due at or before `now`, oldest-scheduled first. Repeating
-    /// timers are rescheduled for their next period; one-shot timers are
-    /// removed.
+    /// timers are rescheduled for their next period; a repeating timer that
+    /// is late by a whole period or more skips the missed firings (no burst
+    /// of catch-up firings after a stall, as in a browser). One-shot timers
+    /// are removed.
     pub fn due(&mut self, now: Instant) -> Vec<u32> {
         let mut due: Vec<(Instant, u32)> =
             self.timers.iter().filter(|(_, t)| !t.frame && t.due_at <= now).map(|(id, t)| (t.due_at, *id)).collect();
@@ -72,6 +74,9 @@ impl TimerQueue {
             if let Some(t) = self.timers.get_mut(id) {
                 if t.repeat {
                     t.due_at += t.period;
+                    if t.due_at <= now {
+                        t.due_at = now + t.period;
+                    }
                 } else {
                     self.timers.remove(id);
                 }
@@ -114,6 +119,21 @@ mod tests {
         assert_eq!(q.due(t0 + Duration::from_millis(10)), Vec::<u32>::new());
         assert_eq!(q.due(t0 + Duration::from_millis(20)), vec![id]);
         assert!(!q.is_empty());
+    }
+
+    #[test]
+    fn a_late_repeating_timer_skips_missed_firings() {
+        let mut q = TimerQueue::new();
+        let t0 = Instant::now();
+        let id = q.set(t0, 10, true);
+        // A stall of 55 ms: one firing now, the next 10 ms later, no burst.
+        let late = t0 + Duration::from_millis(55);
+        assert_eq!(q.due(late), vec![id]);
+        assert_eq!(q.due(late), Vec::<u32>::new());
+        assert_eq!(q.next_deadline(), Some(late + Duration::from_millis(10)));
+        // A timer that is a little late keeps its phase.
+        assert_eq!(q.due(late + Duration::from_millis(12)), vec![id]);
+        assert_eq!(q.next_deadline(), Some(late + Duration::from_millis(20)));
     }
 
     #[test]

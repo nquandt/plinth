@@ -413,8 +413,8 @@ impl PlinthRoot {
     }
 
     /// The soonest time the guest has a `plinth:time` timer due, if any.
-    /// A host drives timers by sleeping until this instant (or a shorter,
-    /// fixed interval) and calling `poll_timers`.
+    /// A host drives timers by sleeping until this instant (at most a
+    /// short, fixed interval, for net results) and calling `poll_timers`.
     pub fn next_timer_deadline(&self) -> Option<Instant> {
         self.guest.next_timer_deadline()
     }
@@ -422,8 +422,8 @@ impl PlinthRoot {
     /// Dispatches every timer due by now and applies what the guest
     /// commits (SPEC.md §8.4, §8.5), mirroring `fire` for `ui` events.
     /// Also delivers any `plinth:net` result a worker thread finished
-    /// (SPEC.md §8.4, §8.5): `net.fetch` has no deadline of its own, so it
-    /// rides the same fixed poll tick as timers.
+    /// (SPEC.md §8.4, §8.5): `net.fetch` has no deadline of its own, so the
+    /// host also polls at a fixed, longest interval.
     pub fn poll_timers(&mut self, cx: &mut Context<Self>) {
         if self.stopped.is_some() {
             return;

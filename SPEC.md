@@ -543,7 +543,7 @@ The `kind`, `prop`, `event`, and enum ids are generated from one table in `wit/p
 - Each host API module is a WIT interface. Fallible calls return `result<T, error>`.
 - Calls that can block (net, file dialogs, large reads) return a `request: u32` at once and finish through a `completion` event. Synchronous calls are permitted only when they are guaranteed fast (clock, locale, kv get from cache).
 - Every call checks the capability policy (§11). A denied call returns `error.denied(reason)` and never traps.
-- **Status (M2):** `wit/plinth/app.wit` has the interfaces `error` (`host-error`, `denied-reason`), `time` (`now`, `monotonic-now`, `set-timer`, `cancel-timer`), `store` (`kv-get`, `kv-set`, `kv-delete`, `kv-keys`) and `clipboard` (`write-text`, `read-text`). All of these calls are synchronous. The host fires timers with the `timer` event. The desktop host polls the timers each 15 ms and delivers one firing for each poll. It does not catch up missed ticks. The kv store is a JSON file at `%APPDATA%\plinthpps\<id>\kv.json`.
+- **Status (M2):** `wit/plinth/app.wit` has the interfaces `error` (`host-error`, `denied-reason`), `time` (`now`, `monotonic-now`, `set-timer`, `cancel-timer`), `store` (`kv-get`, `kv-set`, `kv-delete`, `kv-keys`) and `clipboard` (`write-text`, `read-text`). All of these calls are synchronous. The host fires timers with the `timer` event. The desktop host wakes at the next timer deadline (and at least each 15 ms, for net results) and fires every due timer. A late repeating timer does not catch up missed ticks. Frame timers (core 1.12) fire in the display frame, not on this loop. The kv store is a JSON file at `%APPDATA%\plinthpps\<id>\kv.json`.
 
 ---
 
