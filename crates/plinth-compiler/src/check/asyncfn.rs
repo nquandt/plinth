@@ -1292,7 +1292,7 @@ impl Checker<'_> {
 
 /// Gives every variable that `stmts` declares the owner `fid`, and as its
 /// loop the innermost loop of `fid` around the declaration.
-fn reown(prog: &mut Program, stmts: &[TStmt], fid: FuncId, lp: Option<LoopId>) {
+pub(super) fn reown(prog: &mut Program, stmts: &[TStmt], fid: FuncId, lp: Option<LoopId>) {
     for s in stmts {
         let set = |prog: &mut Program, v: VarId, lp: Option<LoopId>| {
             let info = &mut prog.vars[v as usize];

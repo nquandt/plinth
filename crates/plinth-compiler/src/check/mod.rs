@@ -29,6 +29,7 @@ pub enum StdModule {
     Dialog,
     Net,
     Hub,
+    Files,
 }
 
 impl StdModule {
@@ -42,6 +43,7 @@ impl StdModule {
             "plinth:dialog" => Some(StdModule::Dialog),
             "plinth:net" => Some(StdModule::Net),
             "plinth:hub" => Some(StdModule::Hub),
+            "plinth:files" => Some(StdModule::Files),
             _ => None,
         }
     }
@@ -108,6 +110,11 @@ pub enum StdFn {
     HubUnblockPublisher,
     HubCheckUpdates,
     HubUpdate,
+    FilesRead,
+    FilesWrite,
+    FilesList,
+    FilesStat,
+    FilesRemove,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -417,6 +424,21 @@ impl Checker<'_> {
             Field { name: "status".into(), ty: Type::Number, optional: false },
             Field { name: "text".into(), ty: Type::String, optional: false },
             Field { name: "error".into(), ty: Type::String.nullable(), optional: false },
+        ];
+        match self.anon_struct(fields) {
+            Type::Struct(s) => s,
+            _ => unreachable!(),
+        }
+    }
+
+    /// The memoized `{ name: string; kind: string; size: number }` struct
+    /// of a `plinth:files` entry (`list`, `stat`; `std/files.d.ts`'s
+    /// `FileEntry`), decoded from the host's JSON.
+    pub(crate) fn file_entry_struct(&mut self) -> types::StructId {
+        let fields = vec![
+            Field { name: "name".into(), ty: Type::String, optional: false },
+            Field { name: "kind".into(), ty: Type::String, optional: false },
+            Field { name: "size".into(), ty: Type::Number, optional: false },
         ];
         match self.anon_struct(fields) {
             Type::Struct(s) => s,

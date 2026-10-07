@@ -131,6 +131,33 @@ interface net {
   fetch: func(url: string, method: string, headers: list<tuple<string, string>>, body: option<string>) -> u32;
 }
 
+/// Text files in the app's private space (core 1.11, `docs/STORAGE.md`
+/// §2 item 3, §3; capability: `files.private`, Low risk). Every app has one
+/// private space; the host derives its location from the app identity, and
+/// the app gives only a relative path. The host checks each path (rule 1 of
+/// `docs/STORAGE.md` §3; `docs/host-apis.md` "plinth:files" lists the rules)
+/// and never trusts the guest's own check. Every call returns a request id at
+/// once; the result arrives later through a `completion` event (SPEC.md
+/// §8.4) as a 4-element list, the same shape as `net.fetch`: `ok` (bool), `0`
+/// (s32, unused), `text` (string) and `error` (string, or null when `ok`). A
+/// denied call never traps: it completes with `error` = `"denied:<reason>"`.
+interface files {
+  /// The text of the file at `path`. `text` is the content.
+  read: func(path: string) -> u32;
+  /// Writes `text` to `path`; makes the parent directories. `text` is `""`.
+  write: func(path: string, text: string) -> u32;
+  /// The entries of the directory `dir` (`""` is the root of the space).
+  /// `text` is a JSON array of `{ "name", "kind": "file" | "dir", "size" }`,
+  /// sorted by name. A directory that does not exist is an error.
+  list-dir: func(dir: string) -> u32;
+  /// One entry: `text` is a JSON object as for `list-dir` (`name` is the last
+  /// segment of `path`), or `null` if nothing is at `path`.
+  stat: func(path: string) -> u32;
+  /// Removes the file or the directory (with its contents) at `path`.
+  /// Removing a path that does not exist is not an error.
+  remove: func(path: string) -> u32;
+}
+
 /// Privileged library and Hub management calls (`docs/HUB.md` §4.1, §12.2,
 /// §12.3; capability: `hub.manage`, High risk). The host grants
 /// `hub.manage` only to a package signed by a key it trusts as a Hub key
@@ -221,6 +248,7 @@ world app {
   import dialog;
   import net;
   import hub;
+  import files;
 
   /// Builds the initial tree.
   export init: func(args: list<u8>);

@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use wasmtime::component::{Component, HasSelf, Linker, types::ComponentItem};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
 
+pub mod files;
 pub mod hub;
 pub mod kv;
 pub mod net;
@@ -143,6 +144,9 @@ struct HostState {
     /// The `plinth:hub` backend (`docs/HUB.md` §4.1, §12.2), present only
     /// for a guest the host trusted with `hub.manage`.
     hub: Option<Box<dyn HubBackend>>,
+    /// The app's private space for `plinth:files` (core 1.11). Unavailable
+    /// until the host gives one with `Guest::set_files`.
+    files: files::Files,
 }
 
 impl bindings::plinth::app::ui::Host for HostState {
@@ -481,6 +485,36 @@ impl bindings::plinth::app::net::Host for HostState {
     }
 }
 
+impl HostState {
+    fn files_call(&mut self, op: files::Op) -> u32 {
+        let id = self.requests.open();
+        self.files.submit(&self.policy, id, op, &self.net_results);
+        id
+    }
+}
+
+impl bindings::plinth::app::files::Host for HostState {
+    fn read(&mut self, path: String) -> u32 {
+        self.files_call(files::Op::Read(path))
+    }
+
+    fn write(&mut self, path: String, text: String) -> u32 {
+        self.files_call(files::Op::Write(path, text))
+    }
+
+    fn list_dir(&mut self, dir: String) -> u32 {
+        self.files_call(files::Op::List(dir))
+    }
+
+    fn stat(&mut self, path: String) -> u32 {
+        self.files_call(files::Op::Stat(path))
+    }
+
+    fn remove(&mut self, path: String) -> u32 {
+        self.files_call(files::Op::Remove(path))
+    }
+}
+
 /// The engine is shared by all guests. It owns the epoch ticker thread.
 pub struct Runner {
     engine: Engine,
@@ -566,6 +600,7 @@ impl Runner {
             net_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             fake_timezone_offset_minutes: None,
             hub,
+            files: files::Files::unavailable(),
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
@@ -634,6 +669,13 @@ impl Guest {
     /// UTC) for tests, instead of the real OS offset.
     pub fn set_fake_timezone_offset(&mut self, minutes: i32) {
         self.store.data_mut().fake_timezone_offset_minutes = Some(minutes);
+    }
+
+    /// Gives the guest its private space for `plinth:files` (core 1.11,
+    /// `docs/STORAGE.md` §2, §3). Without it, every call is
+    /// `denied:unsupported`. Call it before `init`.
+    pub fn set_files(&mut self, files: files::Files) {
+        self.store.data_mut().files = files;
     }
 
     /// The soonest time a timer is due, if any is pending. The desktop

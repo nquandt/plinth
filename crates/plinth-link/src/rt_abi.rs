@@ -179,6 +179,8 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     // -- async/await (SPEC.md §4.5, core 1.10) -------------------------------
     ("set_drain", &[I32, I32], &[]),
     ("report", &[I32], &[]),
+    // -- plinth:files (core 1.11, docs/STORAGE.md §2, §3) --------------------
+    ("files_call", &[I32, I32, I32, I32, I32], &[]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -256,13 +258,14 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("uncaught", 10),
     ("set_drain", 10),
     ("report", 10),
+    ("files_call", 11),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).
 pub fn added_in(name: &str) -> u32 {
     ADDED_IN.iter().find(|(n, _)| *n == name).map_or(0, |(_, m)| *m)
 }
-pub const CORE_MINOR: u32 = 10;
+pub const CORE_MINOR: u32 = 11;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;

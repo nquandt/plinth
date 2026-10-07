@@ -33,7 +33,7 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 4] = *b"1.10";
+static CORE_VERSION: [u8; 4] = *b"1.11";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;
@@ -553,6 +553,11 @@ abi! {
     fn __plinth_rt_net_result_status() -> f64 { host::net_result_status() }
     fn __plinth_rt_net_result_text() -> i32 { host::net_result_text() }
     fn __plinth_rt_net_result_error() -> i32 { host::net_result_error() }
+
+    // -- plinth:files (core 1.11, docs/STORAGE.md §2, §3) ----------------------
+    fn __plinth_rt_files_call(thunk: i32, env: i32, op: i32, path: i32, text: i32) {
+        host::files_call(Callable { thunk: thunk as u32, env: env as u32 }, op, path, text)
+    }
 
     // -- plinth:time date/time additions (SPEC.md §8.5, docs/GAPS.md gap #5) --
     fn __plinth_rt_tz_offset_minutes(ms: f64) -> f64 { host::timezone_offset(ms as i64) as f64 }

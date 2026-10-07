@@ -1,0 +1,4 @@
+app/main.tsx(3,1): error PL1007: this call needs the `files.private` capability, which `plinth.toml` does not declare
+  write("notes/a.md", "hi");
+  ^^^^^^^^^^^^^^^^^^^^^^^^^
+  help: add `[[capabilities]]` with `name = "files.private"` and a `rationale` to plinth.toml (SPEC.md §11)

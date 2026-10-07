@@ -443,6 +443,28 @@ pub fn net_result_error() -> i32 {
     })
 }
 
+/// `plinth:files` (core 1.11, `docs/STORAGE.md` §2, §3): one ABI function
+/// for the five WIT calls, to keep the core small. `op` is 0 `read`, 1
+/// `write`, 2 `list`, 3 `stat`, 4 `remove` (the compiler's
+/// `check/stdlib.rs` `FILES_OPS`); `text` is the string for `write`, else
+/// unused. The completion is the same 4-element list as `net.fetch`, so the
+/// compiler's wrapper closure reads it with `net_result_*`. The host checks
+/// the path and the capability; an unknown `op` reads.
+pub fn files_call(callable: Callable, op: i32, path: i32, text: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let path = strings::as_str(path as u32);
+        let id = match op {
+            1 => host::files::write(path, strings::as_str(text as u32)),
+            2 => host::files::list_dir(path),
+            3 => host::files::stat(path),
+            4 => host::files::remove(path),
+            _ => host::files::read(path),
+        };
+        register_request(id, callable);
+    }
+}
+
 /// The last denial reason for `plinth:hub` calls (`docs/HUB.md` §4.1,
 /// §12.2), as the string `hub.lastError()` returns, or `None` if the last
 /// call was not denied.
