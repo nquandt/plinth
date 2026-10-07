@@ -31,10 +31,10 @@ Plinth is a framework for cross-platform apps. Authors write a strict subset of 
 
 | Area | State |
 |---|---|
-| Packages and cores (SPEC §10.4, §10.5) | Core **1.10**. An app declares the lowest core that has the functions it imports. |
+| Packages and cores (SPEC §10.4, §10.5) | Core **1.11** (`plinth:files`). An app declares the lowest core that has the functions it imports. |
 | UI API (SPEC §6.3, `docs/ui.md`) | **1.9** (absolute positioning, `onKeyDown`/`onKeyUp`); **1.8** (`disabled` on text inputs, `Row.selected`); **1.7** (partial styles `hover`/`active`/`focus`/`compact`/`regular`/`wide`); **1.6** (Level 2 primitives `Box`, `Span`, `Pressable`, `Scroll`, `docs/UI-ADVANCED.md` U1). **1.5**: about 30 controls (Checkbox, TextArea, Slider, NumberField, Picker, Progress, Badge, Tabs, Sheet, Dialog, Menu, Grid, Action, Image, Icon, DatePicker, Chart bar/line/pie, Row `trailing`, …). Stack navigation, screen actions, AccessKit roles, keyboard use. Charts: real path geometry on the desktop (`crates/plinth-ui/src/chart.rs`), a zero line for negative values, pie legends with percents, on both hosts. |
 | Lists | Keyed reconciler with a minimal-moves diff; host-side virtualization above 200 rows. 10,000 rows: about 4 ms per frame on the desktop. |
-| Host APIs (SPEC §8.5, `docs/host-apis.md`) | `time`, `store` (kv), `clipboard`, `dialog`, `net`, `hub` (privileged), `error.report`. Async calls use request ids and `completion` events; without a `done` callback they return a `Promise`. Denied calls never trap. The desktop shows a banner for uncaught app errors. |
+| Host APIs (SPEC §8.5, `docs/host-apis.md`) | `time`, `store` (kv), `clipboard`, `dialog`, `net`, `files` (core 1.11: text files in the app's private space, capability `files.private`, Low; host path checks; a folder per app identity on the desktop, the page's IndexedDB on the web; `docs/host-apis.md`), `hub` (privileged), `error.report`. Async calls use request ids and `completion` events; without a `done` callback they return a `Promise`. Denied calls never trap. The desktop shows a banner for uncaught app errors. |
 | Compiler (SPEC §4) | Unions and narrowing, generics, classes with inheritance, `int`, `Map`/`Set` (with `entries`), tuples, nullable boxing, JSON, fragments, `.map()` JSX children, checked casts, many string and array methods (`sort`, `splice`, `fill`, `flat`), `try`/`catch`/`finally`/`throw` (generated, built-in `Error`), `async`/`await` (`check/asyncfn.rs`; `await` in every statement; async methods), the `Promise` API (`then`/`catch`/`finally`, `new Promise`, `Promise.all`, `resolve`/`reject`; `check/promises.rs`), dynamic `Chart` `data` and `series`. Golden tests for every diagnostic. |
 | Desktop Hub (`docs/HUB.md`) | H0, H1 (Ed25519 signing), H3 steps 1–3: the Hub app `examples/hub` (Library, App, Discover screens), launches in new windows with in-process consent, updates with re-consent, version pins, publisher blocks, `plinth://` links, `.lnk` shortcuts and Start menu entries, the `plinthw` launcher. |
 | Registry (`docs/REGISTRY.md`) | Static or dynamic registries; `plinth registry build|serve`; capability labels and icons in the app list; a static `hub.json` (`--hub-trusted-key`) for the web Hub. |
@@ -44,7 +44,7 @@ Plinth is a framework for cross-platform apps. Authors write a strict subset of 
 | Tooling | Hot reload with kept signal state, `plinth-shoot` headless screenshots, GC stress mode, `plinth native` single-file executables, VS Code extension (not published), npm packages (not published). |
 | Platforms | Windows: everything. Linux and macOS: compiler, cores, runner, hub and registry tests pass; no GUI window opened yet. Mobile: not started. |
 
-Example apps (valid TypeScript, all built by the check script): `counter`, `todo`, `notes`, `calculator`, `settings-gallery`, `contacts`, `timer`, `gallery`, `dialogs`, `budget`, `utility`, `quotes`, `big-list`, `gc-torture`, `hub`.
+Example apps (valid TypeScript, all built by the check script): `counter`, `todo`, `notes`, `calculator`, `settings-gallery`, `contacts`, `timer`, `gallery`, `dialogs`, `budget`, `utility`, `quotes`, `big-list`, `gc-torture`, `hub`, `files-demo`.
 
 ## 3. Build, run, test
 
@@ -79,7 +79,7 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 | Path | What |
 |---|---|
 | `SPEC.md`, `docs/` | The design and the docs (see the list at the top). |
-| `wit/plinth/app.wit` | Guest/host interfaces: `ui`, `dev`, `error`, `time`, `store`, `clipboard`, `dialog`, `net`, `hub`. |
+| `wit/plinth/app.wit` | Guest/host interfaces: `ui`, `dev`, `error`, `time`, `store`, `clipboard`, `dialog`, `net`, `hub`, `files`. |
 | `wit/plinth/ui-api.toml` | Control, prop, event and enum ids (UI API 1.5). Append only. `node scripts/gen-web-ids.mjs` regenerates `web/ui-api.js`. |
 | `std/*.d.ts` | Typings for the `plinth:*` modules and `lib.d.ts`. `std_typings_match` keeps them equal to the compiler. |
 | `crates/plinth-rt` | The core (Rust → wasm32, `no_std`). `CORE_VERSION` must equal `CORE_MINOR`. |
@@ -131,7 +131,7 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 1. (Done 2026-10-06: the web Hub app runs in its own sandboxed frame with the `plinth:hub` bridge. Small rest: minify `plinth.js`.) **Do not spend most time on the web host** (owner, 2026-10-06): the next steps are mostly outside `web/`.
 2. (Done 2026-10-06: **7GUIs, tasks 1–5** in `examples/7guis/`, tests in `tests/sevenguis.rs` and `web/test/run-7guis.mjs`, numbers in VALIDATION §6. Open: `docs/GAPS.md` 7G-1 to 7G-5, mainly `TextField.disabled` and `Row` selection.)
 3. **Level 2 UI:** U1 (UI API 1.6) and most of U2 (1.7: `hover`, `active`, `focus` and width-class partial styles) are done; `examples/primitives`. Rest of U2: transitions and springs, a `disabled` partial style. Pong (`examples/pong`) found ten gaps (`docs/GAPS.md` "Games"); G1 positioning and G3 keys are done. Next: Canvas (U4, G2), pointer and drag (U3, G4), an animation-frame timer (G5), a seeded random generator (G6), skipping unchanged values (G8); then interned style records (`docs/UI-ADVANCED.md` §4).
-4. **Storage, first slice** (`docs/STORAGE.md` §6): `plinth:files` on a private space and a granted `vault` space, local folder and OPFS providers, host sync to rustfs and Azurite in Docker, Hub UI for spaces, isolation tests. Editor: Markdown source plus a `Markdown` display control. Then the notes app (VALIDATION V2).
+4. **Storage, first slice** (`docs/STORAGE.md` §6; done 2026-10-06: `plinth:files` on the private space, core 1.11, with isolation tests on both hosts): `plinth:files` on a private space and a granted `vault` space, local folder and OPFS providers, host sync to rustfs and Azurite in Docker, Hub UI for spaces, isolation tests. Editor: Markdown source plus a `Markdown` display control. Then the notes app (VALIDATION V2).
 5. **7GUIs tasks 6–7:** `Canvas` (U4) for Circle drawer; Grid virtualization for Cells.
 6. **Experience build order** (`docs/EXPERIENCE.md` §7): plain words and defaults, Try and Keep, the Privacy page, folder sync with encryption and pairing.
 7. **Compiler:** the web host error banner; smaller async code; rest patterns in array destructuring (`const [a, ...r] = t`). (Done 2026-10-06: `Promise.race`/`any`/`allSettled`, the sync-in-async `finally` order, tuples with optional and rest elements, `flat(depth)` with `Infinity`.)
