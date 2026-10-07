@@ -6,6 +6,10 @@
 # - a newer push to the same branch cancels the run in progress;
 # - changes to documentation only do not start CI;
 # - macOS runs only by hand (workflow_dispatch) and once a week.
+# Windows and Linux run on self-hosted runners on the owner's PC (no
+# minutes; infra/self-hosted-runner/README.md): Windows as a persistent
+# service (the build output stays warm), Linux as an ephemeral loop in WSL.
+# Only macOS uses GitHub-hosted minutes.
 name: CI
 
 on:
@@ -33,26 +37,26 @@ jobs:
   windows:
     name: Windows (full)
     if: github.event_name != 'schedule'
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, plinth]
     steps:
+      # clean: false keeps target/ between runs on this persistent runner
+      # (a clean checkout runs `git clean -ffdx`, which deletes it).
       - name: Checkout plinth
         uses: actions/checkout@v4
         with:
           path: plinth
+          clean: false
       - name: Checkout gpui-ce (sibling, pinned commit)
         uses: actions/checkout@v4
         with:
           repository: nquandt/gpui-ce
           ref: ${{ env.GPUI_CE_COMMIT }}
           path: gpui-ce
+          clean: false
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: plinth -> target
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -65,7 +69,7 @@ jobs:
   linux:
     name: Linux (no GUI)
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, plinth]
     steps:
       - name: Checkout plinth
         uses: actions/checkout@v4
@@ -85,11 +89,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: plinth -> target
-      # Packages gpui-ce needs to build on Linux (from gpui-ce's own CI).
-      - name: Install system packages for gpui-ce
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev libfontconfig-dev
+      # The packages that gpui-ce needs on Linux are installed on the runner
+      # one time (a job has no sudo): libxkbcommon-dev libxkbcommon-x11-dev
+      # libwayland-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      # libfontconfig-dev (infra/self-hosted-runner/README.md).
       - name: scripts/ci-local.sh nogui
         working-directory: plinth
         run: bash scripts/ci-local.sh nogui

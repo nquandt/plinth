@@ -1,0 +1,24 @@
+# The Linux CI runner loop of nquandt/plinth (README.md in this directory).
+# Install (inside WSL): sudo cp plinth-runner.service /etc/systemd/system/ && sudo systemctl enable --now plinth-runner
+[Unit]
+Description=GitHub Actions ephemeral runner loop for nquandt/plinth
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/mnt/u /mnt/c
+
+[Service]
+Type=simple
+User=nquandt
+Group=nquandt
+ExecStart=/usr/bin/bash /home/nquandt/ci-runners/plinth-run-loop.sh
+StandardOutput=append:/mnt/u/ci-runners/logs/loop-plinth.log
+StandardError=append:/mnt/u/ci-runners/logs/loop-plinth.log
+# SIGTERM makes the loop deregister its runner before it exits.
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=60
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
