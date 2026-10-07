@@ -88,7 +88,15 @@ struct Ui {
     /// shows already. `set_prop` does not send this value back (no echo of
     /// a one-way `value` plus `onChange`, SPEC.md §8.4).
     host_value: Option<(NodeId, Value)>,
+    /// The last value of each prop and the text that the host got, by
+    /// node id (docs/GAPS.md G8). An effect that gives the same value again
+    /// sends no op. `value` is not in it: the user can change that one in
+    /// the host, so the app must be able to set it again.
+    sent: Vec<Vec<(u16, Value)>>,
 }
+
+/// The key of the text in `Ui::sent` (no prop has this id).
+const TEXT_KEY: u16 = u16::MAX;
 
 static UI: Global<Ui> = Global::new(Ui {
     ops: Writer::new(),
@@ -101,6 +109,7 @@ static UI: Global<Ui> = Global::new(Ui {
     binds: Vec::new(),
     lists: Vec::new(),
     host_value: None,
+    sent: Vec::new(),
 });
 
 fn with<R>(f: impl FnOnce(&mut Ui) -> R) -> R {
@@ -108,6 +117,26 @@ fn with<R>(f: impl FnOnce(&mut Ui) -> R) -> R {
 }
 
 impl Ui {
+    /// Records `value` as sent for (`id`, `key`); false if the host has it already.
+    fn changed(&mut self, id: NodeId, key: u16, value: &Value) -> bool {
+        let i = id as usize;
+        if self.sent.len() <= i {
+            self.sent.resize_with(i + 1, Vec::new);
+        }
+        let props = &mut self.sent[i];
+        match props.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, v)) if v == value => false,
+            Some((_, v)) => {
+                *v = value.clone();
+                true
+            }
+            None => {
+                props.push((key, value.clone()));
+                true
+            }
+        }
+    }
+
     fn slots_mut(&mut self, parent: NodeId) -> &mut Vec<Slot> {
         let i = parent as usize;
         if self.slots.len() <= i {
@@ -173,6 +202,9 @@ pub fn create(kind: u16) -> NodeId {
             id
         });
         u.ops.op(&Op::Create { id, kind });
+        if let Some(sent) = u.sent.get_mut(id as usize) {
+            sent.clear(); // a new node: the host has none of its props
+        }
         // A new node with the id of the changed one (ids are used again)
         // does not show the value of the change.
         if matches!(&u.host_value, Some((n, _)) if *n == id) {
@@ -189,6 +221,9 @@ pub fn set_prop(id: NodeId, prop: u16, value: Value) {
         if prop == prop::VALUE && matches!(&u.host_value, Some((n, v)) if *n == id && *v == value) {
             return; // The host shows this value already.
         }
+        if prop != prop::VALUE && !u.changed(id, prop, &value) {
+            return; // The host has this value already (G8).
+        }
         u.ops.op(&Op::SetProp { id, prop, value })
     });
 }
@@ -199,7 +234,12 @@ pub fn end_event() {
 }
 
 pub fn set_text(id: NodeId, text: &str) {
-    with(|u| u.ops.op(&Op::Text { id, value: Value::Str(text.to_owned()) }));
+    with(|u| {
+        let value = Value::Str(text.to_owned());
+        if u.changed(id, TEXT_KEY, &value) {
+            u.ops.op(&Op::Text { id, value });
+        }
+    });
 }
 
 /// Appends a static child.
@@ -682,6 +722,9 @@ pub fn cleanup(c: Cleanup) {
         Cleanup::Node(n) => with(|u| {
             if let Some(s) = u.slots.get_mut(n as usize) {
                 s.clear();
+            }
+            if let Some(sent) = u.sent.get_mut(n as usize) {
+                sent.clear();
             }
             u.free_nodes.push(n);
         }),

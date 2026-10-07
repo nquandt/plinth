@@ -2701,3 +2701,73 @@ fn map_with_a_named_function_reference_is_still_rejected() {
         .replace("<Screen title=\"Home\" />", "<Screen title=\"Home\"><Section>{items.map(row)}</Section></Screen>");
     assert_eq!(codes(&main), vec!["PL4004"]);
 }
+
+/// docs/GAPS.md G8: an effect that gives the same prop value or text again
+/// sends no op; a changed value is sent; `value` is always sent (the host
+/// can change it), so a field can be reset to the same text.
+#[test]
+fn unchanged_props_and_text_are_not_sent_again() {
+    let main = r#"import { app, Screen, Button, Text, TextField, signal } from "plinth:ui";
+function Home() {
+  const n = signal(0);
+  const typed = signal("");
+  return (
+    <Screen title="Home">
+      <Text tone={n() > 1 ? "danger" : "default"}>{n() > 1 ? "big" : "small"}</Text>
+      <TextField label="T" value={typed()} onChange={(v) => typed.set(v)} onSubmit={() => typed.set("")} />
+      <Button label="Add" onPress={() => n.set(n() + 1)} />
+    </Screen>
+  );
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        tree.apply(&commit).unwrap();
+    }
+    let find = |tree: &Tree, kind: ControlKind| {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        loop {
+            let id = stack.pop().expect("node not found");
+            let node = tree.get(id).unwrap();
+            if node.kind == Some(kind) {
+                break id;
+            }
+            stack.extend(node.children.iter());
+        }
+    };
+    let mut fire = |tree: &mut Tree, node: u32, ev: u16, value: Value| -> Vec<plinth_protocol::Op> {
+        let handler = tree.get(node).unwrap().handler(ev).expect("a handler");
+        let mut w = Writer::new();
+        w.event(&Event::Ui { handler, event: ev, value });
+        let mut ops = Vec::new();
+        for commit in guest.on_event(w.as_bytes()).unwrap() {
+            tree.apply(&commit).unwrap();
+            ops.extend(plinth_protocol::decode_ops(&commit).unwrap());
+        }
+        ops
+    };
+    let button = find(&tree, ControlKind::Button);
+    // 0 -> 1: the text and the tone do not change: no op for them.
+    let ops = fire(&mut tree, button, event::PRESS, Value::Null);
+    assert!(!ops.iter().any(|op| matches!(op, plinth_protocol::Op::Text { .. } | plinth_protocol::Op::SetProp { .. })), "{ops:?}");
+    // 1 -> 2: both change.
+    let ops = fire(&mut tree, button, event::PRESS, Value::Null);
+    assert!(ops.iter().any(|op| matches!(op, plinth_protocol::Op::Text { .. })), "{ops:?}");
+    assert!(ops.iter().any(|op| matches!(op, plinth_protocol::Op::SetProp { prop: p, .. } if *p == prop::TONE)), "{ops:?}");
+    // `value` is always sent: type "x", then Enter resets the field to "".
+    let field = find(&tree, ControlKind::TextField);
+    tree.set_local_prop(field, prop::VALUE, Value::Str("x".into()));
+    fire(&mut tree, field, event::CHANGE, Value::Str("x".into()));
+    let ops = fire(&mut tree, field, event::SUBMIT, Value::Str("x".into()));
+    assert!(ops.iter().any(|op| matches!(op, plinth_protocol::Op::SetProp { prop: p, value: Value::Str(s), .. } if *p == prop::VALUE && s.is_empty())), "{ops:?}");
+}
