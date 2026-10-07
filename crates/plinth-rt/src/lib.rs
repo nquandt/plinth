@@ -234,7 +234,16 @@ fn settle() {
             matches!(RESULT.take(), Val::I32(n) if n != 0)
         };
         reactive::flush();
-        if !ran {
+        // `onMount` (core 1.12): the elements that the render just queued
+        // are already in the ops buffer that `commit` sends next, so this
+        // is "after the commit" from the app's view. A mount callback can
+        // write a signal, or call `onMount` again (a component that mounts
+        // another), so flush and check again until none ran.
+        let mounted = reactive::run_mounts();
+        if mounted {
+            reactive::flush();
+        }
+        if !ran && !mounted {
             break;
         }
     }
@@ -640,6 +649,12 @@ abi! {
         reactive::add_cleanup(reactive::Cleanup::User(Callable { thunk: thunk as u32, env: env as u32 }))
     }
     fn __plinth_rt_app_active() -> i32 { reactive::signal_get(active_signal()).i32() }
+    // `onMount` (core 1.12, docs/GAPS.md G10): queues `f` to run once the
+    // elements that the current render created are in the host tree
+    // (`settle` runs it after the commit, before the next event).
+    fn __plinth_rt_on_mount(thunk: i32, env: i32) {
+        reactive::add_mount(Callable { thunk: thunk as u32, env: env as u32 })
+    }
 
     // -- plinth:time date/time additions (SPEC.md §8.5, docs/GAPS.md gap #5) --
     fn __plinth_rt_tz_offset_minutes(ms: f64) -> f64 { host::timezone_offset(ms as i64) as f64 }

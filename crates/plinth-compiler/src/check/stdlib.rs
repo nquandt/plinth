@@ -29,7 +29,7 @@ pub const UI_NAMES: &[&str] = &[
     // UI API 1.13
     "strokeRect", "strokeCircle",
     // Core 1.12: lifecycle (docs/GAPS.md G10)
-    "onCleanup", "isActive",
+    "onCleanup", "isActive", "onMount",
 ];
 pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int", "JSON", "seedRandom"];
 pub const TIME_NAMES: &[&str] = &[
@@ -170,6 +170,7 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             // Core 1.12 (docs/GAPS.md G10).
             "onCleanup" => Binding::Std(StdFn::OnCleanup),
             "isActive" => Binding::Std(StdFn::IsActive),
+            "onMount" => Binding::Std(StdFn::OnMount),
             "app" => Binding::Std(StdFn::App),
             "navigate" => Binding::StdObj(StdObj::Navigate),
             "Signal" => Binding::Type(Type::Signal(Box::new(Type::Error))),
@@ -284,6 +285,14 @@ impl Checker<'_> {
                     self.err(code::ARG_COUNT, span, "`isActive` takes no arguments");
                 }
                 TExpr::new(TExprKind::Rt("app_active", Vec::new()), Type::Bool, span)
+            }
+            StdFn::OnMount => {
+                if args.len() != 1 {
+                    self.err(code::ARG_COUNT, span, "`onMount` takes a callback");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let (cb, _) = self.callback(&args[0], &[], Some(Type::Void));
+                TExpr::new(TExprKind::RtCallback("on_mount", Box::new(cb)), Type::Void, span)
             }
             StdFn::Effect => {
                 if !one_arg(self, "effect") {

@@ -62,6 +62,9 @@ struct State {
     current_scope: ScopeId,
     observer: Option<RId>,
     queue: VecDeque<RId>,
+    /// `onMount` (core 1.12): callbacks queued during the render that just
+    /// ran, not yet run. `run_mounts` drains it after the commit.
+    mounts: Vec<Callable>,
 }
 
 static STATE: Global<State> = Global::new(State {
@@ -72,6 +75,7 @@ static STATE: Global<State> = Global::new(State {
     current_scope: 0,
     observer: None,
     queue: VecDeque::new(),
+    mounts: Vec::new(),
 });
 
 const MAX_FLUSH_RUNS: usize = 100_000;
@@ -236,6 +240,30 @@ pub fn add_cleanup(c: Cleanup) {
             sc.cleanups.push(c);
         }
     });
+}
+
+/// `onMount` (core 1.12): queues `c` to run once the render that called it
+/// has committed. A component inside a conditional or a list queues a new
+/// callback each time it renders again.
+pub fn add_mount(c: Callable) {
+    with(|s| s.mounts.push(c));
+}
+
+/// Runs every callback that `onMount` queued since the last call, then
+/// clears the queue. Mount callbacks run outside a tracking scope, like
+/// `onCleanup`; a signal write inside one is a normal update (the caller
+/// flushes again afterwards). Returns whether any callback ran, so the
+/// caller knows to flush and check again (a mount can call `onMount`, or
+/// write a signal that renders another component with its own mount).
+pub fn run_mounts() -> bool {
+    let pending = with(|s| core::mem::take(&mut s.mounts));
+    if pending.is_empty() {
+        return false;
+    }
+    for c in pending {
+        untracked(|| invoke(c, Val::None));
+    }
+    true
 }
 
 /// Disposes a scope and everything that it owns, children first.
@@ -614,6 +642,10 @@ pub fn trace_roots(f: &mut dyn FnMut(u32)) {
                     f(c.env);
                 }
             }
+        }
+        // `onMount` callbacks wait here until `run_mounts` runs them.
+        for c in &s.mounts {
+            f(c.env);
         }
     });
 }
