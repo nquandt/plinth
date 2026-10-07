@@ -1,0 +1,8 @@
+id = "dev.plinth.test.files-fixture"
+name = "Files Fixture"
+version = "0.1.0"
+publisher = "plinth"
+
+[[capabilities]]
+name = "files.private"
+rationale = "Test fixture: keeps a few text files (web/test/run-files.mjs)."

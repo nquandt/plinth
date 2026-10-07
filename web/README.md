@@ -73,6 +73,7 @@ itself, not in a sandboxed frame: use it for tests and development only.
 | `frame-host.js` | **The parent side** of the pair, for any page that shows a Plinth app (`AppFrame`): kv data of each app, capability checks, `plinth:net` requests made by the page, the clipboard, dialogs drawn by the page (`hostDialog`), the content height. |
 | `plinth.js` | GENERATED (`scripts/gen-plinth-js.mjs`): the web host as one ES module, for web exports. It defines `<plinth-app>`. |
 | `plinth-app.js` | The `<plinth-app>` element (only in the bundle): reads the package (`src`, a URL or `#id` with base64), finds the core (`core`, or `plinth-core-<version>.wasm` next to `plinth.js`), and runs the app in an `AppFrame` with an inline frame document. Attributes `height="content"` (default) or `fill`; `data-state` is `loading`, `running` or `failed`. |
+| `files.js` | `plinth:files`: the path rules (`checkPath`), `FileSpace` (results, quota, call order), and the backends: memory and the page's IndexedDB. No DOM. |
 | `hub-storage.js` | The bridge messages (`checkFrameMessage`, `startMessage`) and the kv store of the page (`HubStore`, one namespace for each app) and of the frame (`frameKvStore`). No DOM. |
 | `hub-integrity.js` | Package checks with WebCrypto: SHA-256 against the registry, the manifest, the Ed25519 signature (`signature.json`), the core digest. No DOM. |
 | `registry-client.js` | Reads a registry (`docs/REGISTRY.md`): the service index, the app list, app documents, cores, search. No DOM. |
@@ -91,6 +92,7 @@ itself, not in a sandboxed frame: use it for tests and development only.
 | `clipboard` | Works with `navigator.clipboard` (in a frame: through the page), gated on `clipboard.write`/`clipboard.read`. The interface is synchronous and the browser API is not: `writeText` is fire-and-forget; `readText` returns the last known value and starts an async read for the next call, so the first read can return nothing. The browser can ask for permission, and it gives the clipboard only to a secure page (HTTPS or `localhost`). |
 | `dialog` | Stand-alone: the browser's own `alert`/`confirm`/`prompt`. In a frame: dialogs that the page draws. The answer is a `completion` event. |
 | `net` | Works with `fetch`, checked against the manifest's `net:<host>`/`net:*`/`net.local` and the refused capabilities. In a frame the page makes the request (checked again there), so it has the page's origin and no cookies. The target server must allow CORS. |
+| `files` | `plinth:files` (core 1.11) on the app's private space, gated on `files.private`. In a frame: the page keeps the files in its IndexedDB (database `plinth-files`, keys `[app id in lower case, path]`) and checks the capability and every path again (`files.js`, the same rules as the desktop host). Stand-alone and in Node: in memory (`FileSpace` on `memoryFileBackend`). |
 | `hub` | With a backend (`opts.hub`, `hub-host.js`) and `hub.manage` granted: the web App Hub. Else every call is `denied(unsupported)` (or `denied(refused)`). |
 
 ## The app-frame bridge
@@ -110,6 +112,8 @@ Frame to page:
 | `clipboard-read` | `id` | `answer` with the clipboard text, or null. |
 | `dialog` | `id`, `kind` (`alert`/`confirm`/`prompt`), `message` | Shows a page dialog; `answer` with null, true/false, or the text/null. |
 | `net-fetch` | `id`, `url`, `method`, `headers` (`[[name, value]]`), `body` (string or null) | Checks `net:` again, makes the request, `answer` with `[ok, status, text, error]` (`error` is `"denied:<reason>"` or `"network: …"`). |
+| `files-read`, `files-list`, `files-stat`, `files-remove` | `id`, `path` | `plinth:files`: checks `files.private` again, runs the call on the app's space (`FileSpace`, which checks the path again), `answer` with `[ok, 0, text, error]` (`error` is `"denied:<reason>"`, `"invalid-path: <rule>"`, `"not-found"`, …; docs/host-apis.md). A `path` longer than 1024 characters is refused. |
+| `files-write` | `id`, `path`, `text` | The same, for `write`. A `text` longer than 8 MiB is refused. |
 | `size` | `height` | The content height in CSS pixels; the page sizes the iframe if `autoHeight`. |
 | `hub-save` | `state` | Hub app only (`hub.manage` and the `hub` option): the new `plinth:hub` state of the frame's copy; the page stores it. |
 | `hub-launch` | `id` | Hub app only: opens the app (consent window, app window). |
@@ -123,7 +127,7 @@ Page to frame:
 | `hub-state` | `state`: the page changed the `plinth:hub` state (for example the consent window). |
 | `answer` | `id`, `value`: the answer to a request with that `id`. |
 
-`AppFrame` options (`frame-host.js`): `appId`, `title`, `pkg`, `core`, `declared`, `refused`, `store` (a `HubStore`), `quota`, `src` or `srcdoc`, `autoHeight`, `askDialog`, `fetchImpl`, `onStarted`, `onFailed`. The page decides the grants; the pair only applies them.
+`AppFrame` options (`frame-host.js`): `appId`, `title`, `pkg`, `core`, `declared`, `refused`, `store` (a `HubStore`), `quota`, `src` or `srcdoc`, `autoHeight`, `askDialog`, `fetchImpl`, `files` (a `FileSpace`; default: the page's IndexedDB), `onStarted`, `onFailed`. The page decides the grants; the pair only applies them.
 
 ## Not done yet
 

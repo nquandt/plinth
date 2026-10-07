@@ -16,6 +16,8 @@
 // backing store is anything with the `Storage` interface (`localStorage`
 // in the browser, a small Map-backed object in the test).
 
+import { MAX_PATH as FILES_MAX_PATH, MAX_FILE as FILES_MAX_FILE } from "./files.js";
+
 /** The kv quota of one app, in characters (UTF-16 code units) of keys and values. */
 export const KV_QUOTA = 512 * 1024;
 
@@ -234,6 +236,12 @@ const FRAME_TYPES = {
   "clipboard-read": { id: "number" },
   dialog: { id: "number", kind: "string", message: "string" },
   "net-fetch": { id: "number", url: "string", method: "string" },
+  // plinth:files (core 1.11): the page keeps the files of the app.
+  "files-read": { id: "number", path: "string" },
+  "files-write": { id: "number", path: "string", text: "string" },
+  "files-list": { id: "number", path: "string" },
+  "files-stat": { id: "number", path: "string" },
+  "files-remove": { id: "number", path: "string" },
   size: { height: "number" },
   // Only from the frame of the Hub app (the page gave it a `plinth:hub` snapshot).
   "hub-save": { state: "object" },
@@ -261,6 +269,12 @@ export function checkFrameMessage(data) {
   if (data.type === "net-fetch") {
     const headersOk = Array.isArray(data.headers) && data.headers.every((h) => Array.isArray(h) && h.length === 2 && h.every((x) => typeof x === "string"));
     if (!headersOk || (data.body !== null && typeof data.body !== "string")) return null;
+  }
+  if (data.type.startsWith("files-")) {
+    // The page checks the path again (`FileSpace`); this only bounds the sizes.
+    if (data.path.length > FILES_MAX_PATH) return null;
+    if (data.type === "files-write" && data.text.length > FILES_MAX_FILE) return null;
+    if (data.type !== "files-write" && data.text !== undefined) return null;
   }
   if (data.type === "size" && !(Number.isFinite(data.height) && data.height >= 0)) return null;
   if (data.type === "hub-save" && (data.state === null || Array.isArray(data.state))) return null;

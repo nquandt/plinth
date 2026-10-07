@@ -31,6 +31,7 @@ import { checkPackage } from "./hub-integrity.js";
  */
 const CAPABILITIES = {
   "store.kv": { risk: "low", description: "save data on this device" },
+  "files.private": { risk: "low", description: "save files on this device" },
   "clipboard.write": { risk: "low", description: "write to the clipboard" },
   "clipboard.read": { risk: "medium", description: "read the clipboard" },
   "net.local": { risk: "medium", description: "connect to devices on your local network" },

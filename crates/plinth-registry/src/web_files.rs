@@ -21,6 +21,7 @@ pub const FILES: &[(&str, &[u8])] = &[
     ("dom-renderer.js", include_bytes!("../../../web/dom-renderer.js")),
     ("protocol.js", include_bytes!("../../../web/protocol.js")),
     ("zip.js", include_bytes!("../../../web/zip.js")),
+    ("files.js", include_bytes!("../../../web/files.js")),
     ("ui-api.js", include_bytes!("../../../web/ui-api.js")),
     ("style.css", include_bytes!("../../../web/style.css")),
 ];

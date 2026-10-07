@@ -65,6 +65,9 @@ async function start(msg) {
     // The parent page makes each request (it checks the capability again),
     // so a request carries the page's origin, not "null".
     netFetch: (url, method, headers, body) => ask("net-fetch", { url, method, headers, body }),
+    // plinth:files: the page keeps the files (its IndexedDB, one namespace
+    // for this app) and checks the capability and the path again.
+    files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
     hub,
   });
   new DomRenderer(tree, container, app, assets);

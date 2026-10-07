@@ -23,7 +23,7 @@ const web = path.join(root, "web");
 const out = path.join(web, "plinth.js");
 
 // In dependency order. `app-frame.js` runs only in the frame.
-const MODULES = ["zip.js", "protocol.js", "ui-api.js", "plinth-web.js", "dom-renderer.js", "hub-storage.js", "frame-host.js", "plinth-app.js"];
+const MODULES = ["zip.js", "protocol.js", "ui-api.js", "files.js", "plinth-web.js", "dom-renderer.js", "hub-storage.js", "frame-host.js", "plinth-app.js"];
 const FRAME = "app-frame.js";
 
 const varName = (file) => `__${file.replace(/\.js$/, "").replace(/[^a-zA-Z0-9]/g, "_")}`;
