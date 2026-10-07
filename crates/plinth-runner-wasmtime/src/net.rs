@@ -3,9 +3,13 @@
 //! with a blocking client, and builds the 4-field completion result list
 //! `plinth-rt`'s `net_result_*` reads (SPEC.md §8.4).
 
-use crate::policy::{DeniedReason, Policy};
+use crate::policy::{is_private_ip, DeniedReason, Policy};
 use plinth_protocol::Value;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
+use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
 
 /// How long one request may run before it completes with a network error.
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -48,11 +52,51 @@ pub fn denied(reason: DeniedReason) -> Value {
     Value::List(vec![Value::Bool(false), Value::Int(0), Value::Str(String::new()), Value::Str(text.to_owned())])
 }
 
+/// A resolver that drops private addresses (SPEC.md §11) after the DNS
+/// lookup, so a public name that resolves to a local address (a DNS
+/// rebinding attack, or `2130706433` for `127.0.0.1`) cannot reach the
+/// local network without `net.local`. ureq connects only to the addresses
+/// that this resolver returns, so the check and the connection use the
+/// same address. The host of the user's proxy is never filtered.
+#[derive(Debug)]
+struct PublicOnlyResolver {
+    allow_private: bool,
+    proxy_host: Option<String>,
+    blocked: Arc<AtomicBool>,
+}
+
+impl Resolver for PublicOnlyResolver {
+    fn resolve(&self, uri: &ureq::http::Uri, config: &ureq::config::Config, timeout: NextTimeout) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        let all = DefaultResolver::default().resolve(uri, config, timeout)?;
+        let is_proxy = self.proxy_host.is_some() && uri.host() == self.proxy_host.as_deref();
+        if self.allow_private || is_proxy {
+            return Ok(all);
+        }
+        let mut kept = self.empty();
+        for addr in public_only(&all) {
+            kept.push(addr);
+        }
+        if kept.is_empty() {
+            self.blocked.store(true, Ordering::SeqCst);
+            return Err(ureq::Error::HostNotFound);
+        }
+        Ok(kept)
+    }
+}
+
+/// The public addresses of `addrs`, in their order (`is_private_ip`).
+fn public_only(addrs: &[std::net::SocketAddr]) -> Vec<std::net::SocketAddr> {
+    addrs.iter().copied().filter(|a| !is_private_ip(a.ip())).collect()
+}
+
 /// Runs one blocking HTTP request (SPEC.md §8.5: "a blocking HTTP client
 /// on a worker thread"). Never panics: any failure (bad URL, connection
 /// error, a body over `MAX_BODY`, non-UTF-8 text) becomes a `"network:
-/// ..."` result, not a trap.
-pub fn blocking_fetch(url: &str, method: &str, headers: &[(String, String)], body: Option<&str>) -> Value {
+/// ..."` result, not a trap. Without `allow_private`
+/// (`Policy::allows_local_network`), a host that resolves only to private
+/// addresses completes as `denied:undeclared`, the same as a private IP
+/// literal.
+pub fn blocking_fetch(url: &str, method: &str, headers: &[(String, String)], body: Option<&str>, allow_private: bool) -> Value {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT))
         // Redirects are allowed only to allowed hosts (SPEC.md §11); this
@@ -63,8 +107,12 @@ pub fn blocking_fetch(url: &str, method: &str, headers: &[(String, String)], bod
         // as a transport error (SPEC.md §8.5).
         .http_status_as_error(false)
         .build();
-    let agent = ureq::Agent::new_with_config(config);
+    let proxy_host = config.proxy().and_then(|p| p.uri().host()).map(str::to_owned);
+    let blocked = Arc::new(AtomicBool::new(false));
+    let resolver = PublicOnlyResolver { allow_private, proxy_host, blocked: blocked.clone() };
+    let agent = ureq::Agent::with_parts(config, DefaultConnector::default(), resolver);
     match run(&agent, url, method, headers, body) {
+        Err(_) if blocked.load(Ordering::SeqCst) => denied(DeniedReason::Undeclared),
         Ok((status, text)) => {
             let ok = (200..300).contains(&status);
             Value::List(vec![Value::Bool(ok), Value::Int(status), Value::Str(text), Value::Null])
@@ -110,6 +158,18 @@ mod tests {
         assert_eq!(host_of("https://api.example.com/v1?x=1"), Some("api.example.com"));
         assert_eq!(host_of("https://user:pw@example.com/"), Some("example.com"));
         assert_eq!(host_of("not a url"), None);
+    }
+
+    #[test]
+    fn public_only_drops_every_private_address() {
+        let addrs: Vec<std::net::SocketAddr> =
+            ["127.0.0.1:80", "93.184.216.34:80", "[::1]:80", "10.0.0.1:80", "[2606:4700::1111]:443", "169.254.169.254:80"]
+                .iter()
+                .map(|s| s.parse().unwrap())
+                .collect();
+        let kept = public_only(&addrs);
+        assert_eq!(kept, vec![addrs[1], addrs[4]]);
+        assert!(public_only(&addrs[..1]).is_empty());
     }
 
     #[test]

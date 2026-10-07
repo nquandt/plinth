@@ -102,16 +102,17 @@ Production apps run code from many publishers. This area must be complete before
 |---|---|---|---|---|
 | S1 | Default deny; capabilities proved from imports; user consent | Preview | Done | SPEC §11, consent window |
 | S2 | Every web app in a sandboxed iframe with an opaque origin | Preview | Done | SPEC §10.3 |
-| S3 | `net` blocks private network ranges unless `net.local` | Preview | Done | `plinth-runner-wasmtime/src/policy.rs`. Next: the same test on the web host. |
+| S3 | `net` blocks private network ranges unless `net.local` | Preview | Done | All non-public IPv4/IPv6 ranges and embedded IPv4 on both hosts (`policy.rs` `is_private_ip`, `plinth-web.js` `isPrivateNetHost`, `web/test/run-net-private.mjs`); the desktop also checks the address after DNS resolution (`net.rs` `PublicOnlyResolver`, `tests/net.rs`). The web cannot check DNS results (THREAT-MODEL §6 item 1). |
 | S4 | Packages and update feeds are signed (Ed25519); no downgrade | Preview | Done | `plinth-package::feed`, desktop updater |
 | S5 | Re-consent when an update asks for new capabilities | Beta | Open | UPDATES §9.1 |
 | S6 | Project key that signs cores and the Hub; key rotation and revocation | Beta | Decide | HANDOFF §0.2 item 3; HANDOFF §10 item 12 |
-| S7 | `SECURITY.md`: how to report a vulnerability, response time | Beta | Open | |
+| S7 | `SECURITY.md`: how to report a vulnerability, response time | Beta | Done | `SECURITY.md`. Turn on GitHub private vulnerability reporting when the repo is public (G6). |
 | S8 | Dependency audit in CI (`cargo deny` or `cargo audit`, `npm audit`) | Beta | Open | |
 | S9 | Fuzz tests run in CI on a schedule with more iterations | Beta | Partial | `robustness.rs`, `hostile_ops.rs`, `hostile_render.rs` run in the gate with few iterations. |
-| S10 | Threat model document: app vs app, app vs host, publisher vs user, network | Beta | Open | |
+| S10 | Threat model document: app vs app, app vs host, publisher vs user, network | Beta | Done | `docs/THREAT-MODEL.md`. Update it with each new host API. |
 | S11 | Security review by a third party (sandbox, consent, signing, web bridge) | 1.0 | Open | |
 | S12 | Hub: signed indexes (H2) and a transparency log | 1.0 | Open | `docs/HUB.md` |
+| S13 | The Hub tells the user when an app's pinned core has a known vulnerability | 1.0 | Open | THREAT-MODEL §6 item 6; needs an advisory list in the core feed. |
 
 ## 8. Platforms
 

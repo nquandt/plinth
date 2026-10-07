@@ -236,6 +236,53 @@ fn a_private_address_without_net_local_is_denied() {
 }
 
 #[test]
+fn a_public_name_that_resolves_to_a_private_address_is_denied() {
+    let port = spawn_server(0);
+    // `2130706433` is `127.0.0.1` in decimal. The host text is not an IP
+    // literal, so only the connect-time resolver check (net.rs
+    // `PublicOnlyResolver`) can stop it; `net:*` must not reach the
+    // local network without `net.local` (SPEC.md §11).
+    let url = format!("http://2130706433:{port}/hello");
+    let src = app_src(&format!(r#"fetch("{url}", null, (r) => {{ result.set(r.ok + ":" + (r.error ?? "null")); }})"#));
+    let (mut guest, mut tree) = start(&src, &["net:*"], false);
+    let button = find(&tree, ControlKind::Button, |_| true);
+    press(&mut guest, &mut tree, button);
+    wait_and_answer(&mut guest, &mut tree);
+    // The Windows resolver does not accept the decimal form ("No such
+    // host is known"); glibc and macOS resolve it to 127.0.0.1, so there
+    // the resolver check must deny it. On every platform it must fail.
+    if cfg!(windows) {
+        assert!(text(&tree).starts_with("false:"), "{}", text(&tree));
+    } else {
+        assert_eq!(text(&tree), "false:denied:undeclared");
+    }
+}
+
+#[test]
+fn an_ipv4_mapped_loopback_address_is_private() {
+    let port = spawn_server(0);
+    let url = format!("http://[::ffff:127.0.0.1]:{port}/hello");
+    let src = app_src(&format!(r#"fetch("{url}", null, (r) => {{ result.set(r.ok + ":" + (r.error ?? "null")); }})"#));
+    let (mut guest, mut tree) = start(&src, &["net:*"], false);
+    let button = find(&tree, ControlKind::Button, |_| true);
+    press(&mut guest, &mut tree, button);
+    wait_and_answer(&mut guest, &mut tree);
+    assert_eq!(text(&tree), "false:denied:undeclared");
+}
+
+#[test]
+fn a_trailing_dot_localhost_is_still_private() {
+    let port = spawn_server(0);
+    let url = format!("http://localhost.:{port}/hello");
+    let src = app_src(&format!(r#"fetch("{url}", null, (r) => {{ result.set(r.ok + ":" + (r.error ?? "null")); }})"#));
+    let (mut guest, mut tree) = start(&src, &["net:*"], false);
+    let button = find(&tree, ControlKind::Button, |_| true);
+    press(&mut guest, &mut tree, button);
+    wait_and_answer(&mut guest, &mut tree);
+    assert_eq!(text(&tree), "false:denied:undeclared");
+}
+
+#[test]
 fn the_done_callback_survives_a_gc_between_the_call_and_its_answer() {
     let port = spawn_server(1);
     let url = format!("http://127.0.0.1:{port}/hello");

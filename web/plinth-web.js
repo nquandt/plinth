@@ -101,14 +101,76 @@ function manifestEntry(manifestText) {
 
 const DeniedReason = { undeclared: 0, refused: 1, unsupported: 2 };
 
-/** True for a host in a private or loopback range (`net.local`, SPEC.md §11). */
+/**
+ * True for a host that names the local network rather than the public
+ * internet (`net.local`, SPEC.md §11): `localhost` and `*.localhost`, a
+ * `.local` name, or an IP literal in a non-public range: unspecified,
+ * loopback, private, shared (CGNAT), link-local (this includes the cloud
+ * metadata address 169.254.169.254), multicast, broadcast and reserved
+ * ranges, IPv6 unique-local and site-local addresses, and an IPv4 address
+ * embedded in IPv6 (mapped, compatible, NAT64, 6to4). The same rules as
+ * `is_private_host` in `crates/plinth-runner-wasmtime/src/policy.rs`.
+ * `new URL()` normalizes other IPv4 forms (`2130706433`, `0x7f.1`) to
+ * dotted decimal first. A page cannot check where a public name
+ * resolves; the desktop host can (net.rs).
+ */
 export function isPrivateNetHost(host) {
-  const h = host.split(":")[0]; // strip a port
-  if (h.toLowerCase() === "localhost" || h.endsWith(".local") || h === "::1" || h === "0.0.0.0" || h === "[::1]") return true;
+  let h = host.toLowerCase();
+  if (h.startsWith("[")) h = h.slice(1, h.indexOf("]") < 0 ? h.length : h.indexOf("]"));
+  else if (h.split(":").length === 2) h = h.split(":")[0]; // strip a port
+  if (h.endsWith(".")) h = h.slice(0, -1);
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) return true;
+  const v4 = parseIPv4(h);
+  if (v4) return isPrivateV4(v4);
+  const v6 = parseIPv6(h);
+  return v6 ? isPrivateV6(v6) : false;
+}
+
+function parseIPv4(h) {
   const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!m) return false;
-  const [a, b] = [Number(m[1]), Number(m[2])];
-  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  if (!m) return null;
+  const o = m.slice(1).map(Number);
+  return o.every((n) => n <= 255) ? o : null;
+}
+
+/** Eight 16-bit segments, or null. Accepts `::` and a dotted IPv4 tail. */
+function parseIPv6(h) {
+  if (!h.includes(":")) return null;
+  const lastColon = h.lastIndexOf(":");
+  const v4 = parseIPv4(h.slice(lastColon + 1));
+  if (v4) {
+    const hex = (hi, lo) => ((hi << 8) | lo).toString(16);
+    h = `${h.slice(0, lastColon + 1)}${hex(v4[0], v4[1])}:${hex(v4[2], v4[3])}`;
+  }
+  const halves = h.split("::");
+  if (halves.length > 2) return null;
+  const part = (s) => (s === "" ? [] : s.split(":").map((g) => (/^[0-9a-f]{1,4}$/.test(g) ? parseInt(g, 16) : NaN)));
+  const head = part(halves[0]);
+  const rest = halves.length === 2 ? part(halves[1]) : [];
+  const count = head.length + rest.length;
+  if ([...head, ...rest].some(Number.isNaN)) return null;
+  if (halves.length === 1 ? count !== 8 : count > 7) return null;
+  return [...head, ...new Array(8 - count).fill(0), ...rest];
+}
+
+function isPrivateV4([a, b, c]) {
+  return (
+    a === 0 || a === 127 || a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+    (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) ||
+    (a === 192 && b === 0 && c === 0) || (a === 198 && (b === 18 || b === 19)) ||
+    a >= 224 // multicast, reserved and broadcast
+  );
+}
+
+function isPrivateV6(s) {
+  const embedded = (hi, lo) => isPrivateV4([hi >> 8, hi & 255, lo >> 8, lo & 255]);
+  const zeroTo = (n) => s.slice(0, n).every((x) => x === 0);
+  if (zeroTo(5) && s[5] === 0xffff) return embedded(s[6], s[7]); // ::ffff:a.b.c.d
+  if (zeroTo(6)) return (s[6] === 0 && s[7] <= 1) || embedded(s[6], s[7]); // ::, ::1, ::a.b.c.d
+  if (s[0] === 0x64 && s[1] === 0xff9b && s.slice(2, 6).every((x) => x === 0)) return embedded(s[6], s[7]);
+  if (s[0] === 0x2002) return embedded(s[1], s[2]);
+  return (s[0] & 0xff00) === 0xff00 || (s[0] & 0xfe00) === 0xfc00 || (s[0] & 0xffc0) === 0xfe80 || (s[0] & 0xffc0) === 0xfec0;
 }
 
 /**

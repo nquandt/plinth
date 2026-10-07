@@ -761,7 +761,7 @@ A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version i
 - Every host API call passes through `Policy::check(app, capability)`. Denial reasons are distinct: `undeclared`, `refused`, `unsupported`.
 - Grants are stored per app id and per publisher key. A new version that asks for new capabilities asks the user again.
 - App data is isolated per app id. Apps cannot read the data of other apps.
-- Network requests go only to hosts that the `net:` patterns allow. The host also blocks requests to private network ranges, unless a separate `net.local` capability allows them.
+- Network requests go only to hosts that the `net:` patterns allow. The host also blocks requests to private network ranges, unless a separate `net.local` capability allows them. "Private" means every address that is not public unicast: loopback, private, shared (CGNAT), link-local (with the cloud metadata address), multicast, reserved, IPv6 unique-local, and IPv4 embedded in IPv6. The desktop host checks the host text and also the addresses after DNS resolution, so a public name that resolves to a private address is denied. The web host checks only the host text (`docs/THREAT-MODEL.md` §6).
 
 ---
 

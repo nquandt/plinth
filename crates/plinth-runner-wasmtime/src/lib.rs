@@ -582,8 +582,9 @@ impl bindings::plinth::app::net::Host for HostState {
             Err(reason) => self.net_results.lock().unwrap().push((id, net::denied(reason))),
             Ok(()) => {
                 let tx = self.net_results.clone();
+                let allow_private = self.policy.allows_local_network();
                 std::thread::spawn(move || {
-                    let outcome = net::blocking_fetch(&url, &method, &headers, body.as_deref());
+                    let outcome = net::blocking_fetch(&url, &method, &headers, body.as_deref(), allow_private);
                     tx.lock().unwrap().push((id, outcome));
                 });
             }
