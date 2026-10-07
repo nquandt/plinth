@@ -322,6 +322,7 @@ type ColorToken =
   | "border"
   | "hover"
   | "selected";
+/** A size in spacing units (fractional units are allowed, UI API 1.11), or a share of the parent box. */
 type SizeValue = number | "auto" | "full" | "1/2" | "1/3" | "2/3" | "1/4" | "3/4";
 
 /** The style props of a box: also the keys of a partial style (`hover`, `compact`, ...). Partial style values must be literals. */
@@ -349,7 +350,7 @@ interface BoxLook {
   radius?: "none" | "sm" | "md" | "lg" | "full";
   /** "absolute": the element leaves the flow and the insets place it in its parent box (UI API 1.9). */
   position?: "relative" | "absolute";
-  /** Insets in spacing units, from the edges of the parent box. */
+  /** Insets in spacing units, from the edges of the parent box. Fractional units are allowed (UI API 1.11): `left={10.25}`. */
   top?: number;
   left?: number;
   right?: number;

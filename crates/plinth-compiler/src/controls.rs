@@ -207,10 +207,10 @@ macro_rules! box_props {
             p("border", T::Enum(COLORS), false, P(prop::BORDER)),
             p("radius", T::Enum(RADII), false, P(prop::RADIUS)),
             p("position", T::Enum(POSITIONS), false, P(prop::POSITION)),
-            p("top", T::Int, false, P(prop::TOP)),
-            p("left", T::Int, false, P(prop::LEFT)),
-            p("right", T::Int, false, P(prop::RIGHT)),
-            p("bottom", T::Int, false, P(prop::BOTTOM)),
+            p("top", T::Num, false, P(prop::TOP)),
+            p("left", T::Num, false, P(prop::LEFT)),
+            p("right", T::Num, false, P(prop::RIGHT)),
+            p("bottom", T::Num, false, P(prop::BOTTOM)),
         ]
     };
 }

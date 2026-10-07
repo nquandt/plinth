@@ -353,6 +353,16 @@ fn pong_plays_a_point() {
     }
     let moved = ball(&h);
     assert!(moved.0 > start.0 && moved.1 != start.1, "the ball moves: {start:?} -> {moved:?}");
+    // UI API 1.11: the insets are fractional units, so the ball moves the
+    // same distance on each tick (whole units gave steps of 1, 1, ..., 0).
+    let ball_x = |h: &Harness| h.tree.get(labelled(h, "Ball")).unwrap().prop(prop::LEFT).and_then(Value::as_number).unwrap();
+    let mut xs = vec![ball_x(&h)];
+    for _ in 0..5 {
+        tick(&mut h);
+        xs.push(ball_x(&h));
+    }
+    let steps: Vec<f64> = xs.windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(steps.iter().all(|s| (s - 0.9).abs() < 1e-9), "even steps of 0.9 units: {steps:?}");
 
     press(&mut h, "Pause");
     assert!(h.guest.next_timer_deadline().is_none(), "Pause stops the loop");
@@ -406,4 +416,44 @@ fn pong_plays_a_point() {
         times[times.len() / 2],
         times[times.len() * 95 / 100]
     );
+}
+
+/// UI API 1.11: sizes and insets take fractional spacing units, as number
+/// props; a partial style keeps the fraction in its text.
+#[test]
+fn sizes_and_insets_take_fractional_units() {
+    const APP: &str = r#"
+import { app, signal, Screen, Box, Pressable, Span } from "plinth:ui";
+
+function Home() {
+  const x = signal(1.5);
+  return (
+    <Screen title="Home">
+      <Box label="Court" width={20} height={10}>
+        <Box label="Dot" position="absolute" left={x()} top={0.25} width={2.5} height={2} hover={{ left: 2.25, width: 40 }} />
+      </Box>
+      <Pressable label="Move" role="button" onPress={() => x.set(x() + 0.9)}><Span>Move</Span></Pressable>
+    </Screen>
+  );
+}
+
+export default app({ screens: { home: { title: "Home", component: Home } } });
+"#;
+    let fs = plinth_compiler::driver::MemFs::default().with("app/main.tsx", APP);
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &[]).expect("compile");
+    let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+    let art = artifact.unwrap_or_else(|| panic!("errors:\n{}", diags.join("\n")));
+    let mut h = Harness::start(&art.component);
+    let labelled = |h: &Harness, kind: ControlKind, label: &str| h.find(kind, |n| n.str_prop(prop::LABEL) == Some(label))[0];
+    let dot = labelled(&h, ControlKind::Box, "Dot");
+    let num = |h: &Harness, p: u16| h.tree.get(dot).unwrap().prop(p).and_then(Value::as_number).unwrap();
+    assert_eq!(num(&h, prop::LEFT), 1.5);
+    assert_eq!(num(&h, prop::TOP), 0.25);
+    assert_eq!(num(&h, prop::WIDTH), 2.5);
+    assert_eq!(h.tree.get(dot).unwrap().str_prop(prop::HOVER), Some(format!("{}:2.25,{}:40", prop::LEFT, prop::WIDTH).as_str()));
+    let court = labelled(&h, ControlKind::Box, "Court");
+    assert_eq!(h.tree.get(court).unwrap().prop(prop::WIDTH).and_then(Value::as_number), Some(20.0));
+    let mv = labelled(&h, ControlKind::Pressable, "Move");
+    h.fire(mv, event::PRESS, Value::Null);
+    assert!((num(&h, prop::LEFT) - 2.4).abs() < 1e-9);
 }

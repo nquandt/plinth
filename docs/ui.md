@@ -264,7 +264,10 @@ the default, or `"row"`), `wrap`, `gap`, `padding`, `paddingX`, `paddingY`,
 - **Spaces and sizes** are spacing units: one unit is 4 px on every host.
   A size can also be a fraction string: `"auto"`, `"full"`, `"1/2"`,
   `"1/3"`, `"2/3"`, `"1/4"`, `"3/4"` (a string literal). An element with a
-  width or a height in units does not shrink.
+  width or a height in units does not shrink. Sizes (`width`, `height`,
+  `maxWidth`, `maxHeight`) and insets can be fractional units (UI API
+  1.11): `left={10.25}` is 41 px. Use them for motion; `gap` and the
+  paddings take whole units.
 - **Colors** are theme tokens: `"background"`, `"surface"`, `"surface.alt"`,
   `"accent"`, `"danger"`, `"success"`, `"text"`, `"text.muted"`,
   `"on.accent"`, `"border"`, `"hover"`, `"selected"`, `"none"`. There are no

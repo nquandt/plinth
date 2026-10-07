@@ -89,8 +89,8 @@ assert.deepEqual(scores(), [0, 0]);
 const centerY = (FIELD_H - PADDLE_H) / 2;
 assert.equal(paddleTop("Your paddle"), centerY);
 const start = ball();
-// The ball starts on the net; the right half draws it at its left edge.
-assert.deepEqual(start, { x: Math.round((FIELD_W - BALL) / 2), y: Math.round((FIELD_H - BALL) / 2) });
+// The ball starts in the middle of the court (fractional units, UI API 1.11).
+assert.deepEqual(start, { x: (FIELD_W - BALL) / 2, y: (FIELD_H - BALL) / 2 });
 assert.equal(intervals.size, 0, "no game loop before Start");
 
 // -- Start: the ball moves toward the computer ---------------------------------
@@ -101,12 +101,21 @@ for (let i = 0; i < 10; i++) tickAll();
 const moved = ball();
 assert.ok(moved.x > start.x, `the ball moves right: ${JSON.stringify([start, moved])}`);
 assert.notEqual(moved.y, start.y, "the ball also moves up or down");
+// The ball moves the same distance on each tick (whole units gave steps of 1, ..., 0).
+const xs = [ball().x];
+for (let i = 0; i < 5; i++) {
+  tickAll();
+  xs.push(ball().x);
+}
+const steps = xs.slice(1).map((x, i) => x - xs[i]);
+assert.ok(steps.every((s) => Math.abs(s - 0.9) < 1e-9), `even steps of 0.9 units: ${steps}`);
 
 // Pause stops the loop; Resume starts it again.
 press("Pause");
 assert.equal(intervals.size, 0);
+const paused = ball();
 tickAll();
-assert.deepEqual(ball(), moved);
+assert.deepEqual(ball(), paused);
 press("Resume");
 assert.equal(intervals.size, 1);
 

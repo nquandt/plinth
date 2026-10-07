@@ -3,7 +3,8 @@
 //
 // The court is one box; the paddles, the net and the ball are absolute
 // boxes in it (UI API 1.9), placed by their insets. All sizes are spacing
-// units (4 px). Keys: hold the arrow keys or W/S on the court to move the
+// units (4 px); the insets are fractional units (UI API 1.11), so the ball
+// moves the same distance on each tick. Keys: hold the arrow keys or W/S on the court to move the
 // paddle, Space starts and pauses (UI API 1.9 onKeyDown/onKeyUp). The
 // buttons below the court do the same for touch and pointer users.
 import { app, signal, computed, Screen, Section, Box, Span, Pressable } from "plinth:ui";
@@ -14,7 +15,6 @@ import {
   newGame,
   step,
   toggle,
-  cell,
   FIELD_W,
   FIELD_H,
   PADDLE_W,
@@ -144,9 +144,9 @@ function Pong() {
                 <Box width={NET_W} height={2} bg="text.muted" />
               ))}
             </Box>
-            <Box label="Your paddle" position="absolute" left={0} top={cell(game().leftY)} width={PADDLE_W} height={PADDLE_H} bg="background" />
-            <Box label="Computer paddle" position="absolute" right={0} top={cell(game().rightY)} width={PADDLE_W} height={PADDLE_H} bg="background" />
-            <Box label="Ball" position="absolute" left={PADDLE_W + cell(game().ballX)} top={cell(game().ballY)} width={BALL} height={BALL} bg="background" radius="full" />
+            <Box label="Your paddle" position="absolute" left={0} top={game().leftY} width={PADDLE_W} height={PADDLE_H} bg="background" />
+            <Box label="Computer paddle" position="absolute" right={0} top={game().rightY} width={PADDLE_W} height={PADDLE_H} bg="background" />
+            <Box label="Ball" position="absolute" left={PADDLE_W + game().ballX} top={game().ballY} width={BALL} height={BALL} bg="background" radius="full" />
           </Box>
           <Span fg="text.muted">{status()}</Span>
           <Box direction="row" gap={2} align="center" width={FIELD_W + 2 * PADDLE_W}>

@@ -191,8 +191,3 @@ function score(g: Game, serveDir: number): void {
   }
   serve(g, serveDir);
 }
-
-/** The ball's whole-unit position, as the court draws it. */
-export function cell(v: number): number {
-  return Math.round(v);
-}

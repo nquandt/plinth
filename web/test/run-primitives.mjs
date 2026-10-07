@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { PlinthApp, readPlnt } from "../plinth-web.js";
 import { Tree, primitiveStyle, colorVar, UNIT, parsePartialStyle, partialRule, parseShapes } from "../dom-renderer.js";
-import { ControlKind, Prop, Event, EnumAxis, EnumColor, EnumFraction, EnumRadius, EnumCrossAlign, EnumJustify, EnumTextSize, EnumWeight } from "../ui-api.js";
+import { ControlKind, Prop, Event, EnumAxis, EnumColor, EnumFraction, EnumRadius, EnumCrossAlign, EnumJustify, EnumTextSize, EnumWeight, EnumPosition } from "../ui-api.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -90,6 +90,15 @@ assert.deepEqual([...parsed], [
   [Prop.wrap, true],
   [Prop.gap, -1],
 ]);
+// UI API 1.11: sizes and insets can be fractional units.
+assert.deepEqual([...parsePartialStyle(`${Prop.left}:2.25,${Prop.width}:-0.5`)], [
+  [Prop.left, 2.25],
+  [Prop.width, -0.5],
+]);
+const moving = primitiveStyle(node(ControlKind.box, { position: E(EnumPosition.absolute), left: 10.25, top: 0.9, width: 2.5 }));
+assert.equal(moving.left, "41px");
+assert.equal(moving.top, `${0.9 * UNIT}px`);
+assert.equal(moving.width, "10px");
 // A partial style sets only what it names: no display, no default direction.
 assert.deepEqual(primitiveStyle({ kind: ControlKind.box, props: parsePartialStyle(`${Prop.border}:${EnumColor.accent}`) }, true), {
   border: "1px solid var(--pl-accent)",

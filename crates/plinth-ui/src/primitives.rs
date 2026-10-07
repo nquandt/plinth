@@ -24,6 +24,13 @@ pub fn units(n: i64) -> Pixels {
     px(n.clamp(0, MAX_UNITS) as f32 * UNIT)
 }
 
+/// `n` spacing units as pixels; a size or an inset can be fractional
+/// (UI API 1.11), so a moving box does not jump by whole units.
+pub fn units_f(n: f64) -> Pixels {
+    let n = if n.is_finite() { n.clamp(0.0, MAX_UNITS as f64) } else { 0.0 };
+    px(n as f32 * UNIT)
+}
+
 /// The size props, each with its fraction prop. A style that sets one of a
 /// pair replaces the other.
 const SIZE_PAIRS: [(u16, u16); 4] = [
@@ -33,11 +40,11 @@ const SIZE_PAIRS: [(u16, u16); 4] = [
     (prop::MAX_HEIGHT, prop::MAX_HEIGHT_FRACTION),
 ];
 
-/// The style props of one element as `(prop id, int value)`: enums as their
-/// value, booleans as 0 or 1.
+/// The style props of one element as `(prop id, value)`: enums as their
+/// value, booleans as 0 or 1. Sizes and insets can be fractional.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Style {
-    values: Vec<(u16, i64)>,
+    values: Vec<(u16, f64)>,
 }
 
 impl Style {
@@ -51,9 +58,10 @@ impl Style {
             })
             .filter_map(|(id, v)| {
                 let n = match v {
-                    Value::Int(i) => i64::from(*i),
-                    Value::Enum(e) => i64::from(*e),
-                    Value::Bool(b) => i64::from(*b),
+                    Value::Int(i) => f64::from(*i),
+                    Value::Number(n) => *n,
+                    Value::Enum(e) => f64::from(*e),
+                    Value::Bool(b) => f64::from(u8::from(*b)),
                     _ => return None,
                 };
                 Some((*id, n))
@@ -77,13 +85,15 @@ impl Style {
         style
     }
 
-    /// A partial style: `"56:11,42:4"`. Malformed pairs are skipped.
+    /// A partial style: `"56:11,42:4"` (`"73:1.5"` for a fractional size).
+    /// Malformed pairs are skipped.
     pub fn parse(text: &str) -> Self {
         let values = text
             .split(',')
             .filter_map(|pair| {
                 let (k, v) = pair.split_once(':')?;
-                Some((k.trim().parse().ok()?, v.trim().parse().ok()?))
+                let v: f64 = v.trim().parse().ok()?;
+                v.is_finite().then_some((k.trim().parse().ok()?, v))
             })
             .collect();
         Self { values }
@@ -105,7 +115,12 @@ impl Style {
         }
     }
 
+    /// The value of `id` as a whole number (a fraction is cut off).
     pub fn get(&self, id: u16) -> Option<i64> {
+        self.get_f(id).map(|v| v as i64)
+    }
+
+    pub fn get_f(&self, id: u16) -> Option<f64> {
         self.values.iter().find(|(k, _)| *k == id).map(|(_, v)| *v)
     }
 
@@ -172,8 +187,8 @@ pub fn token(t: &Tokens, value: u16) -> Option<Hsla> {
 
 /// A size: spacing units if the int prop is set, else the fraction.
 pub fn size(s: &Style, units_prop: u16, fraction_prop: u16) -> Option<Length> {
-    if let Some(n) = s.get(units_prop) {
-        return Some(units(n).into());
+    if let Some(n) = s.get_f(units_prop) {
+        return Some(units_f(n).into());
     }
     let share = match s.enum_(fraction_prop) {
         fraction::AUTO => return Some(Length::Auto),
@@ -275,17 +290,17 @@ pub fn box_style<S: Styled>(d: S, s: &Style, t: &Tokens, partial: bool) -> S {
     if !partial || has(prop::POSITION) {
         d = if s.enum_(prop::POSITION) == position::ABSOLUTE { d.absolute() } else { d.relative() };
     }
-    if let Some(v) = s.get(prop::TOP) {
-        d = d.top(units(v));
+    if let Some(v) = s.get_f(prop::TOP) {
+        d = d.top(units_f(v));
     }
-    if let Some(v) = s.get(prop::LEFT) {
-        d = d.left(units(v));
+    if let Some(v) = s.get_f(prop::LEFT) {
+        d = d.left(units_f(v));
     }
-    if let Some(v) = s.get(prop::RIGHT) {
-        d = d.right(units(v));
+    if let Some(v) = s.get_f(prop::RIGHT) {
+        d = d.right(units_f(v));
     }
-    if let Some(v) = s.get(prop::BOTTOM) {
-        d = d.bottom(units(v));
+    if let Some(v) = s.get_f(prop::BOTTOM) {
+        d = d.bottom(units_f(v));
     }
     d
 }
@@ -347,6 +362,18 @@ mod tests {
         assert_eq!(s.get(prop::PADDING), Some(4));
         assert_eq!(s.get(prop::GAP), Some(-2));
         assert_eq!(s.get(prop::AXIS), None);
+    }
+
+    #[test]
+    fn sizes_and_insets_can_be_fractional() {
+        let s = Style::parse(&format!("{}:2.25,{}:10.5,{}:1e400", prop::LEFT, prop::WIDTH, prop::TOP));
+        assert_eq!(s.get_f(prop::LEFT), Some(2.25));
+        assert_eq!(s.get(prop::LEFT), Some(2), "a whole-number read cuts the fraction off");
+        assert_eq!(s.get_f(prop::TOP), None, "an infinite value is skipped");
+        assert_eq!(units_f(2.25), px(9.));
+        assert_eq!(units_f(-1.5), px(0.));
+        assert_eq!(units_f(f64::NAN), px(0.));
+        assert_eq!(size(&s, prop::WIDTH, prop::WIDTH_FRACTION), Some(px(42.).into()));
     }
 
     #[test]

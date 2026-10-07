@@ -4,7 +4,10 @@
 # enum ids. The compiler, the guest runtime and the host all generate their
 # constants from it. Never reuse or renumber an id inside one major version.
 
-version = "1.10"
+version = "1.11"
+# UI API 1.11: no new ids. `width`, `height`, `maxWidth`, `maxHeight` (in
+# spacing units) and the insets `top`, `left`, `right`, `bottom` take
+# fractional units (a number prop; whole-number int props stay valid).
 
 [controls]
 screen = 1

@@ -290,7 +290,8 @@ impl Checker<'_> {
                         let te = self.typed(&value, &t);
                         (PropTarget::Enum(fraction_id, table.iter().map(|(s, v)| (s.to_string(), *v)).collect()), te)
                     }
-                    _ => (PropTarget::Int(id), self.typed(&value, &Type::Number)),
+                    // UI API 1.11: spacing units can be fractional (1.5).
+                    _ => (PropTarget::Num(id), self.typed(&value, &Type::Number)),
                 },
                 PropTy::Num => (PropTarget::Num(id), self.typed(&value, &Type::Number)),
                 PropTy::Int => (PropTarget::Int(id), self.typed(&value, &Type::Number)),
@@ -459,7 +460,8 @@ impl Checker<'_> {
     /// which keeps the resulting prop reactive through the normal JSX
     /// reactive-effect machinery, same as any other string prop.
     /// A Level 2 partial style (UI API 1.7): `{ bg: "hover", padding: 4 }`
-    /// becomes `"56:11,42:4"` (prop id and int value). Every value must be a
+    /// becomes `"56:11,42:4"` (prop id and value; a size or an inset can be
+    /// fractional, `"73:1.5"`, UI API 1.11). Every value must be a
     /// literal: the style is fixed at compile time.
     fn encode_partial_style(&mut self, value: &Expr, allowed: &[PropSpec], name: &str) -> Option<String> {
         let ExprKind::Object(fields) = &value.kind else {
@@ -471,7 +473,7 @@ impl Checker<'_> {
             );
             return None;
         };
-        let mut pairs: Vec<(u16, i64)> = Vec::new();
+        let mut pairs: Vec<(u16, f64)> = Vec::new();
         let mut ok = true;
         for f in fields {
             let ObjProp::Field(key, e, key_span) = f else {
@@ -496,12 +498,13 @@ impl Checker<'_> {
                 _ => None,
             };
             let pair = match (ps.ty, &e.kind, num) {
-                (PropTy::Enum(table), ExprKind::Str(s), _) => table.iter().find(|(n, _)| n == s).map(|(_, v)| (id, i64::from(*v))),
+                (PropTy::Enum(table), ExprKind::Str(s), _) => table.iter().find(|(n, _)| n == s).map(|(_, v)| (id, f64::from(*v))),
                 (PropTy::Size(fraction), ExprKind::Str(s), _) => {
-                    crate::controls::FRACTIONS.iter().find(|(n, _)| n == s).map(|(_, v)| (fraction, i64::from(*v)))
+                    crate::controls::FRACTIONS.iter().find(|(n, _)| n == s).map(|(_, v)| (fraction, f64::from(*v)))
                 }
-                (PropTy::Int | PropTy::Size(_), _, Some(n)) if n.fract() == 0.0 && n.abs() < 1e6 => Some((id, n as i64)),
-                (PropTy::Bool, ExprKind::Bool(b), _) => Some((id, i64::from(*b))),
+                (PropTy::Int, _, Some(n)) if n.fract() == 0.0 && n.abs() < 1e6 => Some((id, n)),
+                (PropTy::Num | PropTy::Size(_), _, Some(n)) if n.is_finite() && n.abs() < 1e6 => Some((id, n)),
+                (PropTy::Bool, ExprKind::Bool(b), _) => Some((id, f64::from(u8::from(*b)))),
                 _ => None,
             };
             match pair {
@@ -509,7 +512,8 @@ impl Checker<'_> {
                 None => {
                     let want = match ps.ty {
                         PropTy::Enum(table) => table.iter().map(|(n, _)| format!("\"{n}\"")).collect::<Vec<_>>().join(" | "),
-                        PropTy::Size(_) => "a whole number of spacing units, or a fraction such as \"1/2\"".into(),
+                        PropTy::Size(_) => "a number of spacing units, or a fraction such as \"1/2\"".into(),
+                        PropTy::Num => "a number of spacing units".into(),
                         PropTy::Bool => "true or false".into(),
                         _ => "a whole number".into(),
                     };
