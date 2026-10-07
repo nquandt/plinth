@@ -108,10 +108,23 @@ async function waitForCdp(port, timeoutMs = 15000) {
 function cdpSend(ws, pending, nextId, method, params = {}, sessionId = undefined) {
   const id = nextId.value++;
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
+    // No call waits for ever: a stuck call (an evaluate whose promise never
+    // settles, a dead frame) fails with its name instead of hanging the run.
+    const timer = setTimeout(() => {
+      if (!pending.delete(id)) return;
+      const what = method === "Runtime.evaluate" ? `${method} ${String(params.expression).slice(0, 120)}` : method;
+      reject(new Error(`no answer in ${CDP_TIMEOUT_MS / 1000} s to ${what}`));
+    }, CDP_TIMEOUT_MS);
+    pending.set(id, {
+      resolve: (v) => (clearTimeout(timer), resolve(v)),
+      reject: (e) => (clearTimeout(timer), reject(e)),
+    });
     ws.send(JSON.stringify({ id, method, params, sessionId }));
   });
 }
+
+/** The longest time that one DevTools call may take. */
+const CDP_TIMEOUT_MS = 60000;
 
 /** Opens a new page in the given browser-level CDP connection and returns a
  * helper bound to that page's target, plus a `close()` to tear it down. */
