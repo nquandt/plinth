@@ -49,7 +49,7 @@ Plinth is not ready for production apps. The current level is "before Preview".
 
 | Limit | Item |
 |---|---|
-| On the web host, an endless loop or a very large allocation freezes the browser tab. The desktop host stops the app after 2 s or at 64 MiB. | R3 |
+| On the web host, an endless loop freezes the browser tab. The desktop host stops the app after 2 s. (A runaway allocation stops at 64 MiB on both hosts.) | R3 |
 | The `wasmi` engine (for iOS) is experimental. | R4 |
 
 ## Updates

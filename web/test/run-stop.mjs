@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { PlinthApp, readPlnt } from "../plinth-web.js";
+import { PlinthApp, readPlnt, capCoreMemory, MEMORY_LIMIT_PAGES } from "../plinth-web.js";
 import { Tree } from "../dom-renderer.js";
 import { ControlKind, Event, Prop } from "../ui-api.js";
 
@@ -78,6 +78,27 @@ const status = (h) => find(h, ControlKind.text, () => true).text;
   const h = await start();
   press(h, "recurse");
   assert.deepEqual(h.stops, ["too many nested calls (stack overflow)"]);
+}
+
+// A runaway allocation: the 64 MiB memory cap (capCoreMemory), the same
+// reason as the desktop runner's memory limit.
+{
+  const h = await start();
+  press(h, "allocate");
+  assert.deepEqual(h.stops, ["out of memory"]);
+  const memory = Object.values(h.app._core?.instance?.exports ?? {}).find((e) => e instanceof WebAssembly.Memory);
+  if (memory) assert.ok(memory.buffer.byteLength <= MEMORY_LIMIT_PAGES * 65536, "the memory stays under the cap");
+}
+
+// The cap itself: the core's memory gets a maximum, and a lower one stays.
+{
+  const capped = capCoreMemory(coreBytes, MEMORY_LIMIT_PAGES);
+  const mod = new WebAssembly.Module(capped);
+  assert.ok(WebAssembly.Module.exports(mod).some((e) => e.kind === "memory"));
+  const tiny = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 5, 4, 1, 1, 1, 2]); // memory min 1, max 2
+  assert.deepEqual([...capCoreMemory(tiny, 1024).subarray(8)], [5, 4, 1, 1, 1, 2]);
+  const open = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 5, 3, 1, 0, 1]); // memory min 1, no max
+  assert.deepEqual([...capCoreMemory(open, 1024).subarray(8)], [5, 5, 1, 1, 1, 128, 8]);
 }
 
 // With no `onStop` handler, the call throws (Node tests and other callers

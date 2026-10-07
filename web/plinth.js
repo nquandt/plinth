@@ -962,6 +962,70 @@ const RT_PREFIX = "__plinth_rt_";
 /** The `init` record of the `Math.random` seed (core 1.12): 8 bytes, a little-endian u64. */
 const INIT_RANDOM_SEED = 3;
 
+/** The memory cap of an app, the same as the desktop runner (`Limits`, 64 MiB). */
+const MEMORY_LIMIT_PAGES = 1024;
+
+/**
+ * Returns a copy of a core module whose defined memory has a maximum of
+ * `maxPages` (64 KiB pages; GAPS "R1/R2 design"). The core declares no
+ * maximum; the desktop caps it in wasmtime instead. With the maximum, a
+ * `memory.grow` past the cap fails, and the core's allocator stops the app
+ * with "out of memory", the same reason as on the desktop. A lower
+ * maximum in the module stays. A module with no memory section is
+ * returned unchanged.
+ */
+function capCoreMemory(bytes, maxPages) {
+  const u8s = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let pos = 8;
+  const leb = () => {
+    let result = 0,
+      shift = 0,
+      byte;
+    do {
+      byte = u8s[pos++];
+      result += (byte & 0x7f) * 2 ** shift;
+      shift += 7;
+    } while (byte & 0x80);
+    return result;
+  };
+  const enc = (n) => {
+    const out = [];
+    do {
+      let b = n % 128;
+      n = Math.floor(n / 128);
+      if (n > 0) b |= 0x80;
+      out.push(b);
+    } while (n > 0);
+    return out;
+  };
+  while (pos < u8s.length) {
+    const start = pos;
+    const id = u8s[pos++];
+    const len = leb();
+    const body = pos;
+    const end = body + len;
+    if (id === 5) {
+      const count = leb();
+      const out = [...enc(count)];
+      for (let i = 0; i < count; i++) {
+        const flags = u8s[pos++];
+        const min = leb();
+        const max = flags & 1 ? leb() : Infinity;
+        out.push(flags | 1, ...enc(min), ...enc(Math.max(min, Math.min(max, maxPages))));
+      }
+      if (pos !== end) return u8s; // an encoding this function does not know: leave the module as it is
+      const section = [5, ...enc(out.length), ...out];
+      const result = new Uint8Array(start + section.length + (u8s.length - end));
+      result.set(u8s.subarray(0, start), 0);
+      result.set(section, start);
+      result.set(u8s.subarray(end), start + section.length);
+      return result;
+    }
+    pos = end;
+  }
+  return u8s;
+}
+
 /** Reads the `plinth-rt`/`table` import's minimum size from a raw wasm module. */
 function readTableImportMin(bytes) {
   let pos = 8; // past the 8-byte wasm header
@@ -1751,7 +1815,10 @@ function hostImports(
 async function loadCore(coreWasmBytes, opts = {}) {
   let instanceRef;
   const imports = hostImports(() => instanceRef.exports, opts.onCommit ?? (() => {}), opts);
-  const { instance } = await WebAssembly.instantiate(coreWasmBytes, imports);
+  // `opts.memoryLimitPages`: 0 means no cap (tests only).
+  const limit = opts.memoryLimitPages ?? MEMORY_LIMIT_PAGES;
+  const bytes = limit && !(coreWasmBytes instanceof WebAssembly.Module) ? capCoreMemory(coreWasmBytes, limit) : coreWasmBytes;
+  const { instance } = await WebAssembly.instantiate(bytes, imports);
   instanceRef = instance;
   const tableExportName = Object.keys(instance.exports).find(
     (k) => instance.exports[k] instanceof WebAssembly.Table,
@@ -1938,7 +2005,7 @@ function stopReason(err, lastTrap) {
   }
   return msg;
 }
-  return { INIT_RANDOM_SEED, readPlnt, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, loadCore, linkApp, PlinthApp, stopReason };
+  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, capCoreMemory, readPlnt, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, loadCore, linkApp, PlinthApp, stopReason };
   })();
 
   // ---- dom-renderer.js

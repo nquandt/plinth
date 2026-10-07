@@ -27,6 +27,16 @@ function Home() {
         }}
       />
       <Button label="recurse" onPress={() => status.set("" + deep(0))} />
+      <Button
+        label="allocate"
+        onPress={() => {
+          let s = "x";
+          for (let i = 0; i < 40; i++) {
+            s = s + s;
+          }
+          status.set("" + s.length);
+        }}
+      />
     </Screen>
   );
 }

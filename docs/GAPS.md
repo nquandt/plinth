@@ -778,11 +778,11 @@ Open:
 | # | Area | What | Suggested fix |
 |---|---|---|---|
 | R1 | Web host | No time limit: an endless loop in an app blocks its frame (and the page, if the browser keeps the sandboxed frame in the same process). | Run the core in a dedicated Worker per app with a watchdog that ends the worker; the frame keeps only the DOM. Design below. Not implemented. |
-| R2 | Web host | No memory cap of its own: the browser's limit applies. | Cap the core's wasm memory at 64 MiB. Design below. Not implemented. |
+| R2 | Web host | **Fixed (2026-10-07).** `loadCore` caps the core's memory at 64 MiB (`capCoreMemory`, `MEMORY_LIMIT_PAGES`); a runaway allocation stops the app with "out of memory" (`web/test/run-stop.mjs`). | — |
 | R3 | Compiler | A sum of more than 1000 terms is `PL1000`; `tsc` accepts it. | Convert left-deep binary chains without recursion (an explicit stack in the parser, checker and codegen). Low: hand-written code does not get near the limit. |
 | R4 | Tests | The mutation test only changes valid programs, at the text level. | Add structure-aware changes (swap two expressions of the same kind, change a type annotation) and a nightly run with a large `PLINTH_FUZZ_ITERS`. |
 
-### R1/R2 design (2026-10-07, not implemented)
+### R1/R2 design (2026-10-07; R2 implemented, R1 not implemented)
 
 Looked at giving the web host the desktop's two limits (2 s per `init`/`on-event` call,
 64 MiB memory, the same plain stop reasons). This is a bigger change than the rest of
