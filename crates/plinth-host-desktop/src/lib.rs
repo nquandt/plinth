@@ -13,6 +13,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
 pub mod consent;
+pub mod updater;
 
 pub use plinth_runner_wasmtime::files::Owner;
 
@@ -385,8 +386,24 @@ pub fn open_app_with_hub(
     policy: Policy,
     hub: Option<Box<dyn plinth_runner_wasmtime::hub::HubBackend>>,
 ) -> gpui::WindowHandle<PlinthRoot> {
+    open_app_reporting_init(cx, runner, app, policy, hub, |_| {})
+}
+
+/// Like `open_app_with_hub`, and calls `on_init(true)` or `on_init(false)`
+/// with whether the guest's `init` succeeded (`docs/UPDATES.md` §8 step
+/// 4: the updater's rollback counter needs this to tell a load failure
+/// from a normal run). `on_init` runs once, before the window opens.
+pub fn open_app_reporting_init(
+    cx: &mut App,
+    runner: Arc<Runner>,
+    app: HostApp,
+    policy: Policy,
+    hub: Option<Box<dyn plinth_runner_wasmtime::hub::HubBackend>>,
+    on_init: impl FnOnce(bool),
+) -> gpui::WindowHandle<PlinthRoot> {
     let HostApp { component, title, accent, app_id, assets, owner, .. } = app;
     let (port, init) = start_with_policy_and_hub(runner, &component, &app_id, &owner, policy, hub, &[]);
+    on_init(init.is_ok());
     let assets = Arc::new(assets);
 
     let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
@@ -435,6 +452,14 @@ pub fn open_app_with_hub(
 /// one window, but the window closing no longer quits other windows a
 /// later caller (the Hub) may have opened in the same process.
 pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
+    run_reporting_init(app, reloads, |_| {})
+}
+
+/// Like `run`, and calls `on_init(true)` or `on_init(false)` with whether
+/// the app's `init` succeeded (`docs/UPDATES.md` §8 step 4, 5: a `plinth
+/// native` executable uses this to count rollback attempts). `on_init`
+/// runs once, before the window opens, from the `gpui` app thread.
+pub fn run_reporting_init(app: HostApp, reloads: Option<Receiver<Vec<u8>>>, on_init: impl FnOnce(bool) + 'static) -> Result<()> {
     let runner = Arc::new(Runner::new()?);
     let app_id = app.app_id.clone();
     let owner = app.owner.clone();
@@ -443,7 +468,7 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
 
     gpui_platform::application().run(move |cx: &mut App| {
         init_app(cx);
-        let window = open_app(cx, runner.clone(), app, policy);
+        let window = open_app_reporting_init(cx, runner.clone(), app, policy, None, on_init);
         cx.activate(true);
 
         if let Some(rx) = reloads {

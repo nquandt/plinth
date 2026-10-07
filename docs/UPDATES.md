@@ -1,6 +1,6 @@
 # Updates without a reinstall (design draft)
 
-Status: draft from the owner's brainstorm of 2026-10-07. Nothing in this document is built yet, except the parts that "Today" names and §8 step 1 (done 2026-10-07: core patch versions and the author's `core` policy, SPEC.md §10.5). Open questions are marked UP-Q*.
+Status: draft from the owner's brainstorm of 2026-10-07. §8 step 1 (core patch versions and the author's `core` policy, SPEC.md §10.5) and steps 2-3 (the signed feed format and the desktop updater, with rollback) are done, 2026-10-07. The rest of this document is still a design draft. Open questions are marked UP-Q*.
 
 ## 1. Goal
 
@@ -40,30 +40,80 @@ So the update cases are:
    - `core = "pinned"`: one core build, by digest (recorded in the manifest at build time).
 
    The desktop host honors the policy when it links a package. Still open: the web host (today it always follows, SPEC §10.3) and the Hub's update check against a pinned app (it should refuse an update that would change the pinned core, `UP-Q1` follow-up).
-3. **An update feed** for each distributable: a signed `feed.json` at a URL that the author chooses, with the app versions, the core each needs, and where to get packages and cores. The Hub's registry format is the start point (`docs/REGISTRY.md`).
-4. **An updater in the host:** check the feed, download into the per-user data folder, verify, and use the newest set that the native host supports. The embedded `.plnt` and core stay as the fallback.
-5. **A project key** that signs cores (HANDOFF open decisions: "the project Hub key").
+3. **An update feed. Done (2026-10-07).** A signed `feed.json` + `feed.json.sig` at a URL the author chooses (`plinth-package::feed`, §10 below). `plinth feed add` writes it from a built, signed package.
+4. **An updater in the host. Done (2026-10-07)**, for the desktop (`plinth-host-desktop::updater`): checks the feed in the background on start, downloads and verifies a newer version into the per-user updates folder, and runs the newest verified set from the next start on. The embedded `.plnt` stays the fallback. Still open: the web service worker cache (§8 step 4) and mobile (§8 step 6); a core fetched through the feed is accepted only by the digest the signed feed lists, because the project core key (item 5 below) does not exist yet (UP-Q4).
+5. **A project key** that signs cores (HANDOFF open decisions: "the project Hub key"). Still open.
 
-## 5. The author's configuration (proposal)
+## 5. The author's configuration (built, 2026-10-07)
 
 ```toml
 [updates]
 feed = "https://example.com/myapp/feed.json"
 channel = "stable"     # or "beta"
-check = "on-start"     # or an interval
+check = "on-start"     # the only policy built; an interval is future work
 apply = "next-start"   # "prompt" | "next-start" | "live"
 core = "follow"        # "patch" | "pinned"
 ```
 
+`ProjectConfig` (`plinth.toml`) carries this into the manifest's `updates` field unchanged (`plinth_package::UpdatesConfig`). An old `plinth.toml`, or a manifest built before this field existed, has no `updates`: the app never checks for updates. `apply = "live"` is rejected at `plinth build` time (not implemented, UP-Q2); `apply = "prompt"` parses but the desktop host does not yet show the restart prompt it implies (§8 step 6 below) -- it runs `next-start` instead, so an author who sets it today still gets updates, just not the prompt.
+
 `apply = "live"` replaces a running app and keeps its state, with the same signal snapshot that hot reload uses (SPEC §13). It needs care when the shape of the state changes.
 
-## 6. Safety
+## 6. Safety (built, 2026-10-07, in `plinth-host-desktop::updater`)
 
-- **Signatures:** an app update must have the publisher key of the installed build; a core must have the project key. A digest check for every file.
-- **No downgrade:** versions only go up (a feed cannot roll a user back to an old, unsafe version).
-- **Rollback:** if a new set stops at start (a trap in `init`) two times, the host goes back to the previous set and reports it. The "This app stopped" path (2026-10-07) gives the signal.
-- **Data:** the host stores the app version with the app's data; an `onUpgrade(fromVersion)` hook lets an app move its data. A rollback must not lose data that a newer version wrote (UP-Q5).
-- **Capabilities:** an update that declares a new capability asks the user again, as the Hub does.
+- **Signatures:** an app update must have the publisher key of the *embedded* package (key continuity) -- a feed validly signed by a different key is refused outright, the same as a corrupt feed, not treated as "unsigned". A core must have the project key; until that key exists (item 5, UP-Q4), a core is accepted only when its digest is the one the already-verified, signed feed lists.
+- **No downgrade:** versions only go up (`plinth_package::is_newer`); a feed cannot roll a user back to an old, unsafe version. The comparison is against the newest version already downloaded, or the embedded version if nothing has been downloaded yet.
+- **Rollback:** if a new set stops at start (a trap in `init`, or the load itself failing) two times in a row, the host goes back to the embedded set and reports it (the log, and `updater::rollback_report` for the error banner path). One failure does not roll back; a success in between resets the count. The "This app stopped" path (2026-10-07) gives the per-start signal (`open_app_reporting_init`/`run_reporting_init`).
+- **Data:** the host stores the app version with the app's data; an `onUpgrade(fromVersion)` hook lets an app move its data. A rollback must not lose data that a newer version wrote (UP-Q5). **Still open:** this hook does not exist yet.
+- **Capabilities:** an update that declares a new capability asks the user again, as the Hub does. **Still open** for the desktop updater: today it does not compare the downloaded package's capabilities against the embedded one, so it does not yet ask again. A capability change in a self-update is a gap to close before this ships to real users (see "What is open" below).
+
+## 10. The feed format (built, 2026-10-07)
+
+`plinth-package::feed` (`crates/plinth-package/src/feed.rs`). Two files, next to each other at the author's chosen URL:
+
+- `feed.json` -- the data.
+- `feed.json.sig` -- a **detached** Ed25519 signature over the exact bytes of `feed.json`.
+
+**Why detached, not an envelope.** `signature.json` (`docs/HUB.md` §6.1) signs a *statement* (a digest of each package entry) that is a different value from the stored file, so it needs canonical JSON to make signing and verifying agree on the exact bytes. A feed has no such problem: the file an author writes to disk is the exact message to sign, so Ed25519 signs it directly, with no canonicalization step to get wrong on either side. This is the simplest option that is still secure, not a shortcut: signing a raw byte string is the ordinary use of the primitive. The downside -- two files instead of one -- is minor net of what it removes.
+
+`feed.json`:
+
+```json
+{
+  "schema": "plinth.feed/1",
+  "id": "com.example.notes",
+  "channels": {
+    "stable": [
+      {
+        "version": "1.2.0",
+        "package": "notes-1.2.0.plnt",
+        "sha256": "9f2c...",
+        "core": "1.2",
+        "core-source": { "url": "core-1.3.wasm", "version": "1.3", "sha256": "ab12..." }
+      }
+    ]
+  }
+}
+```
+
+- `id` must equal the running app's manifest id; a host refuses a feed for a different app (a mismatched URL, or a stale copy).
+- `channels` maps a channel name to its versions, newest first.
+- `package` and `core-source.url` are relative to the feed's own URL, or absolute -- the same resolution rule as the registry (`docs/REGISTRY.md` §2).
+- `core` is the app's lowest required core version (SPEC.md §10.5), the same value `plinth registry build` writes to an app document.
+- `core-source` is present only when the author ran `plinth feed add --with-core`; a host that already has a compatible core ignores it.
+
+`feed.json.sig`:
+
+```json
+{
+  "schema": "plinth.feed/1",
+  "publisher": "Acme",
+  "key": "ed25519:...",
+  "signature": "base64 over the raw feed.json bytes"
+}
+```
+
+`plinth feed add <feed-dir> <app.plnt> [--channel <name>] [--with-core]` (`crates/plinth-cli/src/feed_cmd.rs`) builds or updates `feed.json`/`feed.json.sig` from a signed package, with the loaded publisher identity (`plinth publisher init`). It refuses an unsigned package, or one signed by a different identity than the one loaded, and refuses to add a version to a feed that is for a different app id. Running it again for a newer version keeps every earlier entry; it never edits or removes one.
 
 ## 7. Platforms
 

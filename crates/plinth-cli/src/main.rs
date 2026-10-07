@@ -9,6 +9,7 @@ use std::sync::mpsc;
 use std::time::{Duration, SystemTime};
 
 mod dev_tools;
+mod feed_cmd;
 mod registry_cmd;
 mod web_export;
 
@@ -73,6 +74,8 @@ usage:
   plinth registry serve <folder> [--port N] [--web]
                                    serve a static registry on 127.0.0.1;
                                    --web also serves the web App Hub at /
+  plinth feed add <feed-dir> <app.plnt> [--channel <name>] [--with-core]
+                                   write or update a signed update feed (docs/UPDATES.md §8)
 
 The project directory defaults to the current directory.";
 
@@ -195,6 +198,7 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
         }
         Some("hub") => hub_command(&positional[1..], &args[1..]),
         Some("registry") => registry_command(&positional[1..], &args[1..]),
+        Some("feed") => feed_command(&positional[1..], &args[1..]),
         Some("validate") => {
             let file = positional.get(1).context("usage: plinth validate <file>")?;
             dev_tools::validate_file(Path::new(file))?;
@@ -1058,5 +1062,21 @@ fn registry_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
         }
         Some(other) => bail!("unknown `plinth registry {other}`; use build or serve"),
         None => bail!("usage: plinth registry build|serve <folder>"),
+    }
+}
+
+/// `plinth feed add <feed-dir> <app.plnt> [--channel <name>] [--with-core]`
+/// (`docs/UPDATES.md` §8 step 3).
+fn feed_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
+    match args.first().copied() {
+        Some("add") => {
+            let feed_dir = args.get(1).context("usage: plinth feed add <feed-dir> <app.plnt> [--channel <name>] [--with-core]")?;
+            let package = args.get(2).context("usage: plinth feed add <feed-dir> <app.plnt> [--channel <name>] [--with-core]")?;
+            let channel = raw.iter().position(|a| *a == "--channel").and_then(|i| raw.get(i + 1)).copied().unwrap_or("stable");
+            feed_cmd::add(Path::new(feed_dir), Path::new(package), channel, raw.iter().any(|a| *a == "--with-core"))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(other) => bail!("unknown `plinth feed {other}`; use add"),
+        None => bail!("usage: plinth feed add <feed-dir> <app.plnt>"),
     }
 }
