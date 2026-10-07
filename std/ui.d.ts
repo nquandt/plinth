@@ -102,6 +102,7 @@ export declare function TextField(props: {
   error?: string;
   onChange?: (value: string) => void;
   onSubmit?: () => void;
+  disabled?: boolean;
 }): Element;
 
 export declare function Toggle(props: {
@@ -128,6 +129,8 @@ export declare function Row(props: {
   /** A muted value shown on the right of the row, e.g. "12 items" or "$4.50". */
   trailing?: string;
   children?: Children;
+  /** This row is the selected one of its list (shown, and told to assistive technology). */
+  selected?: boolean;
 }): Element;
 
 export declare function Empty(props: { title: string; message?: string }): Element;
@@ -148,6 +151,7 @@ export declare function TextArea(props: {
   value: Signal<string> | string;
   placeholder?: string;
   onChange?: (value: string) => void;
+  disabled?: boolean;
 }): Element;
 
 export declare function Slider(props: {
@@ -269,6 +273,7 @@ export declare function DatePicker(props: {
   value: Signal<string> | string;
   mode?: "date" | "time" | "datetime";
   onChange?: (value: string) => void;
+  disabled?: boolean;
 }): Element;
 
 // -- UI API 1.5 -----------------------------------------------------------

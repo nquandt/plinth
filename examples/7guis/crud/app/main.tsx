@@ -26,7 +26,7 @@ function Crud() {
           row={(p) => (
             <Row
               title={fullName(p)}
-              trailing={selectedId() === p.id ? "Selected" : ""}
+              selected={selectedId() === p.id}
               onPress={() => select(p.id, p.name, p.surname)}
             />
           )}

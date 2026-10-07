@@ -1473,9 +1473,11 @@ impl PlinthRoot {
         let error = node.str_prop(prop::ERROR).filter(|e| !e.is_empty()).map(str::to_owned);
         let Some(field) = self.fields.get(&node.id) else { return div().into_any_element() };
         let id = node.id;
+        let disabled = node.bool_prop(prop::DISABLED);
         let input = div()
             .id(eid("tf-wrap", id))
             .w_full()
+            .when(disabled, |d| d.opacity(0.5))
             .capture_action(cx.listener(move |this, _: &Enter, _, cx| {
                 let Some(node) = this.tree.get(id) else { return };
                 if let Some(h) = node.handler(event::SUBMIT) {
@@ -1486,7 +1488,7 @@ impl PlinthRoot {
             .child(
                 text_input(eid("tf", id))
                     .state(field.state.downgrade())
-                    .accepts_input(self.stopped.is_none())
+                    .accepts_input(self.stopped.is_none() && !disabled)
                     .placeholder(placeholder)
                     .placeholder_color(t.text_muted)
                     .caret_color(t.text)
@@ -1662,10 +1664,13 @@ impl PlinthRoot {
             Some(tr) => format!("{title}, {tr}"),
             None => title.clone(),
         };
-                let row_el = div()
+        let selected = node.bool_prop(prop::SELECTED);
+        let row_el = div()
             .id(eid("row", node.id))
             .role(accesskit::Role::ListItem)
             .aria_label(aria_label)
+            .aria_selected(selected)
+            .when(selected, |d| d.bg(t.selected))
             .flex()
             .items_center()
             .gap_3()
@@ -1787,10 +1792,11 @@ impl PlinthRoot {
         let placeholder = node.str_prop(prop::PLACEHOLDER).unwrap_or("").to_owned();
         let Some(field) = self.fields.get(&node.id) else { return div().into_any_element() };
         let id = node.id;
-        let input = div().id(eid("ta-wrap", id)).w_full().child(
+        let disabled = node.bool_prop(prop::DISABLED);
+        let input = div().id(eid("ta-wrap", id)).w_full().when(disabled, |d| d.opacity(0.5)).child(
             text_area(eid("ta", id))
                 .state(field.state.downgrade())
-                .accepts_input(self.stopped.is_none())
+                .accepts_input(self.stopped.is_none() && !disabled)
                 .placeholder(placeholder)
                 .placeholder_color(t.text_muted)
                 .caret_color(t.text)
@@ -2295,13 +2301,16 @@ impl PlinthRoot {
             (None, Some((h, mi))) => calendar::format_time_readable(h, mi),
             (None, None) => "No date".to_owned(),
         };
-        let open = self.open_menus.contains(&id);
+        let disabled = node.bool_prop(prop::DISABLED) || self.stopped.is_some();
+        let open = !disabled && self.open_menus.contains(&id);
         let trigger = div()
             .id(eid("dp-trigger", id))
             .role(accesskit::Role::Button)
             .aria_label(format!("{label}: {display}"))
             .aria_expanded(open)
-            .cursor_pointer()
+            .aria_disabled(disabled)
+            .when(disabled, |d| d.opacity(0.5))
+            .when(!disabled, |d| d.cursor_pointer())
             .w_full()
             .px_3()
             .py_2()
@@ -2315,16 +2324,20 @@ impl PlinthRoot {
             .items_center()
             .justify_between()
             .child(display)
-            .child(div().text_color(t.text_muted).child(icon_glyph(if mode == "time" { "clock" } else { "calendar" })))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            .child(div().text_color(t.text_muted).child(icon_glyph(if mode == "time" { "clock" } else { "calendar" })));
+        let trigger = if disabled {
+            trigger
+        } else {
+            let trigger = trigger.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 this.toggle_date_picker(id);
                 cx.notify();
             }));
-        let trigger = keyboard_activatable(trigger, cx, move |this, cx| {
-            this.toggle_date_picker(id);
-            cx.notify();
-        });
+            keyboard_activatable(trigger, cx, move |this, cx| {
+                this.toggle_date_picker(id);
+                cx.notify();
+            })
+        };
         let mut wrap = div().flex().flex_col().gap_1().child(trigger);
         if open {
             wrap = wrap.child(

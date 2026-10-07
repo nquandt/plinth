@@ -64,7 +64,7 @@ function FlightBooker() {
           value={start}
           error={startDay() === null ? "Use the form DD.MM.YYYY" : ""}
         />
-        {isReturn() && <TextField label="Return date" placeholder="DD.MM.YYYY" value={back} error={backError()} />}
+        <TextField label="Return date" placeholder="DD.MM.YYYY" value={back} error={isReturn() ? backError() : ""} disabled={!isReturn()} />
         <Button label="Book" role="primary" disabled={!canBook()} onPress={book} />
       </Section>
       <Dialog

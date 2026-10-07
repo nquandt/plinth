@@ -1162,6 +1162,7 @@ export class DomRenderer {
         setOptionalText(label, n.props.get(Prop.label));
         setProp(input, "value", n.props.get(Prop.value) ?? "");
         setProp(input, "placeholder", n.props.get(Prop.placeholder) ?? "");
+        setProp(input, "disabled", !!n.props.get(Prop.disabled));
         // An empty `error` means no error, as on the desktop.
         const message = n.props.get(Prop.error) || "";
         setOptionalText(error, message);
@@ -1184,6 +1185,7 @@ export class DomRenderer {
         setOptionalText(label, n.props.get(Prop.label));
         setProp(input, "value", n.props.get(Prop.value) ?? "");
         setProp(input, "placeholder", n.props.get(Prop.placeholder) ?? "");
+        setProp(input, "disabled", !!n.props.get(Prop.disabled));
       },
     };
   }
@@ -1237,6 +1239,11 @@ export class DomRenderer {
         const canPress = n.listeners.get(Event.press) !== undefined;
         row.classList.toggle("pl-row-pressable", canPress);
         setAttr(row, "tabindex", canPress ? "0" : null);
+        // The selected row of its list (UI API 1.8). `aria-selected` is not
+        // allowed on a listitem; `aria-current` is.
+        const selected = !!n.props.get(Prop.selected);
+        row.classList.toggle("pl-row-selected", selected);
+        setAttr(row, "aria-current", selected ? "true" : null);
       },
     };
   }
@@ -1408,6 +1415,7 @@ export class DomRenderer {
         const type = mode === EnumDatePickerMode.time ? "time" : mode === EnumDatePickerMode.datetime ? "datetime-local" : "date";
         if (input.type !== type) input.type = type;
         setProp(input, "value", n.props.get(Prop.value) ?? "");
+        setProp(input, "disabled", !!n.props.get(Prop.disabled));
       },
     };
   }

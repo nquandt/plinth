@@ -163,7 +163,7 @@ async function flightBooker() {
   const start = h.field("Start date");
   assert.equal(value(start).length, 10);
   assert.ok(!h.disabled("Book"));
-  assert.equal(h.find(ControlKind.textField, (n) => n.props.get(Prop.label) === "Return date").length, 0);
+  assert.equal(h.field("Return date").props.get(Prop.disabled), true, "one-way: the return date is disabled");
 
   h.type(start, "31.04.2027");
   assert.equal(error(start), "Use the form DD.MM.YYYY");
@@ -223,8 +223,8 @@ async function crud() {
   assert.equal(value(h.field("Name")), "Roman");
   assert.equal(value(h.field("Surname")), "Tisch");
   assert.deepEqual(
-    h.find(ControlKind.row).map((r) => r.props.get(Prop.trailing) ?? ""),
-    ["", "", "Selected"],
+    h.find(ControlKind.row).map((r) => r.props.get(Prop.selected) === true),
+    [false, false, true],
   );
   h.type(h.field("Name"), "Romy");
   h.press("Update");

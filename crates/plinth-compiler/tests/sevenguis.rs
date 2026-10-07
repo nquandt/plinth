@@ -232,8 +232,8 @@ fn flight_booker_constraints() {
     // The start date is today, so a one-way flight can be booked at once.
     assert_eq!(h.value(start).len(), 10, "{}", h.value(start));
     assert!(!h.disabled("Book"));
-    // One-way: no return date field.
-    assert!(h.find(ControlKind::TextField, |n| n.str_prop(prop::LABEL) == Some("Return date")).is_empty());
+    // One-way: the return date field is disabled (UI API 1.8).
+    assert!(h.node(h.field("Return date")).bool_prop(prop::DISABLED));
 
     // An invalid start date: an error, and Book is disabled.
     for bad in ["31.04.2027", "29.02.2027", "1.3.2027", "01-03-2027", "aa.bb.cccc", ""] {
@@ -277,7 +277,8 @@ fn flight_booker_constraints() {
     h.type_text(back, "01.01.2000");
     assert!(h.disabled("Book"));
     h.fire(kind, event::CHANGE, "one-way flight".into());
-    assert!(h.find(ControlKind::TextField, |n| n.str_prop(prop::LABEL) == Some("Return date")).is_empty());
+    let back_node = h.node(h.field("Return date"));
+    assert!(back_node.bool_prop(prop::DISABLED) && back_node.str_prop(prop::ERROR).unwrap_or("").is_empty());
     assert!(!h.disabled("Book"));
     h.press("Book");
     assert_eq!(h.node(dialog).str_prop(prop::MESSAGE), Some("You booked a one-way flight on 29.02.2028."));
@@ -355,15 +356,14 @@ fn crud_filter_create_update_delete() {
     h.type_text(filter, "");
     assert_eq!(h.row_titles().len(), 3);
 
-    // Select a row: its name goes into the fields, and the row shows
-    // "Selected" (there is no `selected` prop on `Row`, docs/GAPS.md).
+    // Select a row: its name goes into the fields, and the row is the
+    // selected one (`Row.selected`, UI API 1.8).
     let row = h.rows()[1];
     h.fire(row, event::PRESS, Value::Null);
     let (name, surname) = (h.field("Name"), h.field("Surname"));
     assert_eq!((h.value(name).as_str(), h.value(surname).as_str()), ("Max", "Mustermann"));
-    let marks: Vec<String> =
-        h.rows().into_iter().map(|r| h.node(r).str_prop(prop::TRAILING).unwrap_or_default().to_owned()).collect();
-    assert_eq!(marks, ["", "Selected", ""]);
+    let marks: Vec<bool> = h.rows().into_iter().map(|r| h.node(r).bool_prop(prop::SELECTED)).collect();
+    assert_eq!(marks, [false, true, false]);
     assert!(!h.disabled("Update") && !h.disabled("Delete"));
 
     // Update the selected entry.
@@ -387,7 +387,7 @@ fn crud_filter_create_update_delete() {
     let checked: Vec<String> = h
         .rows()
         .into_iter()
-        .filter(|r| h.node(*r).str_prop(prop::TRAILING) == Some("Selected"))
+        .filter(|r| h.node(*r).bool_prop(prop::SELECTED))
         .map(|r| h.node(r).str_prop(prop::TITLE).unwrap_or_default().to_owned())
         .collect();
     assert_eq!(checked, ["Lovelace, Ada"]);
