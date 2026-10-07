@@ -14,6 +14,8 @@ Plinth goes through three public levels. A level starts only when all items with
 | **Beta** | Early adopters with real apps, at their own risk. | No breaking change to the language, the `.plnt` format, the UI API or the host APIs without a deprecation step. Security reports get a fix. |
 | **1.0** | The public, for production apps. | Semantic versioning on all public contracts (§2). Rolling support: every released runtime stays available, so old apps keep running. Signed binaries. A documented security process. |
 
+An item with the gate **Later** comes after 1.0. It does not block a level.
+
 Status words:
 
 - **Done**: merged on `master`, tested in the gate, documented.
@@ -89,7 +91,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | H3 | Notifications (`notify`) | Beta | Open | SPEC §11 names it. Most production apps need it. |
 | H4 | Structured storage (`store.sql` or a documented pattern on files) | Beta | Decide | STORAGE ST-Q1, VALIDATION V2 |
 | H5 | Storage: `vault` space, a folder as a space, `watch` | 1.0 | Open | `docs/STORAGE.md` §6 |
-| H6 | Sync between devices of one user | 1.0 | Decide | STORAGE §6. Decide if 1.0 needs it (PR-Q5). |
+| H6 | Sync between devices of one user | Later | Open | STORAGE §6. Not in 1.0 (PR-Q5). |
 | H7 | Each host API has a documented behavior on each host, with the same test on each host | Beta | Partial | Next: a table in `docs/host-apis.md` (host × API) that the tests fill. |
 
 ## 7. Security
@@ -196,19 +198,14 @@ Decisions of 2026-10-07:
 | # | Question | Decision |
 |---|---|---|
 | PR-Q1 | Is mobile part of 1.0? | **Yes. 1.0 covers all platforms:** Windows, macOS, Linux, web, iOS, Android. Plan with the assumption that gpui mobile backends exist. |
-| PR-Q2 | Does 1.0 need localization (U8) and sound (U11)? | **Yes, both.** Sync (H6) is still open, see PR-Q5. |
+| PR-Q2 | Does 1.0 need localization (U8) and sound (U11)? | **Yes, both.** |
 | PR-Q3 | What is the support policy? | **Rolling support with no guaranteed window.** The promise is that every released runtime stays available (C10), so an old app keeps running. |
 | PR-Q4 | Is the list complete? | Good so far. Add items when work finds them. |
 | — | License (G1) | MIT OR Apache-2.0, as in the Rust ecosystem. |
 | — | Name (G2), public repo (G6), Linux and macOS window (P2, P3) | At the end, before 1.0. |
 | — | CI runners online (Q2), npm packages and release tests (D1, D2) | Near Beta. |
 | — | VS Code Marketplace (T2) | At 1.0. |
-
-Open:
-
-| # | Question | Notes |
-|---|---|---|
-| PR-Q5 | Does 1.0 need sync (H6)? | Sync means: one user has the same app on two devices (for example a phone and a desktop), and the app data is the same on both. A change on one device goes to the other. Owner decision 7 says the data stays on the user's device or the user's storage, so sync goes through storage that the user owns (a folder that a sync service like OneDrive or iCloud copies, or a user-owned server), never a Plinth server. `docs/STORAGE.md` §6 has the design draft. |
+| PR-Q5 | Does 1.0 need sync (H6)? | **No.** Sync comes after 1.0. Sync means: one user has the same app on two devices (for example a phone and a desktop), and the app data is the same on both. A change on one device goes to the other. Owner decision 7 says the data stays on the user's device or the user's storage, so sync goes through storage that the user owns (a folder that a sync service like OneDrive or iCloud copies, or a user-owned server), never a Plinth server. `docs/STORAGE.md` §6 has the design draft. |
 
 ## 16. Summary
 
@@ -218,7 +215,8 @@ Count on 2026-10-07, by gate and status:
 |---|---|---|---|
 | Preview | 25 | 0 | 0 |
 | Beta | 0 | 16 | 35 |
-| 1.0 | 1 | 1 | 21 |
+| 1.0 | 1 | 1 | 20 |
+| Later (after 1.0) | 0 | 0 | 1 |
 
 **The Preview level is complete** for the documented platforms (Windows and the web, `docs/LIMITS.md`). Preview is only an internal mark until the repository is public (G6).
 
