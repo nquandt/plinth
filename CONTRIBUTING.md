@@ -74,16 +74,39 @@ It should print nothing.
   `wit/plinth/ui-api.toml`, and never remove, retype, or change the
   behavior of a function in `crates/plinth-rt`'s exported ABI inside a
   major core version — add a new function and bump the minor version
-  instead (SPEC.md §10.5).
+  instead (SPEC.md §10.5). `docs/COMPATIBILITY.md` lists every public
+  contract and its rules; `wit/plinth/app.wit` is append-only too (a
+  snapshot test guards it).
+
+## A pull request
+
+1. Say what the change does and why, and link the checklist item in
+   `docs/PRODUCTION.md` if there is one.
+2. Add tests: a regression test for a bug, tests on both hosts (desktop
+   and web) for a UI or host API change, a golden test for a new
+   diagnostic.
+3. Update the docs in the same change: the reference (`docs/ui.md`,
+   `docs/host-apis.md`, `docs/language.md`), `docs/LIMITS.md` if a limit
+   goes away, the item status in `docs/PRODUCTION.md`, and an entry under
+   "Unreleased" in `CHANGELOG.md` for a change that users or app authors
+   see.
+4. Write docs in ASD-STE100 Simplified Technical English.
+5. Run the gate (see "Before you push").
+
+Report a security problem privately, not in a pull request or an issue:
+see [SECURITY.md](SECURITY.md).
+
+Everyone who takes part in the project follows the
+[code of conduct](CODE_OF_CONDUCT.md).
 
 ## Where to start
 
 [HANDOFF.md](HANDOFF.md) is the single best entry point: it describes
 what exists, what is in progress, the gotchas people have already hit,
-and a suggested order of next steps (currently: the Plinth Hub's
-local-library phase, a web host spike, async host calls, and more UI
-controls). Read it, then [SPEC.md](SPEC.md) for the design and this
-repository's docs under `docs/` for topic-by-topic references.
+and a suggested order of next steps. Read it, then [SPEC.md](SPEC.md) for
+the design and this repository's docs under `docs/` for topic-by-topic
+references. [docs/PRODUCTION.md](docs/PRODUCTION.md) lists the open work
+on the way to 1.0; an item with the status Open is a good place to start.
 
 ## License
 

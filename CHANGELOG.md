@@ -12,6 +12,8 @@ No public release yet. The first release is a Preview for Windows and the web. `
 - `docs/PRODUCTION.md`: the production readiness checklist.
 - `docs/LIMITS.md`: the known limits.
 - `SECURITY.md` and `docs/THREAT-MODEL.md`.
+- `docs/COMPATIBILITY.md`: the public contracts, their version rules and the deprecation policy.
+- `docs/PRIVACY.md`, `CODE_OF_CONDUCT.md`, and a pull request guide in `CONTRIBUTING.md`.
 
 ### Security
 

@@ -187,9 +187,9 @@ Production apps run code from many publishers. This area must be complete before
 |---|---|---|---|---|
 | G1 | License: MIT OR Apache-2.0 | Preview | Done | `LICENSE-MIT`, `LICENSE-APACHE`, `Cargo.toml`, `package.json` files |
 | G2 | Final project name and npm scope | 1.0 | Open | SPEC Q2. "Plinth" is a placeholder; the npm name `plinth` is taken. | The owner decides at the end. |
-| G3 | `CONTRIBUTING.md` for outside contributors; code of conduct | Beta | Partial | `CONTRIBUTING.md` lists commands only. |
+| G3 | `CONTRIBUTING.md` for outside contributors; code of conduct | Beta | Done | `CONTRIBUTING.md` ("A pull request"), `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1). Add a private contact when the repo is public (G6). |
 | G4 | Licenses of all dependencies checked and listed (also gpui-ce) | Beta | Open | `cargo deny` can do the check (S8). |
-| G5 | Privacy statement: no telemetry by default; data stays with the user | Beta | Open | Owner decision 7 (HANDOFF §0.1); EXPERIENCE §7 "Privacy page" |
+| G5 | Privacy statement: no telemetry by default; data stays with the user | Beta | Done | `docs/PRIVACY.md` |
 | G6 | Public repository and issue tracker | 1.0 | Open | The repo is private now. |
 
 ## 15. Owner decisions and open questions
