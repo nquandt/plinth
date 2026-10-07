@@ -127,16 +127,37 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 - The owner may edit `SPEC.md`; diff it before you change it.
 - Parallel agents: sibling worktrees `C:\repos\plinth-wt-<name>` (so `../gpui-ce` resolves), one or two items per agent, a full `ci-local.sh` pass before it reports, never a push. Merge locally, regenerate `web/plinth.js` on a conflict, run the script and `run-a11y.mjs`, then report. Old merged worktrees still exist (`-a11y`, `-ci`, `-hostapi`, `-inputs`, `-lang`, `-rtfix`, `-structure`); they can be removed.
 
-## 9. Next steps (in order)
+## 9. Smooth motion and performance (owner request, 2026-10-06)
 
-1. **Pointer input (UI-ADVANCED U3, GAPS G4):** `onPointerDown`/`onPointerMove`/`onPointerUp` with x and y (in view units on a `Canvas`, in spacing units on a box), then drag. The runtime passes one event value to a callback (`ARG` in `plinth-rt/src/lib.rs`): a callback with two numbers needs either an argument queue in the runtime (a core minor bump) or a struct value. Then 7GUIs task 6, Circle drawer (Canvas, a context menu, a Dialog with a Slider, undo and redo), and a drag control for Pong.
-2. **Game and app loop gaps (GAPS "Games"):** an animation-frame timer (G5), a seeded random generator (G6), window visibility and component lifecycle hooks (G10). Rest of U2: transitions and springs. Then interned style records (`docs/UI-ADVANCED.md` §4).
-3. **7GUIs task 7, Cells:** Grid virtualization, many signals, a 26 × 100 grid under 16 ms per frame.
-4. **Storage, next part (`docs/STORAGE.md` §6):** a granted `vault` space and the Hub UI for spaces; an existing folder as a space (S6); `watch`; then sync to rustfs and Azurite in Docker. Editor: Markdown source plus a `Markdown` display control. Then the notes app (VALIDATION V2).
-5. **Experience (`docs/EXPERIENCE.md` §7):** step 1 (plain words) is done. Next: Try and Keep, the Privacy page (permissions with last use, storage size, Remove).
-6. **Compiler:** the web host error banner; smaller async code; rest in object patterns; default values in patterns; `cond ? x : undefined` for optional props (GAPS 7G-3).
-7. **Web (small doses):** minify `plinth.js` (176 KiB); web Hub PWA and first-use prompts (`docs/web-hub.md` §7).
-8. **Platforms:** a GUI window on Linux and macOS; then mobile with gpui (SPEC Q1, Q3).
-9. **Distribution:** publish the npm packages and a first registry; Hub H2 (signed indexes, transparency log); key rotation; later a tree-shaken app-plus-runtime bundle.
+The owner played Pong: about 63 ticks per second, but the ball "seems a little jumpy". The cause is not the screen. Two causes are known; measure before and after each fix.
+
+**Known causes:**
+
+1. **Positions in whole spacing units (the main cause).** Insets and sizes take whole units (4 px). The ball moves 0.9 units per tick (`SERVE_SPEED` in `examples/pong/app/game.ts`), and `cell()` rounds each position. So the ball moves 4 px on most ticks and 0 px on about one tick in ten: a stutter about 6 times per second. The vertical speed (up to 1.0) has the same effect.
+2. **Timer cadence.** The desktop host checks timers on a 15 ms background timer (`crates/plinth-host-desktop/src/lib.rs`, `poll_timers`) and fires at most one tick per check. A 16 ms `setInterval` against 15 ms checks and the display refresh gives uneven gaps between frames (45–62 per second at start, then 60–63, GAPS "Games"). The web host uses `setInterval`, which is not in step with the display either.
+
+**Optimization plan (in order):**
+
+1. **Fractional positions.** Let insets (`top`, `left`, `right`, `bottom`) and sizes take fractional spacing units (for example in quarter units, 1 px), or move Pong's court to `Canvas`, whose view units are fractional and scale to the window. Then remove `cell()` from Pong. This removes cause 1 and also fixes the small court on wide windows (GAPS G9).
+2. **An animation-frame timer (GAPS G5):** `onFrame((dt) => …)` or `requestFrame`, driven by the host's frame callback (gpui: request the next frame from the window; web: `requestAnimationFrame` in the frame), with the real time since the last frame, paused when the window is hidden. Games then move by `speed * dt`. This removes cause 2 and stops the loop in a hidden window (G10).
+3. **A better timer loop on the desktop:** wake at the next timer deadline (`next_timer_deadline` exists) instead of a fixed 15 ms poll, and run all due timers in one go.
+4. **Host-side motion (UI-ADVANCED U2 motion):** `transition` on `left`/`top` lets the renderer move an element smoothly between two commits, so 30 ticks per second can look like 60 or 120.
+5. **Release builds for play.** `plinth dev` and `target/debug/plinth.exe` are debug builds of the host and wasmtime. Measure a release build (`cargo build --release -p plinth-cli`) and say in `docs/getting-started.md` which build to use for games.
+6. **Frame cost on the desktop:** `render.rs` builds the whole element tree for every frame. Measure with `PLINTH_TRACE_RENDER=1` on Pong and on `big-list` (0.35–0.6 ms for Pong in a debug build); if it grows, cache the elements of unchanged nodes.
+
+**How to measure:** add a frame-time histogram to Pong's status line or to `PLINTH_TRACE_RENDER` (the time between presented frames, not only the tick count). Check that the ball's x position changes by the same amount each frame. Record the numbers in `docs/VALIDATION.md` §6 and in GAPS "Games". Already done: the runtime sends no op for an unchanged value (GAPS G8, 9 → 1.4 ops per tick).
+
+## 10. Next steps (in order)
+
+1. **Smooth motion (§9):** fractional positions and an animation-frame timer first; the owner asked for it after playing Pong.
+2. **Pointer input (UI-ADVANCED U3, GAPS G4):** `onPointerDown`/`onPointerMove`/`onPointerUp` with x and y (in view units on a `Canvas`, in spacing units on a box), then drag. The runtime passes one event value to a callback (`ARG` in `plinth-rt/src/lib.rs`): a callback with two numbers needs either an argument queue in the runtime (a core minor bump) or a struct value. Then 7GUIs task 6, Circle drawer (Canvas, a context menu, a Dialog with a Slider, undo and redo), and a drag control for Pong.
+3. **Game and app loop gaps (GAPS "Games"):** a seeded random generator (G6), window visibility and component lifecycle hooks (G10). Rest of U2: transitions and springs. Then interned style records (`docs/UI-ADVANCED.md` §4).
+4. **7GUIs task 7, Cells:** Grid virtualization, many signals, a 26 × 100 grid under 16 ms per frame.
+5. **Storage, next part (`docs/STORAGE.md` §6):** a granted `vault` space and the Hub UI for spaces; an existing folder as a space (S6); `watch`; then sync to rustfs and Azurite in Docker. Editor: Markdown source plus a `Markdown` display control. Then the notes app (VALIDATION V2).
+6. **Experience (`docs/EXPERIENCE.md` §7):** step 1 (plain words) is done. Next: Try and Keep, the Privacy page (permissions with last use, storage size, Remove).
+7. **Compiler:** the web host error banner; smaller async code; rest in object patterns; default values in patterns; `cond ? x : undefined` for optional props (GAPS 7G-3).
+8. **Web (small doses):** minify `plinth.js` (176 KiB); web Hub PWA and first-use prompts (`docs/web-hub.md` §7).
+9. **Platforms:** a GUI window on Linux and macOS; then mobile with gpui (SPEC Q1, Q3).
+10. **Distribution:** publish the npm packages and a first registry; Hub H2 (signed indexes, transparency log); key rotation; later a tree-shaken app-plus-runtime bundle.
 
 **Open decisions for the owner:** the license (Cargo.toml says Apache-2.0; no LICENSE file); the project Hub key; self-hosted runners; `docs/HUB.md` H-Q4; the open questions in the design drafts (ST-Q*, UA-Q*, UX-Q*); whether app data keyed by package digest for unsigned apps (a new space for each build) is acceptable.

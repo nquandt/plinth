@@ -683,6 +683,8 @@ frame rate is set by the timer delivery, not by Plinth's cost.
 | G9 | **Scale to the window** (width-class styles, U2, or a size that fills the parent while the content keeps its aspect ratio) | A court that fills the window on a desktop and fits a phone. | A fixed court of 79 x 48 units (316 x 192 px), sized to fit the compact window. | On a wide window the court is small in a large card (see `plinth-shoot` `screen0-wide.png`). Fractions (`"1/2"`, `"full"`) exist for sizes, but the spacers need units, so a court with a fraction width cannot place the ball. |
 | G10 | **Lifecycle hooks** (`onMount`/`onCleanup` for a component, window focus and visibility) | Stop the loop when the screen goes away or the window loses focus; pause the game automatically. | The timer id is kept in a signal and cleared on Pause and at the end of the game. | A loop that runs until the user presses Pause, also in a hidden window. |
 
+**Jumpy ball (owner, 2026-10-06).** At about 63 ticks per second the ball looks a little jumpy. Cause 1: positions are whole spacing units, so a ball at 0.9 units per tick moves 4 px on most ticks and 0 px on about one in ten. Cause 2: the desktop host polls timers every 15 ms and fires at most one per poll, so the gaps between frames are uneven. The plan is in `HANDOFF.md` §9 (fractional positions or Canvas, an animation-frame timer, a deadline-based timer loop, host-side motion).
+
 No compiler, runtime or renderer bug was found: the app compiled on the
 first try, and both hosts gave the same layout facts and the same game.
 
