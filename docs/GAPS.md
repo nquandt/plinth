@@ -725,6 +725,19 @@ first try, and both hosts gave the same layout facts and the same game.
 - **Rest patterns in array destructuring: done.** `const [a, , ...r] = xs` on arrays and on tuples with a rest element (`tests/lang.rs` `array_rest_patterns_bind_the_remaining_elements`, golden `PL2000_tuple_rest_pattern`). **Rest in object patterns and default values in patterns: done (2026-10-07).** `const { a, ...o } = x` (a new object of an anonymous object type with the other fields) and `{ a = 1 }`, `[a = 1]`, parameter patterns, nested patterns and `for…of` patterns. A default applies to `null` and, in an array pattern, past the end (a length check, no trap). Tests: `object_pattern_defaults_*`, `array_pattern_defaults_apply_past_the_end`, `object_rest_*` (`tests/lang.rs`).
 - **`join` on number and boolean arrays: done** for a literal separator (the default `","` too); a computed separator on a number array is still `PL3001`. Test `join_converts_numbers_and_booleans`.
 
+## Async code size (2026-10-07)
+
+`async_code_size` (`crates/plinth-compiler/tests/async_size.rs`, `--ignored`) compiles the same logic with `await confirm(...)` and with `confirm(..., done)`. App module bytes above an app without dialogs (1,103 B):
+
+| Awaits | `async` | Callbacks |
+|---|---|---|
+| 1 | +1,653 B | +235 B |
+| 2 | +1,965 B | +314 B |
+| 4 | +2,600 B | +472 B |
+| 8 | +3,902 B | +788 B |
+
+So `async` costs about 1.35 KB one time (the promise machinery, the microtask queue and the drain are generated app code) and about 320 B for each `await` (a continuation closure and its `try` wrapper), against about 80 B for each callback. Proposal (low priority; app size is a goal, not a cap): move the promise machinery into the core (no size limit, HANDOFF decision 6) to save the fixed part in every async app, then share one wrapper for the continuations.
+
 ## Desktop frame cost (2026-10-07)
 
 `crates/plinth-shoot/tests/frame_cost.rs` draws 20 frames of every example in a headless window (1000 x 800) and prints the median of `Window::draw`; a second test measures five of one control. Release build, the slowest first: cells 8.3 ms (5,666 nodes, culled scroll), **settings-gallery 7.1 ms with only 26 nodes**, utility 3.6 ms, budget 3.4 ms; big-list 1.6 ms with 21,008 nodes (a virtual `List`). So the cost does not follow the node count.
