@@ -48,7 +48,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | L2 | Every rejected feature gives a diagnostic with a golden test | Preview | Done | `plinth-compiler/tests/golden.rs` (SPEC M3 exit) |
 | L3 | The compiler never panics or overflows its stack on any input | Preview | Done | `tests/robustness.rs`, `PL1000`, `stacker` |
 | L4 | Regular expressions (`RegExp`) | Beta | Open | GAPS "Larger items". Most real apps need them for validation and parsing. |
-| L5 | Locale-aware text: number, date and plural formatting (`plinth:locale`) | Beta | Open | `std/time.d.ts` says English only. See also U8. |
+| L5 | Locale-aware text: number, date and plural formatting (`plinth:locale`) | Beta | Open | `docs/I18N.md` §3.3 (steps 1–2). |
 | L6 | Long expression chains (more than 1000 terms) | Beta | Open | GAPS R3. |
 | L7 | Smaller async code (promise machinery in the core) | 1.0 | Open | GAPS "Async code size". |
 | L8 | Libraries: share Plinth TS code between apps (`hub:<publisher>/<lib>`, `plinth.lock`) | 1.0 | Open | SPEC §12 "Libraries". Without them, each app copies code. |
@@ -77,8 +77,8 @@ A production app needs contracts that do not break. Each contract needs a writte
 | U5 | Text input: IME composition, on desktop too | Beta | Open | The web uses native inputs. Check the gpui-ce text field with a CJK IME. |
 | U6 | Pointer: secondary button or `onContextMenu`, drag and drop, modal overlay that blocks pointer events | Beta | Open | GAPS G4, 7G-6, 7G-7; HANDOFF §10 item 6 |
 | U7 | System settings: dark mode, high contrast, text scale, reduced motion | Beta | Partial | Theme tokens exist. Next: follow each OS setting on both hosts, with tests. |
-| U8 | Localization: app strings in more than one language, the user's locale | 1.0 | Open | No design yet. Write `docs/I18N.md` first. |
-| U9 | Right-to-left layout | 1.0 | Open | Depends on U8 and gpui-ce support. |
+| U8 | Localization: app strings in more than one language, the user's locale | 1.0 | Open | Design draft: `docs/I18N.md` (catalogs, `t()`, host formatting with ICU4X and `Intl`). Next: answer I18N-Q1..Q5, then steps 1–4. |
+| U9 | Right-to-left layout | 1.0 | Open | `docs/I18N.md` §3.5. Risk: bidirectional text in gpui-ce (I18N-Q1). |
 | U10 | Motion: host-side transitions and springs | 1.0 | Open | UI-ADVANCED U2; HANDOFF §10 items 4, 7 |
 | U11 | Sound | 1.0 | Open | GAPS G7. 1.0 needs it (PR-Q2). |
 
