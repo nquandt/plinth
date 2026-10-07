@@ -557,7 +557,7 @@ The `kind`, `prop`, `event`, and enum ids are generated from one table in `wit/p
 | `plinth-ui` | The semantic tree arena, the op decoder, the layout rules, the adaptive shell, and the control library on `gpui-ce`. |
 | `plinth-runner-wasmtime` | A Wasm runner adapter for desktop and Android. |
 | `plinth-runner-web` | A Wasm runner adapter that uses the browser `WebAssembly` API and `jco` glue. |
-| `plinth-runner-aot` | Support for iOS. It builds the app module into native code at package time. |
+| `plinth-runner-wasmi` | A Wasm runner adapter on the `wasmi` interpreter: iOS (no JIT), and a check of the interpreter path on every platform (planned 2026-10-07). |
 | `plinth-host-api` | Traits for each host API, with one implementation module per platform. |
 | `plinth-host-{windows,macos,linux,web,ios,android}` | Thin binaries and entry points for each platform. |
 
@@ -576,7 +576,7 @@ trait WasmRunner {
 |---|---|---|
 | Windows, macOS, Linux | `wasmtime` + Cranelift | Cache compiled code on disk per artifact digest. |
 | Android | `wasmtime` + Cranelift | Android permits JIT. |
-| iOS | AOT: `wasm2c` (or WAMR AOT) → C → linked into the IPA | iOS does not permit JIT. Thus each iOS build includes its app as native code. The hub serves iOS apps as built IPAs or through an approved container app. *(Open question Q3.)* |
+| iOS | `wasmi` (an interpreter in Rust, no JIT) | iOS does not permit JIT. **Decided (owner, 2026-10-07): iOS runs Wasm with an interpreter**, so an app, a core or an update that arrives after install runs the same way as an embedded one (`docs/UPDATES.md`). `wasmi` keeps the host in Rust with gpui, its API is close to wasmtime's, and it has fuel (time limit) and a resource limiter (memory cap). WasmKit (Swift) was the other candidate. AOT (`wasm2c`) is at most a later, optional speed-up for an embedded app. *(Q3 is still open for the Hub on iOS.)* |
 | Web | browser `WebAssembly` | The core module and the app module run as two Wasm instances on one page (the side-module model of §18.3). A JavaScript host (`web/`) renders the tree as DOM elements (M5). |
 
 **Fuel and limits:** each runner enforces a time limit for each event (wasmtime epoch interruption on desktop) and a memory cap. If a handler is too slow, the host interrupts it and shows the standard "app is not responding" UI.

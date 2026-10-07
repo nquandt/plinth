@@ -156,6 +156,7 @@ The owner played Pong: about 63 ticks per second, but the ball "seems a little j
 
 ## 10. Next steps (in order)
 
+0a. **Decided 2026-10-07 (owner):** updates without a reinstall in three layers (native host, core, app), configured by the author: design draft `docs/UPDATES.md`. iOS runs Wasm with the `wasmi` interpreter (no JIT; SPEC §9.2). Order: finish the memory-leak work (monkey test, `big-list`), then `plinth-runner-wasmi` with the test suites on both runners, then core patch versions and the `core` policy (UPDATES §8).
 0. **Robustness (2026-10-07, `docs/GAPS.md` "Robustness"):** done: a compiler mutation test (`tests/robustness.rs`; run more cases with `PLINTH_FUZZ_ITERS=40000`), a large stack for each compile (`stacker`) and a nesting limit (`PL1000`), JSON of recursive types, limit tests, plain stop reasons on both hosts, and the web host's stopped state and banners. Open: R1 a time limit on the web (a Worker per app), R2 a web memory cap, R4 structure-aware mutations.
 
 1. **Smooth motion (§9), the rest:** steps 4–6 (transitions, a release build for play, frame cost). Ask the owner to play Pong again first.
