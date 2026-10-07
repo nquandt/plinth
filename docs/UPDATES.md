@@ -1,6 +1,6 @@
 # Updates without a reinstall (design draft)
 
-Status: draft from the owner's brainstorm of 2026-10-07. §8 step 1 (core patch versions and the author's `core` policy, SPEC.md §10.5) and steps 2-3 (the signed feed format and the desktop updater, with rollback) are done, 2026-10-07. The rest of this document is still a design draft. Open questions are marked UP-Q*.
+Status: draft from the owner's brainstorm of 2026-10-07. §9 step 1 (core patch versions and the author's `core` policy, SPEC.md §10.5) and steps 2-3 (the signed feed format and the desktop updater, with rollback) are done, 2026-10-07. The rest of this document is still a design draft. Open questions are marked UP-Q*.
 
 ## 1. Goal
 
@@ -40,8 +40,8 @@ So the update cases are:
    - `core = "pinned"`: one core build, by digest (recorded in the manifest at build time).
 
    The desktop host honors the policy when it links a package. Still open: the web host (today it always follows, SPEC §10.3) and the Hub's update check against a pinned app (it should refuse an update that would change the pinned core, `UP-Q1` follow-up).
-3. **An update feed. Done (2026-10-07).** A signed `feed.json` + `feed.json.sig` at a URL the author chooses (`plinth-package::feed`, §10 below). `plinth feed add` writes it from a built, signed package.
-4. **An updater in the host. Done (2026-10-07)**, for the desktop (`plinth-host-desktop::updater`): checks the feed in the background on start, downloads and verifies a newer version into the per-user updates folder, and runs the newest verified set from the next start on. The embedded `.plnt` stays the fallback. Still open: the web service worker cache (§8 step 4) and mobile (§8 step 6); a core fetched through the feed is accepted only by the digest the signed feed lists, because the project core key (item 5 below) does not exist yet (UP-Q4).
+3. **An update feed. Done (2026-10-07).** A signed `feed.json` + `feed.json.sig` at a URL the author chooses (`plinth-package::feed`, §7 below). `plinth feed add` writes it from a built, signed package.
+4. **An updater in the host. Done (2026-10-07)**, for the desktop (`plinth-host-desktop::updater`): checks the feed in the background on start, downloads and verifies a newer version into the per-user updates folder, and runs the newest verified set from the next start on. The embedded `.plnt` stays the fallback. Still open: the web service worker cache (§9 step 4) and mobile (§9 step 6); a core fetched through the feed is accepted only by the digest the signed feed lists, because the project core key (item 5 below) does not exist yet (UP-Q4).
 5. **A project key** that signs cores (HANDOFF open decisions: "the project Hub key"). Still open.
 
 ## 5. The author's configuration (built, 2026-10-07)
@@ -55,7 +55,7 @@ apply = "next-start"   # "prompt" | "next-start" | "live"
 core = "follow"        # "patch" | "pinned"
 ```
 
-`ProjectConfig` (`plinth.toml`) carries this into the manifest's `updates` field unchanged (`plinth_package::UpdatesConfig`). An old `plinth.toml`, or a manifest built before this field existed, has no `updates`: the app never checks for updates. `apply = "live"` is rejected at `plinth build` time (not implemented, UP-Q2); `apply = "prompt"` parses but the desktop host does not yet show the restart prompt it implies (§8 step 6 below) -- it runs `next-start` instead, so an author who sets it today still gets updates, just not the prompt.
+`ProjectConfig` (`plinth.toml`) carries this into the manifest's `updates` field unchanged (`plinth_package::UpdatesConfig`). An old `plinth.toml`, or a manifest built before this field existed, has no `updates`: the app never checks for updates. `apply = "live"` is rejected at `plinth build` time (not implemented, UP-Q2); `apply = "prompt"` parses but the desktop host does not yet show the restart prompt it implies (a stub dialog is still open work, see "What is open" below) -- it runs `next-start` instead, so an author who sets it today still gets updates, just not the prompt.
 
 `apply = "live"` replaces a running app and keeps its state, with the same signal snapshot that hot reload uses (SPEC §13). It needs care when the shape of the state changes.
 
@@ -67,7 +67,7 @@ core = "follow"        # "patch" | "pinned"
 - **Data:** the host stores the app version with the app's data; an `onUpgrade(fromVersion)` hook lets an app move its data. A rollback must not lose data that a newer version wrote (UP-Q5). **Still open:** this hook does not exist yet.
 - **Capabilities:** an update that declares a new capability asks the user again, as the Hub does. **Still open** for the desktop updater: today it does not compare the downloaded package's capabilities against the embedded one, so it does not yet ask again. A capability change in a self-update is a gap to close before this ships to real users (see "What is open" below).
 
-## 10. The feed format (built, 2026-10-07)
+## 7. The feed format (built, 2026-10-07)
 
 `plinth-package::feed` (`crates/plinth-package/src/feed.rs`). Two files, next to each other at the author's chosen URL:
 
@@ -115,23 +115,32 @@ core = "follow"        # "patch" | "pinned"
 
 `plinth feed add <feed-dir> <app.plnt> [--channel <name>] [--with-core]` (`crates/plinth-cli/src/feed_cmd.rs`) builds or updates `feed.json`/`feed.json.sig` from a signed package, with the loaded publisher identity (`plinth publisher init`). It refuses an unsigned package, or one signed by a different identity than the one loaded, and refuses to add a version to a feed that is for a different app id. Running it again for a newer version keeps every earlier entry; it never edits or removes one.
 
-## 7. Platforms
+## 8. Platforms
 
 - **Desktop:** first. A per-user install (as VS Code and Chrome do) means that no update needs administrator rights. A native update can also be a per-user self-update: download the new executable and swap it at the next start.
 - **Web:** the same layers: `plinth.js` is the native layer, plus `core.wasm` and the `.plnt`, all cached by a service worker and keyed by digest.
 - **iOS:** iOS does not permit JIT. **Decided (2026-10-07): iOS runs Wasm with the `wasmi` interpreter** (SPEC §9.2), so code that arrives after install runs the same way as embedded code. The App Store rules for downloaded, interpreted code are a separate question (UP-Q6); the owner wants the feature on every host anyway.
 - **Android:** wasmtime permits JIT; the same updater as the desktop.
 
-## 8. Order of work (proposal)
+## 9. Order of work (proposal)
 
 1. Core patch versions and the `core` policy (the other parts depend on them). **Done (2026-10-07).**
-2. The feed format and its signature (reuse the registry).
-3. The desktop updater for `plinth native`, with rollback.
+2. The feed format and its signature (reuse the registry). **Done (2026-10-07).**
+3. The desktop updater for `plinth native`, with rollback. **Done (2026-10-07).**
 4. The web service worker cache.
 5. `apply = "live"`.
 6. Mobile, with the `wasmi` runner (`plinth-runner-wasmi`).
 
-## 9. Open questions
+### 9.1 What is open, after steps 2-3
+
+- **`plinth run`** (running a `.plnt` directly, not a single-file export) does not check for updates; only a `plinth native` executable's embedded-payload path (`run_payload` in `plinth-cli`) does. This matches `docs/UPDATES.md` §1: the update mechanism is for a distributable the user already installed, not for a package a developer points the CLI at directly.
+- **`apply = "prompt"`** parses and is carried into the manifest, but the desktop host has no restart dialog yet; it behaves like `next-start`.
+- **Capability re-consent on update** (§6 "Capabilities") is not checked: the updater does not compare the downloaded package's declared capabilities against the embedded one before using it.
+- **`onUpgrade(fromVersion)`** (§6 "Data", UP-Q5) does not exist.
+- **The project core key** (item 5 of §4, UP-Q4) does not exist; a core from the feed is accepted only by the digest the signed feed lists.
+- **The web host and mobile** (§9 steps 4 and 6) are untouched.
+
+## 10. Open questions
 
 | # | Question |
 |---|---|

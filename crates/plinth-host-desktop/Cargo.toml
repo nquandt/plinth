@@ -40,3 +40,6 @@ wat = "1"
 # the Hub launch poll loop test (`tests/hub_host.rs`).
 gpui = { workspace = true, features = ["test-support"] }
 plinth-ui.workspace = true
+# A tiny real HTTP server for the updater's integration test
+# (`tests/updater_http.rs`), reusing `plinth registry serve`'s server.
+plinth-registry.workspace = true
