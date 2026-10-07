@@ -269,8 +269,8 @@ The compiler is written in Rust. It is one binary, `plinth`, together with the C
 
 | Item | Target |
 |---|---|
-| `plinth-rt` linked into each artifact | ≤ 60 KiB (after the linker stubs the unreachable functions; `wasm-opt -Oz` is optional). The raw `plinth-rt` has no strict limit: an app pays only for the runtime functions that it reaches. |
-| "Counter" app artifact | ≤ 80 KiB |
+| The runtime (`plinth-rt`, a core) | **No limit** (owner, 2026-10-06). The host owns the runtime and installs it one time; an app does not carry it. The tests print its size. A compact, tree-shaken app-plus-runtime bundle (for example for a native or single-file export) is a possible later improvement. |
+| The app code of the counter (`app.wasm` in its `.plnt`) | ≤ 8 KiB (it is about 2 KB; the guard shows that no runtime code went into the app) |
 | Typical small app (5 screens) | ≤ 300 KiB |
 
 ### 5.6 Errors and exceptions

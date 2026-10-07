@@ -104,7 +104,7 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 
 - A `.plnt` holds only app code and is universal.
 - Cores: inside a major version only add functions; each addition increments `CORE_MINOR`, gets an `ADDED_IN` entry, and needs every host (desktop runner AND `web/plinth-web.js`) to supply new WIT functions. Parallel branches: the coordinator renumbers at merge. Prefer generated code over new runtime functions.
-- Size: the linked runtime of the counter app stays within 60 KiB (`tests/e2e.rs`, SPEC §5.5). No `core::fmt`, `format!`, `HashMap` or Unicode tables in `plinth-rt`.
+- Size: the runtime has **no size limit** (owner, 2026-10-06; SPEC §5.5). Only the app code is guarded: the counter's `app.wasm` stays within 8 KiB (`tests/e2e.rs`). A tree-shaken app-plus-runtime bundle is a possible later improvement. Keep `plinth-rt` lean anyway (no `core::fmt`, `format!`, `HashMap` or Unicode tables), because every host loads it.
 - New UI is intent props or typed Level 2 style props from tokens; never raw pixels or colors. `ui-api.toml` ids are append-only.
 - Denied host calls never trap. `hub.manage` only for packages signed by a trusted Hub key.
 - Linear memory and a Rust runtime; the GC runs only between events.

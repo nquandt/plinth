@@ -140,11 +140,13 @@ async function startApp(coreBytes, plnt, opts = {}) {
   const label = new Map();
   const listen = new Map();
   let resultId;
+  let resultOps = 0; // text ops on the result node
   app.onCommit = (ops) => {
     for (const op of ops) {
       if (op.op === "text") {
         text.set(op.id, String(op.value));
         resultId ??= op.id;
+        if (op.id === resultId) resultOps++;
       } else if (op.op === "listen") {
         if (!listen.has(op.id)) listen.set(op.id, new Map());
         listen.get(op.id).set(op.event, op.handler);
@@ -156,16 +158,25 @@ async function startApp(coreBytes, plnt, opts = {}) {
   await app.load(coreBytes, appWasm, { log: () => {}, reportError: (s) => app.errors.push(s), manifestText: opts.manifestText ?? manifestText, ...opts });
   app.errors = [];
   app.init([]);
-  /** Presses the button `name` and waits for "done:…". */
+  /**
+   * Presses the button `name` and waits for "done:…", the text that the
+   * app sets when the call settles. The runtime does not send a text that
+   * did not change (GAPS G8), so a result equal to the previous one sends
+   * no op: then the test accepts it after a short quiet time.
+   */
   app.press = async (name) => {
     let handler;
     for (const [id, byEvent] of listen) if (label.get(id) === name) handler = byEvent.get(1);
     assert.ok(handler !== undefined, `no button ${name}`);
-    text.set(resultId, "pressed");
+    const before = resultOps;
+    const previous = text.get(resultId);
     app.onEvent({ kind: "ui", handler, event: 1, value: null });
     const start = Date.now();
-    while (!text.get(resultId).startsWith("done:")) {
-      if (Date.now() - start > 5000) throw new Error(`no result for ${name}: ${text.get(resultId)}`);
+    for (;;) {
+      const now = text.get(resultId);
+      if (now.startsWith("done:") && resultOps > before && now !== "done:") break;
+      if (now === previous && now.startsWith("done:") && Date.now() - start > 300) break;
+      if (Date.now() - start > 5000) throw new Error(`no result for ${name}: ${now}`);
       await new Promise((r) => setTimeout(r, 2));
     }
     assert.deepEqual(app.errors, [], "uncaught errors");
