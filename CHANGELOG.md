@@ -15,6 +15,7 @@ No public release yet. The first release is a Preview for Windows and the web. `
 - `docs/COMPATIBILITY.md`: the public contracts, their version rules and the deprecation policy.
 - `docs/PRIVACY.md`, `CODE_OF_CONDUCT.md`, and a pull request guide in `CONTRIBUTING.md`.
 - `docs/host-apis.md` "Support on each host": how each host API works on the desktop (wasmtime and wasmi) and the web, and the test that covers it on each host.
+- `docs/guides/`: guides for app authors (storage, network, updates, publishing, accessibility, performance), each with a checked example.
 
 ### Security
 

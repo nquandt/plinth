@@ -329,3 +329,9 @@ element). The app gets the capabilities that `plinth.toml` declares, with
 no consent screen, and its `store.kv` data stays in the browser storage of
 your site. A `plinth:net` request needs CORS on the target server. See
 SPEC.md §10.3.
+
+## 9. Next steps
+
+The [guides](guides/README.md) tell you how to do one task each: save
+data, use the network, ship updates, publish to a registry, make your app
+accessible, and keep it fast.

@@ -386,7 +386,7 @@ The control set is the **UI API**, versioned `MAJOR.MINOR`
 independently of the framework's own version. A minor version only adds
 controls or optional props; a major version can remove or change them.
 Your package declares the UI API version it was built against
-(`ui-api = "1.5"` in `plinth.toml`); a host supports a range. An unknown
+(`ui-api` in the package manifest, which `plinth build` writes); a host supports a range. An unknown
 prop is a compile error; a host that sees a control kind newer than it
 supports renders a placeholder and logs an error — it does not crash.
 
