@@ -222,8 +222,37 @@ fn risk_of(capability: &str) -> plinth_link::capabilities::Risk {
 
 /// Whether `capability`'s risk means it is granted at install without a
 /// question (`docs/HUB.md` §7.2).
-fn is_low_risk(capability: &str) -> bool {
+pub fn is_low_risk(capability: &str) -> bool {
     matches!(risk_of(capability), plinth_link::capabilities::Risk::None | plinth_link::capabilities::Risk::Low)
+}
+
+/// The capabilities in `new` that `old` does not declare, in the order of
+/// `new` (`docs/HUB.md` §7.3 step 3). A capability that `new` removes is
+/// not in the result: a removal needs no consent.
+pub fn added_capabilities(old: &[String], new: &[String]) -> Vec<String> {
+    new.iter().filter(|c| !old.contains(c)).cloned().collect()
+}
+
+/// The capabilities in `declared` that need the user's decision, in the
+/// order of `declared` (`docs/HUB.md` §7.2, §7.3): a Medium or High
+/// capability for which `decided` is false. A `None`/`Low` capability is
+/// granted by default and never needs a decision. The Hub
+/// (`Hub::needs_consent`) and the desktop self-updater
+/// (`plinth-host-desktop::updater`) both use this rule.
+pub fn undecided(declared: &[String], decided: impl Fn(&str) -> bool) -> Vec<String> {
+    declared.iter().filter(|c| !decided(c.as_str()) && !is_low_risk(c)).cloned().collect()
+}
+
+/// Whether a declared capability is granted, from its recorded decision
+/// (`docs/HUB.md` §7.1, §7.2): allowed is granted, refused is not, and no
+/// decision is granted only for a `None`/`Low` capability. The global
+/// deny list (`Hub::policy_denied`) is a separate, later step.
+pub fn is_granted(capability: &str, decision: Option<Decision>) -> bool {
+    match decision {
+        Some(Decision::Allowed) => true,
+        Some(Decision::Refused) => false,
+        None => is_low_risk(capability),
+    }
 }
 
 /// Key: `"<app id>\u{1f}<capability>"` (the unit separator cannot appear in
@@ -646,11 +675,8 @@ impl Hub {
                 policy.refuse(cap.clone());
                 continue;
             }
-            match grants.get(cap) {
-                Some(Grant { decision: Decision::Allowed, .. }) => {}
-                Some(Grant { decision: Decision::Refused, .. }) => policy.refuse(cap.clone()),
-                None if is_low_risk(cap) => {}
-                None => policy.refuse(cap.clone()),
+            if !is_granted(cap, grants.get(cap).map(|g| g.decision)) {
+                policy.refuse(cap.clone());
             }
         }
         Ok(policy)
@@ -702,7 +728,7 @@ impl Hub {
     /// even if, for some reason, no grant was recorded yet).
     pub fn needs_consent(&self, id: &str, declared: &[String]) -> Result<Vec<String>> {
         let grants = self.grants(id)?;
-        Ok(declared.iter().filter(|c| !grants.contains_key(c.as_str()) && !is_low_risk(c)).cloned().collect())
+        Ok(undecided(declared, |c| grants.contains_key(c)))
     }
 
     /// The bytes of one specific installed version of `id` (not
@@ -886,7 +912,7 @@ pub fn check_updates(hub: &Hub, client: &dyn SourceClient, only: Option<&str>) -
         let found = latest.filter(|l| is_newer(&l.version, &current)).map(|l| {
             let old: Vec<String> = newest.as_ref().map(|v| v.capabilities.clone()).unwrap_or_default();
             AvailableUpdate {
-                new_capabilities: l.capabilities.iter().filter(|c| !old.contains(c)).cloned().collect(),
+                new_capabilities: added_capabilities(&old, &l.capabilities),
                 version: l.version,
                 source: reg.name.clone(),
             }
@@ -954,7 +980,7 @@ pub fn apply_update(hub: &Hub, client: &dyn SourceClient, id: &str) -> Result<Op
     hub.set_available_update(id, None)?;
     let old: Vec<String> = newest.map(|v| v.capabilities).unwrap_or_default();
     let new_version = hub.get(id)?.and_then(|e| e.versions.into_iter().find(|v| v.version == latest.version));
-    let new_capabilities = new_version.map(|v| v.capabilities).unwrap_or_default().into_iter().filter(|c| !old.contains(c)).collect();
+    let new_capabilities = added_capabilities(&old, &new_version.map(|v| v.capabilities).unwrap_or_default());
     Ok(Some(Updated { id: id.to_owned(), from: current, to: latest.version, source: reg.name, new_capabilities }))
 }
 

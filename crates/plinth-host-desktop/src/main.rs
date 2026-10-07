@@ -4,14 +4,15 @@
 //! (SPEC.md §10.3): with a `.plnt` payload at its end, it runs that app.
 
 use anyhow::{Context as _, Result};
-use plinth_host_desktop::{HostApp, init_logging, run};
+use plinth_host_desktop::{HostApp, init_logging, run, run_payload};
 use std::path::PathBuf;
 
 fn main() -> Result<()> {
     init_logging();
     let exe = std::env::current_exe()?;
     if let Some(plnt) = plinth_package::read_payload(&exe)? {
-        return run(HostApp::from_bytes(plnt, &exe)?, None);
+        // With the updater (`docs/UPDATES.md` §5, §6, §8).
+        return run_payload(plnt, &exe);
     }
     let path = std::env::args().nth(1).map(PathBuf::from).context("usage: plinth-host <app.plnt | app.wasm>")?;
     run(HostApp::load(&path)?, None)

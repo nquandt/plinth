@@ -14,8 +14,31 @@
 //! ```text
 //! <updates dir>/<app id>/
 //!   state.json      the rollback state machine (`State`)
-//!   downloaded.plnt  the newest verified package (may not exist yet)
+//!   downloaded.plnt  the newest verified package that the user accepted
+//!                    (may not exist yet)
+//!   pending.plnt     a newer verified package that the next start checks
+//!                    for new capabilities before it runs (may not exist)
 //! ```
+//!
+//! ## Re-consent (`docs/UPDATES.md` §6 "Capabilities")
+//!
+//! `check` stores a new version as `pending.plnt`. At the next start,
+//! `prepare_start` compares the capabilities of that version with the
+//! capabilities of the embedded package (the user accepted these when
+//! they installed the executable) and with the decisions that the user
+//! made for earlier updates. It uses the same rule as the Hub
+//! (`plinth_hub::added_capabilities`, `plinth_hub::undecided`,
+//! `docs/HUB.md` §7.3 step 3):
+//!
+//! - No new Medium or High capability: the pending version becomes the
+//!   downloaded version, with no question.
+//! - A new Medium or High capability with no decision: the host shows the
+//!   consent window for these capabilities only. Continue records the
+//!   decisions (`accept`) and runs the new version; a capability set to
+//!   "Don't allow" is refused in the policy. Cancel (`decline`) keeps the
+//!   previous version. The host does not ask again for the same version;
+//!   it asks again only when a newer version arrives.
+//! - A removed capability needs no consent.
 //!
 //! `<updates dir>` is `PLINTH_UPDATES_DIR`, or `%LOCALAPPDATA%\plinth\
 //! updates` (next to the Hub data dir, `docs/UPDATES.md` §8 step 4)
@@ -24,8 +47,10 @@
 
 use anyhow::{Context as _, Result, bail};
 use plinth_package::feed::{Feed, FeedVersion};
-use plinth_package::{Package, is_newer};
+use plinth_hub::Decision;
+use plinth_package::{ApplyPolicy, Package, is_newer};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// A new set stops at start this many times in a row before the host
@@ -63,6 +88,10 @@ fn package_path(dir: &Path) -> PathBuf {
     dir.join("downloaded.plnt")
 }
 
+fn pending_path(dir: &Path) -> PathBuf {
+    dir.join("pending.plnt")
+}
+
 /// The rollback state machine's persisted state (`docs/UPDATES.md` §6).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -85,6 +114,21 @@ pub struct State {
     /// the user.
     #[serde(default)]
     pub rolled_back: bool,
+    /// The version at `pending.plnt`: newer than the downloaded version,
+    /// verified, and not yet started. `prepare_start` makes it the
+    /// downloaded version, after consent if it adds a capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_version: Option<String>,
+    /// A pending version that the user refused on the consent window
+    /// (Cancel). The host does not ask again for this version; a newer
+    /// version replaces it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declined_version: Option<String>,
+    /// The user's decisions for the capabilities that an update added, by
+    /// capability name. As in the Hub, a decision does not depend on the
+    /// version (`docs/HUB.md` §7.3 step 3).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub grants: BTreeMap<String, Decision>,
 }
 
 impl State {
@@ -180,6 +224,166 @@ pub fn rollback_report(dir: &Path) -> Option<String> {
     }
 }
 
+// -- Re-consent for new capabilities (`docs/UPDATES.md` §6) -----------------
+
+/// What the host must do with a new version before it runs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateConsent {
+    /// The new version adds no Medium or High capability without a
+    /// decision: run it with no question.
+    Run,
+    /// Show the consent window for these capabilities (in manifest order)
+    /// first.
+    Ask(Vec<String>),
+    /// The user already refused this version: keep the previous version,
+    /// and do not ask again.
+    Declined,
+}
+
+/// Decides whether a new version needs consent before it runs. `old` is
+/// the capabilities of the embedded package (the user accepted them at
+/// install), `new` the capabilities of the new version, `grants` the
+/// decisions that the user made for earlier updates, and `declined` the
+/// version the user refused, if any. The rule is the Hub's
+/// (`docs/HUB.md` §7.3 step 3): only an added Medium or High capability
+/// with no decision needs consent; a removed capability needs none.
+pub fn update_consent(old: &[String], new: &[String], grants: &BTreeMap<String, Decision>, version: &str, declined: Option<&str>) -> UpdateConsent {
+    let ask = plinth_hub::undecided(&plinth_hub::added_capabilities(old, new), |c| grants.contains_key(c));
+    if ask.is_empty() {
+        UpdateConsent::Run
+    } else if declined == Some(version) {
+        UpdateConsent::Declined
+    } else {
+        UpdateConsent::Ask(ask)
+    }
+}
+
+/// The capabilities of `declared` that the policy must refuse when the
+/// downloaded set runs: each capability that the update added (relative
+/// to `old`, the embedded package) and that is not granted by the Hub's
+/// rule (`plinth_hub::is_granted`): refused by the user, or Medium/High
+/// with no decision. A capability of the embedded package stays granted.
+pub fn refused_capabilities(old: &[String], declared: &[String], grants: &BTreeMap<String, Decision>) -> Vec<String> {
+    plinth_hub::added_capabilities(old, declared).into_iter().filter(|c| !plinth_hub::is_granted(c, grants.get(c).copied())).collect()
+}
+
+/// The same as `refused_capabilities`, with the grants that are stored in
+/// `dir`.
+pub fn refused_for_run(dir: &Path, old: &[String], declared: &[String]) -> Vec<String> {
+    refused_capabilities(old, declared, &State::load(dir).grants)
+}
+
+/// A new version that needs consent before it runs: what the consent
+/// window shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateRequest {
+    pub version: String,
+    pub app_name: String,
+    pub publisher: String,
+    /// The signer's key id, for the consent window's publisher line.
+    pub signer: Option<String>,
+    /// Each capability that needs a decision, with the app's reason.
+    pub capabilities: Vec<(String, String)>,
+}
+
+/// Prepares this start (`docs/UPDATES.md` §6). If a pending version
+/// exists and needs no consent, it becomes the downloaded version. If it
+/// needs consent, this returns the request; the caller shows the consent
+/// window and calls `accept` or `decline`. A pending version that is not
+/// newer than the downloaded or embedded version, or that is not a valid
+/// package, is removed. Call `pick` after this.
+pub fn prepare_start(dir: &Path, embedded_version: &str, embedded_capabilities: &[String]) -> Option<UpdateRequest> {
+    let mut state = State::load(dir);
+    let version = state.pending_version.clone()?;
+    let accepted = state.downloaded_version.clone().filter(|d| is_newer(d, embedded_version)).unwrap_or_else(|| embedded_version.to_owned());
+    let pkg = std::fs::read(pending_path(dir)).ok().and_then(|b| Package::read(&b).ok());
+    let pkg = match pkg {
+        Some(pkg) if is_newer(&version, &accepted) && pkg.manifest.version == version => pkg,
+        _ => {
+            let _ = std::fs::remove_file(pending_path(dir));
+            state.pending_version = None;
+            let _ = state.save(dir);
+            return None;
+        }
+    };
+    let declared: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
+    match update_consent(embedded_capabilities, &declared, &state.grants, &version, state.declined_version.as_deref()) {
+        UpdateConsent::Run => {
+            if let Err(e) = promote(dir) {
+                log::warn!("cannot use the update to version {version}: {e:#}");
+            }
+            None
+        }
+        UpdateConsent::Declined => None,
+        UpdateConsent::Ask(ask) => {
+            let capabilities = ask
+                .into_iter()
+                .map(|c| {
+                    let why = pkg.manifest.capabilities.iter().find(|m| m.name == c).map(|m| m.rationale.clone()).unwrap_or_default();
+                    (c, why)
+                })
+                .collect();
+            let signer = plinth_package::signature::verify(&pkg).ok().flatten().map(|s| s.key);
+            Some(UpdateRequest { version, app_name: pkg.manifest.name.clone(), publisher: pkg.manifest.publisher.clone(), signer, capabilities })
+        }
+    }
+}
+
+/// Moves the pending package to the downloaded slot, and resets the
+/// rollback counter for it.
+fn promote(dir: &Path) -> Result<()> {
+    let mut state = State::load(dir);
+    let version = state.pending_version.clone().context("no pending version")?;
+    std::fs::rename(pending_path(dir), package_path(dir)).with_context(|| format!("rename to {}", package_path(dir).display()))?;
+    state.downloaded_version = Some(version);
+    state.pending_version = None;
+    state.declined_version = None;
+    state.failures = 0;
+    state.rolled_back = false;
+    state.save(dir)
+}
+
+/// The user accepted the update to `version` on the consent window:
+/// records each decision (`true` is allowed), and makes the pending
+/// version the downloaded version. The next `pick` runs it.
+pub fn accept(dir: &Path, version: &str, decisions: &[(String, bool)]) -> Result<()> {
+    let mut state = State::load(dir);
+    if state.pending_version.as_deref() != Some(version) {
+        bail!("version {version} is not the pending update");
+    }
+    for (capability, allowed) in decisions {
+        state.grants.insert(capability.clone(), if *allowed { Decision::Allowed } else { Decision::Refused });
+    }
+    state.save(dir)?;
+    promote(dir)
+}
+
+/// The user refused the update to `version` on the consent window
+/// (Cancel): the previous version keeps running, and the host does not
+/// ask again for this version. A newer version from the feed replaces it
+/// (`check`) and is asked for again.
+pub fn decline(dir: &Path, version: &str) -> Result<()> {
+    let mut state = State::load(dir);
+    if state.pending_version.as_deref() != Some(version) {
+        bail!("version {version} is not the pending update");
+    }
+    state.declined_version = Some(version.to_owned());
+    state.save(dir)
+}
+
+// -- `apply = "prompt"` (`docs/UPDATES.md` §5) -------------------------------
+
+/// Whether the host shows the restart prompt after a feed check, and for
+/// which version: only for `apply = "prompt"`, and only when the check
+/// stored a newer version. `next-start` (and `live`, which `plinth build`
+/// refuses) never prompt.
+pub fn prompt_for(apply: ApplyPolicy, outcome: &CheckOutcome) -> Option<String> {
+    match (apply, outcome) {
+        (ApplyPolicy::Prompt, CheckOutcome::Updated(version)) => Some(version.clone()),
+        _ => None,
+    }
+}
+
 /// Fetches bytes over HTTP/HTTPS with a short timeout, for the feed and
 /// the files it names. Kept separate from `check` so tests can supply a
 /// fake fetcher with no real network.
@@ -221,8 +425,8 @@ pub enum CheckOutcome {
     /// No newer, verified version than what is already downloaded (or
     /// embedded, if nothing is downloaded).
     UpToDate,
-    /// A newer version was verified and stored; it will run on the next
-    /// start.
+    /// A newer version was verified and stored as the pending version; the
+    /// next start runs it (after consent, if it adds a capability).
     Updated(String),
 }
 
@@ -266,24 +470,33 @@ pub fn check(
     if feed.id != app_id {
         bail!("the feed at {feed_url} is for `{}`, not `{app_id}`", feed.id);
     }
+    // The baseline is the newest version this host has: pending (also
+    // a declined one, so that the same version is not offered again),
+    // downloaded, or running.
     let state = State::load(dir);
-    let baseline = state.downloaded_version.as_deref().unwrap_or(current_version);
+    let mut baseline = current_version;
+    for v in [state.downloaded_version.as_deref(), state.pending_version.as_deref()].into_iter().flatten() {
+        if is_newer(v, baseline) {
+            baseline = v;
+        }
+    }
     let Some(entry) = feed.newest(channel) else { return Ok(CheckOutcome::UpToDate) };
     if !is_newer(&entry.version, baseline) {
         return Ok(CheckOutcome::UpToDate);
     }
     download_and_store(dir, feed_url, entry, &fetch)?;
+    // The new version waits in `pending.plnt`; `prepare_start` checks
+    // its capabilities at the next start (`docs/UPDATES.md` §6).
     let mut state = State::load(dir);
-    state.downloaded_version = Some(entry.version.clone());
-    state.failures = 0;
-    state.rolled_back = false;
+    state.pending_version = Some(entry.version.clone());
+    state.declined_version = None;
     state.save(dir)?;
     Ok(CheckOutcome::Updated(entry.version.clone()))
 }
 
 /// Downloads and verifies `entry`'s package (and its core, when the feed
 /// names one this host does not already have, SPEC.md §10.5), then stores
-/// the package at `downloaded.plnt`. The core, once the project core key
+/// the package at `pending.plnt`. The core, once the project core key
 /// exists (UP-Q4), will be installed the same way `plinth core install`
 /// does; for now this only verifies the core's digest against the signed
 /// feed's listing and leaves installing it to the author's existing
@@ -314,9 +527,9 @@ fn download_and_store(dir: &Path, feed_url: &str, entry: &FeedVersion, fetch: &i
         plinth_link::cores::install(&core_bytes).with_context(|| format!("install core {}", core_source.version))?;
     }
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-    let tmp = dir.join(format!(".downloaded.plnt.tmp-{}", std::process::id()));
+    let tmp = dir.join(format!(".pending.plnt.tmp-{}", std::process::id()));
     std::fs::write(&tmp, &bytes).with_context(|| format!("write {}", tmp.display()))?;
-    std::fs::rename(&tmp, package_path(dir)).with_context(|| format!("rename to {}", package_path(dir).display()))?;
+    std::fs::rename(&tmp, pending_path(dir)).with_context(|| format!("rename to {}", pending_path(dir).display()))?;
     Ok(())
 }
 
@@ -330,9 +543,13 @@ mod tests {
         PublisherIdentity { name: name.into(), signing_key: ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng) }
     }
 
-    fn package(identity: &PublisherIdentity, id: &str, version: &str) -> (Vec<u8>, Package) {
+    fn package(identity: &PublisherIdentity, id: &str, version: &str, caps: &[&str]) -> (Vec<u8>, Package) {
         let wasm = b"\0asm fake component".to_vec();
-        let cfg = ProjectConfig::parse(&format!("id = \"{id}\"\nname = \"App\"\nversion = \"{version}\"\npublisher = \"{}\"\n", identity.name)).unwrap();
+        let mut toml = format!("id = \"{id}\"\nname = \"App\"\nversion = \"{version}\"\npublisher = \"{}\"\n", identity.name);
+        for cap in caps {
+            toml.push_str(&format!("\n[[capabilities]]\nname = \"{cap}\"\nrationale = \"needed for {cap}\"\n"));
+        }
+        let cfg = ProjectConfig::parse(&toml).unwrap();
         let manifest = cfg.manifest("1.0", "plinth-rt/test", None, &wasm);
         let mut pkg = Package { manifest, component: wasm, assets: Vec::new(), signature: None };
         pkg.signature = Some(plinth_package::signature::sign(&pkg, identity).unwrap());
@@ -362,8 +579,13 @@ mod tests {
         /// its signature, and the package from in-memory bytes (no real
         /// network or files on disk other than this fixture's own temp
         /// dir).
-        fn fetcher(&self, signer: &PublisherIdentity, version: &str) -> (impl Fn(&str) -> Result<Vec<u8>>, String) {
-            let (pkg_bytes, _pkg) = package(&self.identity, &self.app_id, version);
+        fn fetcher(&self, signer: &PublisherIdentity, version: &str) -> (impl Fn(&str) -> Result<Vec<u8>> + use<>, String) {
+            self.fetcher_with(signer, version, &[])
+        }
+
+        /// Like `fetcher`, for a package that declares `caps`.
+        fn fetcher_with(&self, signer: &PublisherIdentity, version: &str, caps: &[&str]) -> (impl Fn(&str) -> Result<Vec<u8>> + use<>, String) {
+            let (pkg_bytes, _pkg) = package(&self.identity, &self.app_id, version, caps);
             let digest = sha256_hex(&pkg_bytes);
             let mut feed = feed::Feed { schema: feed::SCHEMA.into(), id: self.app_id.clone(), channels: Default::default() };
             feed.add_version(
@@ -394,6 +616,9 @@ mod tests {
         let (fetch, feed_url) = fx.fetcher(&fx.identity, "1.1.0");
         let outcome = check(&fx.dir(), &fx.app_id, &feed_url, "stable", "1.0.0", &fx.identity.key_id(), fetch).unwrap();
         assert_eq!(outcome, CheckOutcome::Updated("1.1.0".into()));
+        assert!(pending_path(&fx.dir()).is_file());
+        assert!(matches!(pick(&fx.dir(), "1.0.0"), Pick::Embedded), "a pending version does not run before prepare_start");
+        assert_eq!(prepare_start(&fx.dir(), "1.0.0", &[]), None, "no new capability: no question");
         assert!(package_path(&fx.dir()).is_file());
         match pick(&fx.dir(), "1.0.0") {
             Pick::Downloaded(_) => {}
@@ -451,6 +676,7 @@ mod tests {
         let (fetch, feed_url) = fx.fetcher(&fx.identity, "1.1.0");
         check(&fx.dir(), &fx.app_id, &feed_url, "stable", "1.0.0", &fx.identity.key_id(), fetch).unwrap();
         let dir = fx.dir();
+        assert_eq!(prepare_start(&dir, "1.0.0", &[]), None);
         let picked = match pick(&dir, "1.0.0") {
             Pick::Downloaded(p) => Pick::Downloaded(p),
             Pick::Embedded => panic!(),
@@ -468,6 +694,7 @@ mod tests {
         let (fetch, feed_url) = fx.fetcher(&fx.identity, "1.1.0");
         check(&fx.dir(), &fx.app_id, &feed_url, "stable", "1.0.0", &fx.identity.key_id(), fetch).unwrap();
         let dir = fx.dir();
+        assert_eq!(prepare_start(&dir, "1.0.0", &[]), None);
         let picked = match pick(&dir, "1.0.0") {
             Pick::Downloaded(p) => Pick::Downloaded(p),
             Pick::Embedded => panic!(),
@@ -476,5 +703,133 @@ mod tests {
         report_success(&dir, &picked);
         report_failure(&dir, &picked);
         assert!(matches!(pick(&dir, "1.0.0"), Pick::Downloaded(_)), "the reset means this is only the first failure again");
+    }
+
+    // -- Re-consent (`docs/UPDATES.md` §6 "Capabilities") ----------------
+
+    fn caps(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn version_of(picked: &Pick) -> String {
+        match picked {
+            Pick::Downloaded(p) => Package::read(&std::fs::read(p).unwrap()).unwrap().manifest.version,
+            Pick::Embedded => "embedded".into(),
+        }
+    }
+
+    #[test]
+    fn update_consent_rules() {
+        let none = BTreeMap::new();
+        let old = caps(&["store.kv", "clipboard.read"]);
+        // The same capabilities, or fewer: no question.
+        assert_eq!(update_consent(&old, &old, &none, "1.1.0", None), UpdateConsent::Run);
+        assert_eq!(update_consent(&old, &caps(&["store.kv"]), &none, "1.1.0", None), UpdateConsent::Run, "a removed capability needs no consent");
+        // An added Low-risk capability is granted by default (as in the Hub).
+        assert_eq!(update_consent(&old, &caps(&["store.kv", "clipboard.read", "clipboard.write"]), &none, "1.1.0", None), UpdateConsent::Run);
+        // An added Medium capability (and an unknown one) needs a decision, in manifest order.
+        let new = caps(&["net", "store.kv", "net.local", "clipboard.read"]);
+        assert_eq!(update_consent(&old, &new, &none, "1.1.0", None), UpdateConsent::Ask(caps(&["net", "net.local"])));
+        // A decision from an earlier update counts, allowed or refused.
+        let grants = BTreeMap::from([("net".to_string(), Decision::Allowed), ("net.local".to_string(), Decision::Refused)]);
+        assert_eq!(update_consent(&old, &new, &grants, "1.1.0", None), UpdateConsent::Run);
+        let some = BTreeMap::from([("net".to_string(), Decision::Allowed)]);
+        assert_eq!(update_consent(&old, &new, &some, "1.1.0", None), UpdateConsent::Ask(caps(&["net.local"])));
+        // A declined version is not asked again; a newer one is.
+        assert_eq!(update_consent(&old, &new, &none, "1.1.0", Some("1.1.0")), UpdateConsent::Declined);
+        assert_eq!(update_consent(&old, &new, &none, "1.2.0", Some("1.1.0")), UpdateConsent::Ask(caps(&["net", "net.local"])));
+    }
+
+    #[test]
+    fn refused_capabilities_rules() {
+        let old = caps(&["clipboard.read"]);
+        let declared = caps(&["clipboard.read", "clipboard.write", "net", "net.local", "hub.manage"]);
+        let grants = BTreeMap::from([("net".to_string(), Decision::Allowed), ("net.local".to_string(), Decision::Refused)]);
+        // `clipboard.read` came with the install; `clipboard.write` is Low;
+        // `net` is allowed; `net.local` is refused; `hub.manage` has no decision.
+        assert_eq!(refused_capabilities(&old, &declared, &grants), caps(&["net.local", "hub.manage"]));
+    }
+
+    #[test]
+    fn prompt_only_for_apply_prompt_and_a_new_version() {
+        let updated = CheckOutcome::Updated("1.1.0".into());
+        assert_eq!(prompt_for(ApplyPolicy::Prompt, &updated), Some("1.1.0".into()));
+        assert_eq!(prompt_for(ApplyPolicy::Prompt, &CheckOutcome::UpToDate), None);
+        assert_eq!(prompt_for(ApplyPolicy::NextStart, &updated), None);
+        assert_eq!(prompt_for(ApplyPolicy::Live, &updated), None);
+    }
+
+    #[test]
+    fn a_new_capability_asks_and_cancel_keeps_the_previous_version() {
+        let fx = Fixture::new();
+        let dir = fx.dir();
+        let embedded = caps(&["store.kv"]);
+        // 1.1.0 adds no capability: it runs with no question.
+        let (fetch, feed_url) = fx.fetcher_with(&fx.identity, "1.1.0", &["store.kv"]);
+        check(&dir, &fx.app_id, &feed_url, "stable", "1.0.0", &fx.identity.key_id(), fetch).unwrap();
+        assert_eq!(prepare_start(&dir, "1.0.0", &embedded), None);
+        assert_eq!(version_of(&pick(&dir, "1.0.0")), "1.1.0");
+
+        // 1.2.0 adds `net.local` (Medium): the next start asks.
+        let (fetch, feed_url) = fx.fetcher_with(&fx.identity, "1.2.0", &["store.kv", "net.local"]);
+        assert_eq!(check(&dir, &fx.app_id, &feed_url, "stable", "1.0.0", &fx.identity.key_id(), fetch).unwrap(), CheckOutcome::Updated("1.2.0".into()));
+        let request = prepare_start(&dir, "1.0.0", &embedded).expect("consent for net.local");
+        assert_eq!(request.version, "1.2.0");
+        assert_eq!(request.capabilities, vec![("net.local".to_string(), "needed for net.local".to_string())]);
+        assert_eq!(request.signer, Some(fx.identity.key_id()));
+        // Until the user decides, the previous version runs.
+        assert_eq!(version_of(&pick(&dir, "1.0.0")), "1.1.0");
+
+        // Cancel: the previous version keeps running, and 1.2.0 is not offered again.
+        decline(&dir, "1.2.0").unwrap();
+        assert_eq!(version_of(&pick(&dir, "1.0.0")), "1.1.0");
+        assert_eq!(prepare_start(&dir, "1.0.0", &embedded), None, "a declined version is not asked again");
+        let (fetch, feed_url) = fx.fetcher_with(&fx.identity, "1.2.0", &["store.kv", "net.local"]);
+        assert_eq!(check(&dir, &fx.app_id, &feed_url, "stable", "1.0.0", &fx.identity.key_id(), fetch).unwrap(), CheckOutcome::UpToDate);
+
+        // A newer version asks again; Continue runs it with the decision.
+        let (fetch, feed_url) = fx.fetcher_with(&fx.identity, "1.3.0", &["store.kv", "net.local"]);
+        assert_eq!(check(&dir, &fx.app_id, &feed_url, "stable", "1.0.0", &fx.identity.key_id(), fetch).unwrap(), CheckOutcome::Updated("1.3.0".into()));
+        let request = prepare_start(&dir, "1.0.0", &embedded).expect("asked again for a newer version");
+        assert_eq!(request.version, "1.3.0");
+        accept(&dir, "1.3.0", &[("net.local".into(), true)]).unwrap();
+        assert_eq!(version_of(&pick(&dir, "1.0.0")), "1.3.0");
+        assert!(refused_for_run(&dir, &embedded, &caps(&["store.kv", "net.local"])).is_empty());
+
+        // The decision stays: a later version with the same capability runs with no question.
+        let (fetch, feed_url) = fx.fetcher_with(&fx.identity, "1.4.0", &["net.local"]);
+        check(&dir, &fx.app_id, &feed_url, "stable", "1.0.0", &fx.identity.key_id(), fetch).unwrap();
+        assert_eq!(prepare_start(&dir, "1.0.0", &embedded), None);
+        assert_eq!(version_of(&pick(&dir, "1.0.0")), "1.4.0");
+    }
+
+    #[test]
+    fn continue_with_dont_allow_runs_the_update_without_that_capability() {
+        let fx = Fixture::new();
+        let dir = fx.dir();
+        let (fetch, feed_url) = fx.fetcher_with(&fx.identity, "1.1.0", &["clipboard.read"]);
+        check(&dir, &fx.app_id, &feed_url, "stable", "1.0.0", &fx.identity.key_id(), fetch).unwrap();
+        let request = prepare_start(&dir, "1.0.0", &[]).expect("consent for clipboard.read");
+        assert_eq!(request.capabilities.len(), 1);
+        // With nothing downloaded before, the embedded version runs until the user decides.
+        assert!(matches!(pick(&dir, "1.0.0"), Pick::Embedded));
+        accept(&dir, "1.1.0", &[("clipboard.read".into(), false)]).unwrap();
+        assert_eq!(version_of(&pick(&dir, "1.0.0")), "1.1.0");
+        assert_eq!(refused_for_run(&dir, &[], &caps(&["clipboard.read"])), caps(&["clipboard.read"]));
+        // Accept and decline only act on the pending version.
+        assert!(accept(&dir, "1.1.0", &[]).is_err());
+        assert!(decline(&dir, "9.9.9").is_err());
+    }
+
+    #[test]
+    fn a_bad_pending_package_is_removed() {
+        let fx = Fixture::new();
+        let dir = fx.dir();
+        let (fetch, feed_url) = fx.fetcher(&fx.identity, "1.1.0");
+        check(&dir, &fx.app_id, &feed_url, "stable", "1.0.0", &fx.identity.key_id(), fetch).unwrap();
+        std::fs::write(pending_path(&dir), b"not a package").unwrap();
+        assert_eq!(prepare_start(&dir, "1.0.0", &[]), None);
+        assert!(!pending_path(&dir).exists());
+        assert!(matches!(pick(&dir, "1.0.0"), Pick::Embedded));
     }
 }

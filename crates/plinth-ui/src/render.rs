@@ -5,7 +5,7 @@
 use crate::theme::{Tokens, WidthClass, icon_glyph, with_alpha};
 use crate::tree::{Node, Tree};
 use gpui::{
-    AnyElement, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FocusHandle, FontWeight, Image, ImageFormat,
+    AnyElement, App, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FocusHandle, FontWeight, Image, ImageFormat,
     DispatchPhase, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
     Point, Render, SharedString, Stateful, Subscription, Window, anchored, canvas, deferred, div, img, prelude::*, px,
 };
@@ -238,6 +238,9 @@ struct ActiveDialog {
     input: Option<Entity<EditableTextState>>,
 }
 
+/// What the update prompt's "Restart" button does (the host decides).
+type OnRestart = Box<dyn FnOnce(&mut App)>;
+
 pub struct PlinthRoot {
     tree: Tree,
     guest: Box<dyn GuestPort>,
@@ -285,6 +288,9 @@ pub struct PlinthRoot {
     /// overscan). A row box with fixed-width children builds only the ones
     /// in it. `None`: build all (docs/GAPS.md 7G-12).
     cull_x: Cell<Option<(f32, f32)>>,
+    /// The host-owned update prompt (`docs/UPDATES.md` §5, `apply =
+    /// "prompt"`): `Some` while it shows. It holds what "Restart" does.
+    update_prompt: Option<OnRestart>,
 }
 
 impl PlinthRoot {
@@ -327,6 +333,7 @@ impl PlinthRoot {
             list_states: std::cell::RefCell::new(HashMap::new()),
             scroll_handles: std::cell::RefCell::new(HashMap::new()),
             cull_x: Cell::new(None),
+            update_prompt: None,
         };
         root.apply_commits(initial_commits);
         root.sync_dialog(cx);
@@ -356,6 +363,7 @@ impl PlinthRoot {
             list_states: std::cell::RefCell::new(HashMap::new()),
             scroll_handles: std::cell::RefCell::new(HashMap::new()),
             cull_x: Cell::new(None),
+            update_prompt: None,
         }
     }
 
@@ -930,6 +938,7 @@ impl Render for PlinthRoot {
             .flex_col()
             .child(self.render_stopped_banner(&t))
             .children(self.render_error_banner(&t, cx))
+            .children(self.render_update_prompt(&t, cx))
             .child(match self.tree.current_root() {
                 Some(root) => self.render_screen(root, &t, cx),
                 None => div().flex_1().into_any_element(),
@@ -1093,6 +1102,67 @@ impl PlinthRoot {
                         .child(div().text_xs().child(last)),
                 )
                 .child(dismiss)
+                .into_any_element(),
+        )
+    }
+
+    /// Shows the host-owned update prompt (`docs/UPDATES.md` §5): "An
+    /// update is ready. Restart now?" with "Restart" and "Later". It is
+    /// not modal; the app stays usable. "Restart" removes the prompt and
+    /// calls `on_restart`; "Later" only removes the prompt. A second call
+    /// replaces the first.
+    pub fn show_update_prompt(&mut self, on_restart: impl FnOnce(&mut App) + 'static, cx: &mut Context<Self>) {
+        self.update_prompt = Some(Box::new(on_restart));
+        cx.notify();
+    }
+
+    /// Whether the update prompt shows (for tests).
+    pub fn update_prompt_shown(&self) -> bool {
+        self.update_prompt.is_some()
+    }
+
+    fn render_update_prompt(&self, t: &Tokens, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.update_prompt.as_ref()?;
+        let button = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .role(accesskit::Role::Button)
+                .aria_label(label)
+                .px_3()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(t.on_accent)
+                .cursor_pointer()
+                .child(label)
+        };
+        let restart = button("plinth-update-restart", "Restart").on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            if let Some(on_restart) = this.update_prompt.take() {
+                cx.notify();
+                cx.defer(move |cx| on_restart(cx));
+            }
+        }));
+        let later = button("plinth-update-later", "Later").on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            this.update_prompt = None;
+            cx.notify();
+        }));
+        Some(
+            div()
+                .id("plinth-update-prompt")
+                .role(accesskit::Role::Status)
+                .aria_label("An update is ready. Restart now?")
+                .w_full()
+                .px_4()
+                .py_3()
+                .bg(t.accent)
+                .text_color(t.on_accent)
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_3()
+                .child(div().flex_1().min_w_0().font_weight(FontWeight::SEMIBOLD).child("An update is ready. Restart now?"))
+                .child(restart)
+                .child(later)
                 .into_any_element(),
         )
     }

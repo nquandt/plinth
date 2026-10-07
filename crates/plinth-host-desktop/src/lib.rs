@@ -7,7 +7,9 @@ use gpui::{App, AppContext, Bounds, KeyBinding, WindowBounds, WindowOptions, act
 use plinth_runner_wasmtime::files::{DEFAULT_QUOTA, Files, private_space_dir};
 use plinth_runner_wasmtime::{Clipboard, Guest, Limits, Runner, kv::Kv, policy::Policy};
 use plinth_ui::{GuestPort, PlinthRoot};
+use std::cell::Cell;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
@@ -460,16 +462,68 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
 /// native` executable uses this to count rollback attempts). `on_init`
 /// runs once, before the window opens, from the `gpui` app thread.
 pub fn run_reporting_init(app: HostApp, reloads: Option<Receiver<Vec<u8>>>, on_init: impl FnOnce(bool) + 'static) -> Result<()> {
+    let policy = Policy::new(app.capabilities.iter().cloned());
+    run_session(app, policy, reloads, on_init, None).map(|_| ())
+}
+
+/// How often the host looks for a finished feed check (`apply = "prompt"`).
+const UPDATE_POLL: Duration = Duration::from_millis(500);
+
+/// Runs one app window with `policy` until the last window closes. When
+/// `update_ready` gets a version (`apply = "prompt"`, `docs/UPDATES.md`
+/// §5), the window shows the update prompt. Returns `true` when the user
+/// clicked "Restart" in it.
+fn run_session(
+    app: HostApp,
+    policy: Policy,
+    reloads: Option<Receiver<Vec<u8>>>,
+    on_init: impl FnOnce(bool) + 'static,
+    update_ready: Option<Receiver<String>>,
+) -> Result<bool> {
     let runner = Arc::new(Runner::new()?);
     let app_id = app.app_id.clone();
     let owner = app.owner.clone();
     let capabilities = app.capabilities.clone();
-    let policy = Policy::new(capabilities.iter().cloned());
+    let restart = Rc::new(Cell::new(false));
+    let restart_flag = restart.clone();
 
     gpui_platform::application().run(move |cx: &mut App| {
         init_app(cx);
         let window = open_app_reporting_init(cx, runner.clone(), app, policy, None, on_init);
         cx.activate(true);
+
+        if let Some(rx) = update_ready {
+            cx.spawn(async move |cx| {
+                loop {
+                    cx.background_executor().timer(UPDATE_POLL).await;
+                    match rx.try_recv() {
+                        Ok(version) => {
+                            let restart = restart_flag.clone();
+                            let shown = window.update(cx, |root, _, cx| {
+                                root.show_update_prompt(
+                                    move |cx| {
+                                        restart.set(true);
+                                        cx.quit();
+                                    },
+                                    cx,
+                                )
+                            });
+                            if shown.is_ok() {
+                                eprintln!("[plinth] version {version} is ready; the app asks to restart");
+                            }
+                            return;
+                        }
+                        Err(TryRecvError::Empty) => {
+                            if window.update(cx, |_, _, _| ()).is_err() {
+                                return;
+                            }
+                        }
+                        Err(TryRecvError::Disconnected) => return,
+                    }
+                }
+            })
+            .detach();
+        }
 
         if let Some(rx) = reloads {
             let runner = runner.clone();
@@ -513,7 +567,7 @@ pub fn run_reporting_init(app: HostApp, reloads: Option<Receiver<Vec<u8>>>, on_i
             .detach();
         }
     });
-    Ok(())
+    Ok(restart.get())
 }
 
 // -- The Hub host (`docs/HUB.md` §4.2, §7.3, phase H3) ----------------------
@@ -748,6 +802,133 @@ pub fn run_from_hub_with_sources(hub: &plinth_hub::Hub, app_id: &str, sources: O
         cx.activate(true);
     });
     Ok(())
+}
+
+// -- Self-update of an exported app (`docs/UPDATES.md` §5, §6, §8) ----------
+
+/// Runs the payload of a single-file export (`plinth native`), with the
+/// updater (`docs/UPDATES.md` §8 step 4) when the embedded package has
+/// `[updates]` and a signature. Both `plinth` and `plinth-host` call this.
+///
+/// Each start: a pending update that adds a capability shows the consent
+/// window first (§6); then the newest accepted, verified set runs. The
+/// feed check runs in the background one time per process. With
+/// `apply = "prompt"`, an update that the check stores shows the restart
+/// banner; "Restart" closes the window and starts again in this process,
+/// on the new version (§5).
+pub fn run_payload(plnt: Vec<u8>, exe: &Path) -> Result<()> {
+    let Some(updates) = SelfUpdate::new(&plnt) else {
+        return run(HostApp::from_bytes(plnt, exe)?, None);
+    };
+    let mut ready = None;
+    let mut first = true;
+    loop {
+        let (bytes, pick) = updates.start();
+        // The check starts after the start decision, so it does not write
+        // `state.json` while `prepare_start` reads it.
+        if first {
+            ready = updates.spawn_check();
+            first = false;
+        }
+        let app = HostApp::from_bytes(bytes, exe)?;
+        let mut policy = Policy::new(app.capabilities.iter().cloned());
+        if matches!(pick, updater::Pick::Downloaded(_)) {
+            for capability in updater::refused_for_run(&updates.dir, &updates.capabilities, &app.capabilities) {
+                policy.refuse(capability);
+            }
+        }
+        let dir = updates.dir.clone();
+        let on_init = move |ok: bool| {
+            if ok {
+                updater::report_success(&dir, &pick);
+            } else if updater::report_failure(&dir, &pick) {
+                eprintln!("[plinth] an update failed to start twice in a row; rolled back to the previous version (docs/UPDATES.md §6)");
+            }
+        };
+        let restart = run_session(app, policy, None, on_init, ready.take())?;
+        if !restart {
+            return Ok(());
+        }
+        eprintln!("[plinth] restarting on the new version");
+    }
+}
+
+/// What the updater needs to know about the embedded package.
+struct SelfUpdate {
+    embedded: Vec<u8>,
+    dir: std::path::PathBuf,
+    app_id: String,
+    version: String,
+    capabilities: Vec<String>,
+    key: String,
+    config: plinth_package::UpdatesConfig,
+}
+
+impl SelfUpdate {
+    /// `None` when the embedded package has no `[updates]`, or is unsigned
+    /// (an unsigned app has no key to check update continuity against).
+    fn new(embedded: &[u8]) -> Option<SelfUpdate> {
+        let pkg = plinth_package::Package::read(embedded).ok()?;
+        let config = pkg.manifest.updates.clone()?;
+        let signer = plinth_package::signature::verify(&pkg).ok().flatten()?;
+        Some(SelfUpdate {
+            embedded: embedded.to_vec(),
+            dir: updater::app_dir(&updater::updates_dir(), &pkg.manifest.id),
+            app_id: pkg.manifest.id.clone(),
+            version: pkg.manifest.version.clone(),
+            capabilities: pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect(),
+            key: signer.key,
+            config,
+        })
+    }
+
+    /// Asks for consent when a pending update adds a capability
+    /// (`docs/UPDATES.md` §6), then picks the set to run.
+    fn start(&self) -> (Vec<u8>, updater::Pick) {
+        if let Some(request) = updater::prepare_start(&self.dir, &self.version, &self.capabilities) {
+            let title = format!("{} {}", request.app_name, request.version);
+            let result = match consent::show(&title, &request.publisher, request.signer.as_deref(), &request.capabilities) {
+                Some(decisions) => updater::accept(&self.dir, &request.version, &decisions),
+                None => {
+                    eprintln!("[plinth] update to version {} refused; the previous version runs", request.version);
+                    updater::decline(&self.dir, &request.version)
+                }
+            };
+            if let Err(e) = result {
+                eprintln!("[plinth] cannot record the consent decision: {e:#}");
+            }
+        }
+        let pick = updater::pick(&self.dir, &self.version);
+        let bytes = match &pick {
+            updater::Pick::Embedded => self.embedded.clone(),
+            updater::Pick::Downloaded(path) => std::fs::read(path).unwrap_or_else(|_| self.embedded.clone()),
+        };
+        (bytes, pick)
+    }
+
+    /// Starts the feed check in the background (`check = "on-start"`, the
+    /// only policy). It never blocks the first frame. With
+    /// `apply = "prompt"`, the returned channel gets the new version when
+    /// the check stores one.
+    fn spawn_check(&self) -> Option<Receiver<String>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let dir = self.dir.clone();
+        let app_id = self.app_id.clone();
+        let version = self.version.clone();
+        let key = self.key.clone();
+        let config = self.config.clone();
+        std::thread::spawn(move || {
+            match updater::check(&dir, &app_id, &config.feed, config.channel.as_str(), &version, &key, updater::http_fetch) {
+                Ok(outcome) => {
+                    if let Some(new_version) = updater::prompt_for(config.apply, &outcome) {
+                        let _ = tx.send(new_version);
+                    }
+                }
+                Err(e) => eprintln!("[plinth] update check failed: {e:#}"),
+            }
+        });
+        (self.config.apply == plinth_package::ApplyPolicy::Prompt).then_some(rx)
+    }
 }
 
 /// Installs the default logger (`RUST_LOG` overrides the level).
