@@ -210,13 +210,13 @@ Decisions of 2026-10-07:
 
 ## 16. Summary
 
-Count on 2026-10-07, by gate and status:
+Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh` for the current count, and `bash scripts/production-status.sh --open Beta` for the list of open Beta items.
 
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
 | Preview | 25 | 0 | 0 |
-| Beta | 0 | 16 | 35 |
-| 1.0 | 1 | 1 | 20 |
+| Beta | 7 | 14 | 30 |
+| 1.0 | 1 | 1 | 21 |
 | Later (after 1.0) | 0 | 0 | 1 |
 
 **The Preview level is complete** for the documented platforms (Windows and the web, `docs/LIMITS.md`). Preview is only an internal mark until the repository is public (G6).

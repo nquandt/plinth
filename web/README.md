@@ -87,7 +87,7 @@ itself, not in a sandboxed frame: use it for tests and development only.
 | API | State |
 |---|---|
 | `ui`, `dev` | Work. |
-| `time` | Works: `now`, `monotonic-now`, the time zone offset, and timers (`setTimeout`/`setInterval`; each fired timer is a `timer` event). |
+| `time` | Works: `now`, `monotonic-now`, the time zone offset, timers (`setTimeout`/`setInterval`; each fired timer is a `timer` event), and frame timers (`onFrame`, core 1.12) on one `requestAnimationFrame` loop, which the browser stops in a hidden page. |
 | `store` (kv) | Works when the manifest declares `store.kv` (else `denied(undeclared)`) and the user did not refuse it (else `denied(refused)`). In a frame: the page keeps the data, one namespace for each app (snapshot at start, writes through the bridge, quota). Stand-alone: `localStorage` with the app id as a key prefix. |
 | `clipboard` | Works with `navigator.clipboard` (in a frame: through the page), gated on `clipboard.write`/`clipboard.read`. The interface is synchronous and the browser API is not: `writeText` is fire-and-forget; `readText` returns the last known value and starts an async read for the next call, so the first read can return nothing. The browser can ask for permission, and it gives the clipboard only to a secure page (HTTPS or `localhost`). |
 | `dialog` | Stand-alone: the browser's own `alert`/`confirm`/`prompt`. In a frame: dialogs that the page draws. The answer is a `completion` event. |

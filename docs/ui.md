@@ -1,4 +1,4 @@
-# UI control reference (UI API 1.5)
+# UI control reference (UI API 1.13)
 
 Every control in this page is a typed JSX intrinsic exported from
 `plinth:ui`. Props in **bold** are required. This reference is checked
@@ -390,4 +390,4 @@ Your package declares the UI API version it was built against
 prop is a compile error; a host that sees a control kind newer than it
 supports renders a placeholder and logs an error — it does not crash.
 
-This page documents **UI API 1.5**, the version in `std/ui.d.ts` today.
+This page documents **UI API 1.13**, the version in `std/ui.d.ts` today. A heading that names a version tells when that control or prop came in.

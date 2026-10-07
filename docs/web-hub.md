@@ -114,6 +114,7 @@ Before the page runs a package (the Hub app and each app), it checks:
 | Capability | In the browser |
 |---|---|
 | `store.kv` | Works. The page keeps the data (§4.2). |
+| `files.private` | Works. The page keeps the private space of each app in its IndexedDB, one space for each app id; the frame gets only its own (`web/files.js`). |
 | `clipboard.write` | Works. The page writes to the clipboard for the frame. |
 | `clipboard.read` | Limited. The page reads the clipboard for the frame; the browser asks for permission. The first read can return nothing (the browser API is asynchronous; the host keeps the last value). |
 | `net:<host>`, `net:*`, `net.local` | Limited. The page makes the request for the frame (after the same capability check), so the request has the origin of the page, not `null`. The server must allow requests from this origin (CORS). The request has no cookies. |

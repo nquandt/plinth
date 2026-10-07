@@ -34,17 +34,18 @@ for the full, current state.
 
 | Area | State |
 |---|---|
-| Plinth TS compiler (v0 core language) | works: types, control flow, closures, JSX, generics, classes (single inheritance), unions, `Map`/`Set` |
-| UI API 1.3 controls and navigation | works on the desktop host |
-| Host APIs: `plinth:time`, `plinth:store`, `plinth:clipboard`, `plinth:dialog` | work on the desktop host |
-| `plinth:net` | in progress (needs `async`/`await`) |
-| Desktop host (Windows) | works, tested in CI |
-| Desktop host (macOS, Linux) | builds; not yet tested |
-| Web host | early spike in `web/`; several host APIs are stubs |
-| Mobile hosts (Android, iOS) | not started |
-| `async`/`await`, `try`/`catch` | not started |
-| Plinth Hub (app store, capability consent, publishing) | design only, see [docs/HUB.md](docs/HUB.md) |
+| Plinth TS compiler | works: types, unions and narrowing, generics, classes, `Map`/`Set`, tuples, destructuring, JSON, `try`/`catch`, `async`/`await`, the Promise API |
+| UI API 1.13 (Level 1 controls, Level 2 primitives, `Canvas`) | works on the desktop and web hosts |
+| Host APIs: `time`, `store`, `clipboard`, `dialog`, `net`, `files`, `hub` | work on the desktop and web hosts ([docs/host-apis.md](docs/host-apis.md)) |
+| Desktop host (Windows) | works; the local gate tests it |
+| Desktop host (macOS, Linux) | compiler, runner and Hub tests pass; no GUI window yet |
+| Web host | works: DOM renderer, every app in a sandboxed frame, the web Hub |
+| Mobile hosts (Android, iOS) | not started (gpui, and wasmi on iOS) |
+| Plinth Hub | desktop and web: library, signed packages, consent ([docs/HUB.md](docs/HUB.md)) |
+| Updates without a reinstall | desktop: signed feed, rollback ([docs/UPDATES.md](docs/UPDATES.md)) |
 | npm packages (`@plinth/cli`, `create-plinth`) | pipeline written, not yet published; build from source |
+
+[docs/LIMITS.md](docs/LIMITS.md) lists what Plinth cannot do yet. [docs/PRODUCTION.md](docs/PRODUCTION.md) is the checklist to 1.0.
 
 ## 60-second quick start
 

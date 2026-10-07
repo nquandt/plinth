@@ -40,14 +40,20 @@ cd my-app
 
 ```
 my-app/
-  plinth.toml         # app manifest
-  tsconfig.json        # closed-world TypeScript config
-  package.json          # npm scripts that call `plinth`
+  plinth.toml         # app manifest; declares `store.kv`
+  tsconfig.json       # closed-world TypeScript config
+  package.json        # npm scripts that call `plinth`
+  .gitignore
+  README.md
   app/
-    main.tsx             # the app entry
+    main.tsx          # the app entry: the screens
+    model.ts          # the task list and its storage
+    tasks.tsx         # the list screen
+    detail.tsx        # the detail screen
 ```
 
-`app/main.tsx` is a complete "hello world" with one screen and a counter.
+The app is a small task list with a list screen and a detail screen. It
+keeps the tasks in the kv store, so `plinth.toml` declares `store.kv`.
 Run it:
 
 ```sh
