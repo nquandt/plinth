@@ -73,6 +73,9 @@ pub enum StdFn {
     OnCleanup,
     /// `isActive()` (core 1.12): a reactive boolean, true while the app's window is in the foreground.
     IsActive,
+    /// `onMount(fn)` (core 1.12): runs `fn` once, after the elements the
+    /// current render created are in the host tree.
+    OnMount,
     App,
     Navigate,
     ParseNumber,

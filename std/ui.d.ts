@@ -30,6 +30,13 @@ export declare function onCleanup(f: () => void): void;
  * window goes to the background or comes back. Pause a game there. */
 export declare function isActive(): boolean;
 
+/** Runs `f` once, after the elements that the current render made are in
+ * the host tree: read a measured size there, or start something that
+ * needs the real UI (core 1.12). Not during rendering. A signal write
+ * inside `f` is a normal update. A component inside a condition or a list
+ * row runs its own `onMount` again each time it renders anew. */
+export declare function onMount(f: () => void): void;
+
 // -- App ----------------------------------------------------------------------
 
 export type Accent = "teal" | "blue" | "indigo" | "purple" | "pink" | "red" | "orange" | "green";

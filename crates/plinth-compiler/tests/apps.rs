@@ -699,3 +699,59 @@ export default app({ screens: { home: { title: "Home", component: Home } } });
     lifecycle(&mut h, plinth_protocol::lifecycle_kind::FOREGROUND);
     assert_eq!(status(&h), "cleaned 2, active true, changes 3");
 }
+
+/// Core 1.12 (docs/GAPS.md G10): `onMount` runs once, after the first
+/// commit of the render that registered it; a signal write inside it is a
+/// normal update; a component inside a condition mounts again each time it
+/// appears; `onCleanup` and `onMount` pair up for each appearance.
+#[test]
+fn on_mount_runs_after_the_commit() {
+    const APP: &str = r#"
+import { app, signal, onCleanup, onMount, Screen, Text, Button } from "plinth:ui";
+
+const mounted = signal(0);
+const cleaned = signal(0);
+const ready = signal("no");
+
+function Child() {
+  onMount(() => {
+    mounted.set(mounted() + 1);
+    ready.set("yes");
+  });
+  onCleanup(() => cleaned.set(cleaned() + 1));
+  return <Text>child</Text>;
+}
+
+function Home() {
+  const show = signal(true);
+  return (
+    <Screen title="Home">
+      {show() ? <Child /> : null}
+      <Text>{`mounted ${mounted()}, cleaned ${cleaned()}, ready ${ready()}`}</Text>
+      <Button label="Toggle" onPress={() => show.set(!show())} />
+    </Screen>
+  );
+}
+
+export default app({ screens: { home: { title: "Home", component: Home } } });
+"#;
+    let fs = plinth_compiler::driver::MemFs::default().with("app/main.tsx", APP);
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &[]).expect("compile");
+    let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+    let art = artifact.unwrap_or_else(|| panic!("errors:\n{}", diags.join("\n")));
+    let mut h = Harness::start(&art.component);
+    let status = |h: &Harness| h.find(ControlKind::Text, |_| true).into_iter().map(|id| h.text_of(id)).find(|t| t.starts_with("mounted")).unwrap();
+    // The first commit already has the child's text, and the mount
+    // callback's signal write (ready "yes") is folded into the same init,
+    // not a render that runs before the elements exist.
+    assert_eq!(status(&h), "mounted 1, cleaned 0, ready yes");
+
+    let toggle = h.find(ControlKind::Button, |_| true)[0];
+    h.fire(toggle, event::PRESS, Value::Null);
+    assert_eq!(status(&h), "mounted 1, cleaned 1, ready yes", "the child's cleanup ran, no new mount");
+    h.fire(toggle, event::PRESS, Value::Null);
+    assert_eq!(status(&h), "mounted 2, cleaned 1, ready yes", "a new child mounts again");
+    h.fire(toggle, event::PRESS, Value::Null);
+    h.fire(toggle, event::PRESS, Value::Null);
+    assert_eq!(status(&h), "mounted 3, cleaned 2, ready yes", "each appearance pairs a mount with a cleanup");
+}

@@ -602,13 +602,52 @@ impl Cx<'_> {
     /// Runs `stmt` now if `value` is static, or in an effect if it is
     /// dynamic.
     fn maybe_effect(&mut self, dynamic: bool, stmt: TStmt, out: &mut Vec<TStmt>, span: Span) {
+        self.maybe_effect_multi(dynamic, vec![stmt], out, span);
+    }
+
+    /// Like `maybe_effect`, for a prop set that needs more than one
+    /// statement (a null check before the runtime call).
+    fn maybe_effect_multi(&mut self, dynamic: bool, stmts: Vec<TStmt>, out: &mut Vec<TStmt>, span: Span) {
         if !dynamic {
-            out.push(stmt);
+            out.extend(stmts);
             return;
         }
-        let f = self.synthetic("<effect>", vec![stmt], Type::Void, span);
+        let f = self.synthetic("<effect>", stmts, Type::Void, span);
         let thunk = thunk_of(&f);
         out.push(rt_stmt("effect", vec![thunk, f]));
+    }
+
+    /// Sets a number/int/bool prop whose value may be `null` (an optional
+    /// prop set to `undefined`, GAPS 7G-3): `null` calls `prop_str` with a
+    /// null pointer, which removes the prop on both hosts; otherwise the
+    /// value is unboxed and sent with `rt_name`. `to_final` applies any
+    /// extra coercion (e.g. `Number` to `i32` for an int prop) once
+    /// unboxed.
+    fn prop_or_null_stmts(
+        &mut self,
+        node: TExpr,
+        id: u16,
+        value: TExpr,
+        rt_name: &'static str,
+        to_final: impl FnOnce(TExpr) -> TExpr,
+        span: Span,
+    ) -> Vec<TStmt> {
+        let Type::Nullable(inner) = value.ty.clone() else {
+            let s = rt_stmt(rt_name, vec![node, i32c(id as i32), to_final(value)]);
+            return vec![s];
+        };
+        let ty = value.ty.clone();
+        let tmp = self.new_var("$prop_or_null", ty.clone());
+        let read = TExpr::new(TExprKind::Var(tmp), ty, span);
+        let is_null = TExpr::new(TExprKind::IsNull(Box::new(read.clone())), Type::Bool, span);
+        let unbox = match inner.repr() {
+            crate::types::Repr::F64 => Coercion::UnboxNum,
+            _ => Coercion::UnboxI32,
+        };
+        let unwrapped = TExpr::new(TExprKind::Coerce(unbox, Box::new(read)), (*inner).clone(), span);
+        let then_ = vec![rt_stmt("prop_str", vec![node.clone(), i32c(id as i32), i32c(0)])];
+        let else_ = vec![rt_stmt(rt_name, vec![node, i32c(id as i32), to_final(unwrapped)])];
+        vec![TStmt::Let(tmp, Some(value)), TStmt::If(is_null, then_, else_)]
     }
 
     // -- JSX ----------------------------------------------------------------
@@ -634,17 +673,17 @@ impl Cx<'_> {
                             self.maybe_effect(dynamic, s, &mut out, span);
                         }
                         PropTarget::Num(id) => {
-                            let s = rt_stmt("prop_f64", vec![node(), i32c(id as i32), value]);
-                            self.maybe_effect(dynamic, s, &mut out, span);
+                            let stmts = self.prop_or_null_stmts(node(), id, value, "prop_f64", |v| v, span);
+                            self.maybe_effect_multi(dynamic, stmts, &mut out, span);
                         }
                         PropTarget::Int(id) => {
-                            let v = TExpr::new(TExprKind::Coerce(Coercion::NumToI32, Box::new(value)), Type::Bool, span);
-                            let s = rt_stmt("prop_int", vec![node(), i32c(id as i32), v]);
-                            self.maybe_effect(dynamic, s, &mut out, span);
+                            let to_i32 = |v: TExpr| TExpr::new(TExprKind::Coerce(Coercion::NumToI32, Box::new(v)), Type::Bool, span);
+                            let stmts = self.prop_or_null_stmts(node(), id, value, "prop_int", to_i32, span);
+                            self.maybe_effect_multi(dynamic, stmts, &mut out, span);
                         }
                         PropTarget::Bool(id) => {
-                            let s = rt_stmt("prop_bool", vec![node(), i32c(id as i32), value]);
-                            self.maybe_effect(dynamic, s, &mut out, span);
+                            let stmts = self.prop_or_null_stmts(node(), id, value, "prop_bool", |v| v, span);
+                            self.maybe_effect_multi(dynamic, stmts, &mut out, span);
                         }
                         PropTarget::Enum(id, table) => {
                             let v = self.enum_value(value, &table);

@@ -299,11 +299,11 @@ impl Checker<'_> {
                         (PropTarget::Enum(fraction_id, table.iter().map(|(s, v)| (s.to_string(), *v)).collect()), te)
                     }
                     // UI API 1.11: spacing units can be fractional (1.5).
-                    _ => (PropTarget::Num(id), self.typed(&value, &Type::Number)),
+                    _ => (PropTarget::Num(id), self.typed_prop(&value, &Type::Number, ps.required)),
                 },
-                PropTy::Num => (PropTarget::Num(id), self.typed(&value, &Type::Number)),
-                PropTy::Int => (PropTarget::Int(id), self.typed(&value, &Type::Number)),
-                PropTy::Bool => (PropTarget::Bool(id), self.typed(&value, &Type::Bool)),
+                PropTy::Num => (PropTarget::Num(id), self.typed_prop(&value, &Type::Number, ps.required)),
+                PropTy::Int => (PropTarget::Int(id), self.typed_prop(&value, &Type::Number, ps.required)),
+                PropTy::Bool => (PropTarget::Bool(id), self.typed_prop(&value, &Type::Bool, ps.required)),
                 PropTy::Enum(table) => {
                     let t = Type::str_lits(table.iter().map(|(s, _)| s.to_string()).collect());
                     let te = self.typed_prop(&value, &t, ps.required);

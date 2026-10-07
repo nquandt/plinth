@@ -28,6 +28,7 @@ not a height in points.
 | `effect(f)` | `(f: () => void) => void` | Reruns when a signal it read changes. |
 | `onCleanup(f)` | `(f: () => void) => void` | Core 1.12. Runs `f` when the current component, or the part of the UI that a condition or a list row made, goes away. Stop a timer or a frame loop there. |
 | `isActive()` | `() => boolean` | Core 1.12. True while the app's window is in the foreground (desktop: the window is active; web: the page is visible and has the focus). Reactive: an `effect` that reads it runs again on a change. `examples/pong` pauses there. |
+| `onMount(f)` | `(f: () => void) => void` | Core 1.12 (`docs/GAPS.md` G10). Runs `f` once, after the commit of the event or `init` that put the current component's elements in the host tree, not during rendering. A signal write inside `f` is a normal update: the runtime flushes again and sends the result in the same reply. A component inside a condition or a list row runs its own `onMount` again each time it appears, paired with its own `onCleanup`. |
 
 ## App entry and navigation
 
