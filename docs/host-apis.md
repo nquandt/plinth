@@ -72,7 +72,7 @@ kv.lastError();        // the reason the last call was denied, or null
 ```
 
 On the desktop host, the store is a JSON file at
-`%APPDATA%\plinthpps\<app id>\kv.json`.
+`%APPDATA%\plinth\apps\<app id>\kv.json`.
 
 ## `plinth:clipboard`
 
@@ -307,8 +307,7 @@ Each denied module exposes `lastError()` (`kv.lastError()`,
 - `"denied:undeclared"` — the manifest does not declare the capability.
 - `"denied:refused"` — the user declined it.
 - `"denied:unsupported"` — this host does not implement the capability
-  (for example, the web host's clipboard and store are currently
-  stubs that always deny — see `web/README.md`).
+  (for example, every `plinth:hub` call on a host with no Hub backend).
 - `null` — the last call to that module succeeded. The value clears on
   the next successful call, so check it right after a call whose result
   you need to trust.
@@ -340,5 +339,66 @@ ok: dist/notes.plnt
   cannot hide a capability it can use, and a report of "declared but
   not reachable" flags a capability you asked for but never use.
 
-A package with no capabilities (like the example in `plinth new`) prints
+A package with no capabilities (like `examples/counter`) prints
 `declared: none` and `reachable: none`.
+
+## Support on each host
+
+This section tells how each host API works on each host, and which test
+covers it. There are three hosts:
+
+- **Desktop (wasmtime):** the default engine of `plinth dev`, `plinth run`,
+  `plinth native` and the desktop Hub.
+- **Desktop (wasmi):** the interpreter for iOS. Set `PLINTH_ENGINE=wasmi`
+  to use it on the desktop (cargo feature `wasmi` on
+  `plinth-runner-wasmtime`). Each import shim in `wasmi_engine.rs` calls the
+  same `HostState` method as wasmtime. Thus the behavior is the same as on
+  wasmtime. Only the call time limit is different: wasmi uses fuel, not
+  epochs (`docs/GAPS.md` "wasmi engine").
+- **Web:** `web/plinth-web.js`. "In a frame" means the sandboxed app frame
+  (the web Hub, a web export with `<plinth-app>`): the page does the work
+  for the frame (`web/frame-host.js`). "Stand-alone" means
+  `web/index.html`, for tests and development.
+
+### Behavior
+
+| API | Desktop (wasmtime) | Desktop (wasmi) | Web |
+|---|---|---|---|
+| `time`: timers | The host wakes at the next timer deadline, and at least every 15 ms. A late repeating timer fires one time, then keeps its period. | Same as wasmtime. | JS `setTimeout` and `setInterval`. A browser slows the timers of a hidden tab. |
+| `time`: dates | The time zone offset comes from the OS. | Same as wasmtime. | The offset is `-Date.getTimezoneOffset()`. |
+| `time`: `onFrame` | The host fires frame timers in the gpui frame. While a frame timer runs, the host asks for the next frame. | Same as wasmtime. | One `requestAnimationFrame` loop for all frame timers. The loop stops when the last frame timer stops. The browser sends no frames in a hidden tab. |
+| `store` (kv) | One JSON file for each app id, `%APPDATA%\plinth\apps\<app id>\kv.json`. Each write writes the file again. No quota. A failed write answers `denied:unsupported`. If the host cannot open the file, the app gets an empty store in memory for this run (the log has a warning). | Same as wasmtime. | In a frame: the page `localStorage`, keys `plinth-hub:kv:<app id>:<key>`. The frame gets a snapshot at start and sends each write to the page. Quota: 512 Ki characters of keys and values for each app; a `set` over the quota answers `denied:refused`. Stand-alone: `localStorage`, keys `plinth:<app id>:<key>`. Node: a `Map` in memory. |
+| `clipboard`: write | The system clipboard (gpui). | Same as wasmtime. | `navigator.clipboard.writeText`, in a frame through the page. The call does not wait for the browser. |
+| `clipboard`: read | The system clipboard, at once. | Same as wasmtime. | **Different.** The browser API is asynchronous and the host call is not. `readText()` returns the last value that the host knows (or `null`), and starts a read for the next call. Thus the first read can return `null`. The browser can ask the user for permission. The browser gives the clipboard only to a secure page (HTTPS or `localhost`). |
+| `dialog` | A modal overlay that the desktop host draws, one request at a time. Escape cancels; Enter confirms. | Same as wasmtime. | Stand-alone: the browser's `alert`, `confirm` and `prompt`. In a frame: a dialog that the page draws (`hostDialog`), because a sandboxed frame cannot show a browser dialog. In Node: a declined answer. |
+| `net` | `ureq` on a worker thread. Time limit 20 s. Body limit 8 MiB (`MAX_BODY`). No redirects. The private-address check runs on the host text and again on the addresses after DNS resolution. | Same as wasmtime. | **Different.** `fetch` with a 20 s time limit, `redirect: "manual"` and `credentials: "omit"`. The host code has no body limit. The private-address check runs only on the host text (`docs/THREAT-MODEL.md` §6 item 1). In a frame, the page makes the request, so the request has the origin of the page. The server must allow CORS. |
+| `files` | A folder for each owner and app id under `%APPDATA%\plinth\spaces\private\`. One worker thread for each app, in call order. 8 MiB for one file, 50 MiB for the space. | Same as wasmtime. | In a frame: the page IndexedDB (database `plinth-files`). Stand-alone and in Node: in memory, so the files go away at a reload. The same path rules and limits as the desktop (`web/files.js`). |
+| `hub` | Only for a package that a trusted Hub key signed, with a Hub backend. Else each call answers `denied:unsupported` (or `denied:refused`). | Same as wasmtime. | Only in the web App Hub (`hub-host.js`, browse mode, `docs/web-hub.md` §3.1). Else each call answers `denied:unsupported`. |
+| `error.report` | The runner logs the text and keeps it (`Guest::take_errors`). The desktop host shows the last one in a banner with "Dismiss". | Same as wasmtime. | `reportError`, which is `console.error` by default, and `PlinthApp.onError`. |
+
+### Tests
+
+"By hand" means `PLINTH_ENGINE=wasmi cargo test -p plinth-compiler --test
+<name>`. The gate (`scripts/ci-local.sh`) does not run the wasmi engine
+(`docs/PRODUCTION.md` Q4). The results of the last run by hand are in
+`docs/GAPS.md` "wasmi engine". Compiler tests are in
+`crates/plinth-compiler/tests/`; web tests are in `web/test/`. The gate
+runs every web test except `run-a11y.mjs` (by hand).
+
+| API | Desktop (wasmtime) | Desktop (wasmi) | Web |
+|---|---|---|---|
+| `time`: timers | `hostapi.rs` (`timer_and_kv_round_trip`), `sevenguis.rs` (`timer_elapses_to_the_duration_and_resets`), unit tests in `plinth-runner-wasmtime/src/timers.rs` | `sevenguis.rs`, by hand | `run-timer.mjs`, `run-7guis.mjs` |
+| `time`: dates | `hostapi.rs` (`date_time_round_trip_with_a_fake_offset`), `sevenguis.rs` (`flight_booker_constraints`) | `sevenguis.rs`, by hand | `run-7guis.mjs` (flight booker) |
+| `time`: `onFrame` | `apps.rs` (`on_frame_gets_the_frame_time`, `pong_plays_a_point`), `timers.rs` (`frame_timers_fire_only_by_frames`) | `apps.rs` (`pong_plays_a_point`), by hand | `run-pong.mjs` |
+| `store` (kv) | `hostapi.rs` (`timer_and_kv_round_trip`, `kv_denied_by_policy_does_not_trap`), `capabilities.rs`, unit tests in `kv.rs` | `apps.rs` (`budget_add_filter_edit_delete_and_stats`), by hand | `run-notes.mjs`, `run-hub-storage.mjs` (namespaces, quota), `run-a11y.mjs` (kv isolation in the frame) |
+| `clipboard`: write | **no test** | **no test** | **no test** (`run-hub-storage.mjs` checks only the shape of the bridge message) |
+| `clipboard`: read | **no test** | **no test** | **no test** |
+| `dialog` | `async_await.rs` (`the_dialogs_example_greets_with_three_awaits` and other tests) | **no test** | **no test** (`run-hub-storage.mjs` checks only the shape of the bridge message) |
+| `net` | `net.rs` (local server: GET, POST, status, denied, private addresses, DNS), unit tests in `net.rs` and `policy.rs` | **no test** | `run-net.mjs`, `run-net-private.mjs`, `run-hub-storage.mjs` (the check of the page) |
+| `files` | `files.rs`, unit tests in `plinth-runner-wasmtime/src/files.rs` | **no test** | `run-files.mjs`, `run-a11y.mjs` (files isolation in the frame) |
+| `hub` | `hub_api.rs`, `hub_ui.rs`, `plinth-host-desktop/tests/hub_host.rs` | **no test** | `run-hub-host.mjs`, `run-a11y.mjs` (the Hub app in the browser) |
+| `error.report` | `errors.rs`, `async_await.rs` (uncaught rejections) | `errors.rs`, by hand | `run-stop.mjs` |
+
+`monkey.rs` sends random events to every example, also `utility`, which
+calls `plinth:clipboard`. It does not check the clipboard, so this table
+does not count it as a clipboard test.
