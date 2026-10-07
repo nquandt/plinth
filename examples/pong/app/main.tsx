@@ -1,13 +1,11 @@
-// Pong, built from the Level 2 primitives (UI API 1.6). The rules live in
-// game.ts; this file only draws the court and runs the game loop.
+// Pong, built from the Level 2 primitives. The rules live in game.ts; this
+// file only draws the court and runs the game loop.
 //
-// Plinth has no absolute positioning and no Canvas yet, so the court is
-// a row of fixed-size columns (paddle, left half, net, right half,
-// paddle), and each moving part is placed by an empty spacer Box above
-// it (and, for the ball, beside it). The ball is drawn in the half of
-// the field that it is in. All sizes are spacing units (4 px).
-// There are no key events for apps, so the paddle moves with Pressable
-// buttons: "Up" and "Down" set its direction until "Stop" or the wall.
+// The court is one box; the paddles, the net and the ball are absolute
+// boxes in it (UI API 1.9), placed by their insets. All sizes are spacing
+// units (4 px). Keys: hold the arrow keys or W/S on the court to move the
+// paddle, Space starts and pauses (UI API 1.9 onKeyDown/onKeyUp). The
+// buttons below the court do the same for touch and pointer users.
 import { app, signal, computed, Screen, Section, Box, Span, Pressable } from "plinth:ui";
 import { setInterval, clearInterval, monotonicNow } from "plinth:time";
 import { Math } from "plinth:core";
@@ -40,13 +38,6 @@ function Pong() {
   const rate = signal(0);
   const rateStart = signal(0);
   const rateTicks = signal(0);
-
-  const ballX = computed(() => cell(game().ballX));
-  const ballY = computed(() => cell(game().ballY));
-  // The half that draws the ball: the left half for x < HALF_W, else the right half.
-  const inLeft = computed(() => ballX() + BALL / 2 < HALF_W + NET_W / 2);
-  const leftBallX = computed(() => (inLeft() ? Math.min(ballX(), HALF_W - BALL) : 0));
-  const rightBallX = computed(() => (inLeft() ? 0 : Math.max(0, Math.min(ballX() - HALF_W - NET_W, HALF_W - BALL))));
 
   const stopLoop = () => {
     const id = timer();
@@ -101,6 +92,24 @@ function Pong() {
     }
     return rate() > 0 ? `Rally ${g.rally} · ${rate()} ticks/s` : `Rally ${g.rally}`;
   });
+  // Keys on the court: a held key moves the paddle until it is released.
+  const keyDown = (key: string) => {
+    if (key === "ArrowUp" || key === "w") {
+      move.set(-1);
+    } else if (key === "ArrowDown" || key === "s") {
+      move.set(1);
+    } else if (key === "Space") {
+      startStop();
+    }
+  };
+  const keyUp = (key: string) => {
+    if ((key === "ArrowUp" || key === "w") && move() < 0) {
+      move.set(0);
+    } else if ((key === "ArrowDown" || key === "s") && move() > 0) {
+      move.set(0);
+    }
+  };
+
   const startLabel = computed(() => {
     const p = game().phase;
     return p === "ready" ? "Start" : p === "playing" ? "Pause" : p === "paused" ? "Resume" : "Play again";
@@ -120,34 +129,24 @@ function Pong() {
               <Span size="2xl" weight="bold" mono={true}>{`${game().rightScore}`}</Span>
             </Box>
           </Box>
-          <Box label="Court" direction="row" width={FIELD_W + 2 * PADDLE_W} height={FIELD_H} bg="text" radius="sm">
-            <Box width={PADDLE_W} height={FIELD_H}>
-              <Box height={cell(game().leftY)} />
-              <Box label="Your paddle" width={PADDLE_W} height={PADDLE_H} bg="background" />
-            </Box>
-            <Box width={HALF_W} height={FIELD_H}>
-              <Box height={inLeft() ? ballY() : 0} />
-              <Box direction="row" height={BALL}>
-                <Box width={leftBallX()} />
-                <Box label="Ball (left half)" width={BALL} height={BALL} bg={inLeft() ? "background" : "none"} />
-              </Box>
-            </Box>
-            <Box label="Net" width={NET_W} height={FIELD_H} justify="between" paddingY={1}>
+          <Box
+            label="Court: hold the arrow keys or W and S to move, Space to start or pause"
+            width={FIELD_W + 2 * PADDLE_W}
+            height={FIELD_H}
+            bg="text"
+            radius="sm"
+            focus={{ border: "accent" }}
+            onKeyDown={keyDown}
+            onKeyUp={keyUp}
+          >
+            <Box label="Net" position="absolute" left={PADDLE_W + HALF_W} top={0} width={NET_W} height={FIELD_H} justify="between" paddingY={1}>
               {DASHES.map((d) => (
                 <Box width={NET_W} height={2} bg="text.muted" />
               ))}
             </Box>
-            <Box width={HALF_W} height={FIELD_H}>
-              <Box height={inLeft() ? 0 : ballY()} />
-              <Box direction="row" height={BALL}>
-                <Box width={rightBallX()} />
-                <Box label="Ball (right half)" width={BALL} height={BALL} bg={inLeft() ? "none" : "background"} />
-              </Box>
-            </Box>
-            <Box width={PADDLE_W} height={FIELD_H}>
-              <Box height={cell(game().rightY)} />
-              <Box label="Computer paddle" width={PADDLE_W} height={PADDLE_H} bg="background" />
-            </Box>
+            <Box label="Your paddle" position="absolute" left={0} top={cell(game().leftY)} width={PADDLE_W} height={PADDLE_H} bg="background" />
+            <Box label="Computer paddle" position="absolute" right={0} top={cell(game().rightY)} width={PADDLE_W} height={PADDLE_H} bg="background" />
+            <Box label="Ball" position="absolute" left={PADDLE_W + cell(game().ballX)} top={cell(game().ballY)} width={BALL} height={BALL} bg="background" radius="full" />
           </Box>
           <Span fg="text.muted">{status()}</Span>
           <Box direction="row" gap={2} align="center" width={FIELD_W + 2 * PADDLE_W}>

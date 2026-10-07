@@ -4,7 +4,7 @@
 # enum ids. The compiler, the guest runtime and the host all generate their
 # constants from it. Never reuse or renumber an id inside one major version.
 
-version = "1.8"
+version = "1.9"
 
 [controls]
 screen = 1
@@ -112,12 +112,21 @@ wide = 70              # string, partial style in the wide width class
 # UI API 1.8 (docs/GAPS.md 7G-1, 7G-2): `disabled` (prop 10) also on
 # text-field, text-area and date-picker; `selected` on row.
 selected = 71          # bool, a row is the selected one of its list
+# UI API 1.9 (docs/GAPS.md G1): positioning of Level 2 boxes. An absolute
+# box leaves the flow and is placed in its parent primitive by the insets.
+position = 72          # enum position
+top = 73               # int, spacing units from the top of the parent
+left = 74              # int, spacing units from the left of the parent
+right = 75             # int, spacing units from the right of the parent
+bottom = 76            # int, spacing units from the bottom of the parent
 
 [events]
 press = 1        # value: null
 change = 2       # value: the new value
 submit = 3       # value: the current value
 close = 6        # value: null (sheet onClose; UI API 1.2)
+key-down = 7     # value: the key name (UI API 1.9, Level 2 boxes; no repeats)
+key-up = 8       # value: the key name (UI API 1.9)
 
 [enums.button-role]
 default = 0
@@ -229,3 +238,7 @@ bold = 3
 [enums.pressable-role]
 button = 0
 link = 1
+
+[enums.position]
+relative = 0
+absolute = 1

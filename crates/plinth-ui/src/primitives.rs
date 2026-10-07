@@ -11,7 +11,7 @@
 use crate::theme::{Tokens, WidthClass};
 use crate::tree::Node;
 use gpui::{FontWeight, Hsla, Length, Pixels, Styled, px, relative};
-use plinth_protocol::{Value, axis, color, cross_align, fraction, justify, prop, radius, text_size, weight};
+use plinth_protocol::{Value, axis, color, cross_align, fraction, justify, position, prop, radius, text_size, weight};
 
 /// One spacing unit, in pixels.
 pub const UNIT: f32 = 4.0;
@@ -46,7 +46,9 @@ impl Style {
         let values = node
             .props
             .iter()
-            .filter(|(id, _)| *id == prop::AXIS || *id == prop::ALIGN || (prop::WRAP..=prop::LINES).contains(id))
+            .filter(|(id, _)| {
+                *id == prop::AXIS || *id == prop::ALIGN || (prop::WRAP..=prop::LINES).contains(id) || (prop::POSITION..=prop::BOTTOM).contains(id)
+            })
             .filter_map(|(id, v)| {
                 let n = match v {
                     Value::Int(i) => i64::from(*i),
@@ -118,6 +120,30 @@ impl Style {
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
+}
+
+/// The Plinth name of a gpui key (UI API 1.9): the same names as the web
+/// host (`dom-renderer.js` `keyName`). `None` for a key that apps do not get.
+pub fn key_name(key: &str) -> Option<String> {
+    let name = match key {
+        "up" => "ArrowUp",
+        "down" => "ArrowDown",
+        "left" => "ArrowLeft",
+        "right" => "ArrowRight",
+        "enter" => "Enter",
+        "escape" => "Escape",
+        "space" => "Space",
+        "tab" => "Tab",
+        "backspace" => "Backspace",
+        "delete" => "Delete",
+        "home" => "Home",
+        "end" => "End",
+        "pageup" => "PageUp",
+        "pagedown" => "PageDown",
+        k if k.chars().count() == 1 && k.chars().all(|c| c.is_ascii_alphanumeric()) => return Some(k.to_ascii_lowercase()),
+        _ => return None,
+    };
+    Some(name.to_owned())
 }
 
 /// The partial style that `node` gives in its string prop `id` (`hover`, ...).
@@ -238,13 +264,30 @@ pub fn box_style<S: Styled>(d: S, s: &Style, t: &Tokens, partial: bool) -> S {
     if let Some(c) = token(t, s.enum_(prop::BORDER)) {
         d = d.border_1().border_color(c);
     }
-    match s.enum_(prop::RADIUS) {
+    d = match s.enum_(prop::RADIUS) {
         radius::SM => d.rounded(px(4.)),
         radius::MD => d.rounded(px(8.)),
         radius::LG => d.rounded(px(12.)),
         radius::FULL => d.rounded_full(),
         _ => d,
+    };
+    // UI API 1.9: an absolute box is placed in its parent by the insets.
+    if !partial || has(prop::POSITION) {
+        d = if s.enum_(prop::POSITION) == position::ABSOLUTE { d.absolute() } else { d.relative() };
     }
+    if let Some(v) = s.get(prop::TOP) {
+        d = d.top(units(v));
+    }
+    if let Some(v) = s.get(prop::LEFT) {
+        d = d.left(units(v));
+    }
+    if let Some(v) = s.get(prop::RIGHT) {
+        d = d.right(units(v));
+    }
+    if let Some(v) = s.get(prop::BOTTOM) {
+        d = d.bottom(units(v));
+    }
+    d
 }
 
 /// The span props: size, weight, italic, mono, color, and the line limit
@@ -286,6 +329,15 @@ mod tests {
         assert_eq!(units(3), px(12.));
         assert_eq!(units(-2), px(0.));
         assert_eq!(units(10_000), px(MAX_UNITS as f32 * UNIT));
+    }
+
+    #[test]
+    fn key_names_match_the_web() {
+        assert_eq!(key_name("up").as_deref(), Some("ArrowUp"));
+        assert_eq!(key_name("space").as_deref(), Some("Space"));
+        assert_eq!(key_name("W").as_deref(), Some("w"));
+        assert_eq!(key_name("7").as_deref(), Some("7"));
+        assert_eq!(key_name("f13"), None);
     }
 
     #[test]

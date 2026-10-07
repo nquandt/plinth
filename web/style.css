@@ -640,6 +640,8 @@ body {
 .pl-pressable {
   box-sizing: border-box;
   min-width: 0;
+  /* An absolute child is placed in its parent primitive, as in gpui. */
+  position: relative;
 }
 .pl-span {
   overflow-wrap: anywhere;

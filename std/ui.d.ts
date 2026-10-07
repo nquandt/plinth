@@ -347,6 +347,13 @@ interface BoxLook {
   bg?: ColorToken;
   border?: ColorToken;
   radius?: "none" | "sm" | "md" | "lg" | "full";
+  /** "absolute": the element leaves the flow and the insets place it in its parent box (UI API 1.9). */
+  position?: "relative" | "absolute";
+  /** Insets in spacing units, from the edges of the parent box. */
+  top?: number;
+  left?: number;
+  right?: number;
+  bottom?: number;
 }
 
 interface BoxStyle extends BoxLook {
@@ -365,8 +372,20 @@ interface BoxStyle extends BoxLook {
   children?: Children;
 }
 
+/**
+ * Keys for `onKeyDown`/`onKeyUp` (UI API 1.9): "ArrowUp", "ArrowDown",
+ * "ArrowLeft", "ArrowRight", "Enter", "Escape", "Space", "Tab",
+ * "Backspace", "Delete", "Home", "End", "PageUp", "PageDown", a lower-case
+ * letter or a digit. A held key gives one down and one up (no repeats).
+ * An element with a key handler is a tab stop; give it a `label`.
+ */
+interface KeyHandlers {
+  onKeyDown?: (key: string) => void;
+  onKeyUp?: (key: string) => void;
+}
+
 /** A layout box. `label` names it as a group for assistive technology. */
-export declare function Box(props: BoxStyle & { label?: string }): Element;
+export declare function Box(props: BoxStyle & KeyHandlers & { label?: string }): Element;
 
 interface SpanLook {
   size?: "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
@@ -398,8 +417,8 @@ export declare function Span(props: {
 
 /** A box that the user can press: a button or a link. It is a tab stop; Enter and Space press it. */
 export declare function Pressable(
-  props: BoxStyle & { label: string; role: "button" | "link"; onPress: () => void; disabled?: boolean },
+  props: BoxStyle & KeyHandlers & { label: string; role: "button" | "link"; onPress: () => void; disabled?: boolean },
 ): Element;
 
 /** A box that scrolls along its direction. Give it a height or a max height. */
-export declare function Scroll(props: BoxStyle & { label?: string }): Element;
+export declare function Scroll(props: BoxStyle & KeyHandlers & { label?: string }): Element;

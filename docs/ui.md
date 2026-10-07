@@ -271,6 +271,16 @@ the default, or `"row"`), `wrap`, `gap`, `padding`, `paddingX`, `paddingY`,
   raw colors and no raw pixels.
 - **`.map()` children** (and a `List`) inside a primitive take part in its
   layout: mapped cards in a row `Box` are a row.
+- **Positioning (UI API 1.9).** `position="absolute"` takes a box out of
+  the flow; `top`, `left`, `right` and `bottom` (spacing units) place it in
+  its parent primitive. Later children are drawn over earlier ones.
+- **Keys (UI API 1.9).** `onKeyDown` and `onKeyUp` on `Box`, `Pressable`
+  and `Scroll` get the key name: `"ArrowUp"`, `"ArrowDown"`, `"ArrowLeft"`,
+  `"ArrowRight"`, `"Enter"`, `"Escape"`, `"Space"`, `"Tab"`,
+  `"Backspace"`, `"Delete"`, `"Home"`, `"End"`, `"PageUp"`, `"PageDown"`,
+  or a lower-case letter or digit. A held key gives one down and one up
+  (no repeats). An element with a key handler is a tab stop: give it a
+  `label`. `examples/pong` uses both.
 - The runtime gives a `Pressable` its hover and disabled states.
 - **Partial styles (UI API 1.7).** `hover`, `active` and `focus` (on `Box`,
   `Pressable`, `Scroll`) and `compact`, `regular`, `wide` (also on `Span`)

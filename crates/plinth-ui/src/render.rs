@@ -6,7 +6,7 @@ use crate::theme::{Tokens, WidthClass, icon_glyph, with_alpha};
 use crate::tree::{Node, Tree};
 use gpui::{
     AnyElement, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FocusHandle, FontWeight, Image, ImageFormat,
-    IntoElement, KeyDownEvent, MouseButton, ObjectFit, Pixels, Render, SharedString, Stateful, Subscription, Window, anchored,
+    IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, ObjectFit, Pixels, Render, SharedString, Stateful, Subscription, Window, anchored,
     deferred, div, img, prelude::*, px,
 };
 use std::cell::Cell;
@@ -1259,12 +1259,44 @@ impl PlinthRoot {
         d
     }
 
+    /// `onKeyDown`/`onKeyUp` of a Level 2 box (UI API 1.9): the element is a
+    /// tab stop and sends the key name; a held key sends no repeats.
+    fn key_handlers<E: StatefulInteractiveElement + Styled>(&self, d: E, node: &Node, cx: &mut Context<Self>) -> E {
+        let down = node.handler(event::KEY_DOWN).filter(|_| self.stopped.is_none());
+        let up = node.handler(event::KEY_UP).filter(|_| self.stopped.is_none());
+        if down.is_none() && up.is_none() {
+            return d;
+        }
+        let mut d = d.tab_index(0);
+        if let Some(h) = down {
+            d = d.on_key_down(cx.listener(move |this, ev: &KeyDownEvent, _, cx| {
+                if ev.is_held {
+                    return;
+                }
+                if let Some(name) = primitives::key_name(&ev.keystroke.key) {
+                    cx.stop_propagation();
+                    this.fire(h, event::KEY_DOWN, Value::Str(name), cx);
+                }
+            }));
+        }
+        if let Some(h) = up {
+            d = d.on_key_up(cx.listener(move |this, ev: &KeyUpEvent, _, cx| {
+                if let Some(name) = primitives::key_name(&ev.keystroke.key) {
+                    cx.stop_propagation();
+                    this.fire(h, event::KEY_UP, Value::Str(name), cx);
+                }
+            }));
+        }
+        d
+    }
+
     /// A layout box. Without a label it is a plain container for AccessKit;
     /// with one it is a named group.
     fn render_box(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let label = node.str_prop(prop::LABEL).map(str::to_owned);
         let style = self.primitive_style(node);
         let d = primitives::box_style(div().id(eid("box", node.id)), &style, t, false);
+        let d = self.key_handlers(d, node, cx);
         self.state_styles(d, node, t)
             .when_some(label, |d, l| d.role(accesskit::Role::Group).aria_label(l))
             .children(self.render_box_children(node, t, cx))
@@ -1319,6 +1351,9 @@ impl PlinthRoot {
                 d = d.focus_visible(move |r| primitives::box_style(r, &f, &tokens, true));
             }
         }
+        if !disabled {
+            d = self.key_handlers(d, node, cx);
+        }
         if let Some(h) = node.handler(event::PRESS).filter(|_| !disabled) {
             d = d
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.fire(h, event::PRESS, Value::Null, cx)))
@@ -1338,6 +1373,7 @@ impl PlinthRoot {
         let d = div().id(eid("scroll", node.id)).role(accesskit::Role::ScrollView);
         let d = primitives::box_style(d, &style, t, false);
         let d = if primitives::is_row(&style) { d.overflow_x_scroll() } else { d.overflow_y_scroll() };
+        let d = self.key_handlers(d, node, cx);
         self.state_styles(d, node, t)
             .when_some(label, |d, l| d.aria_label(l))
             .children(self.render_box_children(node, t, cx))

@@ -325,6 +325,7 @@ async function main() {
       ["an unchanged row is the same element after a commit (todo)", checkRowIdentity],
       ["one row of 10,000 changes, no other element does (big-list)", checkBigList],
       ["Level 2 primitives: layout and keyboard (primitives)", checkPrimitives],
+      ["absolute boxes and held keys (pong)", checkPong],
     ]) {
       console.log(`== ${name} ==`);
       try {
@@ -706,6 +707,38 @@ async function checkPrimitives(cdpPort, base) {
       await writeFile(path.join(process.env.A11Y_SHOTS, "primitives.png"), Buffer.from(r.data, "base64"));
     }
     return `${layout.cards} cards in one row, Enter presses, disabled is not a tab stop, hover style, compact style`;
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Pong in Edge (UI API 1.9): the ball and the paddles are absolute boxes
+ * in the court; real key events on the focused court start the game
+ * (Space) and move the paddle while ArrowUp is held, and stop it when the
+ * key is released.
+ */
+async function checkPong(cdpPort, base) {
+  const page = await openApp(cdpPort, base, "pong", `document.querySelector('#app [aria-label^="Court"]')`);
+  const key = async (type, key, code, vk) => page.send("Input.dispatchKeyEvent", { type, key, code, windowsVirtualKeyCode: vk });
+  try {
+    const paddle = `document.querySelector('#app [aria-label="Your paddle"]')`;
+    const pos = await page.eval(`getComputedStyle(${paddle}).position + " " + getComputedStyle(document.querySelector('#app [aria-label="Ball"]')).position`);
+    if (pos !== "absolute absolute") throw new Error(`the paddle and the ball are not absolute: ${pos}`);
+    await page.eval(`document.querySelector('#app [aria-label^="Court"]').focus()`);
+    await key("keyDown", " ", "Space", 32);
+    await key("keyUp", " ", "Space", 32);
+    await page.waitFor(`document.getElementById("app").innerText.includes("Rally") ? true : null`, 3000);
+    const top = () => page.eval(`${paddle}.getBoundingClientRect().top`);
+    const before = await top();
+    await key("keyDown", "ArrowUp", "ArrowUp", 38);
+    await sleep(300);
+    await key("keyUp", "ArrowUp", "ArrowUp", 38);
+    const held = await top();
+    if (!(held < before)) throw new Error(`holding ArrowUp did not move the paddle up: ${before} -> ${held}`);
+    await sleep(200);
+    if ((await top()) !== held) throw new Error("the paddle moved after the key was released");
+    return `moved ${Math.round(before - held)} px while ArrowUp was held`;
   } finally {
     await page.close();
   }

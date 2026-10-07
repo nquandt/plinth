@@ -20,7 +20,7 @@ import { ControlKind, Prop, Event, EnumColor } from "../ui-api.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 // The court (examples/pong/app/game.ts), in spacing units.
-const FIELD_H = 48, PADDLE_H = 10, BALL = 2, HALF_W = 37, NET_W = 1, FIELD_W = 75;
+const FIELD_H = 48, PADDLE_H = 10, PADDLE_W = 2, BALL = 2, HALF_W = 37, NET_W = 1, FIELD_W = 75;
 
 // A fake setInterval: the host's `set-timer` calls the global functions, so
 // the test owns the clock. `tickAll()` fires every live interval once.
@@ -61,23 +61,20 @@ const press = (label) => {
   assert.ok(p, `a Pressable labelled ${label}`);
   app.onEvent({ kind: "ui", handler: p.listeners.get(Event.press), event: Event.press, value: null });
 };
-const height = (n) => n.props.get(Prop.height) ?? 0;
-const width = (n) => n.props.get(Prop.width) ?? 0;
-/** The spacer before `n` in its parent (the Box that places it). */
-const spacerBefore = (n) => {
-  const parent = tree.nodes.get(n.parent);
-  return tree.nodes.get(parent.children[parent.children.indexOf(n.id) - 1]);
-};
-const paddleTop = (label) => height(spacerBefore(labelled(label)));
-/** The ball's court position, read from the spacers of the half that draws it. */
+// The paddles and the ball are absolute boxes in the court (UI API 1.9):
+// their insets are their positions.
+const inset = (n, prop) => n.props.get(prop) ?? 0;
+const paddleTop = (label) => inset(labelled(label), Prop.top);
+/** The ball's field position (the court has the left paddle column first). */
 const ball = () => {
-  for (const [half, dx] of [["Ball (left half)", 0], ["Ball (right half)", HALF_W + NET_W]]) {
-    const b = labelled(half);
-    if (b.props.get(Prop.bg)?.enum === EnumColor.none) continue;
-    const row = tree.nodes.get(b.parent);
-    return { x: dx + width(spacerBefore(b)), y: height(spacerBefore(row)) };
-  }
-  assert.fail("no ball is visible");
+  const b = labelled("Ball");
+  return { x: inset(b, Prop.left) - PADDLE_W, y: inset(b, Prop.top) };
+};
+/** A key on the court (UI API 1.9 onKeyDown/onKeyUp). */
+const courtKey = (eventCode, key) => {
+  const c = nodes().find((n) => String(n.props.get(Prop.label) ?? "").startsWith("Court"));
+  assert.ok(c, "the court");
+  app.onEvent({ kind: "ui", handler: c.listeners.get(eventCode), event: eventCode, value: key });
 };
 const texts = () => nodes().filter((n) => n.kind === ControlKind.span).map((n) => n.text ?? "");
 const scores = () => {
@@ -93,7 +90,7 @@ const centerY = (FIELD_H - PADDLE_H) / 2;
 assert.equal(paddleTop("Your paddle"), centerY);
 const start = ball();
 // The ball starts on the net; the right half draws it at its left edge.
-assert.deepEqual(start, { x: HALF_W + NET_W, y: Math.round((FIELD_H - BALL) / 2) });
+assert.deepEqual(start, { x: Math.round((FIELD_W - BALL) / 2), y: Math.round((FIELD_H - BALL) / 2) });
 assert.equal(intervals.size, 0, "no game loop before Start");
 
 // -- Start: the ball moves toward the computer ---------------------------------
@@ -125,6 +122,18 @@ press("Down");
 for (let i = 0; i < 40; i++) tickAll();
 assert.equal(paddleTop("Your paddle"), FIELD_H - PADDLE_H, "Down moves it to the bottom wall and no further");
 press("Stop");
+// Keys: a held arrow key moves the paddle until it is released.
+courtKey(Event.keyDown, "ArrowUp");
+for (let i = 0; i < 3; i++) tickAll();
+const held = paddleTop("Your paddle");
+assert.ok(held < FIELD_H - PADDLE_H, `ArrowUp moves the paddle: ${held}`);
+courtKey(Event.keyUp, "ArrowUp");
+tickAll();
+assert.equal(paddleTop("Your paddle"), held, "releasing the key stops the paddle");
+courtKey(Event.keyDown, "s");
+tickAll();
+assert.ok(paddleTop("Your paddle") > held, "S moves the paddle down");
+courtKey(Event.keyUp, "s");
 
 // -- Bounces and a point --------------------------------------------------------
 // Follow the ball until the first point: watch for a wall bounce (vertical

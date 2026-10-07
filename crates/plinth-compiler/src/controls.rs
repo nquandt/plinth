@@ -4,7 +4,7 @@
 
 use plinth_protocol::{
     ControlKind, aspect, axis, button_role, button_size, chart_kind, color, cross_align, date_picker_mode, event, fraction, justify,
-    pressable_role, prop, radius, text_align, text_size, text_style, tone, weight,
+    position, pressable_role, prop, radius, text_align, text_size, text_style, tone, weight,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,6 +160,7 @@ const TEXT_SIZES: &[(&str, u16)] = &[
 const WEIGHTS: &[(&str, u16)] =
     &[("regular", weight::REGULAR), ("medium", weight::MEDIUM), ("semibold", weight::SEMIBOLD), ("bold", weight::BOLD)];
 const PRESSABLE_ROLES: &[(&str, u16)] = &[("button", pressable_role::BUTTON), ("link", pressable_role::LINK)];
+const POSITIONS: &[(&str, u16)] = &[("relative", position::RELATIVE), ("absolute", position::ABSOLUTE)];
 
 /// The props of a Level 2 box: the props of the control itself, the style
 /// props, and the partial styles (states and width classes). `@style`
@@ -196,6 +197,11 @@ macro_rules! box_props {
             p("bg", T::Enum(COLORS), false, P(prop::BG)),
             p("border", T::Enum(COLORS), false, P(prop::BORDER)),
             p("radius", T::Enum(RADII), false, P(prop::RADIUS)),
+            p("position", T::Enum(POSITIONS), false, P(prop::POSITION)),
+            p("top", T::Int, false, P(prop::TOP)),
+            p("left", T::Int, false, P(prop::LEFT)),
+            p("right", T::Int, false, P(prop::RIGHT)),
+            p("bottom", T::Int, false, P(prop::BOTTOM)),
         ]
     };
 }
@@ -526,7 +532,11 @@ pub const CONTROLS: &[ControlSpec] = &[
         name: "Box",
         kind: ControlKind::Box,
         // `label` names the box as a group for assistive technology.
-        props: box_props![p("label", T::Str, false, P(prop::LABEL))],
+        props: box_props![
+            p("label", T::Str, false, P(prop::LABEL)),
+            p("onKeyDown", T::CallbackStr, false, Ev(event::KEY_DOWN)),
+            p("onKeyUp", T::CallbackStr, false, Ev(event::KEY_UP)),
+        ],
         children: ChildKind::Nodes,
     },
     ControlSpec {
@@ -556,13 +566,19 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("role", T::Enum(PRESSABLE_ROLES), true, P(prop::ROLE)),
             p("onPress", T::Callback0, true, Ev(event::PRESS)),
             p("disabled", T::Bool, false, P(prop::DISABLED)),
+            p("onKeyDown", T::CallbackStr, false, Ev(event::KEY_DOWN)),
+            p("onKeyUp", T::CallbackStr, false, Ev(event::KEY_UP)),
         ],
         children: ChildKind::Nodes,
     },
     ControlSpec {
         name: "Scroll",
         kind: ControlKind::Scroll,
-        props: box_props![p("label", T::Str, false, P(prop::LABEL))],
+        props: box_props![
+            p("label", T::Str, false, P(prop::LABEL)),
+            p("onKeyDown", T::CallbackStr, false, Ev(event::KEY_DOWN)),
+            p("onKeyUp", T::CallbackStr, false, Ev(event::KEY_UP)),
+        ],
         children: ChildKind::Nodes,
     },
 ];

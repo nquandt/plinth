@@ -292,13 +292,11 @@ fn utility_converter_and_text_tools() {
 /// wasmtime; see docs/GAPS.md "Games".
 #[test]
 fn pong_plays_a_point() {
-    use plinth_protocol::color;
     const FIELD_W: i32 = 75;
     const FIELD_H: i32 = 48;
     const PADDLE_H: i32 = 10;
     const BALL: i32 = 2;
-    const HALF_W: i32 = 37;
-    const NET_W: i32 = 1;
+    const PADDLE_W: i32 = 2;
 
     let art = build("pong");
     eprintln!("pong: app {} B, component {} B", art.app.len(), art.component.len());
@@ -312,25 +310,15 @@ fn pong_plays_a_point() {
             .unwrap_or_else(|| panic!("no node labelled {label}"))
     };
     let int = |h: &Harness, id: NodeId, p: u16| h.tree.get(id).unwrap().prop(p).and_then(Value::as_int).unwrap_or(0);
-    let spacer_before = |h: &Harness, id: NodeId| -> NodeId {
-        let parent = h.tree.get(h.tree.get(id).unwrap().parent).unwrap();
-        let i = parent.children.iter().position(|c| *c == id).unwrap();
-        parent.children[i - 1]
-    };
+    // The paddles and the ball are absolute boxes in the court (UI API
+    // 1.9): their insets are their positions.
     let paddle = |h: &Harness, label: &str| {
         let p = labelled(h, label);
-        int(h, spacer_before(h, p), prop::HEIGHT)
+        int(h, p, prop::TOP)
     };
     let ball = |h: &Harness| -> (i32, i32) {
-        for (label, dx) in [("Ball (left half)", 0), ("Ball (right half)", HALF_W + NET_W)] {
-            let b = labelled(h, label);
-            if h.tree.get(b).unwrap().enum_prop(prop::BG) == color::NONE {
-                continue;
-            }
-            let row = h.tree.get(b).unwrap().parent;
-            return (dx + int(h, spacer_before(h, b), prop::WIDTH), int(h, spacer_before(h, row), prop::HEIGHT));
-        }
-        panic!("no ball is visible");
+        let b = labelled(h, "Ball");
+        (int(h, b, prop::LEFT) - PADDLE_W, int(h, b, prop::TOP))
     };
     let press = |h: &mut Harness, label: &str| {
         let id = labelled(h, label);

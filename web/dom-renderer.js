@@ -30,6 +30,7 @@ import {
   EnumWeight,
   EnumPressableRole,
   EnumTextAlign,
+  EnumPosition,
 } from "./ui-api.js";
 
 const ASPECT_RATIO = { [EnumAspect.square]: "1 / 1", [EnumAspect.wide]: "16 / 9", [EnumAspect.tall]: "3 / 4" };
@@ -298,12 +299,26 @@ export function primitiveStyle(n, partial = false) {
   if (radius) css["border-radius"] = radius;
   else if (partial && has(Prop.radius)) css["border-radius"] = "0";
   if (n.kind === ControlKind.scroll && !partial) css[row ? "overflow-x" : "overflow-y"] = "auto";
+  // UI API 1.9: an absolute box is placed in its parent primitive (every
+  // primitive is `position: relative` in style.css, as in gpui).
+  if (en(Prop.position) === EnumPosition.absolute) css.position = "absolute";
+  else if (partial && has(Prop.position)) css.position = "relative";
+  for (const [prop, name] of [
+    [Prop.top, "top"],
+    [Prop.left, "left"],
+    [Prop.right, "right"],
+    [Prop.bottom, "bottom"],
+  ]) {
+    const v = p.get(prop);
+    if (typeof v === "number") css[name] = units(v);
+  }
   return css;
 }
 
 // -- UI API 1.7: partial styles (states and width classes) ----------------------
 
 const ENUM_STYLE_PROPS = new Set([
+  Prop.position,
   Prop.axis,
   Prop.align,
   Prop.crossAlign,
@@ -361,6 +376,28 @@ export function partialRule(kind, propId, text, cls) {
   if (!decls) return null;
   const sel = PARTIAL_RULES[propId](cls);
   return Array.isArray(sel) ? `${sel[0]} { ${sel[1]} { ${decls} } }` : `${sel} { ${decls} }`;
+}
+
+/** The Plinth name of a browser key (UI API 1.9), the same names as the desktop (`primitives::key_name`); null for other keys. */
+export function keyName(key) {
+  const named = {
+    ArrowUp: "ArrowUp",
+    ArrowDown: "ArrowDown",
+    ArrowLeft: "ArrowLeft",
+    ArrowRight: "ArrowRight",
+    Enter: "Enter",
+    Escape: "Escape",
+    " ": "Space",
+    Tab: "Tab",
+    Backspace: "Backspace",
+    Delete: "Delete",
+    Home: "Home",
+    End: "End",
+    PageUp: "PageUp",
+    PageDown: "PageDown",
+  };
+  if (Object.hasOwn(named, key)) return named[key];
+  return /^[A-Za-z0-9]$/.test(key) ? key.toLowerCase() : null;
 }
 
 /** One generated class for each distinct partial style, in one style element of the document. */
@@ -987,6 +1024,18 @@ export class DomRenderer {
     let partials = [];
     let disabled = false;
     let link = false;
+    // UI API 1.9: onKeyDown/onKeyUp. A held key sends no repeats.
+    const key = (eventCode) => (ev) => {
+      if (eventCode === Event.keyDown && ev.repeat) return;
+      const name = keyName(ev.key);
+      if (name === null || this.node(id)?.listeners.get(eventCode) === undefined) return;
+      // The app handles the key: no page scroll, no Space press of a button.
+      if (name.startsWith("Arrow") || name === "Space" || name.startsWith("Page") || name === "Home" || name === "End") ev.preventDefault();
+      ev.stopPropagation();
+      this.fire(id, eventCode, name);
+    };
+    e.addEventListener("keydown", key(Event.keyDown));
+    e.addEventListener("keyup", key(Event.keyUp));
     if (kname === "pressable") {
       const press = () => {
         if (!disabled) this.fire(id, Event.press);
@@ -1019,9 +1068,10 @@ export class DomRenderer {
           e.classList.toggle("pl-pressable-plain", !colorVar(n.props.get(Prop.bg)?.enum) && !n.props.get(Prop.hover));
           e.classList.toggle("pl-pressable-own-hover", !!n.props.get(Prop.hover));
         } else {
+          const keys = n.listeners.get(Event.keyDown) !== undefined || n.listeners.get(Event.keyUp) !== undefined;
           setAttr(e, "role", label ? "group" : null);
           setAttr(e, "aria-label", label);
-          if (kname === "scroll") setAttr(e, "tabindex", "0");
+          setAttr(e, "tabindex", kname === "scroll" || keys ? "0" : null);
         }
       },
     };
