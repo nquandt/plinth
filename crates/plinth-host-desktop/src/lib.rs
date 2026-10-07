@@ -4,6 +4,7 @@
 
 use anyhow::{Context as _, Result};
 use gpui::{App, AppContext, Bounds, KeyBinding, WindowBounds, WindowOptions, actions, px, size};
+use plinth_runner_wasmtime::files::{DEFAULT_QUOTA, Files, private_space_dir};
 use plinth_runner_wasmtime::{Clipboard, Guest, Limits, Runner, kv::Kv, policy::Policy};
 use plinth_ui::{GuestPort, PlinthRoot};
 use std::path::Path;
@@ -12,6 +13,8 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
 pub mod consent;
+
+pub use plinth_runner_wasmtime::files::Owner;
 
 actions!(plinth_host, [Quit]);
 
@@ -31,6 +34,24 @@ pub struct HostApp {
     /// without the prefix, for `<Image>`. A bare `app.wasm` has none; the
     /// `plinth dev` host adds the project's `assets/` itself.
     pub assets: std::collections::HashMap<String, Vec<u8>>,
+    /// Who owns the app's private space for `plinth:files`
+    /// (`docs/STORAGE.md` §3 rule 2): the verified signer of the package,
+    /// else the package digest; `Owner::Dev` for `plinth dev`.
+    pub owner: Owner,
+}
+
+/// The owner of a package's private space: its verified signer, else its
+/// digest. A signature that does not check out gets the digest, so a
+/// tampered package never reaches the publisher's files.
+pub fn package_owner(pkg: &plinth_package::Package, bytes: &[u8]) -> Owner {
+    let signer = plinth_package::signature::verify(pkg).ok().flatten().map(|s| s.key);
+    Owner::of_package(signer.as_deref(), bytes)
+}
+
+/// The `plinth:files` private space of `app_id` owned by `owner`, under the
+/// host's data directory (`docs/STORAGE.md` §2, §3).
+pub fn private_files(owner: &Owner, app_id: &str) -> Files {
+    Files::open(private_space_dir(&plinth_runner_wasmtime::kv::data_dir(), owner, app_id), DEFAULT_QUOTA)
 }
 
 impl HostApp {
@@ -47,6 +68,7 @@ impl HostApp {
     pub fn from_bytes(bytes: Vec<u8>, path: &Path) -> Result<HostApp> {
         if plinth_package::is_package(&bytes) {
             let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("open {}", path.display()))?;
+            let owner = package_owner(&pkg, &bytes);
             let capabilities: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
             check_hub_trust(&pkg, &capabilities).with_context(|| format!("load {}", path.display()))?;
             let assets = pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
@@ -57,9 +79,11 @@ impl HostApp {
                 app_id: pkg.manifest.id,
                 capabilities,
                 assets,
+                owner,
             })
         } else {
             let title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let owner = Owner::of_package(None, &bytes);
             let component = with_runtime(bytes, &[]).with_context(|| format!("load {}", path.display()))?;
             Ok(HostApp {
                 component,
@@ -68,6 +92,7 @@ impl HostApp {
                 app_id: format!("dev.{title}"),
                 capabilities: Vec::new(),
                 assets: std::collections::HashMap::new(),
+                owner,
             })
         }
     }
@@ -255,10 +280,11 @@ pub fn start_with_policy(
     runner: Arc<Runner>,
     component: &[u8],
     app_id: &str,
+    owner: &Owner,
     policy: Policy,
     args: &[u8],
 ) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
-    start_with_policy_and_hub(runner, component, app_id, policy, None, args)
+    start_with_policy_and_hub(runner, component, app_id, owner, policy, None, args)
 }
 
 /// Like `start_with_policy`, with a `plinth:hub` backend (`docs/HUB.md`
@@ -268,6 +294,7 @@ pub fn start_with_policy_and_hub(
     runner: Arc<Runner>,
     component: &[u8],
     app_id: &str,
+    owner: &Owner,
     policy: Policy,
     hub: Option<Box<dyn plinth_runner_wasmtime::hub::HubBackend>>,
     args: &[u8],
@@ -280,6 +307,7 @@ pub fn start_with_policy_and_hub(
     let loaded = runner.load_with_policy_and_hub(component, Limits::default(), policy, kv, clipboard, hub);
     match loaded {
         Ok(mut guest) => {
+            guest.set_files(private_files(owner, app_id));
             // Hot reload (SPEC.md §13): `args` is the previous instance's
             // signal snapshot, or empty on the first start. A release
             // build of the app ignores it (it never registered anything).
@@ -334,8 +362,8 @@ pub fn open_app_with_hub(
     policy: Policy,
     hub: Option<Box<dyn plinth_runner_wasmtime::hub::HubBackend>>,
 ) -> gpui::WindowHandle<PlinthRoot> {
-    let HostApp { component, title, accent, app_id, assets, .. } = app;
-    let (port, init) = start_with_policy_and_hub(runner, &component, &app_id, policy, hub, &[]);
+    let HostApp { component, title, accent, app_id, assets, owner, .. } = app;
+    let (port, init) = start_with_policy_and_hub(runner, &component, &app_id, &owner, policy, hub, &[]);
     let assets = Arc::new(assets);
 
     let bounds = Bounds::centered(None, size(px(1000.), px(720.)), cx);
@@ -373,6 +401,7 @@ pub fn open_app_with_hub(
 pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
     let runner = Arc::new(Runner::new()?);
     let app_id = app.app_id.clone();
+    let owner = app.owner.clone();
     let capabilities = app.capabilities.clone();
     let policy = Policy::new(capabilities.iter().cloned());
 
@@ -384,6 +413,7 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
         if let Some(rx) = reloads {
             let runner = runner.clone();
             let app_id = app_id.clone();
+            let owner = owner.clone();
             let capabilities = capabilities.clone();
             cx.spawn(async move |cx| {
                 loop {
@@ -399,13 +429,14 @@ pub fn run(app: HostApp, reloads: Option<Receiver<Vec<u8>>>) -> Result<()> {
                     if let Some(bytes) = latest {
                         let runner = runner.clone();
                         let app_id = app_id.clone();
+                        let owner = owner.clone();
                         let capabilities = capabilities.clone();
                         let ok = window
                             .update(cx, |root, _, cx| {
                                 root.reload(
                                     |args| {
                                         let policy = Policy::new(capabilities.iter().cloned());
-                                        start_with_policy(runner, &bytes, &app_id, policy, args)
+                                        start_with_policy(runner, &bytes, &app_id, &owner, policy, args)
                                     },
                                     cx,
                                 )
@@ -464,7 +495,7 @@ pub fn plan_launch(hub: &plinth_hub::Hub, app_id: &str) -> Result<LaunchPlan> {
     let declared: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
     let pending = hub.needs_consent(app_id, &declared)?;
     if pending.is_empty() {
-        return Ok(LaunchPlan::Ready(Box::new(prepare(hub, app_id, pkg)?)));
+        return Ok(LaunchPlan::Ready(Box::new(prepare(hub, app_id, pkg, &bytes)?)));
     }
     // A bad signature is refused outright (`docs/HUB.md` §6.1); an
     // unsigned package shows "unverified publisher".
@@ -503,7 +534,7 @@ pub fn apply_consent(
             }
             let bytes = hub.version_bytes(app_id, version)?;
             let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("read version {version} of {app_id}"))?;
-            Ok(Some(prepare(hub, app_id, pkg)?))
+            Ok(Some(prepare(hub, app_id, pkg, &bytes)?))
         }
         None => {
             let fallback = hub.runnable_version(app_id)?;
@@ -514,14 +545,15 @@ pub fn apply_consent(
             eprintln!("[plinth] consent cancelled; running the previous version {} of {app_id}", fallback.version);
             let bytes = hub.version_bytes(app_id, &fallback.version)?;
             let pkg = plinth_package::Package::read(&bytes).with_context(|| format!("read version {} of {app_id}", fallback.version))?;
-            Ok(Some(prepare(hub, app_id, pkg)?))
+            Ok(Some(prepare(hub, app_id, pkg, &bytes)?))
         }
     }
 }
 
 /// Links a library package and builds its policy from the grants
 /// (declared AND allowed is granted; declared and refused is denied).
-fn prepare(hub: &plinth_hub::Hub, app_id: &str, pkg: plinth_package::Package) -> Result<PreparedApp> {
+fn prepare(hub: &plinth_hub::Hub, app_id: &str, pkg: plinth_package::Package, bytes: &[u8]) -> Result<PreparedApp> {
+    let owner = package_owner(&pkg, bytes);
     let declared: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
     check_hub_trust(&pkg, &declared)?;
     let hub_manage = declared.iter().any(|c| c == plinth_runner_wasmtime::capability::HUB_MANAGE);
@@ -531,7 +563,7 @@ fn prepare(hub: &plinth_hub::Hub, app_id: &str, pkg: plinth_package::Package) ->
     let component = with_runtime(pkg.component, &declared)?;
     let assets: std::collections::HashMap<String, Vec<u8>> =
         pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
-    let app = HostApp { component, title, accent, app_id: app_id.to_owned(), capabilities: declared, assets };
+    let app = HostApp { component, title, accent, app_id: app_id.to_owned(), capabilities: declared, assets, owner };
     Ok(PreparedApp { app, policy, hub_manage })
 }
 

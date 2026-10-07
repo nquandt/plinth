@@ -85,6 +85,8 @@ const TYPINGS: &[(&str, &str)] = &[
     ("store.d.ts", include_str!("../../../std/store.d.ts")),
     ("clipboard.d.ts", include_str!("../../../std/clipboard.d.ts")),
     ("dialog.d.ts", include_str!("../../../std/dialog.d.ts")),
+    ("net.d.ts", include_str!("../../../std/net.d.ts")),
+    ("files.d.ts", include_str!("../../../std/files.d.ts")),
 ];
 
 fn main() -> ExitCode {
@@ -626,6 +628,9 @@ fn dev(dir: &Path) -> Result<ExitCode> {
         app_id: first.config.id.clone(),
         capabilities: first.config.capabilities.iter().map(|c| c.name.clone()).collect(),
         assets: read_assets(dir),
+        // `plinth dev` runs a project from source: its private space is
+        // keyed by the app id alone, apart from any installed package.
+        owner: plinth_host_desktop::Owner::Dev,
     };
     plinth_host_desktop::run(app, Some(rx))?;
     Ok(ExitCode::SUCCESS)
