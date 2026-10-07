@@ -87,11 +87,10 @@ repository's docs under `docs/` for topic-by-topic references.
 
 ## License
 
-Plinth is intended to be released under the Apache License 2.0 (see
-the `license` field in `Cargo.toml`). A `LICENSE` file has not been
-added to the repository yet — that is the project owner's decision to
-make before the first public release. Please do not add one in a
-contribution; flag it to a maintainer instead.
+Plinth is dual-licensed under the MIT license (`LICENSE-MIT`) or the
+Apache License 2.0 (`LICENSE-APACHE`), at your option. Unless you say
+otherwise, a contribution that you submit is dual-licensed in the same
+way, with no additional terms or conditions.
 
 ## Before you push
 

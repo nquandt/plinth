@@ -12,7 +12,7 @@ Plinth goes through three public levels. A level starts only when all items with
 |---|---|---|
 | **Preview** | Developers who try Plinth and give feedback. | It installs and works on the documented platforms. Breaking changes can occur in each release. No production use. |
 | **Beta** | Early adopters with real apps, at their own risk. | No breaking change to the language, the `.plnt` format, the UI API or the host APIs without a deprecation step. Security reports get a fix. |
-| **1.0** | The public, for production apps. | Semantic versioning on all public contracts (§2). A support window for each major version. Signed binaries. A documented security process. |
+| **1.0** | The public, for production apps. | Semantic versioning on all public contracts (§2). Rolling support: every released runtime stays available, so old apps keep running. Signed binaries. A documented security process. |
 
 Status words:
 
@@ -35,7 +35,8 @@ A production app needs contracts that do not break. Each contract needs a writte
 | C6 | Plinth TS language version: a list of the accepted syntax and the deviations from ECMAScript | Beta | Partial | SPEC §4.3, §4.6, `docs/language.md`. Next: give the language a version and freeze the 1.0 subset. |
 | C7 | Deprecation policy: how a feature is marked, how long it stays, what diagnostic the compiler gives | Beta | Open | Write it in SPEC §6.6 and §10.5. |
 | C8 | Compatibility test suite: `.plnt` files built by each released version run on the newest host | 1.0 | Open | Keep the released packages of `examples/` in the repo and run them in the gate. |
-| C9 | Support window for each major version (core and host) | 1.0 | Decide | PR-Q3. |
+| C9 | Support policy: rolling support, no guaranteed window; every released runtime core stays available | 1.0 | Done | §15 PR-Q3 (owner, 2026-10-07) |
+| C10 | Every released core and host stays available for download, so an old app always finds its core | 1.0 | Open | A permanent core archive (registry or release assets) and a test that installs an old core from it. |
 
 ## 3. Language and compiler
 
@@ -59,7 +60,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | R2 | Desktop limits: time limit, memory cap, stack limit stop only the app, with a plain reason | Preview | Done | `tests/errors.rs` "Limits" |
 | R3 | Web limits: a time limit (Worker and watchdog) and a memory cap | Beta | Open | GAPS R1, R2; HANDOFF §10 item 5 |
 | R4 | wasmi engine passes all suites (monkey, async, files, hub, net) and runs in CI | Beta | Partial | HANDOFF §10 item 1 (a)–(d) |
-| R5 | Engine-free host state crate (no wasmtime dependency for iOS) | 1.0 | Open | HANDOFF §10 item 1 (e). Needed only if mobile is in 1.0 (PR-Q1). |
+| R5 | Engine-free host state crate (no wasmtime dependency for iOS) | 1.0 | Open | HANDOFF §10 item 1 (e). Needed for iOS (PR-Q1). |
 | R6 | Performance budgets in the gate: start time, frame cost, memory per app, `.plnt` size | Beta | Partial | `frame_cost.rs`, counter size guard in `tests/e2e.rs`. Next: write the budgets in a doc and fail the gate when an example exceeds them. |
 | R7 | Nested flex layout is linear (gpui-ce fix) | Beta | Open | GAPS F1; HANDOFF §10 item 3 |
 
@@ -77,7 +78,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | U8 | Localization: app strings in more than one language, the user's locale | 1.0 | Open | No design yet. Write `docs/I18N.md` first. |
 | U9 | Right-to-left layout | 1.0 | Open | Depends on U8 and gpui-ce support. |
 | U10 | Motion: host-side transitions and springs | 1.0 | Open | UI-ADVANCED U2; HANDOFF §10 items 4, 7 |
-| U11 | Sound | 1.0 | Decide | GAPS G7. Decide if 1.0 needs it (PR-Q2). |
+| U11 | Sound | 1.0 | Open | GAPS G7. 1.0 needs it (PR-Q2). |
 
 ## 6. Host APIs
 
@@ -88,7 +89,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | H3 | Notifications (`notify`) | Beta | Open | SPEC §11 names it. Most production apps need it. |
 | H4 | Structured storage (`store.sql` or a documented pattern on files) | Beta | Decide | STORAGE ST-Q1, VALIDATION V2 |
 | H5 | Storage: `vault` space, a folder as a space, `watch` | 1.0 | Open | `docs/STORAGE.md` §6 |
-| H6 | Sync between devices of one user | 1.0 | Decide | STORAGE §6. Decide if 1.0 needs it (PR-Q2). |
+| H6 | Sync between devices of one user | 1.0 | Decide | STORAGE §6. Decide if 1.0 needs it (PR-Q5). |
 | H7 | Each host API has a documented behavior on each host, with the same test on each host | Beta | Partial | Next: a table in `docs/host-apis.md` (host × API) that the tests fill. |
 
 ## 7. Security
@@ -115,20 +116,20 @@ Production apps run code from many publishers. This area must be complete before
 | # | Item | Gate | Status | Evidence / Next |
 |---|---|---|---|---|
 | P1 | Windows: compiler, host, Hub, native export | Preview | Done | |
-| P2 | Linux: a GUI window (gpui), same tests as Windows | Preview | Open | HANDOFF §10 item 11. Compiler and runner tests pass. |
-| P3 | macOS: a GUI window (gpui), same tests as Windows | Preview | Open | HANDOFF §10 item 11 |
+| P2 | Linux: a GUI window (gpui), same tests as Windows | 1.0 | Open | HANDOFF §10 item 11. Compiler and runner tests pass. |
+| P3 | macOS: a GUI window (gpui), same tests as Windows | 1.0 | Open | HANDOFF §10 item 11 |
 | P4 | Web: Chrome, Firefox and Safari in the test run (now Edge only) | Beta | Open | SPEC M5 exit |
 | P5 | Windows and macOS binaries signed and notarized | Beta | Open | `docs/RELEASING.md` "What is not released yet" |
 | P6 | One `.plnt` runs the same on all three desktop OSes; native exports start with a double-click | Beta | Open | SPEC M4 exit |
-| P7 | Android (gpui, wasmtime) | Decide | Open | PR-Q1. SPEC M6, Q1 |
-| P8 | iOS (gpui, wasmi) and the iOS distribution model | Decide | Open | PR-Q1. SPEC Q3 |
+| P7 | Android (gpui, wasmtime) | 1.0 | Open | PR-Q1: 1.0 covers all platforms. SPEC M6 |
+| P8 | iOS (gpui, wasmi) and the iOS distribution model | 1.0 | Open | PR-Q1: 1.0 covers all platforms. SPEC Q3 |
 
 ## 9. Updates and distribution
 
 | # | Item | Gate | Status | Evidence / Next |
 |---|---|---|---|---|
-| D1 | npm packages: `@plinth/cli`, platform packages, `create-plinth` | Preview | Partial | `npm/`, `release.yml`. Next: publish them; test `npm create plinth` on all three OSes. |
-| D2 | Release pipeline tested on all platforms, with a changelog | Preview | Partial | `docs/RELEASING.md`. Only Windows is tested; no changelog step. |
+| D1 | npm packages: `@plinth/cli`, platform packages, `create-plinth` | Beta | Partial | `npm/`, `release.yml`. Next: publish them; test `npm create plinth` on all three OSes. |
+| D2 | Release pipeline tested on all platforms, with a changelog | Beta | Partial | `docs/RELEASING.md`. Only Windows is tested; no changelog step. |
 | D3 | Desktop self-update: signed feed, rollback, no downgrade | Preview | Done | `plinth-host-desktop::updater` |
 | D4 | Update `prompt` dialog and `onUpgrade(fromVersion)` | Beta | Open | UPDATES §9.1 |
 | D5 | Web updates (service worker cache) | Beta | Open | UPDATES §9.1 |
@@ -140,7 +141,7 @@ Production apps run code from many publishers. This area must be complete before
 | # | Item | Gate | Status | Evidence / Next |
 |---|---|---|---|---|
 | T1 | `plinth new`, `dev` (hot reload), `check`, `build`, `run`, `native` | Preview | Done | SPEC §13 |
-| T2 | VS Code extension: diagnostics, completion | Preview | Partial | `editors/vscode`. Next: publish it to the Marketplace. |
+| T2 | VS Code extension: diagnostics, completion | 1.0 | Partial | `editors/vscode`. Next: publish it to the Marketplace. |
 | T3 | A test kit for app authors: render a screen, send events, check the tree | Beta | Open | The internal harness in `tests/apps.rs` can be the base. |
 | T4 | A debugger or an inspector: the UI tree, signals, host calls | Beta | Open | |
 | T5 | A profiler view: frame times, GC, memory (`PLINTH_TRACE_RENDER` as a start) | 1.0 | Open | |
@@ -155,15 +156,15 @@ Production apps run code from many publishers. This area must be complete before
 | X3 | A public docs website with search | Beta | Open | |
 | X4 | Guides: storage, network, updates, publishing, accessibility, performance | Beta | Open | |
 | X5 | A migration guide for each breaking change and each core minor | Beta | Open | |
-| X6 | `CHANGELOG.md` | Preview | Open | |
-| X7 | Known limits page (what Plinth cannot do yet) | Preview | Partial | `docs/GAPS.md` is internal. Next: a short public page. |
+| X6 | `CHANGELOG.md` | Preview | Done | `CHANGELOG.md`. Add an entry for each change that authors or users see. |
+| X7 | Known limits page (what Plinth cannot do yet) | Preview | Done | `docs/LIMITS.md`. Update it when a limit goes away. |
 
 ## 12. Quality gates and CI
 
 | # | Item | Gate | Status | Evidence / Next |
 |---|---|---|---|---|
 | Q1 | Local gate: `scripts/ci-local.sh full --shoot`, `run-a11y.mjs` | Preview | Done | HANDOFF §3 |
-| Q2 | CI runs on each push (self-hosted Windows and Linux runners online) | Preview | Partial | HANDOFF §0.2 item 1 (owner steps open) |
+| Q2 | CI runs on each push (self-hosted Windows and Linux runners online) | Beta | Partial | HANDOFF §0.2 item 1 (owner steps open) |
 | Q3 | CI on macOS for each release, not only weekly | Beta | Open | |
 | Q4 | A wasmi job in CI | Beta | Open | HANDOFF §10 item 1 (d) |
 | Q5 | A release is blocked when the gate fails on any platform | Beta | Open | `release.yml` |
@@ -181,21 +182,33 @@ Production apps run code from many publishers. This area must be complete before
 
 | # | Item | Gate | Status | Evidence / Next |
 |---|---|---|---|---|
-| G1 | `LICENSE` file (`Cargo.toml` says Apache-2.0) | Preview | Decide | HANDOFF §0.2 item 3 |
-| G2 | Final project name and npm scope | Preview | Decide | SPEC Q2. "Plinth" is a placeholder; the npm name `plinth` is taken. |
+| G1 | License: MIT OR Apache-2.0 | Preview | Done | `LICENSE-MIT`, `LICENSE-APACHE`, `Cargo.toml`, `package.json` files |
+| G2 | Final project name and npm scope | 1.0 | Open | SPEC Q2. "Plinth" is a placeholder; the npm name `plinth` is taken. | The owner decides at the end. |
 | G3 | `CONTRIBUTING.md` for outside contributors; code of conduct | Beta | Partial | `CONTRIBUTING.md` lists commands only. |
 | G4 | Licenses of all dependencies checked and listed (also gpui-ce) | Beta | Open | `cargo deny` can do the check (S8). |
 | G5 | Privacy statement: no telemetry by default; data stays with the user | Beta | Open | Owner decision 7 (HANDOFF §0.1); EXPERIENCE §7 "Privacy page" |
-| G6 | Public repository and issue tracker | Preview | Decide | The repo is private now. |
+| G6 | Public repository and issue tracker | 1.0 | Open | The repo is private now. |
 
-## 15. Open questions for the owner
+## 15. Owner decisions and open questions
+
+Decisions of 2026-10-07:
+
+| # | Question | Decision |
+|---|---|---|
+| PR-Q1 | Is mobile part of 1.0? | **Yes. 1.0 covers all platforms:** Windows, macOS, Linux, web, iOS, Android. Plan with the assumption that gpui mobile backends exist. |
+| PR-Q2 | Does 1.0 need localization (U8) and sound (U11)? | **Yes, both.** Sync (H6) is still open, see PR-Q5. |
+| PR-Q3 | What is the support policy? | **Rolling support with no guaranteed window.** The promise is that every released runtime stays available (C10), so an old app keeps running. |
+| PR-Q4 | Is the list complete? | Good so far. Add items when work finds them. |
+| — | License (G1) | MIT OR Apache-2.0, as in the Rust ecosystem. |
+| — | Name (G2), public repo (G6), Linux and macOS window (P2, P3) | At the end, before 1.0. |
+| — | CI runners online (Q2), npm packages and release tests (D1, D2) | Near Beta. |
+| — | VS Code Marketplace (T2) | At 1.0. |
+
+Open:
 
 | # | Question | Notes |
 |---|---|---|
-| PR-Q1 | Is mobile (iOS, Android) part of 1.0, or does 1.0 cover desktop and web only? | Recommendation: 1.0 = desktop and web. Mobile in 1.x, because no gpui mobile backend exists yet (SPEC Q1). |
-| PR-Q2 | Which of these does 1.0 need: sound (U11), sync (H6), localization (U8)? | Recommendation: localization yes; sound and sync after 1.0. |
-| PR-Q3 | How long is the support window for a major version? | For example, security fixes for 12 months after the next major. |
-| PR-Q4 | Which items in this list are wrong or missing? | |
+| PR-Q5 | Does 1.0 need sync (H6)? | Sync means: one user has the same app on two devices (for example a phone and a desktop), and the app data is the same on both. A change on one device goes to the other. Owner decision 7 says the data stays on the user's device or the user's storage, so sync goes through storage that the user owns (a folder that a sync service like OneDrive or iCloud copies, or a user-owned server), never a Plinth server. `docs/STORAGE.md` §6 has the design draft. |
 
 ## 16. Summary
 
@@ -203,16 +216,17 @@ Count on 2026-10-07, by gate and status:
 
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
-| Preview | 22 | 5 | 6 |
-| Beta | 0 | 13 | 35 |
-| 1.0 | 0 | 0 | 15 |
-| Decide (mobile, P7, P8) | 0 | 0 | 2 |
+| Preview | 25 | 0 | 0 |
+| Beta | 0 | 16 | 35 |
+| 1.0 | 1 | 1 | 21 |
 
-**The next level is Preview.** The items that block it are:
+**The Preview level is complete** for the documented platforms (Windows and the web, `docs/LIMITS.md`). Preview is only an internal mark until the repository is public (G6).
 
-1. G1, G2, G6: license, name, public repo (owner decisions).
-2. P2, P3: a GUI window on Linux and macOS.
-3. Q2: the CI runners online.
-4. D1, D2: publish the npm packages; test the release on all platforms; a changelog (X6).
-5. T2: publish the VS Code extension.
-6. X7: a public page of known limits.
+**The next level is Beta.** Start with the items that the owner and the code do not block:
+
+1. C3: ship core 1.12 and freeze it.
+2. C4, C5, C7: write the format, interface and deprecation rules, with tests.
+3. R3: the web time limit and memory cap.
+4. L4: `RegExp`.
+5. H3: notifications.
+6. S7, S8, S10: `SECURITY.md`, a dependency audit, a threat model.

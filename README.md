@@ -129,5 +129,5 @@ script, so install the target: `rustup target add wasm32-unknown-unknown`.
 
 ## License
 
-Apache-2.0 (see `Cargo.toml`). A `LICENSE` file is pending; see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+Plinth is dual-licensed under the MIT license ([LICENSE-MIT](LICENSE-MIT))
+or the Apache License 2.0 ([LICENSE-APACHE](LICENSE-APACHE)), at your option.

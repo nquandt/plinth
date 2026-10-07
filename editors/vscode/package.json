@@ -3,7 +3,7 @@
   "displayName": "Plinth",
   "description": "Diagnostics from `plinth check` for Plinth TS apps",
   "version": "0.1.0",
-  "license": "Apache-2.0",
+  "license": "MIT OR Apache-2.0",
   "publisher": "plinth",
   "repository": {
     "type": "git",

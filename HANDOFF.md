@@ -29,6 +29,7 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 9. **Balance:** the web host is one part. Prefer the compiler, the desktop/gpui host, the UI, storage and platforms.
 10. **Updates without a reinstall (2026-10-07):** three layers: native host, core, app. A native update only when the native interop (a host interface) changes. App authors choose when their app takes a new core. Design: `docs/UPDATES.md`.
 11. **iOS runs Wasm with the `wasmi` interpreter (2026-10-07),** no JIT (SPEC §9.2). Pulley (wasmtime's interpreter) and WasmKit were the other candidates; wasmi 2 is about two times faster than Pulley.
+12. **Production readiness (2026-10-07, `docs/PRODUCTION.md` §15):** 1.0 covers all platforms, mobile too (assume gpui mobile backends exist). 1.0 needs localization and sound. Support is rolling with no guaranteed window; every released runtime stays available. License: MIT OR Apache-2.0. Name, public repo, Linux and macOS windows: at the end. CI runners and npm: near Beta. Keep `docs/LIMITS.md` and `CHANGELOG.md` current.
 
 ### 0.2 Open items for the owner (remind them)
 
@@ -40,7 +41,7 @@ This file gives a new agent what it needs to continue the work. Read it first. T
    git branch -D wt/dx wt/ci wt-files wt/dates wt/golden wt/lang6 wt/web-sandbox wt/web-dom
    git worktree prune
    ```
-3. **Decisions:** UP-Q1..Q6 in `docs/UPDATES.md` (the core policy default is `follow` for now); the project key that signs cores (also the Hub key, HANDOFF of 2026-10-06); the license (Cargo.toml says Apache-2.0, no LICENSE file); `docs/HUB.md` H-Q4; the open questions in the design drafts (ST-Q*, UA-Q*, UX-Q*).
+3. **Decisions:** UP-Q1..Q6 in `docs/UPDATES.md` (the core policy default is `follow` for now); the project key that signs cores (also the Hub key, HANDOFF of 2026-10-06); `docs/HUB.md` H-Q4; the open questions in the design drafts (ST-Q*, UA-Q*, UX-Q*).
 4. **Play Pong again** (`plinth dev examples/pong`, a release build is better) and say if the motion is smooth now (§10 item 4).
 
 ## 1. What Plinth is
@@ -172,7 +173,7 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 
 ## 10. Next steps (in order)
 
-`docs/PRODUCTION.md` §16 lists the items that block the Preview level. Prefer them to the items below when the owner agrees.
+`docs/PRODUCTION.md` §16 lists the Beta items to do first. Prefer them to the items below when the owner agrees.
 
 1. **wasmi, the rest** (steps 1–2 merged; details in GAPS "wasmi engine (2026-10-07)"): (a) run `--test monkey`, `async_await`, `files`, `hub_api` and `net` with `PLINTH_ENGINE=wasmi` — `files`, `hub_api` and `net` exercise imports that never ran on wasmi; (b) release speed numbers, wasmtime against wasmi (`apps::pong_plays_a_point`, `sevenguis::cells_formulas_propagate_and_find_cycles`, `perf.rs` `list_10k_perf` with `--release --ignored`); (c) check `FUEL_PER_MS` with more workloads (calibrated from two, with a 15x spread); (d) a wasmi job in CI (for example `PLINTH_ENGINE=wasmi` for the errors and language suites); (e) step 3: move the engine-free host state into its own crate, so an iOS build does not depend on wasmtime; (f) find out why opt-level 3 on the `wasmi` crate crashes a Windows debug build, and report it upstream if it is a wasmi bug.
 2. **Updates, the rest** (steps 1–3 done, UPDATES §9.1): the `prompt` dialog, re-consent for new capabilities on a self-update, `onUpgrade(fromVersion)`, then the web service worker cache, `apply = "live"`, mobile.
