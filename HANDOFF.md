@@ -4,171 +4,182 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 
 - `SPEC.md`: the design (ASD-STE100 Simplified Technical English; keep the style; status notes are inline, search "Status").
 - `CONTRIBUTING.md`: commands.
-- `docs/ui.md` (all controls, Level 2 primitives, Canvas), `docs/host-apis.md`, `docs/language.md`.
-- `docs/GAPS.md`: known gaps, with the sections "Found by 7GUIs tasks 1-5" and "Games (Pong)", which drive the next UI work.
+- `docs/ui.md` (all controls, Level 2 primitives, Canvas, lifecycle), `docs/host-apis.md`, `docs/language.md`.
+- `docs/GAPS.md`: known gaps and what was fixed. The newest sections: "Robustness", "Desktop frame cost", "Async code size", "wasmi engine".
+- `docs/UPDATES.md`: updates without a reinstall (design and status).
 - `docs/HUB.md` (the App Hub), `docs/REGISTRY.md`, `docs/web-hub.md`.
-- Design drafts: `docs/VALIDATION.md` (apps that test Plinth), `docs/STORAGE.md` (profiles, spaces, sync, isolation), `docs/UI-ADVANCED.md` (Level 2 UI; status at the top), `docs/EXPERIENCE.md` (scenarios, UI words, defaults, build order).
+- Design drafts: `docs/VALIDATION.md`, `docs/STORAGE.md`, `docs/UI-ADVANCED.md`, `docs/EXPERIENCE.md`.
+- `infra/self-hosted-runner/README.md`: the CI runners on the owner's PC.
 
 ## 0. Read this first
 
-**Do not push.** The owner's GitHub Actions minutes are used up (2026-10-06). Keep commits local on `master`. The gate is a local pass of `bash scripts/ci-local.sh full` (CI runs the same script) and, for UI or web changes, `node web/test/run-a11y.mjs`. When minutes come back, ask the owner before a push and push in one batch. The owner wants self-hosted runners later.
+**State (2026-10-07, end of session):** `master` is the only active branch. The gate passes on it: `bash scripts/ci-local.sh full --shoot` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; the commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
 
-State at this handoff (2026-10-07): `master` is about 153 commits ahead of `origin/master`. `ci-local.sh full` and `run-a11y.mjs` pass on it (the primitives check in `run-a11y.mjs` timed out at page load one time in three runs; it passed when run again). The working tree is clean. The installed `plinth` is current (reinstalled after the last commit).
+### 0.1 Owner decisions (keep them)
 
-**Owner decisions (keep them):**
-
-1. **One implementation for all hosts.** One `.plnt` runs on every host; a host supplies only host APIs and host-owned UI (consent window, error banner, dialogs). Never build a second UI for one host.
+1. **One implementation for all hosts.** One `.plnt` runs on every host; a host supplies only host APIs and host-owned UI (consent window, error and stop banners, dialogs). Never build a second UI for one host.
 2. **Mobile hosts render with gpui.** Only the web host renders to the DOM.
-3. **The web host stays DOM** (SPEC M5, reviewed 2026-10-06). A `gpui_web` canvas host is a possible later, experimental second web host; it is not planned now.
+3. **The web host stays DOM** (SPEC M5). A `gpui_web` canvas host is a possible later experiment, not planned.
 4. **Every web app runs in a sandboxed iframe** (opaque origin), the web Hub app too; the parent page is the host shell (SPEC §10.3).
-5. **Level 2 UI:** typed style props, spacing units (4 px) and theme tokens, no raw pixels or colors. The runtime owns all controls; the semantic controls get rebuilt on the primitives later (`docs/UI-ADVANCED.md` U5).
-6. **No size limit on the runtime** (core, `plinth-rt`). Only app code (`.plnt`) should stay small, and even that is a goal, not a cap for big apps. A tree-shaken app-plus-runtime bundle is a possible later improvement.
-7. **Data belongs to the user:** "your device or your storage, never the vendor's"; strong walls between apps; lasting cross-app access is deferred (`docs/STORAGE.md` §3).
-8. **Plain UI words and safe defaults** (`docs/EXPERIENCE.md` §2, §4): "Your apps", "Store", "Permissions", "Keep", "Allow: <what it does>".
-9. **Balance:** the web host is one part of the system. Do not spend most of the time on `web/`; prefer the compiler, the desktop/gpui host, the UI, storage and platforms.
+5. **Level 2 UI:** typed style props, spacing units (4 px) and theme tokens, no raw pixels or colors.
+6. **No size limit on the runtime** (core, `plinth-rt`). App code (`.plnt`) should stay small, as a goal, not a cap.
+7. **Data belongs to the user:** "your device or your storage, never the vendor's"; strong walls between apps (`docs/STORAGE.md`).
+8. **Plain UI words and safe defaults** (`docs/EXPERIENCE.md` §2, §4).
+9. **Balance:** the web host is one part. Prefer the compiler, the desktop/gpui host, the UI, storage and platforms.
+10. **Updates without a reinstall (2026-10-07):** three layers: native host, core, app. A native update only when the native interop (a host interface) changes. App authors choose when their app takes a new core. Design: `docs/UPDATES.md`.
+11. **iOS runs Wasm with the `wasmi` interpreter (2026-10-07),** no JIT (SPEC §9.2). Pulley (wasmtime's interpreter) and WasmKit were the other candidates; wasmi 2 is about two times faster than Pulley.
 
-**To do (owner, open since 2026-10-07): finish the self-hosted CI runners** (`infra/self-hosted-runner/README.md`). Done: both agents downloaded, `ci.yml` moved to them (commit `4aff175`, NOT pushed), WSL packages installed, `plinth-runner` service installed and enabled but not started. Left for the owner: (1) `gh auth token | wsl -d Ubuntu -- bash -c 'umask 077; cat > ~/.plinth-runner-token'`; (2) in an elevated PowerShell, `install-windows-service.ps1`. Then the agent: `sudo systemctl start plinth-runner` in WSL, check both runners online (`gh api repos/nquandt/plinth/actions/runners`), push, and watch the first CI run.
+### 0.2 Open items for the owner (remind them)
+
+1. **Finish the self-hosted CI runners** (`infra/self-hosted-runner/README.md`). Done: both agents downloaded, `ci.yml` moved to them (commit `4aff175`), the WSL packages installed, the WSL service `plinth-runner` installed and enabled (not started). Left for the owner: (a) `gh auth token | wsl -d Ubuntu -- bash -c 'umask 077; cat > ~/.plinth-runner-token'`; (b) in an elevated PowerShell, `infra\self-hosted-runner\install-windows-service.ps1`. Then the agent: `sudo systemctl start plinth-runner` in WSL (the owner gave the WSL sudo password in the session of 2026-10-07; ask again if needed), check that both runners are online (`gh api repos/nquandt/plinth/actions/runners`), push when the owner asks, and watch the first CI run. **Until the runners are online, a push queues CI jobs that nothing runs** (the hosted Actions minutes ran out on 2026-10-06).
+2. **Delete the 8 old, merged worktrees** `C:\repos\plinth-wt-{a11y,ci,files,hostapi,inputs,lang,rtfix,structure}` (all clean, all commits in `master`). The safety check of the agent session blocks the delete; the owner runs it:
+   ```powershell
+   cd C:\repos\plinth
+   'a11y','ci','files','hostapi','inputs','lang','rtfix','structure' | ForEach-Object { git worktree remove --force "C:\repos\plinth-wt-$_" }
+   git branch -D wt/dx wt/ci wt-files wt/dates wt/golden wt/lang6 wt/web-sandbox wt/web-dom
+   git worktree prune
+   ```
+3. **Decisions:** UP-Q1..Q6 in `docs/UPDATES.md` (the core policy default is `follow` for now); the project key that signs cores (also the Hub key, HANDOFF of 2026-10-06); the license (Cargo.toml says Apache-2.0, no LICENSE file); `docs/HUB.md` H-Q4; the open questions in the design drafts (ST-Q*, UA-Q*, UX-Q*).
+4. **Play Pong again** (`plinth dev examples/pong`, a release build is better) and say if the motion is smooth now (§10 item 4).
 
 ## 1. What Plinth is
 
-Plinth is a framework for cross-platform apps. Authors write a strict subset of TypeScript with JSX ("Plinth TS"). The compiler turns an app into a `.plnt` package that holds **only app code** (the counter is about 2 KB) and is the **same file on every platform**. A user installs a host one time: the `plinth` CLI, the `plinth-host` runner, or the Plinth Hub. The host has **runtime cores** (`plinth-rt` builds, Wasm, versioned like nvm), links each app into the core that it needs, runs it in wasmtime (desktop) or the browser (web), and renders with `gpui-ce` (the owner's fork at `../gpui-ce`) or the DOM. Level 1 controls declare intent and the runtime owns the look; Level 2 primitives (`Box`, `Span`, `Pressable`, `Scroll`, `Canvas`) give apps their own look from theme tokens. A host proves from an app's imports which capabilities the app can use, and the user approves them.
+Plinth is a framework for cross-platform apps. Authors write a strict subset of TypeScript with JSX ("Plinth TS"). The compiler turns an app into a `.plnt` package that holds **only app code** (the counter is about 2 KB) and is the **same file on every platform**. A user installs a host one time: the `plinth` CLI, the `plinth-host` runner, or the Plinth Hub. The host has **runtime cores** (`plinth-rt` builds, Wasm, `MAJOR.MINOR.PATCH` plus a digest), links each app into the core that it needs, runs it in wasmtime (desktop), wasmi (planned for iOS) or the browser (web), and renders with `gpui-ce` (the owner's fork at `../gpui-ce`) or the DOM. Level 1 controls declare intent and the runtime owns the look; Level 2 primitives (`Box`, `Span`, `Pressable`, `Scroll`, `Canvas`) give apps their own look from theme tokens. A host proves from an app's imports which capabilities the app can use, and the user approves them.
 
 ## 2. State
 
 | Area | State |
 |---|---|
-| Cores (SPEC §10.4, §10.5) | Core **1.12** (not shipped, so later additions went into 1.12 too): `set_frame` (`onFrame`, the `frame` event 0x07 with `dt`); `arg_at_f64`/`arg_at_i32` (a list event value is spread into the callback arguments; the thunk reads parameter 2+ with them); `math_random`/`math_seed` (`Math.random`, `seedRandom`; the host seeds it with the init record `RANDOM_SEED`); `on_cleanup`/`app_active` (`onCleanup`, `isActive`; the `lifecycle` event 0/1). Core 1.11 added `files_call` for `plinth:files`. An app declares the lowest core that has the functions it imports. The runtime also skips unchanged prop and text ops (GAPS G8): Pong went from 9 to 1.4 ops per tick. |
-| UI API (`wit/plinth/ui-api.toml`, `docs/ui.md`) | **1.13.** 1.13: Canvas `strokeRect`/`strokeCircle`. 1.12: `onPointerDown`/`onPointerMove`/`onPointerUp` `(x, y)` on boxes (spacing units) and `Canvas` (view units), with pointer capture (desktop: `pointer_layer` in `render.rs`, a paint-time mouse layer; web: `pointerEvents` in `dom-renderer.js`). 1.11: sizes and insets take fractional spacing units (number props). Earlier: Level 1: about 30 semantic controls (1.5), plus `disabled` on TextField/TextArea/DatePicker and `Row.selected` (1.8). Level 2: `Box`, `Span`, `Pressable`, `Scroll` with spacing-unit and token props (1.6); partial styles `hover`, `active`, `focus`, `compact`, `regular`, `wide` (1.7); `position="absolute"` with insets and `onKeyDown`/`onKeyUp` (1.9); `Canvas` with `rect`, `circle`, `line`, `canvasText` in a scaled view space (1.10). Desktop: `crates/plinth-ui/src/{primitives,canvas}.rs`. Web: `primitiveStyle`, generated partial-style classes and SVG canvas in `web/dom-renderer.js`. |
-| Host APIs (`docs/host-apis.md`) | `time` (with `onFrame`/`cancelFrame`, core 1.12: desktop fires frame timers in the gpui frame, web uses `requestAnimationFrame`; the desktop timer loop wakes at the next deadline), `store` (kv), `clipboard`, `dialog`, `net`, `files` (text files in the app's private space; capability `files.private`, Low; host path checks; desktop: a folder per app identity under `%APPDATA%\plinth\spaces\private\`; web: the page's IndexedDB through the frame bridge), `hub` (privileged), `error.report`. Async calls return a `Promise` (or take a `done` callback). Denied calls never trap. |
-| Compiler (SPEC §4) | Unions and narrowing, generics, classes, `int`, `Map`/`Set`, tuples with optional and rest elements, rest patterns in array and object destructuring, default values in patterns, optional props set to `undefined`, nullable boxing, JSON, fragments, `.map()` children, checked casts, many string and array methods (`join` also on number/boolean arrays, `flat(depth)`), `try`/`catch`/`finally`, `async`/`await`, the Promise API with `race`/`any`/`allSettled`. Golden tests for every diagnostic. |
-| Desktop Hub (`docs/HUB.md`) | H0, H1 (Ed25519 signing), H3 steps 1–3: the Hub app `examples/hub`, launches in new windows with in-process consent, updates with re-consent, pins, publisher blocks, `plinth://` links, shortcuts, `plinthw`. |
-| Web Hub (`docs/web-hub.md`) | The same Hub app in the browser, in its own sandboxed frame with a `plinth:hub` bridge (`FrameHub` in `web/hub-host.js`). Browse mode (the library is the registry), a host consent window, every app in a sandboxed frame, digest and Ed25519 checks. |
-| Web export (SPEC §10.3) | `plinth build <dir> --target web [--single-file]`. `web/plinth.js` is the web host as one ES module, GENERATED by `node scripts/gen-plinth-js.mjs` (commit it; `run-bundle.mjs` fails when it is old). `<plinth-app src core height>`; the app frame is inline, so the single file works from disk. |
-| Validation apps | 7GUIs tasks 1–7 in `examples/7guis/` (numbers in VALIDATION §6; task 6 `circle-drawer` uses Canvas pointer events; task 7 `cells`: 2,600 cells, a formula parser, a computed per cell); Pong in `examples/pong` (Level 2 boxes, fractional positions, `onFrame` with a variable step, held keys, a pointer drag); `examples/primitives` (gallery of Level 2 and Canvas); `examples/files-demo`. |
-| Tooling | Hot reload, `plinth-shoot` headless screenshots, `plinth native` executables, VS Code extension and npm packages (both not published). |
-| Platforms | Windows: everything. Linux and macOS: compiler, cores, runner, hub and registry tests pass; no GUI window opened yet. Mobile: not started. |
-
-Example apps (all type-checked and built by the check script): `counter`, `todo`, `notes`, `calculator`, `settings-gallery`, `contacts`, `timer`, `gallery`, `dialogs`, `budget`, `utility`, `quotes`, `big-list`, `gc-torture`, `hub`, `hub-mini`, `files-demo`, `pong`, `primitives`, `7guis/{counter,temperature,flight-booker,timer,crud,circle-drawer,cells}`.
+| Cores (SPEC §10.4, §10.5) | Core **1.12.0** (1.12 was never shipped, so later additions went into it). Versions are `MAJOR.MINOR.PATCH` (`rt_abi::CORE_PATCH`, bumped by hand for a fix that adds no function) plus a SHA-256 digest; an app still declares only `MAJOR.MINOR`. Author policy in `plinth.toml`: `core = "follow" \| "patch" \| "pinned"` (`cores::link_app_with_policy`; the web host supports only `follow`). 1.12 has `onFrame`, `Math.random`/`seedRandom`, `onCleanup`, `isActive`, `onMount`. The runtime skips unchanged prop and text ops (G8). |
+| Memory (2026-10-07) | The allocator uses best fit and keeps the rest of a split block; array buffers count toward the next collection. Before, three leaks grew memory without a limit (GAPS "Robustness", monkey test). |
+| UI API (`ui-api.toml`, `docs/ui.md`) | **1.13**: Level 1 controls, Level 2 primitives with partial styles, absolute positions, keys, pointer events, Canvas with stroke shapes. An optional prop of any kind takes `T \| null` (`icon={c ? "check" : undefined}`): `null` removes the prop on both host trees. |
+| Host APIs (`docs/host-apis.md`) | `time` (with `onFrame`), `store` (kv), `clipboard`, `dialog`, `net`, `files` (private space), `hub` (privileged), `error.report`. Async calls return a `Promise` or take a `done` callback. Denied calls never trap. |
+| Limits and stop reasons | Desktop runner: 2 s per call (epochs), 64 MiB memory (`Limits`); a trap gives a plain one-line reason in "This app stopped" ("array index out of bounds", "out of memory", "too many nested calls (stack overflow)", "the app is not responding (time limit reached)"). The web host has the same banners and reasons (`PlinthApp.stopped`), but no time limit or memory cap of its own (GAPS R1, R2). |
+| Engines | wasmtime (default). **wasmi** (`PLINTH_ENGINE=wasmi`, cargo feature `wasmi` on `plinth-runner-wasmtime`): step 1 merged (core module taken out of the component; ui, dev, error, time, store and clipboard imports; all language tests pass). Step 2 (dialog, net, files, hub; fuel time limit; memory cap; parity on all suites; speed) — see §10 item 1. |
+| Compiler (SPEC §4) | Unions and narrowing, generics, classes, `int`, `Map`/`Set`, tuples, rest patterns in array and object destructuring, default values in patterns, JSON (also recursive types), fragments, `.map()` children, checked casts, string and array methods, `try`/`catch`/`finally`, `async`/`await`, the Promise API. A nesting limit of 1000 levels (`PL1000`); each compile runs on a 256 MiB stack (`stacker`). Golden tests for every diagnostic. |
+| Updates (`docs/UPDATES.md`) | Step 1 done (core patch versions, the `core` policy). Steps 2–3 (a signed feed, the desktop updater for `plinth native`) — see §10 item 2. |
+| Desktop Hub (`docs/HUB.md`) | H0, H1 (Ed25519 signing), H3 steps 1–3. |
+| Web Hub (`docs/web-hub.md`) | The same Hub app in a sandboxed frame with a `plinth:hub` bridge; browse mode; consent; digest and Ed25519 checks. |
+| Web export (SPEC §10.3) | `plinth build <dir> --target web [--single-file]`; `web/plinth.js` is GENERATED (`node scripts/gen-plinth-js.mjs`; commit it). |
+| Validation apps | 7GUIs 1–7, Pong, primitives, files-demo, and 20 other examples. |
+| Platforms | Windows: everything. Linux and macOS: compiler, cores, runner, hub and registry tests pass; no GUI window yet. Mobile: not started (decided: gpui + wasmi on iOS). |
+| CI | `ci.yml` runs Windows and Linux on self-hosted runners (not online yet, §0.2), macOS weekly on GitHub. |
 
 ## 3. Build, run, test
 
-Prerequisites: Rust stable, `rustup target add wasm32-unknown-unknown`, `../gpui-ce` checked out, Node 22, Edge (for the browser tests). Windows is the main platform.
+Prerequisites: Rust stable, `rustup target add wasm32-unknown-unknown`, `../gpui-ce` checked out, Node 22, Edge (browser tests). Windows is the main platform.
 
 ```sh
-bash scripts/ci-local.sh full            # THE check (about 3–5 min with a warm cache)
-bash scripts/ci-local.sh full --shoot    # also the headless GPU screenshot tests
-node web/test/run-a11y.mjs               # headless Edge: axe, renderer checks, primitives, Pong keys, web export, web Hub
+bash scripts/ci-local.sh full            # THE gate (5-10 min with a warm cache)
+bash scripts/ci-local.sh full --shoot    # plus the headless GPU tests (screenshots, frame cost, hostile render)
+node web/test/run-a11y.mjs               # headless Edge: axe, renderer checks, banners, web export, web Hub
 node web/test/run-a11y.mjs --typing-only # renderer checks only; --hub-only; --export-only
 node scripts/gen-plinth-js.mjs           # regenerate web/plinth.js after a change to a bundled web file
 node scripts/gen-web-ids.mjs             # regenerate web/ui-api.js after a change to ui-api.toml
 
-plinth dev examples/pong                 # a window with hot reload (Pong: Space starts, hold the arrows or W/S)
-plinth build <dir> [--target web [--single-file]] ; plinth run <app.plnt> ; plinth native <app> -o app.exe
-plinth hub add|list|run|ui|… ; plinth registry build|serve …
-bash scripts/web-hub-demo.sh             # web Hub with every example (Pong too) on http://127.0.0.1:8787/
-powershell -File scripts/dev-hub.ps1     # desktop Hub with the Hub app and 9 examples (Pong, Primitives, Files demo too)
+plinth dev examples/pong ; plinth build <dir> [--target web] ; plinth run <app.plnt> ; plinth native <app> -o app.exe
+plinth core list|install|export ; plinth hub … ; plinth registry build|serve …
+bash scripts/web-hub-demo.sh             # web Hub with the examples on http://127.0.0.1:8787/
 plinth-shoot <app.plnt> <out-dir>        # headless screenshots at three widths
 ```
 
-**The owner's machine:** `plinth` and `plinthw` are installed in `%USERPROFILE%\.cargo\bin` (reinstalled 2026-10-06 with `cargo install --path crates/plinth-cli --locked --force`; reinstall after CLI changes). A personal publisher key "Nate" exists; `PLINTH_HUB_TRUSTED_KEYS` holds its id. The web demo uses a throwaway key in `target/web-hub-demo-key`. Start a Cloudflare tunnel only when the owner asks. While a demo server runs, `target/debug/plinth.exe` is locked: rename it before a rebuild.
+Stability tests (all in the gate unless marked):
 
-Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`, `PLINTH_HUB_TRUSTED_KEYS`, `PLINTH_BLESS=1` (rewrite diagnostic goldens), `PLINTH_TRACE_RENDER=1` (frame times).
+| Test | What | Knobs |
+|---|---|---|
+| `plinth-compiler/tests/robustness.rs` | Mutated example sources never panic the compiler; deep nesting; changed app modules never panic the linker | `PLINTH_FUZZ_ITERS`, `PLINTH_FUZZ_SEED`; a stack overflow writes the case to `target/fuzz-failures/current.txt` |
+| `plinth-compiler/tests/monkey.rs` | Random UI events on every example, normal and GC stress: no trap, valid tree, level memory | `PLINTH_MONKEY_STEPS`, `PLINTH_MONKEY_APP`, `PLINTH_MONKEY_TRACE` |
+| `plinth-compiler/tests/errors.rs` "Limits" | Endless loop, recursion, allocation stop only the app | — |
+| `plinth-ui/tests/hostile_ops.rs` | Random op streams keep the tree valid | `PLINTH_FUZZ_ITERS` |
+| `plinth-shoot/tests/hostile_render.rs` | Random trees with bad props draw with no panic (`--shoot`) | `PLINTH_FUZZ_ITERS` |
+| `plinth-shoot/tests/frame_cost.rs` | Frame cost of every example and of each form control (`--shoot`) | `PLINTH_FRAME_APP` |
+| `plinth-compiler/tests/async_size.rs` | Code size of `await` against callbacks (`--ignored`) | — |
+| `web/test/run-stop.mjs` | Web host stopped state and reasons | — |
+
+**The owner's machine:** `plinth` and `plinthw` are installed in `%USERPROFILE%\.cargo\bin` (`cargo install --path crates/plinth-cli --locked --force`; reinstall after CLI changes; it fails with "Access is denied" while a `plinth.exe` from there runs). A personal publisher key "Nate" exists; `PLINTH_HUB_TRUSTED_KEYS` holds its id. The web demo uses a throwaway key in `target/web-hub-demo-key`; a demo server can run from a copy, `target/demo-bin/plinth-demo.exe`, so that it does not lock `target/debug/plinth.exe`. Start a Cloudflare tunnel (`cloudflared tunnel --url http://localhost:8787`) only when the owner asks; its URL is public. `C:` has little free space (about 59 GB); `U:` has 2.2 TB.
+
+Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`, `PLINTH_HUB_TRUSTED_KEYS`, `PLINTH_BLESS=1` (goldens), `PLINTH_TRACE_RENDER=1` (frame times), `PLINTH_ENGINE=wasmi`.
 
 ## 4. Repository map
 
 | Path | What |
 |---|---|
 | `wit/plinth/app.wit` | Guest/host interfaces: `ui`, `dev`, `error`, `time`, `store`, `clipboard`, `dialog`, `net`, `hub`, `files`. |
-| `wit/plinth/ui-api.toml` | Control, prop, event and enum ids (UI API 1.10). **Append only.** |
-| `std/*.d.ts` | Typings of the `plinth:*` modules and `lib.d.ts`; `std_typings_match` keeps them equal to the compiler (`check/stdlib.rs` name lists). |
-| `crates/plinth-rt` | The core (Rust → wasm32, `no_std`). `CORE_VERSION` must equal `CORE_MINOR`. |
-| `crates/plinth-link` | Embedded cores, `rt_abi.rs` (append-only, `ADDED_IN`), `link.rs`, `split.rs`, `cores.rs`, `capabilities.rs`. |
-| `crates/plinth-compiler` | Parser (oxc), checker (`check/`: `jsx.rs` props and encoders, `stdlib.rs` std functions, `asyncfn.rs`, `promises.rs`, `stmt.rs` patterns), lowering, codegen. `controls.rs` is the control and prop table. Tests in `tests/` (`lang.rs`, `apps.rs`, `sevenguis.rs`, `files.rs`, `golden/`). |
-| `crates/plinth-ui` | Semantic tree, gpui renderer (`render.rs`), Level 2 (`primitives.rs`), `canvas.rs`, theme tokens, charts. |
-| `crates/plinth-runner-wasmtime` | Runner, `Policy`, kv, timers, request queue, net and files workers, hub backend trait. |
-| `crates/plinth-host-desktop` | Host library and `plinth-host`, consent window. |
-| `crates/plinth-hub`, `plinth-registry`, `plinth-package`, `plinth-cli` | Library and grants; registries and the static server (embeds `web/`); `.plnt` and signatures; the CLI and `plinth new`. |
-| `crates/plinth-shoot` | Headless screenshots and GPU tests (`primitives_layout.rs` checks Level 2 layout and Canvas by AccessKit boxes). |
-| `web/` | Browser host (`plinth-web.js`, `dom-renderer.js`, `protocol.js`, `zip.js`, `files.js`), the frame pair (`app-frame.js`, `frame-host.js`, `hub-storage.js`), the Hub shell and backend, `plinth-app.js`, generated `plinth.js` and `ui-api.js`; Node tests and `run-a11y.mjs` in `web/test/`. |
+| `wit/plinth/ui-api.toml` | Control, prop, event and enum ids (UI API 1.13). **Append only.** |
+| `std/*.d.ts` | Typings of the `plinth:*` modules; `std_typings_match` keeps them equal to the compiler (`check/stdlib.rs`). |
+| `crates/plinth-rt` | The core (Rust → wasm32, `no_std`): GC (`gc.rs`), allocator (`allocator.rs`), reactivity, UI ops, JSON, strings. |
+| `crates/plinth-link` | Embedded cores, `rt_abi.rs` (append-only, `ADDED_IN`, `CORE_MINOR`, `CORE_PATCH`), `link.rs`, `split.rs`, `cores.rs` (versions, digest, selection by policy). |
+| `crates/plinth-compiler` | Parser (oxc; `parse.rs`, `MAX_DEPTH`), checker (`check/`), lowering, codegen. `controls.rs` is the control and prop table. Tests in `tests/`. |
+| `crates/plinth-ui` | Semantic tree (`tree.rs`), gpui renderer (`render.rs`), Level 2 (`primitives.rs`), `canvas.rs`, theme, charts. |
+| `crates/plinth-runner-wasmtime` | Runner and `Guest` (an enum of engines), `HostState` (all host logic, shared by both engines), `wasmi_core.rs`/`wasmi_engine.rs` (feature `wasmi`), `Policy`, kv, timers, net, files, hub backend trait. |
+| `crates/plinth-host-desktop` | Host library and `plinth-host`, consent window, core selection by the manifest's policy. |
+| `crates/plinth-hub`, `plinth-registry`, `plinth-package`, `plinth-cli` | Library and grants; registries and the static server (embeds `web/`); `.plnt`, manifests (`core`, `core-digest`) and signatures; the CLI. |
+| `crates/plinth-shoot` | Headless screenshots and GPU tests. |
+| `web/` | Browser host (`plinth-web.js`, `dom-renderer.js`, `protocol.js`, …), the frame pair, the Hub shell, generated `plinth.js` and `ui-api.js`; tests in `web/test/` (fixtures in `web/test/fixtures/`). |
+| `infra/self-hosted-runner/` | CI runner scripts and docs. |
 
 ## 5. How a new control or prop goes in (the usual path)
 
-1. Append ids to `ui-api.toml` (bump `version`, and the assert in `plinth-protocol`'s test); `node scripts/gen-web-ids.mjs`.
-2. `crates/plinth-compiler/src/controls.rs`: the spec (the `box_props!` macro for Level 2 boxes); a new `PropTy` needs a case in `check/jsx.rs`. Typings in `std/ui.d.ts`; names in `check/stdlib.rs` `UI_NAMES` for new exports.
-3. Desktop: `render.rs` dispatch arm (the match is exhaustive) and `primitives.rs` for style props (`Style` record: props, width-class overlay, partial application).
+1. Append ids to `ui-api.toml` (bump `version` and the assert in `plinth-protocol`'s test); `node scripts/gen-web-ids.mjs`.
+2. `crates/plinth-compiler/src/controls.rs` (the `box_props!` macro for Level 2 boxes); a new `PropTy` needs a case in `check/jsx.rs` (optional props go through `typed_prop`). Typings in `std/ui.d.ts`; names in `check/stdlib.rs` `UI_NAMES`.
+3. Desktop: `render.rs` dispatch arm and `primitives.rs` for style props. Keep layout flat: each nested flex box around a subtree about doubles its layout work (GAPS F1); use block layout where flex gives nothing, and check with `frame_cost.rs`.
 4. Web: `dom-renderer.js` (`makeView`, `primitiveStyle`), then `node scripts/gen-plinth-js.mjs`.
-5. Tests on both hosts: a Node test in `web/test/`, a check in `run-a11y.mjs` if layout or input matters, a desktop test (`tests/lang.rs`/`apps.rs` for behavior, `plinth-shoot` for layout), goldens for new diagnostics. Look at the screenshots.
+5. Tests on both hosts; goldens for new diagnostics; look at the screenshots.
 
 ## 6. Rules to keep
 
 - A `.plnt` holds only app code and is universal.
-- Cores: inside a major version only add functions; each addition increments `CORE_MINOR`, gets an `ADDED_IN` entry, and needs every host (desktop runner AND `web/plinth-web.js`) to supply new WIT functions. Prefer generated code over new runtime functions (Canvas shapes, partial styles and `join` are compile-time encodings).
-- No runtime size limit (§0 decision 6). Keep `plinth-rt` free of `core::fmt`, `format!`, `HashMap` and Unicode tables anyway. The counter's `app.wasm` is guarded at 8 KiB (`tests/e2e.rs`).
+- Cores: inside a major version only add functions; each addition increments `CORE_MINOR` (and resets `CORE_PATCH`), gets an `ADDED_IN` entry, and needs every host (desktop runner, both engines, AND `web/plinth-web.js`) to supply new WIT functions. A fix with no new function bumps `CORE_PATCH`. Prefer generated code over new runtime functions. 1.12 is not shipped yet: add to it, do not create 1.13 until the owner ships 1.12.
+- No runtime size limit; keep `plinth-rt` free of `core::fmt`, `format!`, `HashMap` and Unicode tables anyway. The counter's `app.wasm` is guarded at 8 KiB (`tests/e2e.rs`).
 - New UI: intent props or typed Level 2 props from tokens; never raw pixels or colors. `ui-api.toml` ids are append-only.
 - Denied host calls never trap. `hub.manage` only for packages signed by a trusted Hub key. Host path checks for `files` on both hosts.
-- The runtime skips unchanged props and text, except `value` (the user can change it in the host). A test harness must not edit host-side text and wait for it to come back (see `web/test/run-files.mjs`).
-- The GC runs only between events.
+- The runtime skips unchanged props and text, except `value`.
+- The GC runs only between events. Anything the core allocates for app data must count toward the next collection (`allocated_since_gc`).
+- The compiler must never panic or overflow its stack on any input: add a regression case to `robustness.rs` for each crash found.
 
 ## 7. Gotchas
 
 - Windows linker: test crates run one at a time (the script does it; `CARGO_BUILD_JOBS` 3–6).
-- `plinth-link/build.rs` builds `plinth-rt` into `target/rt` and `target/rt-dev`. A changed runtime keeps its core version if it adds no function: **export the core again** (`plinth core export target/core.wasm`) before Node or Edge tests, else apps can trap with "unreachable". `ci-local.sh full` does it.
+- `plinth-link/build.rs` builds `plinth-rt` into `target/rt` and `target/rt-dev`. After a runtime change, **export the core again** (`plinth core export target/core.wasm`) before Node or Edge tests. `ci-local.sh full` does it.
 - `registry serve --web` serves the web files embedded in the binary: rebuild the CLI before a web Hub test.
-- Subagents start their shell in `C:\repos\plinth`, not in their worktree: brief them to `cd` into the worktree in every command.
-- Goldens change when a message or a list of names changes (for example `PL4001_unknown_control`, `PL4002_partial_style_key`); re-bless with `PLINTH_BLESS=1 cargo test -p plinth-compiler --test golden` and read the diff.
-- Long bash heredocs with Python, backslashes or `\u` escapes break; write the script to a file in the scratchpad, or use the Edit tool.
-- The Bash hook blocks raw `grep`/`find` (and then the whole command line): use `rg` or the Grep tool.
-- Headless Edge: use the DevTools protocol; it cannot shrink below about 500 px (use `Emulation.setDeviceMetricsOverride`); close it with CDP `Browser.close`; it sometimes drops the first click into a new iframe. A sandboxed `srcdoc` frame may stay in the page process: `openPage` in `run-a11y.mjs` handles both kinds and finds a frame by its `data-app-id`. Scroll an element into view before a mouse hover.
+- Goldens change when a message or a list of names changes; re-bless with `PLINTH_BLESS=1 cargo test -p plinth-compiler --test golden` and read the diff.
+- **Editing files from the shell:** Python on Windows writes CRLF unless a file is opened with `newline=''` (the repo uses LF). Backslashes in heredocs and in `sed`/PowerShell arguments get lost or turn into control characters (`\r` became a CR in a path, `C:\repos` became `C:epos`). For Windows paths and escapes, use the Edit tool or a script file in the scratchpad.
+- The Bash hook blocks raw `grep`/`find`: use `rg` or the Grep tool.
+- **The agent session's safety check** blocks moving credentials (a GitHub token into WSL) and deleting folders recursively (old worktrees). Give the owner the command instead; do not work around it.
+- **Never run a long gate in the background while you edit sources:** later steps then compile the new, untested code. Stop it, stash, or wait.
+- Headless Edge: use the DevTools protocol; it cannot shrink below about 500 px; it sometimes drops the first click into a new iframe; `run-a11y.mjs` has a 60 s limit per DevTools call. A killed run leaves Edge helper processes. The primitives check timed out at page load one time in three runs; run it again.
 - AccessKit bounds in `plinth-shoot` tests are device pixels (scale 2 headless): divide by `window.scale_factor()`.
-- gpui does not accept the role `GenericContainer`: a plain box has no role.
 - Live GUI clicks from an agent session often do not reach the window; prefer headless tests.
-- `cargo install --path crates/plinth-cli` fails with "Access is denied" while any `plinth.exe` from `~/.cargo/bin` runs (the owner's `plinth dev`, a demo server). Check its output. A running exe can be renamed: `mv plinth.exe plinth.old.exe`, install, delete the old file later.
-- `run-a11y.mjs`: every DevTools call has a 60 s limit (`CDP_TIMEOUT_MS`), so a stuck call fails with its name. A killed run leaves Edge helper processes (`--user-data-dir=...plinth-a11y-*`); stop them. Do not chain `git commit` after a test run in a background command: a test that is stopped later still runs the commit.
-- Headless gpui scroll tests: the wheel goes to the hovered scroll box. Send the wheel over a visible point (a cell), not the center of a box that is wider than the window.
+- **Timings are noisy while other builds run** (agents). Compare variants interleaved in one process (switch draw by draw), not in separate runs.
+- gpui-ce: `taffy.rs` `compute_layout` computes a subtree again when an element asks for layout as a root, and the Taffy tree is built again each frame (GAPS F1). Agents in `U:\plinth-wt\` build from the same gpui-ce checkout through a junction: do not change gpui-ce while agents run.
 
 ## 8. Working conventions (from the owner)
 
 - Commit after each tested step. No GPG signing; no attribution lines.
 - The owner may edit `SPEC.md`; diff it before you change it.
-- Parallel agents: worktrees `U:\plinth-wt\<name>` (`U:\plinth-wt\gpui-ce` is a junction, so `../gpui-ce` resolves; `C:` has little space), one or two items per agent, a full `ci-local.sh` pass before it reports, never a push. Merge locally, regenerate `web/plinth.js` on a conflict, run the script and `run-a11y.mjs`, then report. Old merged worktrees still exist (`-a11y`, `-ci`, `-hostapi`, `-inputs`, `-lang`, `-rtfix`, `-structure`); they can be removed.
+- **Parallel agents** (the owner allows Sonnet subagents): worktrees `U:\plinth-wt\<name>` (`git worktree add U:/plinth-wt/<name> -b wt/<name> master`; `U:\plinth-wt\gpui-ce` is a junction, so `../gpui-ce` resolves). Brief each agent to `cd` into its worktree in every command, to commit on its branch, never to push, to pass `ci-local.sh full` before it reports, and not to edit `HANDOFF.md`. Give a large task in steps with a clear end point: an agent that sees a multi-day task can stop at once without work. Review the diff, merge locally, run the gate (and `run-a11y.mjs` for UI or web changes) on `master`, then remove the worktree.
+- Write all prose in ASD-STE100 Simplified Technical English.
 
-## 9. Smooth motion and performance (owner request, 2026-10-06)
+## 9. Session log 2026-10-07 (what changed and why)
 
-**Status (2026-10-06, late):** steps 1, 2 and 3 are done. Fractional insets and sizes (UI API 1.11), `onFrame` (core 1.12; Pong steps by `dt`), and a deadline-based desktop timer loop (a late interval skips missed ticks). Measured: about 98 frames per second on the owner's display, `dt` 8–12 ms; a 16 ms interval has gaps of 14–18 ms (was 15–26). Steps 4–6 are open. The owner has not played the new Pong yet.
-
-The owner played Pong: about 63 ticks per second, but the ball "seems a little jumpy". The cause is not the screen. Two causes are known; measure before and after each fix.
-
-**Known causes:**
-
-1. **Positions in whole spacing units (the main cause).** Insets and sizes take whole units (4 px). The ball moves 0.9 units per tick (`SERVE_SPEED` in `examples/pong/app/game.ts`), and `cell()` rounds each position. So the ball moves 4 px on most ticks and 0 px on about one tick in ten: a stutter about 6 times per second. The vertical speed (up to 1.0) has the same effect.
-2. **Timer cadence.** The desktop host checks timers on a 15 ms background timer (`crates/plinth-host-desktop/src/lib.rs`, `poll_timers`) and fires at most one tick per check. A 16 ms `setInterval` against 15 ms checks and the display refresh gives uneven gaps between frames (45–62 per second at start, then 60–63, GAPS "Games"). The web host uses `setInterval`, which is not in step with the display either.
-
-**Optimization plan (in order):**
-
-1. **Fractional positions.** Let insets (`top`, `left`, `right`, `bottom`) and sizes take fractional spacing units (for example in quarter units, 1 px), or move Pong's court to `Canvas`, whose view units are fractional and scale to the window. Then remove `cell()` from Pong. This removes cause 1 and also fixes the small court on wide windows (GAPS G9).
-2. **An animation-frame timer (GAPS G5):** `onFrame((dt) => …)` or `requestFrame`, driven by the host's frame callback (gpui: request the next frame from the window; web: `requestAnimationFrame` in the frame), with the real time since the last frame, paused when the window is hidden. Games then move by `speed * dt`. This removes cause 2 and stops the loop in a hidden window (G10).
-3. **A better timer loop on the desktop:** wake at the next timer deadline (`next_timer_deadline` exists) instead of a fixed 15 ms poll, and run all due timers in one go.
-4. **Host-side motion (UI-ADVANCED U2 motion):** `transition` on `left`/`top` lets the renderer move an element smoothly between two commits, so 30 ticks per second can look like 60 or 120.
-5. **Release builds for play.** `plinth dev` and `target/debug/plinth.exe` are debug builds of the host and wasmtime. Measure a release build (`cargo build --release -p plinth-cli`) and say in `docs/getting-started.md` which build to use for games.
-6. **Frame cost on the desktop:** `render.rs` builds the whole element tree for every frame. Measure with `PLINTH_TRACE_RENDER=1` on Pong and on `big-list` (0.35–0.6 ms for Pong in a debug build); if it grows, cache the elements of unchanged nodes.
-
-**How to measure:** add a frame-time histogram to Pong's status line or to `PLINTH_TRACE_RENDER` (the time between presented frames, not only the tick count). Check that the ball's x position changes by the same amount each frame. Record the numbers in `docs/VALIDATION.md` §6 and in GAPS "Games". Already done: the runtime sends no op for an unchanged value (GAPS G8, 9 → 1.4 ops per tick).
+- **Robustness:** compiler mutation test (fixed a `break` outside a loop, JSON of recursive types, deep nesting with `stacker` and `PL1000`); runner limit tests; plain stop reasons on both hosts; web host stopped state and banners; hostile op streams, hostile render trees and changed app modules (no bugs found; tests kept).
+- **Language:** default values in patterns, object rest, optional props set to `undefined` for every prop kind, `onMount`.
+- **Memory:** three core leaks found by the monkey test and fixed (allocator tail loss, first fit, uncounted array buffers).
+- **Performance:** frame-cost survey; labelled form controls about two times faster (block layout; GAPS F1); async code size measured.
+- **Platform decisions:** `docs/UPDATES.md` (three-layer updates), wasmi for iOS, core patch versions and the `core` policy.
+- **CI:** self-hosted runner files and `ci.yml` (owner steps open, §0.2). Pushed to GitHub up to `b6e766e`.
 
 ## 10. Next steps (in order)
 
-0b. **Done 2026-10-07 (merged on master):** the memory-leak fixes and the monkey test; the frame-cost survey (GAPS F1: labelled form controls are slow, cause not yet found; measure on a quiet CPU); optional number/bool props set to `undefined` and `onMount` (agent branch `wt/props`); core patch versions with a digest and the author's `core` policy (UPDATES step 1, agent branch `wt/corever`). **Running in worktrees on `U:\plinth-wt\`** (agents; merge after review and a gate pass): `wasmi` (the wasmi engine, step 1 of 3: core-module extraction, ui/time/store/clipboard imports, `PLINTH_ENGINE=wasmi`), `updater` (UPDATES steps 2-3: the signed feed and the desktop updater). Worktrees go on `U:` because `C:` has little space; `U:\plinth-wt\gpui-ce` is a junction to `C:\repos\gpui-ce`.
-0a. **Decided 2026-10-07 (owner):** updates without a reinstall in three layers (native host, core, app), configured by the author: design draft `docs/UPDATES.md`. iOS runs Wasm with the `wasmi` interpreter (no JIT; SPEC §9.2). Order: finish the memory-leak work (monkey test, `big-list`), then `plinth-runner-wasmi` with the test suites on both runners, then core patch versions and the `core` policy (UPDATES §8).
-0. **Robustness (2026-10-07, `docs/GAPS.md` "Robustness"):** done: a compiler mutation test (`tests/robustness.rs`; run more cases with `PLINTH_FUZZ_ITERS=40000`), a large stack for each compile (`stacker`) and a nesting limit (`PL1000`), JSON of recursive types, limit tests, plain stop reasons on both hosts, and the web host's stopped state and banners. Open: R1 a time limit on the web (a Worker per app), R2 a web memory cap, R4 structure-aware mutations.
-
-1. **Smooth motion (§9), the rest:** steps 4–6 (transitions, a release build for play, frame cost). Ask the owner to play Pong again first.
-2. **Pointer, the rest (GAPS G4, 7G-6..8):** a secondary button or `onContextMenu`; children in `Dialog`; stroke shapes on `Canvas` (compile-time only); a modal overlay that blocks pointer events to the boxes under it on the desktop; `onDrag` and drop targets (U3).
-3. **Game and app loop gaps (GAPS "Games"):** G6 and G10 are done (`Math.random`, `onCleanup`, `isActive`). Open: sound (G7), scale to the window (G9), `onMount`. Rest of U2: transitions and springs. Then interned style records (`docs/UI-ADVANCED.md` §4).
-4. **7GUIs task 7, Cells: done.** A scroll frame is 8.6 ms in a release build (12.4 ms with AccessKit) after the desktop renderer started to build only the rows and columns of a long `Scroll` that are in view (GAPS 7G-12). Open from it: edit in place (7G-11); caching of unchanged elements for screens that do not scroll (§9 step 6). V1 exit criteria still need the web numbers and the comparison with React and Svelte (VALIDATION §2).
-5. **Storage, next part (`docs/STORAGE.md` §6):** a granted `vault` space and the Hub UI for spaces; an existing folder as a space (S6); `watch`; then sync to rustfs and Azurite in Docker. Editor: Markdown source plus a `Markdown` display control. Then the notes app (VALIDATION V2).
-6. **Experience (`docs/EXPERIENCE.md` §7):** step 1 (plain words) is done. Next: Try and Keep, the Privacy page (permissions with last use, storage size, Remove).
-7. **Compiler:** smaller async code (measured: GAPS "Async code size"; move the promise machinery into the core); `cond ? x : undefined` for optional number and boolean props. (Done 2026-10-07: the web host banners, rest in object patterns, default values in patterns, 7G-3 for string and enum props.)
-8. **Web (small doses):** minify `plinth.js` (176 KiB); web Hub PWA and first-use prompts (`docs/web-hub.md` §7).
-9. **Platforms:** a GUI window on Linux and macOS; then mobile with gpui (SPEC Q1, Q3).
-10. **Distribution:** publish the npm packages and a first registry; Hub H2 (signed indexes, transparency log); key rotation; later a tree-shaken app-plus-runtime bundle.
-
-**Open decisions for the owner:** the license (Cargo.toml says Apache-2.0; no LICENSE file); the project Hub key; self-hosted runners; `docs/HUB.md` H-Q4; the open questions in the design drafts (ST-Q*, UA-Q*, UX-Q*); whether app data keyed by package digest for unsigned apps (a new space for each build) is acceptable.
+1. **wasmi step 2** (IN PROGRESS at this handoff, branch `wt/wasmi`): the `dialog`, `net`, `files` and `hub` imports; the fuel time limit and the memory cap; parity on every suite with `PLINTH_ENGINE=wasmi`; release speed numbers against wasmtime. Then step 3: move the engine-free host state into its own crate, so an iOS build does not depend on wasmtime.
+2. **Updates steps 2–3** (IN PROGRESS at this handoff, branch `wt/updater`): the signed feed, `plinth feed add`, the desktop updater for `plinth native` with no downgrade and rollback. Then UPDATES §8 steps 4–6 (web service worker cache, `apply = "live"`, mobile).
+3. **gpui-ce layout fix (GAPS F1):** make nested flex layout linear in the owner's fork (when no agent builds), then remove other needless flex boxes in `render.rs`; check with `frame_cost.rs` and the screenshots.
+4. **Smooth motion, the rest:** host-side transitions (UI-ADVANCED U2 motion), a release build for play (say it in `docs/getting-started.md`). Ask the owner to play Pong first.
+5. **Web robustness:** R1 a time limit (a Worker per app with a watchdog), R2 a memory cap.
+6. **Pointer, the rest (GAPS G4, 7G-6, 7G-7):** a secondary button or `onContextMenu`; children in `Dialog`; a modal overlay that blocks pointer events on the desktop; `onDrag` and drop targets.
+7. **Game gaps:** sound (G7), scale to the window (G9), transitions and springs.
+8. **Storage (`docs/STORAGE.md` §6):** a `vault` space and the Hub UI for spaces; a folder as a space; `watch`; sync. Then the notes app (VALIDATION V2).
+9. **Experience (`docs/EXPERIENCE.md` §7):** Try and Keep, the Privacy page.
+10. **Compiler:** smaller async code (move the promise machinery into the core, GAPS "Async code size"); R3 (chains longer than 1000 terms).
+11. **Platforms:** a GUI window on Linux (WSLg is available) and macOS; then mobile with gpui and wasmi.
+12. **Distribution:** publish the npm packages and a first registry; Hub H2 (signed indexes); key rotation and the project key.
