@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Cursor, Read, Write};
 
+pub mod feed;
 pub mod publisher;
 pub mod signature;
 
@@ -48,6 +49,68 @@ pub struct ProjectConfig {
     /// today's only behavior.
     #[serde(default)]
     pub core: CorePolicy,
+    /// The author's update feed (`docs/UPDATES.md` §8 step 2). `None`
+    /// means the app never checks for updates (today's behavior, and the
+    /// behavior of a `plinth.toml` written before this field existed).
+    #[serde(default)]
+    pub updates: Option<UpdatesConfig>,
+}
+
+/// `[updates]` in `plinth.toml`, carried into the manifest's `updates`
+/// field unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct UpdatesConfig {
+    /// The feed URL, for example `https://example.com/myapp/feed.json`.
+    pub feed: String,
+    #[serde(default)]
+    pub channel: Channel,
+    #[serde(default)]
+    pub check: CheckPolicy,
+    #[serde(default)]
+    pub apply: ApplyPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Channel {
+    #[default]
+    Stable,
+    Beta,
+}
+
+impl Channel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Channel::Stable => "stable",
+            Channel::Beta => "beta",
+        }
+    }
+}
+
+/// When the host checks the feed. Only `on-start` is implemented
+/// (`docs/UPDATES.md` §8 step 4); an interval is future work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CheckPolicy {
+    #[default]
+    OnStart,
+}
+
+/// When a downloaded update takes effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApplyPolicy {
+    /// Run the new version the next time the app starts (implemented).
+    #[default]
+    NextStart,
+    /// Ask the user to restart now (implemented as a stub prompt;
+    /// `docs/UPDATES.md` §8 step 6).
+    Prompt,
+    /// Replace the running app in place, keeping its state
+    /// (`docs/UPDATES.md` §9 UP-Q2). Not implemented: a config that asks
+    /// for it is rejected by `ProjectConfig::validate`.
+    Live,
 }
 
 /// The author's policy for which core a built app takes, carried into the
@@ -120,6 +183,12 @@ pub struct Manifest {
     /// for a manifest written before this field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core_digest: Option<String>,
+    /// The author's update feed configuration (`docs/UPDATES.md` §8 step
+    /// 2), carried from `plinth.toml`'s `[updates]` unchanged. `None`
+    /// means no updates: a manifest written before this field existed,
+    /// or a `plinth.toml` with no `[updates]` section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updates: Option<UpdatesConfig>,
 }
 
 fn default_core_field() -> String {
@@ -150,6 +219,14 @@ impl ProjectConfig {
                 bail!("plinth.toml: the capability `{}` needs a `rationale` (SPEC.md §11)", c.name);
             }
         }
+        if let Some(updates) = &self.updates {
+            if updates.feed.trim().is_empty() {
+                bail!("plinth.toml: `[updates] feed` must not be empty");
+            }
+            if updates.apply == ApplyPolicy::Live {
+                bail!("plinth.toml: `[updates] apply = \"live\"` is not built yet (docs/UPDATES.md §9 UP-Q2); use \"next-start\" or \"prompt\"");
+            }
+        }
         Ok(())
     }
 
@@ -177,6 +254,7 @@ impl ProjectConfig {
             icon: self.icon.clone(),
             digest: hex(&Sha256::digest(app)),
             capabilities: self.capabilities.clone(),
+            updates: self.updates.clone(),
             core: self.core.as_str().to_owned(),
             core_digest: match self.core {
                 CorePolicy::Pinned => core_digest.map(str::to_owned),
@@ -189,6 +267,19 @@ impl ProjectConfig {
 fn is_semver(v: &str) -> bool {
     let parts: Vec<&str> = v.split('.').collect();
     parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// `MAJOR.MINOR.PATCH` as a comparable tuple; a part that does not parse
+/// counts as 0 (the same rule as `plinth_hub::semver_key` and
+/// `plinth_registry::is_newer`).
+pub fn semver_key(v: &str) -> (u64, u64, u64) {
+    let mut it = v.split(['.', '-', '+']).map(|p| p.parse::<u64>().unwrap_or(0));
+    (it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0))
+}
+
+/// True if version `a` is newer than version `b` (semver order).
+pub fn is_newer(a: &str, b: &str) -> bool {
+    semver_key(a) > semver_key(b)
 }
 
 fn hex(bytes: &[u8]) -> String {
