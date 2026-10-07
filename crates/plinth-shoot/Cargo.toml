@@ -20,3 +20,4 @@ gpui_wgpu = { path = "../../../gpui-ce/crates/gpui_wgpu", package = "gpui_ce_wgp
 
 [dev-dependencies]
 plinth-compiler.workspace = true
+plinth-protocol.workspace = true

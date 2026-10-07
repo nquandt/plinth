@@ -342,3 +342,60 @@ fn deep_nesting_builds_up_to_the_limit_and_is_a_diagnostic_past_it() {
         assert_eq!(msgs, vec![format!("this code nests more than {depth} levels deep").as_str()], "case {i}");
     }
 }
+
+/// A hostile package: the digest check stops random changes to a package,
+/// but anyone can make a valid package around any `app.wasm`. The linker
+/// parses and rewrites that module, so changed app modules must give an
+/// error, never a panic; a module that links must still load in wasmtime
+/// (the result is validated again there) and stop cleanly if it traps.
+#[test]
+fn mutated_app_modules_never_panic_the_linker() {
+    let iters: usize = std::env::var("PLINTH_FUZZ_ITERS").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
+    let mut apps = Vec::new();
+    for p in projects().iter().filter(|p| ["counter", "todo", "pong", "7guis/cells"].contains(&p.name.as_str())) {
+        let fs = MemFs(p.files.clone());
+        let (_, artifact) = plinth_compiler::compile_with_capabilities(&fs, &p.capabilities).unwrap();
+        apps.push(artifact.expect("example builds").app);
+    }
+    assert_eq!(apps.len(), 4);
+    let rt = plinth_compiler::link::runtime();
+    let runner = plinth_runner_wasmtime::Runner::new().unwrap();
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|info| {
+        let at = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        PANIC_AT.with(|p| *p.borrow_mut() = at);
+    }));
+    let mut rng = Rng(0xA99);
+    let (mut linked, mut ran, mut failures) = (0, 0, Vec::new());
+    for case in 0..iters {
+        let mut bytes = apps[rng.below(apps.len())].clone();
+        for _ in 0..1 + rng.below(4) {
+            let at = rng.below(bytes.len());
+            match rng.below(4) {
+                0 => bytes[at] = rng.next() as u8,
+                1 => bytes[at] ^= 1 << rng.below(8),
+                2 => bytes.truncate(at.max(8)),
+                _ => bytes.insert(at, rng.next() as u8),
+            }
+        }
+        let result = catch_unwind(AssertUnwindSafe(|| -> anyhow::Result<bool> {
+            let component = plinth_compiler::split::link_app(rt, &bytes)?;
+            let mut guest = runner.load(&component, plinth_runner_wasmtime::Limits::default())?;
+            Ok(guest.init(&[]).is_ok())
+        }));
+        match result {
+            Ok(Ok(started)) => {
+                linked += 1;
+                ran += usize::from(started);
+            }
+            Ok(Err(_)) => {}
+            Err(e) => {
+                let at = PANIC_AT.with(|p| p.borrow().clone());
+                failures.push(format!("case {case}: panic: {} at {at}", panic_text(&*e)));
+            }
+        }
+    }
+    std::panic::set_hook(hook);
+    eprintln!("{iters} changed app modules: {linked} linked, {ran} started");
+    assert!(failures.is_empty(), "the linker failed:\n{}", failures.join("\n"));
+}

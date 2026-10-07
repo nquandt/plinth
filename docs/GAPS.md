@@ -738,6 +738,12 @@ Fixed:
 - **Out of memory had no reason**: a failed `memory.grow` gave a null pointer to Rust's allocation error path, which reached the panic handler (and the over-aligned path used the null as an address). The allocator now stops with `trap: out of memory` (`trap_oom`, no allocation).
 - **The web host had no stopped state and no banners.** A trap left a broken instance that timers and events still called, and an uncaught error went only to `console.error`. Now `PlinthApp` stops after a trap (`stopped`, `onStop`, the same reasons as the desktop) and never calls the app again, and `DomRenderer` shows "This app stopped" (the screen becomes `inert`) and "An error occurred" with Dismiss, as the desktop does.
 
+Hostile input to the host (no bug found; the tests stay as guards):
+
+- **The op stream** (`crates/plinth-ui/tests/hostile_ops.rs`): random well-formed ops over a small id range (bad parents, cycles, removed nodes, wrong value types) and their bytes with random changes. After each commit the tree keeps its invariants (each child names its parent, no node in two places, no cycle). 20,000 commits passed.
+- **The renderer** (`crates/plinth-shoot/tests/hostile_render.rs`): random trees of real controls with wrong prop types, `NaN`, huge numbers, unknown enums, bad canvas shapes and long text, at three widths, with later moves, removes and navigation. 150 windows drew with no panic (20 in the check script, about 45 s).
+- **The linker** (`mutated_app_modules_never_panic_the_linker` in `robustness.rs`): a valid package can hold any `app.wasm`, so changed app modules go through `split::link_app` and wasmtime. 3,000 cases: 97 linked, 80 started, no panic.
+
 Open:
 
 | # | Area | What | Suggested fix |
