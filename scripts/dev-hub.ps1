@@ -46,7 +46,7 @@ if ($LASTEXITCODE -ne 0) { throw "validate failed" }
 # The library: the Hub app (granted hub.manage) and some examples.
 & plinth hub add $hub.FullName
 & plinth hub grants dev.plinth.hub allow hub.manage
-foreach ($app in "notes", "budget", "todo", "counter", "timer", "calculator") {
+foreach ($app in "notes", "budget", "todo", "counter", "timer", "calculator", "pong", "primitives", "files-demo") {
   & plinth build "examples/$app" | Out-Null
   $pkg = Get-ChildItem "examples/$app/dist/*.plnt" | Select-Object -First 1
   if ($pkg) { & plinth hub add $pkg.FullName }
