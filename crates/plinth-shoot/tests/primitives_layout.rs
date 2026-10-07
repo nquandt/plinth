@@ -215,3 +215,68 @@ export default app({ screens: { home: { title: "Pointer", component: Home } } })
     assert_eq!(log(&mut cx), "sketch down 15 6");
     send(&mut cx, up(at(sketch, 30.0, 12.0)));
 }
+
+/// 7GUIs task 6 on the desktop: real clicks on the canvas draw circles (the
+/// canvas label counts them), a click in a circle draws none. Writes
+/// `target/shots/circle-drawer.png` for a visual check.
+#[test]
+fn circle_drawer_draws_where_clicked() {
+    use gpui::{MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput, point};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/7guis/circle-drawer");
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&DiskFs { root }, &[]).expect("compile");
+    let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+    let artifact = artifact.unwrap_or_else(|| panic!("the circle drawer has errors:\n{}", diags.join("\n")));
+    let platform = gpui_platform::current_platform(true);
+    let mut cx = HeadlessAppContext::with_platform(platform.text_system(), std::sync::Arc::new(()), || {
+        gpui_wgpu::WgpuHeadlessRenderer::new()
+            .map(|r| Box::new(r) as Box<dyn PlatformHeadlessRenderer>)
+            .map_err(|e| log::error!("no headless renderer: {e:#}"))
+            .ok()
+    });
+    cx.update(plinth_ui::init);
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let commits = guest.init(&[]).unwrap();
+    let port = Box::new(WasmGuest { guest, _runner: runner });
+    let window = cx.open_window(size(px(900.), px(800.)), move |_, cx| cx.new(|cx| PlinthRoot::new(port, commits, "indigo", cx))).unwrap();
+    let handle = window.into();
+    cx.update(|cx| window.update(cx, |_, window, _| window.set_a11y_forced(true))).unwrap();
+    cx.run_until_parked();
+
+    let scale = f64::from(cx.update(|cx| window.update(cx, |_, window, _| window.scale_factor())).unwrap());
+    let drawing = |cx: &mut HeadlessAppContext| {
+        let tree = cx.update(|cx| window.update(cx, |_, window, _| window.a11y_tree().cloned())).unwrap().unwrap();
+        tree.nodes
+            .iter()
+            .find(|(_, n)| n.role() == Role::Image)
+            .map(|(_, n)| (n.label().unwrap_or("").to_owned(), n.bounds().unwrap()))
+            .expect("the canvas")
+    };
+    let (label, b) = drawing(&mut cx);
+    assert!(label.starts_with("Drawing with 0 circles"), "{label}");
+    // The view is 400 units wide.
+    let k = (b.x1 - b.x0) / scale / 400.0;
+    let click = |cx: &mut HeadlessAppContext, vx: f64, vy: f64| {
+        let p = point(px((b.x0 / scale + vx * k) as f32), px((b.y0 / scale + vy * k) as f32));
+        cx.update_window(handle, |_, window, cx| {
+            window.dispatch_event(
+                PlatformInput::MouseDown(MouseDownEvent { position: p, modifiers: Default::default(), button: MouseButton::Left, click_count: 1, first_mouse: false }),
+                cx,
+            );
+            window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { position: p, modifiers: Default::default(), button: MouseButton::Left, click_count: 1 }), cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+    click(&mut cx, 80.0, 80.0);
+    click(&mut cx, 200.0, 150.0);
+    click(&mut cx, 300.0, 220.0);
+    click(&mut cx, 205.0, 150.0);
+    let (label, _) = drawing(&mut cx);
+    assert!(label.starts_with("Drawing with 3 circles"), "three clicks on empty canvas, one in a circle: {label}");
+
+    let shots = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/shots");
+    std::fs::create_dir_all(&shots).unwrap();
+    let image = cx.capture_screenshot(window.into()).expect("render the circle drawer");
+    image.save(shots.join("circle-drawer.png")).expect("write the screenshot");
+}

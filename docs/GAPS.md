@@ -644,6 +644,22 @@ Open (workarounds in the apps):
 | 7G-4 | Std (`plinth:time`) | `parseDate` reads only ISO text; `makeDate(2027, 4, 31)` rolls over to 1 May, as JS does. | `examples/7guis/flight-booker/app/dates.ts` splits `DD.MM.YYYY` and checks the day with a `dateParts(makeDate(...))` round trip. | Low. A `parseDate(text, pattern)` would remove 30 lines. |
 | 7G-5 | Tests | The Node tests cannot hold a mouse button or type keys; VALIDATION asks for held clicks on the timer. | Not covered for 7GUIs. `run-a11y.mjs` covers held clicks and typing on other apps. | Add the 7GUIs apps to `run-a11y.mjs`. |
 
+## Found by 7GUIs task 6, Circle Drawer (2026-10-06)
+
+`examples/7guis/circle-drawer`: `Canvas` with pointer events (UI API
+1.12), a `Sheet` with a `Slider`, and undo and redo as snapshots of an
+immutable list. Tests: `circle_drawer_draws_adjusts_and_undoes`
+(`tests/sevenguis.rs`), `circleDrawer` (`run-7guis.mjs`), real clicks in
+`circle_drawer_draws_where_clicked` (`plinth-shoot`, writes
+`target/shots/circle-drawer.png`) and in `checkCircleDrawer`
+(`run-a11y.mjs`, Edge).
+
+| # | Area | What failed | Workaround | Suggested fix |
+|---|---|---|---|---|
+| 7G-6 | UI API | No secondary button: pointer events are for the main button only, and there is no context menu. The task opens the diameter dialog with a right-click on a circle. | An "Adjust diameter" button for the selected circle. | A `button` argument (or `onContextMenu`, also for a long press on touch) and an anchored `Menu` at a point. |
+| 7G-7 | UI API | A `Dialog` holds only a title, a message and actions: no slider. | The slider is in a `Sheet`. | Children in `Dialog` (a small form). |
+| 7G-8 | Canvas | No stroke shapes: a circle outline is two filled circles. | A border-color circle with a smaller fill circle on it. | `stroke` and `strokeWidth` on `circle` and `rect` (compile-time encoding, no core change). |
+
 ## Games (Pong, 2026-10-06)
 
 Found while building `examples/pong` (a one-player Pong against a

@@ -1,4 +1,4 @@
-// Node test (docs/VALIDATION.md V1): the 7GUIs tasks 1-5 in
+// Node test (docs/VALIDATION.md V1): the 7GUIs tasks 1-6 in
 // examples/7guis/, on the web host's code: the same PlinthApp and the same
 // semantic tree (dom-renderer.js `Tree`) that the browser uses, with no DOM.
 // A `change` is sent as `DomRenderer.sendChange` sends it: the host keeps
@@ -239,8 +239,50 @@ async function crud() {
   assert.ok(h.disabled("Update") && h.disabled("Delete"));
 }
 
+async function circleDrawer() {
+  const h = await Harness.start("circle-drawer");
+  const canvas = h.one(ControlKind.canvas);
+  // Pointer events carry [x, y] in view units (UI API 1.12).
+  const pointer = (event, x, y) => h.send(canvas, event, [x, y]);
+  // The fill of each circle (an outline is two circles: the border, then the fill).
+  const fills = () =>
+    String(canvas.props.get(Prop.shapes) ?? "")
+      .split("")
+      .map((s) => s.split(""))
+      .filter((f) => f[0] === "c")
+      .filter((_, i) => i % 2 === 1)
+      .map((f) => [Number(f[1]), Number(f[2]), f[4]]);
+  const borderRadius = () => Number(String(canvas.props.get(Prop.shapes)).split("").find((s) => s.startsWith("c")).split("")[3]);
+
+  assert.deepEqual(fills(), []);
+  pointer(Event.pointerDown, 100, 100);
+  pointer(Event.pointerDown, 250.5, 150);
+  assert.deepEqual(fills(), [[100, 100, "surface.alt"], [250.5, 150, "text.muted"]]);
+  pointer(Event.pointerMove, 110, 95);
+  assert.equal(fills()[0][2], "text.muted", "the pointer selects the circle under it");
+  pointer(Event.pointerDown, 105, 100);
+  assert.equal(fills().length, 2, "a click in a circle adds none");
+
+  h.press("Adjust diameter");
+  const slider = h.labeled(ControlKind.slider, "Diameter");
+  h.send(slider, Event.change, 70);
+  assert.equal(borderRadius(), 35);
+  h.press("Done");
+  h.press("Undo");
+  assert.equal(borderRadius(), 15, "one undo step for the whole adjustment");
+  h.press("Undo");
+  h.press("Undo");
+  assert.deepEqual(fills(), []);
+  h.press("Redo");
+  h.press("Redo");
+  h.press("Redo");
+  assert.equal(fills().length, 2);
+  assert.equal(borderRadius(), 35);
+  assert.ok(h.disabled("Redo"));
+}
+
 async function main() {
-  for (const [name, test] of Object.entries({ counter, temperature, flightBooker, timer, crud })) {
+  for (const [name, test] of Object.entries({ counter, temperature, flightBooker, timer, crud, circleDrawer })) {
     await test();
     console.log(`run-7guis.mjs: ${name} ok`);
   }

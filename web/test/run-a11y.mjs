@@ -257,7 +257,7 @@ async function main() {
     await waitForCdp(cdpPort);
 
     for (const app of hubOnly || typingOnly || exportOnly ? [] : APPS) {
-      const appUrl = `${base}/examples/${app}/dist/${app}.plnt`;
+      const appUrl = `${base}/examples/${app}/dist/${app.split("/").pop()}.plnt`;
       const coreUrl = `${base}/target/core.wasm`;
       const testUrl = `${base}/web/test/a11y.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(coreUrl)}`;
       console.log(`== ${app} ==`);
@@ -330,6 +330,7 @@ async function main() {
       ["one row of 10,000 changes, no other element does (big-list)", checkBigList],
       ["Level 2 primitives: layout and keyboard (primitives)", checkPrimitives],
       ["absolute boxes and held keys (pong)", checkPong],
+      ["canvas pointer positions (7GUIs circle drawer)", checkCircleDrawer],
     ]) {
       console.log(`== ${name} ==`);
       try {
@@ -460,7 +461,7 @@ async function checkStopwatch(cdpPort, base) {
 
 /** Opens `examples/<app>` in the web host and waits for `ready` (an expression). */
 async function openApp(cdpPort, base, app, ready) {
-  const appUrl = `${base}/examples/${app}/dist/${app}.plnt`;
+  const appUrl = `${base}/examples/${app}/dist/${app.split("/").pop()}.plnt`;
   const coreUrl = `${base}/target/core.wasm`;
   const page = await openPage(cdpPort);
   await page.navigate(`${base}/web/index.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(coreUrl)}`);
@@ -768,6 +769,32 @@ async function checkPong(cdpPort, base) {
     });
     await mouse("mouseReleased", court.y + court.h + 24, 0);
     return `moved ${Math.round(before - held)} px while ArrowUp was held; a mouse drag aims the paddle`;
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * UI API 1.12 on a Canvas: a real click on the SVG gives the position in
+ * view units, so the new circle is drawn where the click was.
+ */
+async function checkCircleDrawer(cdpPort, base) {
+  const svg = `document.querySelector('#app svg.pl-canvas')`;
+  const page = await openApp(cdpPort, base, "7guis/circle-drawer", svg);
+  try {
+    const box = await page.eval(`(() => { const r = ${svg}.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width }; })()`);
+    const click = async (dx, dy) => {
+      for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
+        await page.send("Input.dispatchMouseEvent", { type, x: box.x + dx, y: box.y + dy, button: "left", buttons: type === "mousePressed" ? 1 : 0, clickCount: 1 });
+      }
+    };
+    await click(box.w / 4, 40);
+    // The view is 400 units wide: a click at a quarter of the width is x 100.
+    const k = 400 / box.w;
+    const want = { cx: 100, cy: 40 * k };
+    const got = await page.waitFor(`(() => { const c = ${svg}.querySelector("circle"); return c ? { cx: +c.getAttribute("cx"), cy: +c.getAttribute("cy") } : null; })()`, 3000);
+    if (Math.abs(got.cx - want.cx) > 1 || Math.abs(got.cy - want.cy) > 1) throw new Error(`the circle is at ${JSON.stringify(got)}, not ${JSON.stringify(want)}`);
+    return `a click at ${Math.round(box.w / 4)} px drew a circle at view x ${got.cx.toFixed(1)}`;
   } finally {
     await page.close();
   }
