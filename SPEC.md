@@ -723,13 +723,31 @@ The compiler runs the same load step after each build, so each build tests it.
 
 A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version is the same file on every host platform. A `.plnt` that needs core 1.3 behaves the same on Windows, macOS, Linux, the web and mobile, because each of these hosts runs the same core 1.3 file.
 
-- A core holds its version in the custom section `plinth-core` (`MAJOR.MINOR`).
+- A core holds its own version in the custom section `plinth-core` (`MAJOR.MINOR.PATCH`). An app declares only `MAJOR.MINOR` in its own `plinth-core` section: the lowest core it needs. A missing patch part reads as patch 0, so an old core and an old app still parse.
 - An app declares the **lowest** core version that has every runtime function that it imports. `rt_abi::ADDED_IN` records the minor version that added each function. Thus a counter app built with core 1.1 still declares 1.0 and runs on a 1.0 core; an app that uses `JSON.stringify` (added in 1.1) declares 1.1.
-- A host keeps more than one core, as a version manager (for example `nvm`) does: the core that it was built with, and the cores in its cores directory (`%LOCALAPPDATA%\plinth\cores\<version>\core.wasm` on Windows, `$XDG_DATA_HOME/plinth/cores/...` on other systems, or `PLINTH_CORES_DIR`).
-- **Selection.** For each app, the host picks the core with the same major version and the highest minor version that is not lower than the app's minor version. If there is no such core, the host tells the user which core to install.
-- **Backward compatibility.** Because a core only adds functions inside its major version, the newest core of a major version runs every older app of that major version. A breaking change makes a new major version, and the old and the new core stay installed side by side.
+- **Patch versions.** A core fix that adds no function (same imports, same behavior for every existing import) keeps its minor version and only bumps the patch version, `rt_abi::CORE_PATCH` (next to `CORE_MINOR`). A fix that adds a function bumps `CORE_MINOR` instead and resets the patch to 0. There is no automatic check that a patch bump corresponds to a real change: a maintainer bumps `CORE_PATCH` by hand, and the commit message says what the fix was (`HANDOFF.md` §6). `plinth-rt`'s own `CORE_VERSION` byte string must be kept equal to `CORE_MAJOR.CORE_MINOR.CORE_PATCH`.
+- **Core identity.** A core is identified by its version plus the SHA-256 digest of its bytes. Two builds normally do not share a version; when an author's policy is `pinned` (below), the exact build matters, and the digest tells two same-version builds apart. `plinth core list` shows both the version and the digest.
+- A host keeps more than one core, as a version manager (for example `nvm`) does: the core that it was built with, and the cores in its cores directory (`%LOCALAPPDATA%\plinth\cores\<major>.<minor>.<patch>\core.wasm` on Windows, `$XDG_DATA_HOME/plinth/cores/...` on other systems, or `PLINTH_CORES_DIR`). A core directory from before patch versions (`<major>.<minor>\core.wasm`) still loads: the directory name is cosmetic, and the version comes from the file's own section.
+- **Selection.** For each app, the host picks the core with the same major version as the app needs, then, under the author's policy:
+  - `follow` (the default, and the only behavior before this section): the highest minor version that is not lower than the app's, then the highest patch version.
+  - `patch`: only patches of the exact minor version the app was built with, the highest patch.
+  - `pinned`: the exact core build the app was built with, matched by digest. If it is not installed, the host names the missing core (version and digest) instead of substituting another build.
+
+  If there is no matching core, the host tells the user which core to install.
+- **Backward compatibility.** Because a core only adds functions inside its major version, the newest core of a major version runs every older app of that major version (under `follow`). A breaking change makes a new major version, and the old and the new core stay installed side by side.
 - **The native part of a host** (the renderer and the host APIs) must also support every host interface that a core imports. A minor core version can add an interface (core 1.3 added `plinth:app/dialog`), so a host must check a core's imports before it uses the core, and use only cores whose imports it supports. A host that ships a core also ships the support for it; an installed core from elsewhere can need a newer host.
-- **Commands:** `plinth core list`, `plinth core install <core.wasm>`, `plinth core export <file>`. Later, the hub and npm distribute cores.
+- **The author's core policy** (`plinth.toml`, carried into the manifest field `core`):
+
+  ```toml
+  core = "follow"   # default: newest compatible minor and patch
+  # core = "patch"   # only patches of the minor the app was built with
+  # core = "pinned"  # exactly the core build the app was built with (by digest)
+  ```
+
+  For `pinned`, the manifest also records `core-digest`, the digest of the core used at build time. An old manifest with no `core` field means `follow`. `docs/UPDATES.md` has the motivation (an author's control over core updates).
+- **Commands:** `plinth core list` (version and digest for each installed core), `plinth core install <core.wasm>`, `plinth core export <file>`. Later, the hub and npm distribute cores.
+
+**Status (2026-10-07):** core patch versions, core digests, and the author's `core` policy are built (`plinth-link::cores`, `plinth-package::CorePolicy`). The desktop host (`plinth-host-desktop`) honors the policy when it links a package. The feed format and the updater (`docs/UPDATES.md` §4 items 3–5) are still open; `UP-Q1` (the default policy) is answered by this section: `follow`.
 
 ---
 

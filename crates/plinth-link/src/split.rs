@@ -271,9 +271,11 @@ pub fn encode_app(al: &AppLayout, app: &AppCode) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Returns the core version that an app module needs, if it names one.
-pub fn app_core_version(app: &[u8]) -> Option<crate::cores::Version> {
-    crate::cores::core_version(app)
+/// Returns the core version that an app module needs, if it names one. An
+/// app declares only `MAJOR.MINOR` (SPEC.md §10.5): the lowest core it
+/// needs, with no patch part.
+pub fn app_core_version(app: &[u8]) -> Option<crate::cores::Need> {
+    crate::cores::core_version(app).map(|(major, minor, _patch)| (major, minor))
 }
 
 /// True when `bytes` is a core module (an app module), not a component.
@@ -341,11 +343,10 @@ pub fn load_app(rt: &[u8], rt_layout: &Layout, app: &[u8]) -> Result<AppCode> {
     let have = crate::cores::core_version(rt).context("the runtime has no core version")?;
     ensure!(
         need.0 == have.0 && need.1 <= have.1,
-        "the app needs core {}.{}, but this core is {}.{}",
+        "the app needs core {}.{}, but this core is {}",
         need.0,
         need.1,
-        have.0,
-        have.1
+        crate::cores::format_version(have)
     );
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(app)

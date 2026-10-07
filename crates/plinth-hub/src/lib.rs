@@ -299,7 +299,8 @@ impl Hub {
     /// app id.
     pub fn add_package(&self, bytes: &[u8]) -> Result<String> {
         let pkg = plinth_package::Package::read(bytes).context("not a valid .plnt package")?;
-        plinth_link::cores::link_app(&pkg.component).context("the package does not link against an installed core")?;
+        plinth_link::cores::link_app_with_policy(&pkg.component, &pkg.manifest.core, pkg.manifest.core_digest.as_deref())
+            .context("the package does not link against an installed core")?;
         if self.is_blocked(&pkg.manifest.id)? {
             bail!("{} is blocked", pkg.manifest.id);
         }
