@@ -1903,18 +1903,18 @@ impl PlinthRoot {
 
     /// A labelled field. The label goes above the input on compact and beside
     /// it on regular and wide (SPEC.md §6.4).
+    /// A form control with its label: above it on compact, beside it on
+    /// regular and wide. Block layout where flex gives nothing: each
+    /// nested `flex`/`flex_col` around the input about doubled the layout
+    /// work of the input's subtree (GAPS F1: five Pickers 37.8 ms with a
+    /// flex input column, 15.8 ms with a block one, debug build; the
+    /// compact column of columns 57 ms).
     fn labelled(&self, label: String, input: impl IntoElement, error: Option<String>, t: &Tokens) -> AnyElement {
         let label = div().text_sm().text_color(t.text_muted).child(label);
-        let input_col = div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(input)
-            .when_some(error, |d, e| d.child(div().text_xs().text_color(t.danger).child(e)));
+        let error = error.map(|e| div().mt_1().text_xs().text_color(t.danger).child(e));
+        let input_col = div().flex_1().min_w_0().child(input).children(error);
         if self.class == WidthClass::Compact {
-            div().flex().flex_col().gap_1().child(label).child(input_col).into_any_element()
+            div().child(label.mb_1()).child(input_col).into_any_element()
         } else {
             div().flex().items_center().gap_4().child(label.w(px(140.)).flex_none()).child(input_col).into_any_element()
         }
