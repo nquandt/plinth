@@ -13,7 +13,7 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 
 **Do not push.** The owner's GitHub Actions minutes are used up (2026-10-06). Keep commits local on `master`. The gate is a local pass of `bash scripts/ci-local.sh full` (CI runs the same script) and, for UI or web changes, `node web/test/run-a11y.mjs`. When minutes come back, ask the owner before a push and push in one batch. The owner wants self-hosted runners later.
 
-State at this handoff (2026-10-06, evening): `master` is 139 commits ahead of `origin/master`. `ci-local.sh full` and `run-a11y.mjs` pass on it. The working tree is clean.
+State at this handoff (2026-10-06, late): `master` is about 146 commits ahead of `origin/master`. `ci-local.sh full --shoot` and `run-a11y.mjs` pass on it. The working tree is clean. The installed `plinth` has the frame timer and the new timer loop (not yet pointer events: reinstall).
 
 **Owner decisions (keep them):**
 
@@ -35,18 +35,18 @@ Plinth is a framework for cross-platform apps. Authors write a strict subset of 
 
 | Area | State |
 |---|---|
-| Cores (SPEC §10.4, §10.5) | Core **1.11** (added `files_call` for `plinth:files`). An app declares the lowest core that has the functions it imports. The runtime also skips unchanged prop and text ops (GAPS G8): Pong went from 9 to 1.4 ops per tick. |
-| UI API (`wit/plinth/ui-api.toml`, `docs/ui.md`) | **1.10.** Level 1: about 30 semantic controls (1.5), plus `disabled` on TextField/TextArea/DatePicker and `Row.selected` (1.8). Level 2: `Box`, `Span`, `Pressable`, `Scroll` with spacing-unit and token props (1.6); partial styles `hover`, `active`, `focus`, `compact`, `regular`, `wide` (1.7); `position="absolute"` with insets and `onKeyDown`/`onKeyUp` (1.9); `Canvas` with `rect`, `circle`, `line`, `canvasText` in a scaled view space (1.10). Desktop: `crates/plinth-ui/src/{primitives,canvas}.rs`. Web: `primitiveStyle`, generated partial-style classes and SVG canvas in `web/dom-renderer.js`. |
-| Host APIs (`docs/host-apis.md`) | `time`, `store` (kv), `clipboard`, `dialog`, `net`, `files` (text files in the app's private space; capability `files.private`, Low; host path checks; desktop: a folder per app identity under `%APPDATA%\plinth\spaces\private\`; web: the page's IndexedDB through the frame bridge), `hub` (privileged), `error.report`. Async calls return a `Promise` (or take a `done` callback). Denied calls never trap. |
+| Cores (SPEC §10.4, §10.5) | Core **1.12**: `set_frame` (`onFrame`, the `frame` event 0x07 with `dt`), and `arg_at_f64`/`arg_at_i32` (a list event value is spread into the callback arguments; the thunk reads parameter 2+ with them). Core 1.11 added `files_call` for `plinth:files`. An app declares the lowest core that has the functions it imports. The runtime also skips unchanged prop and text ops (GAPS G8): Pong went from 9 to 1.4 ops per tick. |
+| UI API (`wit/plinth/ui-api.toml`, `docs/ui.md`) | **1.12.** 1.12: `onPointerDown`/`onPointerMove`/`onPointerUp` `(x, y)` on boxes (spacing units) and `Canvas` (view units), with pointer capture (desktop: `pointer_layer` in `render.rs`, a paint-time mouse layer; web: `pointerEvents` in `dom-renderer.js`). 1.11: sizes and insets take fractional spacing units (number props). Earlier: Level 1: about 30 semantic controls (1.5), plus `disabled` on TextField/TextArea/DatePicker and `Row.selected` (1.8). Level 2: `Box`, `Span`, `Pressable`, `Scroll` with spacing-unit and token props (1.6); partial styles `hover`, `active`, `focus`, `compact`, `regular`, `wide` (1.7); `position="absolute"` with insets and `onKeyDown`/`onKeyUp` (1.9); `Canvas` with `rect`, `circle`, `line`, `canvasText` in a scaled view space (1.10). Desktop: `crates/plinth-ui/src/{primitives,canvas}.rs`. Web: `primitiveStyle`, generated partial-style classes and SVG canvas in `web/dom-renderer.js`. |
+| Host APIs (`docs/host-apis.md`) | `time` (with `onFrame`/`cancelFrame`, core 1.12: desktop fires frame timers in the gpui frame, web uses `requestAnimationFrame`; the desktop timer loop wakes at the next deadline), `store` (kv), `clipboard`, `dialog`, `net`, `files` (text files in the app's private space; capability `files.private`, Low; host path checks; desktop: a folder per app identity under `%APPDATA%\plinth\spaces\private\`; web: the page's IndexedDB through the frame bridge), `hub` (privileged), `error.report`. Async calls return a `Promise` (or take a `done` callback). Denied calls never trap. |
 | Compiler (SPEC §4) | Unions and narrowing, generics, classes, `int`, `Map`/`Set`, tuples with optional and rest elements, rest patterns in array destructuring, nullable boxing, JSON, fragments, `.map()` children, checked casts, many string and array methods (`join` also on number/boolean arrays, `flat(depth)`), `try`/`catch`/`finally`, `async`/`await`, the Promise API with `race`/`any`/`allSettled`. Golden tests for every diagnostic. |
 | Desktop Hub (`docs/HUB.md`) | H0, H1 (Ed25519 signing), H3 steps 1–3: the Hub app `examples/hub`, launches in new windows with in-process consent, updates with re-consent, pins, publisher blocks, `plinth://` links, shortcuts, `plinthw`. |
 | Web Hub (`docs/web-hub.md`) | The same Hub app in the browser, in its own sandboxed frame with a `plinth:hub` bridge (`FrameHub` in `web/hub-host.js`). Browse mode (the library is the registry), a host consent window, every app in a sandboxed frame, digest and Ed25519 checks. |
 | Web export (SPEC §10.3) | `plinth build <dir> --target web [--single-file]`. `web/plinth.js` is the web host as one ES module, GENERATED by `node scripts/gen-plinth-js.mjs` (commit it; `run-bundle.mjs` fails when it is old). `<plinth-app src core height>`; the app frame is inline, so the single file works from disk. |
-| Validation apps | 7GUIs tasks 1–5 in `examples/7guis/` (numbers in VALIDATION §6); Pong in `examples/pong` (Level 2 boxes, absolute positions, held keys); `examples/primitives` (gallery of Level 2 and Canvas); `examples/files-demo`. |
+| Validation apps | 7GUIs tasks 1–6 in `examples/7guis/` (numbers in VALIDATION §6; task 6 `circle-drawer` uses Canvas pointer events); Pong in `examples/pong` (Level 2 boxes, fractional positions, `onFrame` with a variable step, held keys, a pointer drag); `examples/primitives` (gallery of Level 2 and Canvas); `examples/files-demo`. |
 | Tooling | Hot reload, `plinth-shoot` headless screenshots, `plinth native` executables, VS Code extension and npm packages (both not published). |
 | Platforms | Windows: everything. Linux and macOS: compiler, cores, runner, hub and registry tests pass; no GUI window opened yet. Mobile: not started. |
 
-Example apps (all type-checked and built by the check script): `counter`, `todo`, `notes`, `calculator`, `settings-gallery`, `contacts`, `timer`, `gallery`, `dialogs`, `budget`, `utility`, `quotes`, `big-list`, `gc-torture`, `hub`, `hub-mini`, `files-demo`, `pong`, `primitives`, `7guis/{counter,temperature,flight-booker,timer,crud}`.
+Example apps (all type-checked and built by the check script): `counter`, `todo`, `notes`, `calculator`, `settings-gallery`, `contacts`, `timer`, `gallery`, `dialogs`, `budget`, `utility`, `quotes`, `big-list`, `gc-torture`, `hub`, `hub-mini`, `files-demo`, `pong`, `primitives`, `7guis/{counter,temperature,flight-booker,timer,crud,circle-drawer}`.
 
 ## 3. Build, run, test
 
@@ -129,6 +129,8 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 
 ## 9. Smooth motion and performance (owner request, 2026-10-06)
 
+**Status (2026-10-06, late):** steps 1, 2 and 3 are done. Fractional insets and sizes (UI API 1.11), `onFrame` (core 1.12; Pong steps by `dt`), and a deadline-based desktop timer loop (a late interval skips missed ticks). Measured: about 98 frames per second on the owner's display, `dt` 8–12 ms; a 16 ms interval has gaps of 14–18 ms (was 15–26). Steps 4–6 are open. The owner has not played the new Pong yet.
+
 The owner played Pong: about 63 ticks per second, but the ball "seems a little jumpy". The cause is not the screen. Two causes are known; measure before and after each fix.
 
 **Known causes:**
@@ -149,8 +151,8 @@ The owner played Pong: about 63 ticks per second, but the ball "seems a little j
 
 ## 10. Next steps (in order)
 
-1. **Smooth motion (§9):** fractional positions and an animation-frame timer first; the owner asked for it after playing Pong.
-2. **Pointer input (UI-ADVANCED U3, GAPS G4):** `onPointerDown`/`onPointerMove`/`onPointerUp` with x and y (in view units on a `Canvas`, in spacing units on a box), then drag. The runtime passes one event value to a callback (`ARG` in `plinth-rt/src/lib.rs`): a callback with two numbers needs either an argument queue in the runtime (a core minor bump) or a struct value. Then 7GUIs task 6, Circle drawer (Canvas, a context menu, a Dialog with a Slider, undo and redo), and a drag control for Pong.
+1. **Smooth motion (§9), the rest:** steps 4–6 (transitions, a release build for play, frame cost). Ask the owner to play Pong again first.
+2. **Pointer, the rest (GAPS G4, 7G-6..8):** a secondary button or `onContextMenu`; children in `Dialog`; stroke shapes on `Canvas` (compile-time only); a modal overlay that blocks pointer events to the boxes under it on the desktop; `onDrag` and drop targets (U3).
 3. **Game and app loop gaps (GAPS "Games"):** a seeded random generator (G6), window visibility and component lifecycle hooks (G10). Rest of U2: transitions and springs. Then interned style records (`docs/UI-ADVANCED.md` §4).
 4. **7GUIs task 7, Cells:** Grid virtualization, many signals, a 26 × 100 grid under 16 ms per frame.
 5. **Storage, next part (`docs/STORAGE.md` §6):** a granted `vault` space and the Hub UI for spaces; an existing folder as a space (S6); `watch`; then sync to rustfs and Azurite in Docker. Editor: Markdown source plus a `Markdown` display control. Then the notes app (VALIDATION V2).
