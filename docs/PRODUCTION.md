@@ -92,7 +92,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | H4 | Structured storage (`store.sql` or a documented pattern on files) | Beta | Decide | STORAGE ST-Q1, VALIDATION V2 |
 | H5 | Storage: `vault` space, a folder as a space, `watch` | 1.0 | Open | `docs/STORAGE.md` §6 |
 | H6 | Sync between devices of one user | Later | Open | STORAGE §6. Not in 1.0 (PR-Q5). |
-| H7 | Each host API has a documented behavior on each host, with the same test on each host | Beta | Partial | Next: a table in `docs/host-apis.md` (host × API) that the tests fill. |
+| H7 | Each host API has a documented behavior on each host, with the same test on each host | Beta | Partial | `docs/host-apis.md` "Support on each host" (behavior and tests: desktop wasmtime, desktop wasmi, web). Next: tests for the "no test" cells: `clipboard` on all three hosts; `dialog`, `net`, `files` and `hub` on wasmi (with Q4); `dialog` on the web. |
 
 ## 7. Security
 
@@ -157,7 +157,7 @@ Production apps run code from many publishers. This area must be complete before
 | X1 | Getting started from zero to a running app | Preview | Done | `docs/getting-started.md` |
 | X2 | Reference: language, UI, host APIs | Preview | Done | `docs/language.md`, `docs/ui.md`, `docs/host-apis.md` |
 | X3 | A public docs website with search | Beta | Open | |
-| X4 | Guides: storage, network, updates, publishing, accessibility, performance | Beta | Open | |
+| X4 | Guides: storage, network, updates, publishing, accessibility, performance | Beta | Done | `docs/guides/` (index `docs/guides/README.md`); each example checked with `plinth check`. |
 | X5 | A migration guide for each breaking change and each core minor | Beta | Open | |
 | X6 | `CHANGELOG.md` | Preview | Done | `CHANGELOG.md`. Add an entry for each change that authors or users see. |
 | X7 | Known limits page (what Plinth cannot do yet) | Preview | Done | `docs/LIMITS.md`. Update it when a limit goes away. |

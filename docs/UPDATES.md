@@ -47,12 +47,13 @@ So the update cases are:
 ## 5. The author's configuration (built, 2026-10-07)
 
 ```toml
+core = "follow"        # "patch" | "pinned"; a top-level field, not in [updates]
+
 [updates]
 feed = "https://example.com/myapp/feed.json"
 channel = "stable"     # or "beta"
 check = "on-start"     # the only policy built; an interval is future work
 apply = "next-start"   # "prompt" | "next-start" | "live"
-core = "follow"        # "patch" | "pinned"
 ```
 
 `ProjectConfig` (`plinth.toml`) carries this into the manifest's `updates` field unchanged (`plinth_package::UpdatesConfig`). An old `plinth.toml`, or a manifest built before this field existed, has no `updates`: the app never checks for updates. `apply = "live"` is rejected at `plinth build` time (not implemented, UP-Q2); `apply = "prompt"` parses but the desktop host does not yet show the restart prompt it implies (a stub dialog is still open work, see "What is open" below) -- it runs `next-start` instead, so an author who sets it today still gets updates, just not the prompt.

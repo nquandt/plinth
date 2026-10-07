@@ -101,6 +101,7 @@ virtual DOM and no re-render of the whole component.
 | [docs/language.md](docs/language.md) | Plinth TS: supported syntax, types, what is rejected and why, reactivity rules, the standard library. |
 | [docs/ui.md](docs/ui.md) | Every UI control and its props, intent rules, layout, navigation, accessibility. |
 | [docs/host-apis.md](docs/host-apis.md) | `plinth:time`, `plinth:store`, `plinth:clipboard`, `plinth:dialog`, capabilities, and the manifest. |
+| [docs/guides/](docs/guides/README.md) | Guides for app authors: storage, network, updates, publishing, accessibility, performance. |
 | [docs/architecture.md](docs/architecture.md) | An overview of the pipeline, the crates, and the hosts, for contributors. |
 | [SPEC.md](SPEC.md) | The full design specification. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Build and test commands, conventions, where to start. |
