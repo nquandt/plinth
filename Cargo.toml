@@ -75,6 +75,25 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+# wasmi interprets plinth-rt's own bytecode, so an unoptimized wasmi is
+# much slower than wasmtime's compiled code even for a short test. The
+# three sub-crates that do the actual work (decode the bytecode, run the
+# numeric ops) get full optimization, so `cargo test` with `PLINTH_ENGINE
+# =wasmi` stays fast, without paying for an optimized build of everything
+# else. `wasmi` itself stays at opt-level 0: opt-level 3 there crashes
+# (STATUS_ACCESS_VIOLATION) in a dev build on Windows/MSVC, reproduced
+# with debug-assertions and overflow-checks off too, so it is not those;
+# it is specific to optimizing the `wasmi` crate's own code at this
+# opt-level outside a full `release` profile. `wasmi` itself is mostly
+# glue (`Store`, `Linker`, `Caller`) around the three sub-crates, so this
+# still gets most of the speedup.
+[profile.dev.package.wasmi_core]
+opt-level = 3
+[profile.dev.package.wasmi_ir]
+opt-level = 3
+[profile.dev.package.wasmi_collections]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 

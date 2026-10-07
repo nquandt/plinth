@@ -10,13 +10,31 @@
 //! wasmtime `bindings::...::Host` trait impls call, so the host logic
 //! lives once, in `lib.rs`.
 //!
-//! This step wires `ui`, `dev`, `error`, `time`, `store` and `clipboard`.
-//! `dialog`, `net`, `files` and `hub` get shims that trap with a clear
-//! message; step 2 replaces them (SPEC.md §9.2).
+//! Every interface is wired: `ui`, `dev`, `error`, `time`, `store`,
+//! `clipboard`, `dialog`, `net`, `files` and `hub` (SPEC.md §9.2 step 2).
+//!
+//! wasmi 2 is a register-machine interpreter (it compiles Wasm to its own
+//! register-based bytecode ahead of a call, not a tree-walking
+//! interpreter), which is why its speed is close to a simple bytecode VM
+//! and far from wasmtime's compiled code; see `docs/GAPS.md` "wasmi
+//! engine" for numbers.
+//!
+//! The call time limit (SPEC.md §9.2 step 3) uses fuel: wasmi has no
+//! epoch-interruption primitive like wasmtime, but `Config::consume_fuel`
+//! charges a fuel unit per executed Wasm instruction (roughly), and
+//! `Store::set_fuel`/`get_fuel` read and refill it. `FUEL_PER_MS` converts
+//! `Limits::call_timeout` to a fuel budget; `new_engine`'s doc comment
+//! says how it was measured. The memory cap reuses `crate::Limiter`,
+//! through `wasmi_core::ResourceLimiter` (the same trait `wasmi::
+//! ResourceLimiter` re-exports).
 
 use crate::bindings::plinth::app::clipboard::Host as ClipboardHost;
 use crate::bindings::plinth::app::dev::Host as DevHost;
+use crate::bindings::plinth::app::dialog::Host as DialogHost;
 use crate::bindings::plinth::app::error::{DeniedReason as WitDeniedReason, Host as ErrorHost, HostError};
+use crate::bindings::plinth::app::files::Host as FilesHost;
+use crate::bindings::plinth::app::hub::Host as HubHost;
+use crate::bindings::plinth::app::net::Host as NetHost;
 use crate::bindings::plinth::app::store::Host as StoreHost;
 use crate::bindings::plinth::app::time::Host as TimeHost;
 use crate::bindings::plinth::app::ui::Host as UiHost;
@@ -30,10 +48,26 @@ use anyhow::{Context as _, Result};
 use std::time::Instant;
 use wasmi::{Caller, Config, Engine, Error as WasmiError, Extern, Linker, Memory, Module, Store, TypedFunc};
 
-/// Builds the wasmi engine. No fuel or memory limiter yet (SPEC.md §9.2
-/// step 2): `wasmi::Config::consume_fuel` and `Store::limiter` land then.
+/// Fuel per millisecond of `Limits::call_timeout` (SPEC.md §9.2 step 3).
+///
+/// Measured on the owner's PC, release build, a tight `i32` add-and-branch
+/// loop compiled from `.wat` straight to wasmi (no plinth-rt in between):
+/// 2,000,000,000 iterations took 6.68 s and used 20,000,000,238 fuel, so
+/// ~3,000,000 fuel/ms for that loop. A real app's bytecode (calls, memory
+/// loads/stores through plinth-rt's own interpreter) is heavier per
+/// instruction than that loop, so this constant is set lower, to trip the
+/// time limit sooner rather than later on real app code: trading a closer
+/// wall-clock match for the simple loop against never running substantially
+/// longer than `call_timeout` on typical app code.
+const FUEL_PER_MS: u64 = 150_000;
+
+/// Builds the wasmi engine, with fuel metering on (the call time limit,
+/// SPEC.md §9.2 step 3; `FUEL_PER_MS` turns `Limits::call_timeout` into a
+/// budget, set before each `init`/`on-event` call).
 pub fn new_engine() -> Engine {
-    Engine::new(&Config::default())
+    let mut config = Config::default();
+    config.consume_fuel(true);
+    Engine::new(&config)
 }
 
 /// One running app instance on wasmi, the wasmi twin of `crate::Guest`'s
@@ -44,6 +78,10 @@ pub struct WasmiGuest {
     init_fn: TypedFunc<(i32, i32), ()>,
     on_event_fn: TypedFunc<(i32, i32), ()>,
     cabi_realloc: TypedFunc<(i32, i32, i32, i32), i32>,
+    /// The fuel budget for one `init`/`on-event` call (SPEC.md §9.2 step 3,
+    /// `FUEL_PER_MS`), set fresh before each call the same way the
+    /// wasmtime path resets its epoch deadline.
+    fuel_budget: u64,
     /// Set after a trap. A trapped instance is never called again.
     pub(crate) poisoned: bool,
 }
@@ -69,10 +107,7 @@ pub fn load(
         commits: Vec::new(),
         logs: Vec::new(),
         errors: Vec::new(),
-        limits: Limiter {
-            inner: wasmtime::StoreLimitsBuilder::new().memory_size(limits.memory_bytes).instances(4).build(),
-            memory: 0,
-        },
+        limits: Limiter { memory_cap: limits.memory_bytes, memory: 0 },
         policy,
         kv,
         timers: TimerQueue::new(),
@@ -87,6 +122,12 @@ pub fn load(
         files: crate::files::Files::unavailable(),
     };
     let mut store = Store::new(engine, state);
+    store.limiter(|s| &mut s.limits);
+    let fuel_budget = (limits.call_timeout.as_millis() as u64).saturating_mul(FUEL_PER_MS).max(1);
+    // Instantiation itself runs Wasm (active element segments, globals):
+    // give it a generous one-off budget, separate from the per-call
+    // budget below.
+    store.set_fuel(fuel_budget.max(10_000_000)).map_err(anyhow::Error::from)?;
     let instance =
         linker.instantiate_and_start(&mut store, &module).map_err(anyhow::Error::from).context("instantiate the app")?;
 
@@ -104,13 +145,16 @@ pub fn load(
         .map_err(anyhow::Error::from)
         .context("the core module has no cabi_realloc export")?;
 
-    Ok(WasmiGuest { store, memory, init_fn, on_event_fn, cabi_realloc, poisoned: false })
+    Ok(WasmiGuest { store, memory, init_fn, on_event_fn, cabi_realloc, fuel_budget, poisoned: false })
 }
 
 /// Calls `init` or `on-event` with `bytes` as its `list<u8>` argument: the
 /// same buffer passing wasmtime/bindgen does, by hand (`cabi_realloc` in
-/// the guest, then a plain `(ptr, len)` call).
+/// the guest, then a plain `(ptr, len)` call). Resets the fuel budget
+/// first (SPEC.md §9.2 step 3), the same way the wasmtime path resets its
+/// epoch deadline before each call.
 pub fn call(g: &mut WasmiGuest, export: &str, bytes: &[u8]) -> Result<()> {
+    g.store.set_fuel(g.fuel_budget).map_err(anyhow::Error::from)?;
     let ptr = g.cabi_realloc.call(&mut g.store, (0, 0, 1, bytes.len().max(1) as i32)).map_err(anyhow::Error::from)?;
     g.memory.write(&mut g.store, ptr as usize, bytes).map_err(|e| anyhow::anyhow!("write the guest buffer: {e:#}"))?;
     let f = if export == "init" { &g.init_fn } else { &g.on_event_fn };
@@ -126,6 +170,7 @@ pub fn stop_reason(e: &anyhow::Error, logs: &[String]) -> String {
     if let Some(we) = e.downcast_ref::<WasmiError>() {
         if let Some(code) = we.as_trap_code() {
             return match code {
+                wasmi::TrapCode::OutOfFuel => "the app is not responding (time limit reached)".into(),
                 wasmi::TrapCode::UnreachableCodeReached => "a check in the app failed".into(),
                 wasmi::TrapCode::IntegerDivisionByZero => "an integer division by zero".into(),
                 wasmi::TrapCode::MemoryOutOfBounds | wasmi::TrapCode::TableOutOfBounds => "an invalid memory access".into(),
@@ -154,6 +199,13 @@ fn read_bytes(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<
 
 fn read_string(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<String, WasmiError> {
     Ok(String::from_utf8_lossy(&read_bytes(caller, ptr, len)?).into_owned())
+}
+
+/// Reads one little-endian `u32` out of guest memory (an element of a
+/// `headers: list<tuple<string, string>>` record, for `net.fetch`).
+fn read_u32(caller: &mut Caller<'_, HostState>, ptr: i32) -> Result<u32, WasmiError> {
+    let bytes = read_bytes(caller, ptr, 4)?;
+    Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
 }
 
 fn write_bytes(caller: &mut Caller<'_, HostState>, ptr: i32, data: &[u8]) -> Result<(), WasmiError> {
@@ -211,6 +263,14 @@ fn write_ok_option_string(caller: &mut Caller<'_, HostState>, retptr: i32, value
         }
     }
 }
+/// `Ok(string)` (not an `option`): tag@0=0, ptr@4/len@8. A plain string's
+/// natural alignment is already 4, so there is no option-tag byte.
+fn write_ok_string(caller: &mut Caller<'_, HostState>, retptr: i32, value: &str) -> Result<(), WasmiError> {
+    write_bytes(caller, retptr, &[0])?;
+    let (ptr, len) = write_string(caller, value)?;
+    write_bytes(caller, retptr + 4, &ptr.to_le_bytes())?;
+    write_bytes(caller, retptr + 8, &len.to_le_bytes())
+}
 /// `Ok(list<string>)`: tag@0=0, list ptr@4/len@8; each element is (ptr:
 /// i32, len: i32).
 fn write_ok_string_list(caller: &mut Caller<'_, HostState>, retptr: i32, values: &[String]) -> Result<(), WasmiError> {
@@ -237,17 +297,9 @@ fn reason_byte(e: HostError) -> u8 {
     }
 }
 
-/// A function in `dialog`/`net`/`files`/`hub` (step 2, SPEC.md §9.2): not
-/// wired on wasmi yet. Always traps.
-fn not_yet(iface: &str, name: &str) -> WasmiError {
-    WasmiError::new(format!("plinth:app/{iface} {name}: not yet on wasmi (SPEC.md §9.2 step 2)"))
-}
-
-/// Registers every host import this step wires (`ui`, `dev`, `error`,
-/// `time`, `store`, `clipboard`), plus a trap shim for every function of
-/// `dialog`, `net`, `files` and `hub` (step 2). A shim is only ever called
-/// if the app actually imports it: an app with no `plinth:dialog` import,
-/// for example, never reaches `not_yet`.
+/// `dialog`/`net`/`files`/`hub` (SPEC.md §9.2 step 2): real shims, each
+/// calling the same `HostState` method the wasmtime `bindings::...::Host`
+/// trait impls call. Layouts match `web/plinth-web.js`'s `hostImports`.
 fn register_imports(linker: &mut Linker<HostState>) -> Result<()> {
     linker.func_wrap("plinth:app/ui@1.0.0", "commit", |mut caller: Caller<HostState>, ptr: i32, len: i32| {
         let bytes = read_bytes(&mut caller, ptr, len)?;
@@ -355,127 +407,254 @@ fn register_imports(linker: &mut Linker<HostState>) -> Result<()> {
         }
     })?;
 
-    register_not_yet_shims(linker)?;
-    Ok(())
-}
+    linker.func_wrap("plinth:app/dialog@1.0.0", "alert", |mut caller: Caller<HostState>, ptr: i32, len: i32| -> Result<i32, WasmiError> {
+        let message = read_string(&mut caller, ptr, len)?;
+        Ok(DialogHost::alert(caller.data_mut(), message) as i32)
+    })?;
+    linker.func_wrap("plinth:app/dialog@1.0.0", "confirm", |mut caller: Caller<HostState>, ptr: i32, len: i32| -> Result<i32, WasmiError> {
+        let message = read_string(&mut caller, ptr, len)?;
+        Ok(DialogHost::confirm(caller.data_mut(), message) as i32)
+    })?;
+    linker.func_wrap("plinth:app/dialog@1.0.0", "prompt", |mut caller: Caller<HostState>, ptr: i32, len: i32| -> Result<i32, WasmiError> {
+        let message = read_string(&mut caller, ptr, len)?;
+        Ok(DialogHost::prompt(caller.data_mut(), message) as i32)
+    })?;
 
-/// Step-2 interfaces (SPEC.md §9.2): a shim for every function, with the
-/// same core-ABI signature `web/plinth-web.js` documents, that always
-/// traps.
-fn register_not_yet_shims(linker: &mut Linker<HostState>) -> Result<()> {
-    macro_rules! trap2 {
-        ($iface:literal, $name:literal) => {
-            linker.func_wrap(concat!("plinth:app/", $iface, "@1.0.0"), $name, |_: Caller<HostState>, _: i32, _: i32| -> Result<i32, WasmiError> {
-                Err(not_yet($iface, $name))
-            })?;
-        };
-    }
-    trap2!("dialog", "alert");
-    trap2!("dialog", "confirm");
-    trap2!("dialog", "prompt");
-
+    // `net.fetch` (SPEC.md §8.5, §11): url(ptr,len), method(ptr,len),
+    // headers(ptr,count) -- each element a 16-byte (ptr,len,ptr,len)
+    // tuple<string,string> -- body(tag,ptr,len) (an `option<string>`, tag
+    // 0 = none). Same lowered core ABI as `web/plinth-web.js`'s `fetch`.
     linker.func_wrap(
         "plinth:app/net@1.0.0",
         "fetch",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32| -> Result<i32, WasmiError> {
-            Err(not_yet("net", "fetch"))
+        |mut caller: Caller<HostState>,
+         url_ptr: i32,
+         url_len: i32,
+         method_ptr: i32,
+         method_len: i32,
+         headers_ptr: i32,
+         headers_count: i32,
+         body_tag: i32,
+         body_ptr: i32,
+         body_len: i32|
+         -> Result<i32, WasmiError> {
+            let url = read_string(&mut caller, url_ptr, url_len)?;
+            let method = read_string(&mut caller, method_ptr, method_len)?;
+            let mut headers = Vec::with_capacity(headers_count.max(0) as usize);
+            for i in 0..headers_count {
+                let base = headers_ptr + i * 16;
+                let (k_ptr, k_len) = (read_u32(&mut caller, base)? as i32, read_u32(&mut caller, base + 4)? as i32);
+                let (v_ptr, v_len) = (read_u32(&mut caller, base + 8)? as i32, read_u32(&mut caller, base + 12)? as i32);
+                headers.push((read_string(&mut caller, k_ptr, k_len)?, read_string(&mut caller, v_ptr, v_len)?));
+            }
+            let body = if body_tag == 0 { None } else { Some(read_string(&mut caller, body_ptr, body_len)?) };
+            Ok(NetHost::fetch(caller.data_mut(), url, method, headers, body) as i32)
         },
     )?;
 
-    trap2!("files", "read");
-    trap2!("files", "list-dir");
-    trap2!("files", "stat");
-    trap2!("files", "remove");
+    linker.func_wrap("plinth:app/files@1.0.0", "read", |mut caller: Caller<HostState>, ptr: i32, len: i32| -> Result<i32, WasmiError> {
+        let path = read_string(&mut caller, ptr, len)?;
+        Ok(FilesHost::read(caller.data_mut(), path) as i32)
+    })?;
     linker.func_wrap(
         "plinth:app/files@1.0.0",
         "write",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32, _: i32| -> Result<i32, WasmiError> { Err(not_yet("files", "write")) },
+        |mut caller: Caller<HostState>, ptr: i32, len: i32, text_ptr: i32, text_len: i32| -> Result<i32, WasmiError> {
+            let path = read_string(&mut caller, ptr, len)?;
+            let text = read_string(&mut caller, text_ptr, text_len)?;
+            Ok(FilesHost::write(caller.data_mut(), path, text) as i32)
+        },
     )?;
+    linker.func_wrap("plinth:app/files@1.0.0", "list-dir", |mut caller: Caller<HostState>, ptr: i32, len: i32| -> Result<i32, WasmiError> {
+        let dir = read_string(&mut caller, ptr, len)?;
+        Ok(FilesHost::list_dir(caller.data_mut(), dir) as i32)
+    })?;
+    linker.func_wrap("plinth:app/files@1.0.0", "stat", |mut caller: Caller<HostState>, ptr: i32, len: i32| -> Result<i32, WasmiError> {
+        let path = read_string(&mut caller, ptr, len)?;
+        Ok(FilesHost::stat(caller.data_mut(), path) as i32)
+    })?;
+    linker.func_wrap("plinth:app/files@1.0.0", "remove", |mut caller: Caller<HostState>, ptr: i32, len: i32| -> Result<i32, WasmiError> {
+        let path = read_string(&mut caller, ptr, len)?;
+        Ok(FilesHost::remove(caller.data_mut(), path) as i32)
+    })?;
 
-    linker.func_wrap("plinth:app/hub@1.0.0", "list-apps", |_: Caller<HostState>, _: i32| -> Result<(), WasmiError> {
-        Err(not_yet("hub", "list-apps"))
+    register_hub_imports(linker)?;
+    Ok(())
+}
+
+/// `plinth:hub` (`docs/HUB.md` §4.1, §12.2, §12.3): privileged library and
+/// Hub management calls. Most return `result<_, host-error>` or
+/// `result<string, host-error>` through `retptr`; `search`, `install`,
+/// `check-updates` and `update` are async (a request id now, SPEC.md
+/// §8.4/§8.5) and return `u32` directly.
+fn register_hub_imports(linker: &mut Linker<HostState>) -> Result<()> {
+    linker.func_wrap("plinth:app/hub@1.0.0", "list-apps", |mut caller: Caller<HostState>, retptr: i32| {
+        match HubHost::list_apps(caller.data_mut()) {
+            Ok(json) => write_ok_string(&mut caller, retptr, &json),
+            Err(e) => write_denied_at4(&mut caller, retptr, reason_byte(e)),
+        }
     })?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "launch",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32| -> Result<(), WasmiError> { Err(not_yet("hub", "launch")) },
+        |mut caller: Caller<HostState>, id_ptr: i32, id_len: i32, retptr: i32| {
+            let id = read_string(&mut caller, id_ptr, id_len)?;
+            match HubHost::launch(caller.data_mut(), id) {
+                Ok(()) => write_ok_unit(&mut caller, retptr),
+                Err(e) => write_denied_unit(&mut caller, retptr, reason_byte(e)),
+            }
+        },
     )?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "set-grant",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32| -> Result<(), WasmiError> {
-            Err(not_yet("hub", "set-grant"))
+        |mut caller: Caller<HostState>, id_ptr: i32, id_len: i32, cap_ptr: i32, cap_len: i32, allowed: i32, retptr: i32| {
+            let id = read_string(&mut caller, id_ptr, id_len)?;
+            let capability = read_string(&mut caller, cap_ptr, cap_len)?;
+            match HubHost::set_grant(caller.data_mut(), id, capability, allowed != 0) {
+                Ok(()) => write_ok_unit(&mut caller, retptr),
+                Err(e) => write_denied_unit(&mut caller, retptr, reason_byte(e)),
+            }
         },
     )?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "block",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32| -> Result<(), WasmiError> { Err(not_yet("hub", "block")) },
+        |mut caller: Caller<HostState>, id_ptr: i32, id_len: i32, retptr: i32| {
+            let id = read_string(&mut caller, id_ptr, id_len)?;
+            match HubHost::block(caller.data_mut(), id) {
+                Ok(()) => write_ok_unit(&mut caller, retptr),
+                Err(e) => write_denied_unit(&mut caller, retptr, reason_byte(e)),
+            }
+        },
     )?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "unblock",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32| -> Result<(), WasmiError> { Err(not_yet("hub", "unblock")) },
+        |mut caller: Caller<HostState>, id_ptr: i32, id_len: i32, retptr: i32| {
+            let id = read_string(&mut caller, id_ptr, id_len)?;
+            match HubHost::unblock(caller.data_mut(), id) {
+                Ok(()) => write_ok_unit(&mut caller, retptr),
+                Err(e) => write_denied_unit(&mut caller, retptr, reason_byte(e)),
+            }
+        },
     )?;
-    linker.func_wrap("plinth:app/hub@1.0.0", "list-groups", |_: Caller<HostState>, _: i32| -> Result<(), WasmiError> {
-        Err(not_yet("hub", "list-groups"))
+    linker.func_wrap("plinth:app/hub@1.0.0", "list-groups", |mut caller: Caller<HostState>, retptr: i32| {
+        match HubHost::list_groups(caller.data_mut()) {
+            Ok(json) => write_ok_string(&mut caller, retptr, &json),
+            Err(e) => write_denied_at4(&mut caller, retptr, reason_byte(e)),
+        }
     })?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "create-group",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32| -> Result<(), WasmiError> { Err(not_yet("hub", "create-group")) },
+        |mut caller: Caller<HostState>, name_ptr: i32, name_len: i32, retptr: i32| {
+            let name = read_string(&mut caller, name_ptr, name_len)?;
+            match HubHost::create_group(caller.data_mut(), name) {
+                Ok(()) => write_ok_unit(&mut caller, retptr),
+                Err(e) => write_denied_unit(&mut caller, retptr, reason_byte(e)),
+            }
+        },
     )?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "set-group",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32| -> Result<(), WasmiError> {
-            Err(not_yet("hub", "set-group"))
+        |mut caller: Caller<HostState>, id_ptr: i32, id_len: i32, group_ptr: i32, group_len: i32, member: i32, retptr: i32| {
+            let id = read_string(&mut caller, id_ptr, id_len)?;
+            let group = read_string(&mut caller, group_ptr, group_len)?;
+            match HubHost::set_group(caller.data_mut(), id, group, member != 0) {
+                Ok(()) => write_ok_unit(&mut caller, retptr),
+                Err(e) => write_denied_unit(&mut caller, retptr, reason_byte(e)),
+            }
         },
     )?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "remove",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32| -> Result<(), WasmiError> { Err(not_yet("hub", "remove")) },
+        |mut caller: Caller<HostState>, id_ptr: i32, id_len: i32, retptr: i32| {
+            let id = read_string(&mut caller, id_ptr, id_len)?;
+            match HubHost::remove(caller.data_mut(), id) {
+                Ok(()) => write_ok_unit(&mut caller, retptr),
+                Err(e) => write_denied_unit(&mut caller, retptr, reason_byte(e)),
+            }
+        },
     )?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "search",
-        |_: Caller<HostState>, _: i32, _: i32| -> Result<i32, WasmiError> { Err(not_yet("hub", "search")) },
+        |mut caller: Caller<HostState>, query_ptr: i32, query_len: i32| -> Result<i32, WasmiError> {
+            let query = read_string(&mut caller, query_ptr, query_len)?;
+            Ok(HubHost::search(caller.data_mut(), query) as i32)
+        },
     )?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "install",
-        |_: Caller<HostState>, _: i32, _: i32| -> Result<i32, WasmiError> { Err(not_yet("hub", "install")) },
+        |mut caller: Caller<HostState>, id_ptr: i32, id_len: i32| -> Result<i32, WasmiError> {
+            let app = read_string(&mut caller, id_ptr, id_len)?;
+            Ok(HubHost::install(caller.data_mut(), app) as i32)
+        },
     )?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "app-info",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32| -> Result<(), WasmiError> { Err(not_yet("hub", "app-info")) },
+        |mut caller: Caller<HostState>, id_ptr: i32, id_len: i32, retptr: i32| {
+            let id = read_string(&mut caller, id_ptr, id_len)?;
+            match HubHost::app_info(caller.data_mut(), id) {
+                Ok(json) => write_ok_string(&mut caller, retptr, &json),
+                Err(e) => write_denied_at4(&mut caller, retptr, reason_byte(e)),
+            }
+        },
     )?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "pin",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32, _: i32, _: i32| -> Result<(), WasmiError> { Err(not_yet("hub", "pin")) },
+        |mut caller: Caller<HostState>, id_ptr: i32, id_len: i32, version_ptr: i32, version_len: i32, retptr: i32| {
+            let id = read_string(&mut caller, id_ptr, id_len)?;
+            let version = read_string(&mut caller, version_ptr, version_len)?;
+            match HubHost::pin(caller.data_mut(), id, version) {
+                Ok(()) => write_ok_unit(&mut caller, retptr),
+                Err(e) => write_denied_unit(&mut caller, retptr, reason_byte(e)),
+            }
+        },
     )?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "block-publisher",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32| -> Result<(), WasmiError> { Err(not_yet("hub", "block-publisher")) },
+        |mut caller: Caller<HostState>, key_ptr: i32, key_len: i32, retptr: i32| {
+            let key = read_string(&mut caller, key_ptr, key_len)?;
+            match HubHost::block_publisher(caller.data_mut(), key) {
+                Ok(()) => write_ok_unit(&mut caller, retptr),
+                Err(e) => write_denied_unit(&mut caller, retptr, reason_byte(e)),
+            }
+        },
     )?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "unblock-publisher",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32| -> Result<(), WasmiError> { Err(not_yet("hub", "unblock-publisher")) },
+        |mut caller: Caller<HostState>, key_ptr: i32, key_len: i32, retptr: i32| {
+            let key = read_string(&mut caller, key_ptr, key_len)?;
+            match HubHost::unblock_publisher(caller.data_mut(), key) {
+                Ok(()) => write_ok_unit(&mut caller, retptr),
+                Err(e) => write_denied_unit(&mut caller, retptr, reason_byte(e)),
+            }
+        },
     )?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "check-updates",
-        |_: Caller<HostState>, _: i32, _: i32| -> Result<i32, WasmiError> { Err(not_yet("hub", "check-updates")) },
+        |mut caller: Caller<HostState>, id_ptr: i32, id_len: i32| -> Result<i32, WasmiError> {
+            let app = read_string(&mut caller, id_ptr, id_len)?;
+            Ok(HubHost::check_updates(caller.data_mut(), app) as i32)
+        },
     )?;
     linker.func_wrap(
         "plinth:app/hub@1.0.0",
         "update",
-        |_: Caller<HostState>, _: i32, _: i32| -> Result<i32, WasmiError> { Err(not_yet("hub", "update")) },
+        |mut caller: Caller<HostState>, id_ptr: i32, id_len: i32| -> Result<i32, WasmiError> {
+            let app = read_string(&mut caller, id_ptr, id_len)?;
+            Ok(HubHost::update(caller.data_mut(), app) as i32)
+        },
     )?;
 
     Ok(())
