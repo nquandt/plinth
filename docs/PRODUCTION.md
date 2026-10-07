@@ -33,9 +33,9 @@ A production app needs contracts that do not break. Each contract needs a writte
 | C2 | Core ABI is append-only (`ADDED_IN`, `CORE_MINOR`, `CORE_PATCH`) | Preview | Done | `crates/plinth-link/src/rt_abi.rs`, SPEC §10.5 |
 | C3 | Ship core 1.12 and freeze it (no more additions to a shipped minor) | Beta | Open | HANDOFF §6: 1.12 is not shipped. Ship it with the first Beta release. |
 | C4 | `.plnt` container and manifest have a format version and a compatibility rule | Beta | Partial | SPEC §10.1, §10.2. Next: write the rule "a host reads every older format version" and add a test with old `.plnt` files. |
-| C5 | Host interfaces (`wit/plinth/app.wit`) have a version and an append-only rule | Beta | Partial | Next: write the rule in SPEC §8.1 and add a check like the one for `ui-api.toml`. |
-| C6 | Plinth TS language version: a list of the accepted syntax and the deviations from ECMAScript | Beta | Partial | SPEC §4.3, §4.6, `docs/language.md`. Next: give the language a version and freeze the 1.0 subset. |
-| C7 | Deprecation policy: how a feature is marked, how long it stays, what diagnostic the compiler gives | Beta | Open | Write it in SPEC §6.6 and §10.5. |
+| C5 | Host interfaces (`wit/plinth/app.wit`) have a version and an append-only rule | Beta | Done | `docs/COMPATIBILITY.md` §3; `plinth-link/tests/wit_append_only.rs` with `wit/plinth/app.wit.snapshot` |
+| C6 | Plinth TS language version: a list of the accepted syntax and the deviations from ECMAScript | Beta | Partial | `docs/COMPATIBILITY.md` §5 (rule: a source that compiles stays compiling). Next: freeze the 1.0 subset in `docs/language.md` at Beta. |
+| C7 | Deprecation policy: how a feature is marked, how long it stays, what diagnostic the compiler gives | Beta | Done | `docs/COMPATIBILITY.md` §6. The first deprecation adds its `PLW` golden test. |
 | C8 | Compatibility test suite: `.plnt` files built by each released version run on the newest host | 1.0 | Open | Keep the released packages of `examples/` in the repo and run them in the gate. |
 | C9 | Support policy: rolling support, no guaranteed window; every released runtime core stays available | 1.0 | Done | §15 PR-Q3 (owner, 2026-10-07) |
 | C10 | Every released core and host stays available for download, so an old app always finds its core | 1.0 | Open | A permanent core archive (registry or release assets) and a test that installs an old core from it. |

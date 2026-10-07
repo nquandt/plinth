@@ -1,0 +1,59 @@
+# Every item of wit/plinth/app.wit (tests/wit_append_only.rs). Append only.
+interface ui: commit: func(ops: list<u8>)
+interface dev: log: func(msg: string)
+interface error: enum denied-reason { undeclared, refused, unsupported, }
+interface error: variant host-error { denied(denied-reason), }
+interface error: report: func(message: string)
+interface time: use error.{host-error}
+interface time: now: func() -> u64
+interface time: monotonic-now: func() -> u64
+interface time: set-timer: func(ms: u32, repeat: bool) -> result<u32, host-error>
+interface time: cancel-timer: func(timer: u32)
+interface time: timezone-offset: func(ms: s64) -> s32
+interface time: set-frame-timer: func() -> result<u32, host-error>
+interface store: use error.{host-error}
+interface store: kv-get: func(key: string) -> result<option<string>, host-error>
+interface store: kv-set: func(key: string, value: string) -> result<_, host-error>
+interface store: kv-delete: func(key: string) -> result<_, host-error>
+interface store: kv-keys: func() -> result<list<string>, host-error>
+interface clipboard: use error.{host-error}
+interface clipboard: write-text: func(text: string) -> result<_, host-error>
+interface clipboard: read-text: func() -> result<option<string>, host-error>
+interface dialog: alert: func(message: string) -> u32
+interface dialog: confirm: func(message: string) -> u32
+interface dialog: prompt: func(message: string) -> u32
+interface net: fetch: func(url: string, method: string, headers: list<tuple<string, string>>, body: option<string>) -> u32
+interface files: read: func(path: string) -> u32
+interface files: write: func(path: string, text: string) -> u32
+interface files: list-dir: func(dir: string) -> u32
+interface files: stat: func(path: string) -> u32
+interface files: remove: func(path: string) -> u32
+interface hub: use error.{host-error}
+interface hub: list-apps: func() -> result<string, host-error>
+interface hub: launch: func(id: string) -> result<_, host-error>
+interface hub: set-grant: func(id: string, capability: string, allowed: bool) -> result<_, host-error>
+interface hub: block: func(id: string) -> result<_, host-error>
+interface hub: unblock: func(id: string) -> result<_, host-error>
+interface hub: list-groups: func() -> result<string, host-error>
+interface hub: create-group: func(name: string) -> result<_, host-error>
+interface hub: set-group: func(id: string, group: string, member: bool) -> result<_, host-error>
+interface hub: remove: func(id: string) -> result<_, host-error>
+interface hub: search: func(query: string) -> u32
+interface hub: install: func(id: string) -> u32
+interface hub: app-info: func(id: string) -> result<string, host-error>
+interface hub: pin: func(id: string, version: string) -> result<_, host-error>
+interface hub: block-publisher: func(key: string) -> result<_, host-error>
+interface hub: unblock-publisher: func(key: string) -> result<_, host-error>
+interface hub: check-updates: func(id: string) -> u32
+interface hub: update: func(id: string) -> u32
+world app: import ui
+world app: import dev
+world app: import time
+world app: import store
+world app: import clipboard
+world app: import dialog
+world app: import net
+world app: import hub
+world app: import files
+world app: export init: func(args: list<u8>)
+world app: export on-event: func(ev: list<u8>)
