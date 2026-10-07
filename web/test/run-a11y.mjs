@@ -344,6 +344,7 @@ async function main() {
       ["Level 2 primitives: layout and keyboard (primitives)", checkPrimitives],
       ["absolute boxes and held keys (pong)", checkPong],
       ["canvas pointer positions (7GUIs circle drawer)", checkCircleDrawer],
+      ["host banners: an uncaught error, then a stopped app (stop-fixture)", checkStopBanner],
     ]) {
       console.log(`== ${name} ==`);
       try {
@@ -816,6 +817,38 @@ async function checkCircleDrawer(cdpPort, base) {
     const got = await page.waitFor(`(() => { const c = ${svg}.querySelector("circle"); return c ? { cx: +c.getAttribute("cx"), cy: +c.getAttribute("cy") } : null; })()`, 3000);
     if (Math.abs(got.cx - want.cx) > 1 || Math.abs(got.cy - want.cy) > 1) throw new Error(`the circle is at ${JSON.stringify(got)}, not ${JSON.stringify(want)}`);
     return `a click at ${Math.round(box.w / 4)} px drew a circle at view x ${got.cx.toFixed(1)}`;
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * The host-owned banners (dom-renderer.js `renderBanner`): an uncaught
+ * error shows "An error occurred" with Dismiss, and the app keeps running;
+ * a trap shows "This app stopped" with the core's reason, and the screen
+ * takes no more input (`inert`).
+ */
+async function checkStopBanner(cdpPort, base) {
+  const appUrl = `${base}/web/test/fixtures/stop-fixture/dist/stop-fixture.plnt`;
+  const page = await openPage(cdpPort);
+  try {
+    await page.navigate(`${base}/web/index.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(`${base}/target/core.wasm`)}`);
+    const button = (label) => `[...document.querySelectorAll("#app button")].find((b) => b.textContent === ${JSON.stringify(label)})`;
+    await page.waitFor(`${button("throw")} ? true : null`, 30000);
+    const banner = `(() => { const b = document.querySelector(".pl-host-banner"); return b && !b.hidden ? b.textContent : null; })()`;
+    await page.eval(`${button("throw")}.click()`);
+    const error = await page.waitFor(banner, 3000);
+    if (!error.includes("An error occurred") || !error.includes("Uncaught Error: on purpose")) throw new Error(`error banner: ${error}`);
+    await page.eval(`document.querySelector(".pl-host-banner-dismiss").click()`);
+    await page.waitFor(`document.querySelector(".pl-host-banner").hidden ? true : null`, 3000);
+    await page.eval(`${button("ping")}.click()`);
+    await page.waitFor(`document.querySelector("#app").textContent.includes("pong") ? true : null`, 3000);
+    await page.eval(`${button("index")}.click()`);
+    const stopped = await page.waitFor(banner, 3000);
+    if (!stopped.includes("This app stopped") || !stopped.includes("array index out of bounds")) throw new Error(`stopped banner: ${stopped}`);
+    const inert = await page.eval(`document.querySelector(".pl-screen > :not(.pl-host-banner)").inert`);
+    if (!inert) throw new Error("the screen of a stopped app still takes input");
+    return stopped;
   } finally {
     await page.close();
   }

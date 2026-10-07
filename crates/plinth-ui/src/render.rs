@@ -461,7 +461,7 @@ impl PlinthRoot {
             Ok(commits) => self.apply_commits(commits),
             Err(e) => {
                 log::error!("the app stopped: {e:#}");
-                self.stopped = Some(format!("{e:#}"));
+                self.stopped = Some(format!("{e}"));
             }
         }
         self.sync_fields(cx);
@@ -484,7 +484,7 @@ impl PlinthRoot {
             }
             Err(e) => {
                 log::error!("the app stopped: {e:#}");
-                self.stopped = Some(format!("{e:#}"));
+                self.stopped = Some(format!("{e}"));
             }
         }
         self.sync_fields(cx);
@@ -517,7 +517,7 @@ impl PlinthRoot {
             Ok(_) => {}
             Err(e) => {
                 log::error!("the app stopped: {e:#}");
-                self.stopped = Some(format!("{e:#}"));
+                self.stopped = Some(format!("{e}"));
                 return;
             }
         }
@@ -529,7 +529,7 @@ impl PlinthRoot {
                 }
                 Err(e) => {
                     log::error!("the app stopped: {e:#}");
-                    self.stopped = Some(format!("{e:#}"));
+                    self.stopped = Some(format!("{e}"));
                     return;
                 }
             }
@@ -561,7 +561,7 @@ impl PlinthRoot {
             }
             Err(e) => {
                 log::error!("the app stopped: {e:#}");
-                self.stopped = Some(format!("{e:#}"));
+                self.stopped = Some(format!("{e}"));
                 return;
             }
         }
@@ -669,7 +669,7 @@ impl PlinthRoot {
             Ok(commits) => self.apply_commits(commits),
             Err(e) => {
                 log::error!("the app stopped: {e:#}");
-                self.stopped = Some(format!("{e:#}"));
+                self.stopped = Some(format!("{e}"));
             }
         }
         self.sync_dialog(cx);

@@ -581,6 +581,8 @@ trait WasmRunner {
 
 **Fuel and limits:** each runner enforces a time limit for each event (wasmtime epoch interruption on desktop) and a memory cap. If a handler is too slow, the host interrupts it and shows the standard "app is not responding" UI.
 
+**Status (2026-10-07):** the desktop runner has a time limit of 2 s for each call and a memory cap of 64 MiB (`Limits`). Tests (`crates/plinth-compiler/tests/errors.rs`, "Limits") check an endless loop in a handler and at start, endless recursion and endless allocation: each stops only its app, a stopped app is never called again, and another app on the same runner keeps running. The host shows a plain, one-line reason in "This app stopped" ("array index out of bounds", "out of memory", "too many nested calls (stack overflow)", "the app is not responding (time limit reached)"). The reason is the core's last `trap: <reason>` log, else the trap kind; the log keeps the wasm detail. The web host gives the same reasons and banners (`PlinthApp.stopped`, `DomRenderer.renderBanner`). Open: the web host has no time limit (an endless loop blocks the app's frame) and no memory cap of its own (docs/GAPS.md "Robustness").
+
 ### 9.3 UI runtime on `gpui-ce`
 
 - One gpui `Entity<PlinthRoot>` per window implements `Render`.

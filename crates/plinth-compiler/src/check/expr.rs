@@ -1,6 +1,6 @@
 //! Expressions.
 
-use super::{Binding, Checker, ReactiveCtx, StdFn, StdObj};
+use super::{Binding, Checker, FnCx, ReactiveCtx, Scope, StdFn, StdObj};
 use crate::ast::{self, BinOp, Expr, ExprKind, LogicOp, ObjProp, UnOp};
 use crate::diag::{Span, code};
 use crate::tir::*;
@@ -3061,7 +3061,10 @@ impl Checker<'_> {
             Type::Null => TExpr::new(TExprKind::Str("null".into()), Type::String, span),
             Type::Nullable(inner) => self.json_stringify_nullable(value, &inner, span),
             Type::Array(elem) => self.json_stringify_array(value, &elem, span),
-            Type::Struct(sid) => self.json_stringify_struct(value, sid, span),
+            Type::Struct(sid) => {
+                let fid = self.json_func(true, sid, span);
+                TExpr::new(TExprKind::Call(fid, vec![value]), Type::String, span)
+            }
             Type::Map(k, v) if *k == Type::String => self.json_stringify_map(value, &v, span),
             Type::Error => TExpr { ty: Type::Error, ..value },
             other => {
@@ -3070,6 +3073,36 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Str(String::new()), Type::Error, span)
             }
         }
+    }
+
+    /// The generated function that writes (`stringify`) or reads a value of
+    /// the struct type `sid`: `(v: S) => string` or `() => S` (the reader
+    /// uses the runtime's JSON cursor). Made once per type; the map entry
+    /// exists before the body is built, so a recursive type calls itself.
+    fn json_func(&mut self, stringify: bool, sid: crate::types::StructId, span: Span) -> FuncId {
+        if let Some(fid) = self.json_funcs.get(&(stringify, sid)) {
+            return *fid;
+        }
+        let ty = Type::Struct(sid);
+        let ret = if stringify { Type::String } else { ty.clone() };
+        let name = format!("$json_{}_{sid}", if stringify { "stringify" } else { "parse" });
+        let fid = self.prog.new_func(FuncDef { name, kind: FuncKind::TopLevel, params: Vec::new(), ret: ret.clone(), body: Vec::new(), span });
+        self.json_funcs.insert((stringify, sid), fid);
+        let saved = std::mem::replace(
+            &mut self.fx,
+            FnCx { func: fid, scopes: vec![Scope::default()], loops: Vec::new(), switches: 0, ret: Some(ret), inferred: None, reactive: ReactiveCtx::Callback, is_async: false },
+        );
+        let body = if stringify {
+            let v = self.var_in(fid, "$v", ty.clone(), None);
+            self.prog.funcs[fid as usize].params = vec![v];
+            let value = TExpr::new(TExprKind::Var(v), ty, span);
+            self.json_stringify_struct(value, sid, span)
+        } else {
+            self.json_decode_struct(sid, span)
+        };
+        self.fx = saved;
+        self.prog.funcs[fid as usize].body = vec![TStmt::Return(Some(body))];
+        fid
     }
 
     fn json_stringify_nullable(&mut self, value: TExpr, inner: &Type, span: Span) -> TExpr {
@@ -3287,7 +3320,10 @@ impl Checker<'_> {
                 self.err_help(code::TYPE_MISMATCH, span, msg, "parse an interface with named fields");
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
-            Type::Struct(sid) => self.json_decode_struct(*sid, span),
+            Type::Struct(sid) => {
+                let fid = self.json_func(false, *sid, span);
+                TExpr::new(TExprKind::Call(fid, Vec::new()), ty.clone(), span)
+            }
             Type::Map(k, v) if **k == Type::String => self.json_decode_map(v, span),
             Type::Error => TExpr::new(TExprKind::Null, Type::Error, span),
             other => {
@@ -3469,9 +3505,15 @@ impl Checker<'_> {
             }
             Type::Nullable(_) => TExpr::new(TExprKind::Null, ty.clone(), span),
             Type::Array(elem) => TExpr::new(TExprKind::ArrayLit(Vec::new()), Type::Array(elem.clone()), span),
+            // A required field of the struct's own type can never be
+            // filled from finite JSON, so the parse fails anyway and the
+            // placeholder is never seen: stop the recursion with `null`.
+            Type::Struct(sid) if self.json_default_stack.contains(sid) => TExpr::new(TExprKind::Null, ty.clone(), span),
             Type::Struct(sid) => {
+                self.json_default_stack.push(*sid);
                 let fields = self.prog.structs[*sid as usize].fields.clone();
                 let values = fields.iter().map(|f| self.json_default(&f.ty, span)).collect();
+                self.json_default_stack.pop();
                 TExpr::new(TExprKind::StructLit(*sid, values), ty.clone(), span)
             }
             Type::Map(k, v) => {

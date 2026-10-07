@@ -683,3 +683,37 @@ body {
 .pl-row-selected {
   background: var(--pl-selected);
 }
+
+/* Host-owned banners above the screen (dom-renderer.js renderBanner), as
+   on the desktop: "This app stopped" and the last uncaught app error. */
+.pl-host-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: var(--pl-danger);
+  color: var(--pl-accent-text);
+}
+.pl-host-banner-title {
+  font-weight: 600;
+}
+.pl-host-banner-detail {
+  flex: 1 1 100%;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.pl-host-banner-error .pl-host-banner-detail {
+  flex: 1 1 0;
+}
+.pl-host-banner-dismiss {
+  border: 1px solid var(--pl-accent-text);
+  background: transparent;
+  color: var(--pl-accent-text);
+  border-radius: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font: inherit;
+}

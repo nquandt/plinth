@@ -43,7 +43,11 @@ impl State {
         if new_end > self.end {
             let pages = (new_end - self.end).div_ceil(PAGE);
             if wasm32::memory_grow(0, pages) == usize::MAX {
-                return core::ptr::null_mut();
+                // The host's memory limit. An app cannot recover, so stop
+                // with a reason; a null result would reach the panic
+                // handler with none (and the aligned path below would use
+                // it as an address).
+                crate::trap_oom();
             }
             self.end += pages * PAGE;
         }

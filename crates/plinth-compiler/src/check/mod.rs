@@ -197,6 +197,9 @@ struct FnCx {
     func: FuncId,
     scopes: Vec<Scope>,
     loops: Vec<LoopId>,
+    /// The number of `switch` statements around the statement that the
+    /// checker is in: `break` is valid in a loop or a `switch`.
+    switches: u32,
     /// The declared return type, or `None` to infer it.
     ret: Option<Type>,
     /// The inferred return type so far.
@@ -230,6 +233,14 @@ pub struct Checker<'d> {
     interfaces: Vec<Vec<ast::Interface>>,
     resolving_interface: HashSet<(usize, usize)>,
     anon_structs: HashMap<String, types::StructId>,
+    /// The generated `JSON.stringify` (`true`) and `JSON.parse` (`false`)
+    /// function of each struct type, made at the first use. A function, not
+    /// inline code, so that a recursive type (`interface Node { kids:
+    /// Node[] }`) works.
+    json_funcs: HashMap<(bool, types::StructId), FuncId>,
+    /// Struct types whose `JSON.parse` placeholder (`json_default`) is in
+    /// progress, to stop at a recursive field.
+    json_default_stack: Vec<types::StructId>,
     /// The screen names that `navigate` and `navigate.push` refer to,
     /// checked after the app. The `bool` is `true` for `navigate(name)`,
     /// which needs a primary screen; `navigate.push` accepts any screen.
@@ -331,7 +342,7 @@ pub fn check_ex(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>,
         defaults: vec![None; modules.len()],
         module_scopes: vec![HashMap::new(); modules.len()],
         module: 0,
-        fx: FnCx { func: 0, scopes: Vec::new(), loops: Vec::new(), ret: None, inferred: None, reactive: ReactiveCtx::Plain, is_async: false },
+        fx: FnCx { func: 0, scopes: Vec::new(), loops: Vec::new(), switches: 0, ret: None, inferred: None, reactive: ReactiveCtx::Plain, is_async: false },
         pending: HashMap::new(),
         in_progress: HashSet::new(),
         aliases: vec![Vec::new(); modules.len()],
@@ -339,6 +350,8 @@ pub fn check_ex(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>,
         interfaces: vec![Vec::new(); modules.len()],
         resolving_interface: HashSet::new(),
         anon_structs: HashMap::new(),
+        json_funcs: HashMap::new(),
+        json_default_stack: Vec::new(),
         navigations: Vec::new(),
         app_seen: false,
         capabilities: capabilities.iter().cloned().collect(),
@@ -506,7 +519,7 @@ impl Checker<'_> {
         });
         self.prog.module_inits.push(init);
         self.fx =
-            FnCx { func: init, scopes: Vec::new(), loops: Vec::new(), ret: Some(Type::Void), inferred: None, reactive: ReactiveCtx::Plain, is_async: false };
+            FnCx { func: init, scopes: Vec::new(), loops: Vec::new(), switches: 0, ret: Some(Type::Void), inferred: None, reactive: ReactiveCtx::Plain, is_async: false };
 
         // 1. Imports.
         let mut import_index = 0;
@@ -1761,7 +1774,7 @@ impl Checker<'_> {
 
         let saved_fx = std::mem::replace(
             &mut self.fx,
-            FnCx { func: fid, scopes: vec![Scope::default()], loops: Vec::new(), ret: Some(Type::Struct(sid)), inferred: None, reactive: ReactiveCtx::Callback, is_async: false },
+            FnCx { func: fid, scopes: vec![Scope::default()], loops: Vec::new(), switches: 0, ret: Some(Type::Struct(sid)), inferred: None, reactive: ReactiveCtx::Callback, is_async: false },
         );
         let mut prologue = Vec::new();
         for (p, v) in ctor_ast.params.iter().zip(&param_vars) {
@@ -1981,6 +1994,7 @@ impl Checker<'_> {
                 func: fid,
                 scopes: vec![Scope::default()],
                 loops: Vec::new(),
+                switches: 0,
                 ret: declared.clone(),
                 inferred: None,
                 reactive: if is_component { ReactiveCtx::Plain } else { ReactiveCtx::Callback },
@@ -2137,7 +2151,7 @@ impl Checker<'_> {
         // captured `let`, and it runs while the body below is checked.
         self.prog.funcs[fid as usize].params = param_vars.clone();
         let mut saved =
-            std::mem::replace(&mut self.fx, FnCx { func: fid, scopes: Vec::new(), loops: Vec::new(), ret: declared.clone(), inferred: None, reactive, is_async: f.is_async });
+            std::mem::replace(&mut self.fx, FnCx { func: fid, scopes: Vec::new(), loops: Vec::new(), switches: 0, ret: declared.clone(), inferred: None, reactive, is_async: f.is_async });
         // A closure sees the scopes of the enclosing function: move them in
         // for the body, then give them back.
         self.fx.scopes = std::mem::take(&mut saved.scopes);

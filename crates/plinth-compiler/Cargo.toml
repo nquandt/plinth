@@ -18,6 +18,8 @@ oxc_ast = "0.153"
 oxc_parser = "0.153"
 oxc_span = "0.153"
 oxc_syntax = "0.153"
+# Runs each compile on a large stack: every phase recurses over the tree.
+stacker = "0.1.24"
 toml.workspace = true
 serde.workspace = true
 

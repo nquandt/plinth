@@ -23,19 +23,51 @@ pub fn parse(file: FileId, text: &str, is_tsx: bool, diags: &mut Vec<Diagnostic>
         }
         diags.push(diag);
     }
-    let mut cx = Cx { file, diags };
+    let mut cx = Cx { file, diags, depth: 0, too_deep: false };
     let items = ret.program.body.iter().filter_map(|s| cx.item(s)).collect();
     Module { items }
 }
 
+/// The deepest nesting of expressions, statements, JSX elements and types
+/// that the compiler accepts. Each later phase recurses over the tree, so
+/// the limit bounds their stack use too (`crate::STACK_SIZE`).
+pub const MAX_DEPTH: u32 = 1000;
+
 struct Cx<'d> {
     file: FileId,
     diags: &'d mut Vec<Diagnostic>,
+    /// The nesting depth of the node in conversion.
+    depth: u32,
+    /// `MAX_DEPTH` was reported for this file (one report is enough).
+    too_deep: bool,
 }
 
 impl Cx<'_> {
     fn span(&self, s: oxc_span::Span) -> Span {
         Span::new(self.file, s.start, s.end)
+    }
+
+    /// Enters one level of nesting; `false` (with one diagnostic per file)
+    /// past `MAX_DEPTH`. Each `true` needs a `leave`.
+    fn enter(&mut self, s: oxc_span::Span) -> bool {
+        if self.depth >= MAX_DEPTH {
+            if !self.too_deep {
+                self.too_deep = true;
+                self.err_help(
+                    code::SYNTAX,
+                    s,
+                    format!("this code nests more than {MAX_DEPTH} levels deep"),
+                    "split the expression into named parts (for example a long `a + b + ...` chain into several `const`s)",
+                );
+            }
+            return false;
+        }
+        self.depth += 1;
+        true
+    }
+
+    fn leave(&mut self) {
+        self.depth -= 1;
     }
 
     fn err(&mut self, code: &'static str, s: oxc_span::Span, msg: impl Into<String>) {
@@ -475,6 +507,15 @@ impl Cx<'_> {
     // -- Types ------------------------------------------------------------
 
     fn ty(&mut self, t: &o::TSType) -> Option<TypeAnn> {
+        if !self.enter(oxc_span::GetSpan::span(t)) {
+            return None;
+        }
+        let r = self.ty_inner(t);
+        self.leave();
+        r
+    }
+
+    fn ty_inner(&mut self, t: &o::TSType) -> Option<TypeAnn> {
         use o::TSType as T;
         let span = self.span(oxc_span::GetSpan::span(t));
         Some(match t {
@@ -690,6 +731,15 @@ impl Cx<'_> {
     }
 
     fn stmt(&mut self, s: &o::Statement) -> Option<Stmt> {
+        if !self.enter(oxc_span::GetSpan::span(s)) {
+            return None;
+        }
+        let r = self.stmt_inner(s);
+        self.leave();
+        r
+    }
+
+    fn stmt_inner(&mut self, s: &o::Statement) -> Option<Stmt> {
         use o::Statement as S;
         let span = self.span(oxc_span::GetSpan::span(s));
         let kind = match s {
@@ -922,6 +972,15 @@ impl Cx<'_> {
     // -- Expressions ------------------------------------------------------
 
     fn expr(&mut self, e: &o::Expression) -> Option<Expr> {
+        if !self.enter(oxc_span::GetSpan::span(e)) {
+            return None;
+        }
+        let r = self.expr_inner(e);
+        self.leave();
+        r
+    }
+
+    fn expr_inner(&mut self, e: &o::Expression) -> Option<Expr> {
         use o::Expression as E;
         use oxc_syntax::operator::{AssignmentOperator as A, BinaryOperator as B, LogicalOperator as L, UnaryOperator as U};
         let span = self.span(oxc_span::GetSpan::span(e));
@@ -1343,6 +1402,15 @@ impl Cx<'_> {
     // -- JSX --------------------------------------------------------------
 
     fn jsx(&mut self, j: &o::JSXElement) -> Option<JsxElement> {
+        if !self.enter(j.span) {
+            return None;
+        }
+        let r = self.jsx_inner(j);
+        self.leave();
+        r
+    }
+
+    fn jsx_inner(&mut self, j: &o::JSXElement) -> Option<JsxElement> {
         let open = &j.opening_element;
         let name = match &open.name {
             o::JSXElementName::Identifier(id) => id.name.to_string(),

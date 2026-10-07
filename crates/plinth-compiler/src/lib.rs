@@ -55,6 +55,23 @@ pub fn compile_with_capabilities(fs: &dyn FileSystem, capabilities: &[String]) -
 /// dev` passes `true`; `plinth build`/`plinth check` pass `false`, so a
 /// release artifact never contains that code (HANDOFF.md §7, size policy).
 pub fn compile_ex(fs: &dyn FileSystem, capabilities: &[String], dev: bool) -> anyhow::Result<(Frontend, Option<Artifact>)> {
+    with_stack(|| compile_impl(fs, capabilities, dev))
+}
+
+/// The stack that each compile runs on. Every phase recurses over the
+/// tree, and a debug build uses about 20 KiB of stack for each level of
+/// nesting, so the 1 MiB main thread of Windows overflowed at a sum of 60
+/// terms. The parser limits the nesting (`parse::MAX_DEPTH`), so this is
+/// enough with a wide margin.
+pub const STACK_SIZE: usize = 256 << 20;
+
+/// Runs `f` on a stack of `STACK_SIZE` on this thread (no `Send` bound),
+/// unless the current stack already has half of that left.
+pub(crate) fn with_stack<R>(f: impl FnOnce() -> R) -> R {
+    stacker::maybe_grow(STACK_SIZE / 2, STACK_SIZE, f)
+}
+
+fn compile_impl(fs: &dyn FileSystem, capabilities: &[String], dev: bool) -> anyhow::Result<(Frontend, Option<Artifact>)> {
     let mut front = driver::frontend_with_capabilities(fs, capabilities);
     let Some(mut program) = front.program.take() else {
         return Ok((front, None));

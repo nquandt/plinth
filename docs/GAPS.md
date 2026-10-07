@@ -724,3 +724,25 @@ first try, and both hosts gave the same layout facts and the same game.
 
 - **Rest patterns in array destructuring: done.** `const [a, , ...r] = xs` on arrays and on tuples with a rest element (`tests/lang.rs` `array_rest_patterns_bind_the_remaining_elements`, golden `PL2000_tuple_rest_pattern`). Not done: rest in object patterns (`const { a, ...o } = x`), default values in patterns.
 - **`join` on number and boolean arrays: done** for a literal separator (the default `","` too); a computed separator on a number array is still `PL3001`. Test `join_converts_numbers_and_booleans`.
+
+## Robustness (2026-10-07)
+
+A pass on stability: the compiler must never crash on any source text, and a bad app must stop only itself, with a plain reason, on every host. Tests: `crates/plinth-compiler/tests/robustness.rs` (a mutation test over the example sources: lines deleted, duplicated and swapped, spans removed, tokens inserted, names swapped; 300 cases in the check script, `PLINTH_FUZZ_ITERS`/`PLINTH_FUZZ_SEED` for more; a stack overflow writes the case to `target/fuzz-failures/current.txt`), the "Limits" tests in `tests/errors.rs`, `web/test/run-stop.mjs` and `checkStopBanner` in `run-a11y.mjs`.
+
+Fixed:
+
+- **`break` outside a loop or a `switch` was accepted**, and codegen then panicked (a subtract with overflow). The checker counts the `switch` statements around a statement (`FnCx::switches`). Found by the mutation test.
+- **`JSON.stringify` and `JSON.parse<T>` of a recursive type overflowed the compiler's stack** (`interface Node { kids: Node[] }`): the JSON code was inline for each type. Now each struct type has one generated function for each direction (`json_func`), which can call itself; a required field of the type itself (`{ again: Loop }`) parses to `null`. Tests: `json_round_trips_a_recursive_type`, `json_parse_of_a_type_that_holds_itself_is_null`. Found by the mutation test.
+- **Deep nesting overflowed the compiler's stack.** A debug build stopped at a sum of 60 terms (`1+1+...`), 100 parentheses or 50 nested array literals, on the 1 MiB main thread of Windows. Now every compile runs on a 256 MiB stack on the same thread (`stacker`, `plinth_compiler::with_stack`), and the parser stops at 1000 levels with `PL1000: this code nests more than 1000 levels deep` (`parse::MAX_DEPTH`). Test: `deep_nesting_builds_up_to_the_limit_and_is_a_diagnostic_past_it`.
+- **"This app stopped" showed a long wasm backtrace** (20 lines of `<unknown>!<wasm function N>` for a stack overflow). The runner now puts a plain reason at the top of the error (`stop_reason`): the core's `trap: <reason>` log, else the trap kind. The desktop banner shows only that line; the log keeps the detail.
+- **Out of memory had no reason**: a failed `memory.grow` gave a null pointer to Rust's allocation error path, which reached the panic handler (and the over-aligned path used the null as an address). The allocator now stops with `trap: out of memory` (`trap_oom`, no allocation).
+- **The web host had no stopped state and no banners.** A trap left a broken instance that timers and events still called, and an uncaught error went only to `console.error`. Now `PlinthApp` stops after a trap (`stopped`, `onStop`, the same reasons as the desktop) and never calls the app again, and `DomRenderer` shows "This app stopped" (the screen becomes `inert`) and "An error occurred" with Dismiss, as the desktop does.
+
+Open:
+
+| # | Area | What | Suggested fix |
+|---|---|---|---|
+| R1 | Web host | No time limit: an endless loop in an app blocks its frame (and the page, if the browser keeps the sandboxed frame in the same process). | Run the core in a dedicated Worker per app with a watchdog that ends the worker; the frame keeps only the DOM. |
+| R2 | Web host | No memory cap of its own: the browser's limit applies. | Give the core's memory a `maximum` (an import with a limit) on the web, as `StoreLimits` does on the desktop. |
+| R3 | Compiler | A sum of more than 1000 terms is `PL1000`; `tsc` accepts it. | Convert left-deep binary chains without recursion (an explicit stack in the parser, checker and codegen). Low: hand-written code does not get near the limit. |
+| R4 | Tests | The mutation test only changes valid programs, at the text level. | Add structure-aware changes (swap two expressions of the same kind, change a type annotation) and a nightly run with a large `PLINTH_FUZZ_ITERS`. |

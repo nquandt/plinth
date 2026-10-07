@@ -109,6 +109,10 @@ pub fn frontend(fs: &dyn FileSystem) -> Frontend {
 /// errors. `capabilities` are the capability names from `plinth.toml`
 /// (SPEC.md §11), used to check host API calls.
 pub fn frontend_with_capabilities(fs: &dyn FileSystem, capabilities: &[String]) -> Frontend {
+    crate::with_stack(|| frontend_impl(fs, capabilities))
+}
+
+fn frontend_impl(fs: &dyn FileSystem, capabilities: &[String]) -> Frontend {
     let mut sources = Sources::default();
     let mut diags = Vec::new();
     let Some(text) = fs.read(ENTRY) else {

@@ -825,8 +825,59 @@ export class DomRenderer {
     this.navButtons = [];
     this.main = el("main", "pl-screen");
     this.shown = null; // the root view in `main`
+    // Host-owned banners above the screen, as on the desktop: "This app
+    // stopped" after a trap, and the last uncaught app error.
+    this.banner = el("div", "pl-host-banner", { role: "alert" });
+    this.banner.hidden = true;
+    this.errors = [];
+    this.stoppedReason = null;
     tree.onChange = () => this.render();
+    app.onStop = (reason) => this.showStopped(reason);
+    app.onError = (message) => this.showError(message);
     this.watchForeground(container.ownerDocument);
+  }
+
+  /** The app trapped: show the reason, and block input to its controls. */
+  showStopped(reason) {
+    this.stoppedReason = reason;
+    this.renderShell(false);
+    this.nav.inert = true;
+    if (this.shown) this.shown.el.inert = true;
+    this.renderBanner();
+  }
+
+  /** An uncaught app error (core 1.10): the app keeps running. */
+  showError(message) {
+    this.errors.push(message);
+    this.renderShell(false);
+    this.renderBanner();
+  }
+
+  renderBanner() {
+    const b = this.banner;
+    const title = el("div", "pl-host-banner-title");
+    const detail = el("div", "pl-host-banner-detail");
+    if (this.stoppedReason !== null) {
+      b.className = "pl-host-banner pl-host-banner-stopped";
+      setText(title, "This app stopped");
+      setText(detail, this.stoppedReason);
+      b.replaceChildren(title, detail);
+    } else if (this.errors.length > 0) {
+      const more = this.errors.length - 1;
+      b.className = "pl-host-banner pl-host-banner-error";
+      setText(title, more === 0 ? "An error occurred" : `An error occurred (${more} more)`);
+      setText(detail, this.errors[this.errors.length - 1]);
+      const dismiss = el("button", "pl-host-banner-dismiss", { type: "button", "aria-label": "Dismiss error" });
+      setText(dismiss, "Dismiss");
+      dismiss.addEventListener("click", () => {
+        this.errors = [];
+        this.renderBanner();
+      });
+      b.replaceChildren(title, detail, dismiss);
+    } else {
+      b.replaceChildren();
+    }
+    b.hidden = this.stoppedReason === null && this.errors.length === 0;
   }
 
   /**
@@ -997,8 +1048,8 @@ export class DomRenderer {
 
     const rootId = t.roots.get(t.topScreen());
     const view = rootId !== undefined ? this.viewFor(rootId) : null;
-    if (view !== this.shown || (view && view.el.parentNode !== this.main)) {
-      this.main.replaceChildren(...(view ? [view.el] : []));
+    if (view !== this.shown || (view && view.el.parentNode !== this.main) || this.banner.parentNode !== this.main) {
+      this.main.replaceChildren(this.banner, ...(view ? [view.el] : []));
       this.shown = view;
       // A Sheet or Dialog can open only in the document: open the ones of
       // a screen that comes back.

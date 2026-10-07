@@ -1,0 +1,4 @@
+id = "dev.plinth.test.stop-fixture"
+name = "Stop Fixture"
+version = "0.1.0"
+publisher = "plinth"

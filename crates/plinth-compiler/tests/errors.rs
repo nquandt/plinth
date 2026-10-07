@@ -275,7 +275,8 @@ function Home() {
 export default app({ screens: { home: { title: "Home", component: Home } } });
 "#;
     let (mut guest, mut tree) = start(main);
-    assert!(press(&mut guest, &mut tree, "go").is_err(), "an out-of-bounds read traps, even inside `try`");
+    let e = press(&mut guest, &mut tree, "go").expect_err("an out-of-bounds read traps, even inside `try`");
+    assert_eq!(e.to_string(), "array index out of bounds", "the host shows the core's reason: {e:#}");
 }
 
 #[test]
@@ -295,6 +296,102 @@ export default app({ screens: { home: { title: "Home", component: Home } } });
 "#;
     let (mut guest, mut tree) = start(main);
     assert!(press(&mut guest, &mut tree, "go").is_err());
+}
+
+// -- Limits: a bad app stops; the host and other apps keep running -----------------
+
+/// A program with a "go" button that runs `body`, and a "ping" button
+/// that changes the text.
+fn limit_app(body: &str) -> String {
+    format!(
+        r#"import {{ app, Screen, Text, Button, signal }} from "plinth:ui";
+const m = signal("start");
+function Home() {{
+  return <Screen title="Home">
+    <Text>{{m()}}</Text>
+    <Button label="go" onPress={{() => {{ {body} }}}} />
+    <Button label="ping" onPress={{() => m.set("pong")}} />
+  </Screen>;
+}}
+export default app({{ screens: {{ home: {{ title: "Home", component: Home }} }} }});
+"#
+    )
+}
+
+fn start_limited(runner: &Runner, main: &str, limits: Limits) -> (Guest, Tree) {
+    let artifact = compile(main);
+    let mut guest = runner.load(&artifact.component, limits).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        tree.apply(&commit).unwrap();
+    }
+    (guest, tree)
+}
+
+const SHORT: Limits = Limits { memory_bytes: 16 << 20, call_timeout: std::time::Duration::from_millis(300) };
+
+/// Checks that the guest stopped with an error that contains `want`, that
+/// a later call fails at once, and that a second app on the same runner
+/// still runs.
+fn assert_stops(runner: &Runner, mut guest: Guest, mut tree: Tree, want: &str) {
+    let t = std::time::Instant::now();
+    let e = press(&mut guest, &mut tree, "go").expect_err("the call must fail");
+    // The top message is the plain reason that the host shows.
+    let msg = e.to_string();
+    assert!(msg.contains(want), "error {msg:?} does not contain {want:?}");
+    assert!(!msg.contains('\n'), "the reason is one line: {msg:?}");
+    assert!(t.elapsed() < std::time::Duration::from_secs(10), "took {:?}", t.elapsed());
+    let e = press(&mut guest, &mut tree, "ping").expect_err("a stopped app is not called again");
+    assert!(format!("{e:#}").contains("stopped earlier"), "{e:#}");
+    let (mut other, mut other_tree) = start_limited(runner, &limit_app(""), SHORT);
+    press(&mut other, &mut other_tree, "ping").unwrap();
+    assert_eq!(text(&other_tree), "pong");
+}
+
+#[test]
+fn an_endless_loop_hits_the_time_limit() {
+    let runner = Runner::new().unwrap();
+    let (guest, tree) = start_limited(&runner, &limit_app("let i = 0; while (i >= 0) { i = i + 1; }"), SHORT);
+    assert_stops(&runner, guest, tree, "not responding");
+}
+
+#[test]
+fn an_endless_loop_at_start_hits_the_time_limit() {
+    let runner = Runner::new().unwrap();
+    let main = show("function spin(): number { let i = 0; while (i >= 0) { i = i + 1; } return i; }\nconst x = spin();", "", "\"\" + x");
+    let mut guest = runner.load(&compile(&main).component, SHORT).unwrap();
+    let e = guest.init(&[]).expect_err("init must fail");
+    assert!(format!("{e:#}").contains("not responding"), "{e:#}");
+}
+
+#[test]
+fn endless_recursion_overflows_the_stack_and_stops_the_app() {
+    let runner = Runner::new().unwrap();
+    let main = limit_app("m.set(\"\" + deep(1));").replace(
+        "const m = signal",
+        "function deep(n: number): number { return deep(n + 1) + 1; }\nconst m = signal",
+    );
+    let (guest, tree) = start_limited(&runner, &main, SHORT);
+    assert_stops(&runner, guest, tree, "too many nested calls");
+}
+
+#[test]
+fn endless_allocation_hits_the_memory_limit() {
+    let runner = Runner::new().unwrap();
+    let (guest, tree) = start_limited(
+        &runner,
+        &limit_app("const keep: string[][] = []; while (keep.length >= 0) { keep.push([\"aaaaaaaaaaaaaaaa\" + keep.length]); }"),
+        SHORT,
+    );
+    // The guest fails to grow its memory: wasm `memory.grow` returns -1 and
+    // the runtime traps (out of memory), before the time limit.
+    let mut guest = guest;
+    let mut tree = tree;
+    let e = press(&mut guest, &mut tree, "go").expect_err("the call must fail");
+    // The top message is the plain reason that the host shows.
+    assert_eq!(e.to_string(), "out of memory", "{e:#}");
+    let e = press(&mut guest, &mut tree, "ping").expect_err("a stopped app is not called again");
+    assert!(format!("{e:#}").contains("stopped earlier"), "{e:#}");
 }
 
 // -- Cost --------------------------------------------------------------------------

@@ -799,17 +799,36 @@ impl Guest {
             bail!("the app stopped earlier");
         }
         self.store.set_epoch_deadline(self.deadline_ticks);
+        let logs_before = self.store.data().logs.len();
         let result = f(&self.app, &mut self.store);
         let commits = std::mem::take(&mut self.store.data_mut().commits);
         if let Err(e) = result {
             self.poisoned = true;
-            let interrupted = matches!(e.downcast_ref::<wasmtime::Trap>(), Some(wasmtime::Trap::Interrupt));
-            let e = anyhow::Error::from(e);
-            if interrupted {
-                return Err(e.context("the app is not responding (time limit reached)"));
-            }
-            return Err(e);
+            let reason = stop_reason(&e, &self.store.data().logs[logs_before..]);
+            log::error!(target: "plinth::app", "the app stopped: {reason}: {e:?}");
+            return Err(anyhow::Error::from(e).context(reason));
         }
         Ok(commits)
+    }
+}
+
+/// A short, plain reason for a failed guest call, for the host's "This
+/// app stopped" banner. The error keeps the wasm detail (`{e:#}`, `{e:?}`).
+/// The core logs `trap: <reason>` before it traps (`plinth_rt::trap`), so
+/// the last such log of the call is the best reason.
+fn stop_reason(e: &wasmtime::Error, logs: &[String]) -> String {
+    if let Some(msg) = logs.iter().rev().find_map(|l| l.strip_prefix("trap: ")) {
+        return msg.to_owned();
+    }
+    match e.downcast_ref::<wasmtime::Trap>() {
+        Some(wasmtime::Trap::Interrupt) => "the app is not responding (time limit reached)".into(),
+        Some(wasmtime::Trap::StackOverflow) => "too many nested calls (stack overflow)".into(),
+        Some(wasmtime::Trap::UnreachableCodeReached) => "a check in the app failed".into(),
+        Some(wasmtime::Trap::IntegerDivisionByZero) => "an integer division by zero".into(),
+        Some(wasmtime::Trap::MemoryOutOfBounds | wasmtime::Trap::HeapMisaligned | wasmtime::Trap::TableOutOfBounds) => {
+            "an invalid memory access".into()
+        }
+        Some(t) => t.to_string(),
+        None => "a host call failed".into(),
     }
 }

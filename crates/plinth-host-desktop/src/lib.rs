@@ -326,7 +326,9 @@ pub fn start_with_policy_and_hub(
             } else {
                 plinth_protocol::init_arg::one(plinth_protocol::init_arg::SNAPSHOT, args)
             };
-            let init = guest.init(&init_args).map_err(|e| format!("{e:#}"));
+            // The banner shows the plain reason (the top message); the runner logs
+            // the wasm detail.
+            let init = guest.init(&init_args).map_err(|e| format!("{e}"));
             print_logs(&mut guest);
             (Box::new(WasmGuest { guest, _runner: runner }), init)
         }

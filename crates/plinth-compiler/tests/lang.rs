@@ -1999,6 +1999,53 @@ function Home() {
     assert_eq!(text_of(&tree, ControlKind::Text), "null");
 }
 
+/// A recursive interface (a tree) made the compiler recurse until the
+/// stack overflowed: the JSON code was inline for each type. Now each
+/// struct type has one generated function, which can call itself.
+#[test]
+fn json_round_trips_a_recursive_type() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { JSON } from "plinth:core";
+interface Tree { name: string; kids: Tree[]; next: Tree | null; }
+function count(t: Tree): number {
+  let n = 1;
+  for (const k of t.kids) { n += count(k); }
+  return t.next === null ? n : n + count(t.next);
+}
+function Home() {
+  const t: Tree = { name: "a", kids: [{ name: "b", kids: [], next: null }, { name: "c", kids: [{ name: "d", kids: [], next: null }], next: null }], next: { name: "e", kids: [], next: null } };
+  const text = JSON.stringify(t);
+  const back = JSON.parse<Tree>(text);
+  const bad = JSON.parse<Tree>("{\"name\":\"x\",\"kids\":[{\"name\":\"y\"}],\"next\":null}");
+  const out = back === null ? "null" : JSON.stringify(back) === text ? "same " + count(back) : "different";
+  return <Screen title="Home"><Text>{text + "|" + out + "|" + (bad === null ? "bad" : "ok")}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    let tree_json = r#"{"name":"a","kids":[{"name":"b","kids":[],"next":null},{"name":"c","kids":[{"name":"d","kids":[],"next":null}],"next":null}],"next":{"name":"e","kids":[],"next":null}}"#;
+    assert_eq!(text_of(&tree, ControlKind::Text), format!("{tree_json}|same 5|bad"));
+}
+
+/// A required field of the type itself can never be filled from JSON:
+/// the parse gives `null`, and the compiler does not recurse forever.
+#[test]
+fn json_parse_of_a_type_that_holds_itself_is_null() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+import { JSON } from "plinth:core";
+interface Loop { name: string; again: Loop; }
+function Home() {
+  const v = JSON.parse<Loop>("{\"name\":\"x\",\"again\":{\"name\":\"y\"}}");
+  return <Screen title="Home"><Text>{v === null ? "null" : v.name}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "null");
+}
+
 #[test]
 fn json_parse_int_out_of_range_is_null() {
     let main = r#"import { app, Screen, Text } from "plinth:ui";

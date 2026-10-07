@@ -487,6 +487,13 @@ Rules:
   dereference, out-of-bounds index, a failed `as` cast, out-of-memory)
   are traps, not exceptions: no `catch` gets them, and the host shows a
   "this app stopped" screen. See "Errors and exceptions".
+- **Limits.** Code can nest at most 1000 levels deep (expressions,
+  statements, JSX elements and types; a nested `if` with a block counts
+  two levels). Past that, the compiler gives `PL1000` ("this code nests
+  more than 1000 levels deep"); split a long `a + b + ...` chain into
+  several `const`s. A call that runs longer than the host's time limit
+  (2 s on the desktop), endless recursion and memory past the host's cap
+  (64 MiB on the desktop) stop the app with a plain reason.
 - **`for (let i = ...)`** uses one binding for the whole loop — closures
   made inside the body see its final value, matching old-style `var`
   behavior rather than per-iteration `let`. `for…of` loop variables, and
@@ -511,7 +518,7 @@ accurate.
 
 | Module | Contents | Capability |
 |---|---|---|
-| `plinth:core` | `int`, `Math` (with `Math.random`, core 1.12: the host seeds it with fresh entropy, a test with a fixed seed), `seedRandom(seed)`, `JSON.stringify`/`JSON.parse<T>`, `parseNumber`, `toString`, `console.log` (dev only) | none |
+| `plinth:core` | `int`, `Math` (with `Math.random`, core 1.12: the host seeds it with fresh entropy, a test with a fixed seed), `seedRandom(seed)`, `JSON.stringify`/`JSON.parse<T>` (recursive types such as `interface Node { kids: Node[] }` work), `parseNumber`, `toString`, `console.log` (dev only) | none |
 | `plinth:ui` | `signal`, `computed`, `effect`, `app()`, `navigate`, and every UI control (see [ui.md](ui.md)) | none |
 | `plinth:time` | `now()`, `monotonicNow()`, `setTimeout`/`setInterval`/`clearTimeout`/`clearInterval` | none |
 | `plinth:store` | `kv.get`/`kv.set`/`kv.remove`/`kv.keys`, `kv.lastError()` | `store.kv` |

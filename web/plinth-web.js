@@ -806,6 +806,20 @@ export class PlinthApp {
   constructor() {
     this.core = null;
     this.onCommit = () => {};
+    /**
+     * The plain reason after a trap (the time or memory limit, a failed
+     * runtime check), else `null`. A stopped app is never called again, as
+     * on the desktop (`plinth-runner-wasmtime` `Guest::call`).
+     */
+    this.stopped = null;
+    /**
+     * `(reason, error)` after the app stopped; the DOM renderer shows "This
+     * app stopped". With no handler, `init`/`onEvent` throw the error.
+     */
+    this.onStop = null;
+    /** `(message)` for each uncaught app error (core 1.10); the app keeps running. */
+    this.onError = null;
+    this._lastTrap = null;
   }
 
   /**
@@ -830,8 +844,19 @@ export class PlinthApp {
     const { id: appId, capabilities } = opts.manifestText ? parseManifest(opts.manifestText) : { id: "", capabilities: new Set() };
     const kvStore =
       opts.kvStore ?? (opts.storage ? localStorageKvStore(opts.storage, `plinth:${appId}:`) : mapKvStore(opts.sharedMap));
+    const log = opts.log ?? ((s) => console.log(s));
+    const reportError = opts.reportError ?? ((s) => console.error(s));
     this.core = await loadCore(coreBytes, {
       ...opts,
+      // The core logs `trap: <reason>` before it traps (plinth_rt::trap).
+      log: (s) => {
+        if (typeof s === "string" && s.startsWith("trap: ")) this._lastTrap = s.slice(6);
+        log(s);
+      },
+      reportError: (s) => {
+        reportError(s);
+        this.onError?.(s);
+      },
       scheduleTimerEvent,
       scheduleFrameEvent,
       completeRequest,
@@ -865,13 +890,48 @@ export class PlinthApp {
     const records = [...initArgRecords];
     if (!records.some((r) => r.tag === INIT_RANDOM_SEED)) records.push({ tag: INIT_RANDOM_SEED, data: crypto.getRandomValues(new Uint8Array(8)) });
     const bytes = encodeInitArgs(records);
-    const ptr = this._writeBuf(bytes);
-    this.core.instance.exports.init(ptr, bytes.length);
+    this._call(() => {
+      const ptr = this._writeBuf(bytes);
+      this.core.instance.exports.init(ptr, bytes.length);
+    });
   }
 
   onEvent(event) {
+    // A timer, a frame or an answer can come after the app stopped.
+    if (this.stopped !== null) return;
     const bytes = encodeEvent(event);
-    const ptr = this._writeBuf(bytes);
-    this.core.instance.exports["on-event"](ptr, bytes.length);
+    this._call(() => {
+      const ptr = this._writeBuf(bytes);
+      this.core.instance.exports["on-event"](ptr, bytes.length);
+    });
   }
+
+  _call(f) {
+    if (this.stopped !== null) return;
+    this._lastTrap = null;
+    try {
+      f();
+    } catch (err) {
+      this.stopped = stopReason(err, this._lastTrap);
+      if (!this.onStop) throw err;
+      console.error(`[plinth] the app stopped: ${this.stopped}`, err);
+      this.onStop(this.stopped, err);
+    }
+  }
+}
+
+/**
+ * A short, plain reason for a trap, the same words as the desktop host
+ * (`stop_reason` in `plinth-runner-wasmtime`).
+ */
+export function stopReason(err, lastTrap) {
+  if (lastTrap) return lastTrap;
+  const msg = String(err?.message ?? err);
+  if (err instanceof RangeError && /call stack/i.test(msg)) return "too many nested calls (stack overflow)";
+  if (typeof WebAssembly !== "undefined" && err instanceof WebAssembly.RuntimeError) {
+    if (/unreachable/i.test(msg)) return "a check in the app failed";
+    if (/divide by zero|division by zero/i.test(msg)) return "an integer division by zero";
+    if (/out of bounds/i.test(msg)) return "an invalid memory access";
+  }
+  return msg;
 }

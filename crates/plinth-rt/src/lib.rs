@@ -177,6 +177,16 @@ pub fn trap(msg: &str) -> ! {
     panic!("{msg}");
 }
 
+/// Stops the guest after a failed `memory.grow`. Unlike `trap`, it does
+/// not allocate: the log message is static.
+pub fn trap_oom() -> ! {
+    log("trap: out of memory");
+    #[cfg(target_arch = "wasm32")]
+    core::arch::wasm32::unreachable();
+    #[cfg(not(target_arch = "wasm32"))]
+    panic!("out of memory");
+}
+
 /// Reports an uncaught app error to the host (SPEC.md §5.6, core 1.10):
 /// `prefix`, then `"<name>: <message>"`. The guest keeps running.
 pub fn report_error(prefix: &str, name: &str, message: &str) {

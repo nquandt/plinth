@@ -223,8 +223,12 @@ impl Checker<'_> {
                 vec![TStmt::Return(te)]
             }
             StmtKind::Break | StmtKind::Continue => {
-                if self.fx.loops.is_empty() && !matches!(s.kind, StmtKind::Break) {
-                    self.err(code::SYNTAX, s.span, "`continue` outside a loop");
+                if self.fx.loops.is_empty() {
+                    if !matches!(s.kind, StmtKind::Break) {
+                        self.err(code::SYNTAX, s.span, "`continue` outside a loop");
+                    } else if self.fx.switches == 0 {
+                        self.err(code::SYNTAX, s.span, "`break` outside a loop or a `switch`");
+                    }
                 }
                 vec![if matches!(s.kind, StmtKind::Break) { TStmt::Break } else { TStmt::Continue }]
             }
@@ -251,6 +255,7 @@ impl Checker<'_> {
                 };
                 let mut out_cases = Vec::new();
                 self.push_scope();
+                self.fx.switches += 1;
                 for (test, body) in cases {
                     let t = test.as_ref().map(|t| {
                         let te = self.expr(t, Some(&case_ty));
@@ -263,6 +268,7 @@ impl Checker<'_> {
                     let b = self.block_stmts(body);
                     out_cases.push((t, b));
                 }
+                self.fx.switches -= 1;
                 self.pop_scope();
                 vec![TStmt::Switch { disc: d, eq, cases: out_cases }]
             }
