@@ -430,9 +430,20 @@ pub fn dispatch(handler: u32, value: &Value) {
     match action {
         // A handler for a node that was removed in the same batch.
         None => {}
-        Some(Action::User(c)) => {
-            reactive::untracked(|| invoke(c, value_to_val(value)));
-        }
+        // A list value (UI API 1.12 pointer events: `[x, y]`) gives the
+        // callback one argument per item.
+        Some(Action::User(c)) => match value {
+            Value::List(items) => {
+                let mut args = [Val::None; crate::MAX_ARGS];
+                for (slot, v) in args.iter_mut().zip(items) {
+                    *slot = value_to_val(v);
+                }
+                reactive::untracked(|| crate::invoke_args(c, &args[..items.len().min(crate::MAX_ARGS)]));
+            }
+            _ => {
+                reactive::untracked(|| invoke(c, value_to_val(value)));
+            }
+        },
         Some(Action::Bind(b, kind)) => {
             let v = match (kind, value) {
                 (BindKind::Bool, Value::Bool(x)) => Val::I32(*x as i32),

@@ -643,8 +643,14 @@ impl<'p> Codegen<'p> {
         // The closure's env, then the argument, then the call.
         f.instruction(&I::LocalGet(0));
         f.instruction(&I::I32Load(mem(HEADER + 4, Repr::I32)));
-        for r in &sig.params {
-            f.instruction(&I::Call(if *r == Repr::F64 { rt("arg_f64") } else { rt("arg_i32") }));
+        // The first argument is `arg`; the others (core 1.12) are `arg_at(i)`.
+        for (i, r) in sig.params.iter().enumerate() {
+            if i == 0 {
+                f.instruction(&I::Call(if *r == Repr::F64 { rt("arg_f64") } else { rt("arg_i32") }));
+            } else {
+                f.instruction(&I::I32Const(i as i32));
+                f.instruction(&I::Call(if *r == Repr::F64 { rt("arg_at_f64") } else { rt("arg_at_i32") }));
+            }
         }
         f.instruction(&I::LocalGet(0));
         f.instruction(&I::I32Load(mem(HEADER, Repr::I32)));

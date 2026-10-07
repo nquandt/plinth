@@ -6,8 +6,8 @@ use crate::theme::{Tokens, WidthClass, icon_glyph, with_alpha};
 use crate::tree::{Node, Tree};
 use gpui::{
     AnyElement, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FocusHandle, FontWeight, Image, ImageFormat,
-    IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, ObjectFit, Pixels, Render, SharedString, Stateful, Subscription, Window, anchored,
-    deferred, div, img, prelude::*, px,
+    DispatchPhase, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
+    Point, Render, SharedString, Stateful, Subscription, Window, anchored, canvas, deferred, div, img, prelude::*, px,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -228,6 +228,9 @@ pub struct PlinthRoot {
     /// back) fires without depending on a focusable child being focused.
     focus: FocusHandle,
     focused_once: bool,
+    /// The node that got the last pointer-down (UI API 1.12): it gets the
+    /// moves outside its bounds and the pointer-up, until the button goes up.
+    pointer_owner: Rc<Cell<Option<u32>>>,
     /// The package's assets (SPEC.md §10.1), by path under `assets/`
     /// (without the prefix), for `<Image>`.
     assets: Arc<HashMap<String, Vec<u8>>>,
@@ -272,6 +275,7 @@ impl PlinthRoot {
             dialog: None,
             focus: cx.focus_handle(),
             focused_once: false,
+            pointer_owner: Rc::new(Cell::new(None)),
             assets,
             date_cursor: HashMap::new(),
             list_states: std::cell::RefCell::new(HashMap::new()),
@@ -296,6 +300,7 @@ impl PlinthRoot {
             dialog: None,
             focus: cx.focus_handle(),
             focused_once: false,
+            pointer_owner: Rc::new(Cell::new(None)),
             assets: Arc::new(HashMap::new()),
             date_cursor: HashMap::new(),
             list_states: std::cell::RefCell::new(HashMap::new()),
@@ -1263,19 +1268,19 @@ impl PlinthRoot {
             ControlKind::Span => self.render_span(node, t),
             ControlKind::Pressable => self.render_pressable(node, t, cx),
             ControlKind::Scroll => self.render_scroll(node, t, cx),
-            ControlKind::Canvas => self.render_canvas(node, t),
+            ControlKind::Canvas => self.render_canvas(node, t, cx),
         }
     }
 
     /// A Canvas (UI API 1.10): shapes in a view space that scales to the width.
-    fn render_canvas(&self, node: &Node, t: &Tokens) -> AnyElement {
+    fn render_canvas(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
         warn_if_unlabeled("Canvas", node.id, &label);
         let vw = node.prop(prop::VIEW_WIDTH).and_then(Value::as_int).unwrap_or(100) as f32;
         let vh = node.prop(prop::VIEW_HEIGHT).and_then(Value::as_int).unwrap_or(100) as f32;
         let shapes = crate::canvas::parse(node.str_prop(prop::SHAPES).unwrap_or(""));
         let style = self.primitive_style(node);
-        let mut d = crate::canvas::render(u64::from(node.id), label, vw, vh, shapes, t);
+        let mut d = crate::canvas::render(u64::from(node.id), label, vw, vh, shapes, t).children(self.pointer_layer(node, Some(vw), cx));
         if let Some(w) = primitives::size(&style, prop::WIDTH, prop::WIDTH_FRACTION) {
             d = d.w(w).flex_shrink_0();
         }
@@ -1351,6 +1356,82 @@ impl PlinthRoot {
         d
     }
 
+    /// The pointer events of `node` (UI API 1.12) as a full-size layer that
+    /// adds mouse listeners when it paints, when it knows the bounds of the
+    /// element. `view_width` is the view width of a `Canvas` (the position
+    /// is in view units); `None` gives spacing units (a box). `None` if the
+    /// node has no pointer handler.
+    fn pointer_layer(&self, node: &Node, view_width: Option<f32>, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.stopped.is_some() {
+            return None;
+        }
+        let handlers = [event::POINTER_DOWN, event::POINTER_MOVE, event::POINTER_UP].map(|ev| node.handler(ev));
+        if handlers.iter().all(Option::is_none) {
+            return None;
+        }
+        let [down, moved, up] = handlers;
+        let entity = cx.entity().downgrade();
+        let owner = self.pointer_owner.clone();
+        let id = node.id;
+        let layer = canvas(
+            |_, _, _| (),
+            move |bounds: Bounds<Pixels>, _, window, _| {
+                let scale = match view_width {
+                    Some(vw) => f32::from(bounds.size.width) / vw.max(1.0),
+                    None => primitives::UNIT,
+                }
+                .max(f32::EPSILON);
+                let at = move |p: Point<Pixels>| {
+                    let x = f32::from(p.x - bounds.origin.x) / scale;
+                    let y = f32::from(p.y - bounds.origin.y) / scale;
+                    Value::List(vec![Value::Number(f64::from(x)), Value::Number(f64::from(y))])
+                };
+                let send = {
+                    let entity = entity.clone();
+                    move |h: u32, ev: u16, value: Value, cx: &mut gpui::App| {
+                        let _ = entity.update(cx, |this, cx| this.fire(h, ev, value, cx));
+                    }
+                };
+                {
+                    let (owner, send) = (owner.clone(), send.clone());
+                    window.on_mouse_event(move |ev: &MouseDownEvent, phase, _, cx| {
+                        if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left || !bounds.contains(&ev.position) {
+                            return;
+                        }
+                        owner.set(Some(id));
+                        if let Some(h) = down {
+                            send(h, event::POINTER_DOWN, at(ev.position), cx);
+                        }
+                    });
+                }
+                {
+                    let (owner, send) = (owner.clone(), send.clone());
+                    window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
+                        let Some(h) = moved else { return };
+                        if phase == DispatchPhase::Bubble && (owner.get() == Some(id) || bounds.contains(&ev.position)) {
+                            send(h, event::POINTER_MOVE, at(ev.position), cx);
+                        }
+                    });
+                }
+                window.on_mouse_event(move |ev: &MouseUpEvent, phase, _, cx| {
+                    if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left {
+                        return;
+                    }
+                    let owned = owner.get() == Some(id);
+                    if owned {
+                        owner.set(None);
+                    }
+                    if let Some(h) = up
+                        && (owned || bounds.contains(&ev.position))
+                    {
+                        send(h, event::POINTER_UP, at(ev.position), cx);
+                    }
+                });
+            },
+        );
+        Some(layer.absolute().top_0().left_0().size_full().into_any_element())
+    }
+
     /// A layout box. Without a label it is a plain container for AccessKit;
     /// with one it is a named group.
     fn render_box(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
@@ -1360,6 +1441,7 @@ impl PlinthRoot {
         let d = self.key_handlers(d, node, cx);
         self.state_styles(d, node, t)
             .when_some(label, |d, l| d.role(accesskit::Role::Group).aria_label(l))
+            .children(self.pointer_layer(node, None, cx))
             .children(self.render_box_children(node, t, cx))
             .into_any_element()
     }
@@ -1390,7 +1472,9 @@ impl PlinthRoot {
         let own_hover = primitives::partial(node, prop::HOVER).is_some();
         let hover = t.hover;
         let d = div().id(eid("pressable", node.id)).role(role).aria_label(label).aria_disabled(disabled);
-        let mut d = primitives::box_style(d, &style, t, false).children(self.render_box_children(node, t, cx));
+        let mut d = primitives::box_style(d, &style, t, false)
+            .children(self.pointer_layer(node, None, cx))
+            .children(self.render_box_children(node, t, cx));
         if disabled {
             d = d.opacity(0.5);
         } else {
@@ -1437,6 +1521,7 @@ impl PlinthRoot {
         let d = self.key_handlers(d, node, cx);
         self.state_styles(d, node, t)
             .when_some(label, |d, l| d.aria_label(l))
+            .children(self.pointer_layer(node, None, cx))
             .children(self.render_box_children(node, t, cx))
             .into_any_element()
     }

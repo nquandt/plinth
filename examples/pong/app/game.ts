@@ -27,7 +27,8 @@ const SERVE_SPEED = 0.9;
 const MAX_SPEED = 1.8;
 const SPEED_UP = 1.06;
 const MAX_VY = 1.0;
-const PLAYER_SPEED = 1.2;
+/** The player's paddle speed, in units per tick. */
+export const PLAYER_SPEED = 1.2;
 const COMPUTER_SPEED = 0.62;
 /** Ticks that the ball waits at the center before a serve. */
 const SERVE_WAIT = 30;

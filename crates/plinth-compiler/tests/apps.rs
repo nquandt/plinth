@@ -383,6 +383,29 @@ fn pong_plays_a_point() {
     assert_eq!(paddle(&h, "Your paddle"), FIELD_H - PADDLE_H, "Down stops at the bottom wall");
     press(&mut h, "Stop");
 
+    // UI API 1.12: a drag on the court aims the paddle (its center goes to
+    // the pointer) at the paddle's speed; the event value [x, y] becomes the
+    // two arguments of the callback (core 1.12).
+    let court = h.find(ControlKind::Box, |n| n.str_prop(prop::LABEL).is_some_and(|l| l.starts_with("Court")))[0];
+    let at = |x: f64, y: f64| Value::List(vec![Value::Number(x), Value::Number(y)]);
+    h.fire(court, event::POINTER_DOWN, at(30.0, 10.0));
+    for _ in 0..40 {
+        tick(&mut h);
+    }
+    assert_eq!(paddle(&h, "Your paddle"), 5, "the paddle center goes to the pointer (y 10)");
+    h.fire(court, event::POINTER_MOVE, at(30.0, 30.5));
+    for _ in 0..30 {
+        tick(&mut h);
+    }
+    let top = |h: &Harness| h.tree.get(labelled(h, "Your paddle")).unwrap().prop(prop::TOP).and_then(Value::as_number).unwrap();
+    assert!((top(&h) - 25.5).abs() < 1e-6, "the paddle follows the drag: {}", top(&h));
+    h.fire(court, event::POINTER_UP, at(30.0, 30.5));
+    h.fire(court, event::POINTER_MOVE, at(30.0, 2.0));
+    for _ in 0..10 {
+        tick(&mut h);
+    }
+    assert!((top(&h) - 25.5).abs() < 1e-6, "a move without a button down does not move the paddle");
+
     // Play until a wall bounce, a return by the computer and a point.
     let (mut wall, mut ret) = (false, false);
     let (mut dx, mut dy) = (0, 0);

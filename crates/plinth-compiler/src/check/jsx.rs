@@ -301,7 +301,7 @@ impl Checker<'_> {
                     let te = self.typed(&value, &t);
                     (PropTarget::Enum(id, table.iter().map(|(s, v)| (s.to_string(), *v)).collect()), te)
                 }
-                PropTy::Callback0 | PropTy::CallbackStr | PropTy::CallbackBool | PropTy::CallbackNum => {
+                PropTy::Callback0 | PropTy::CallbackStr | PropTy::CallbackBool | PropTy::CallbackNum | PropTy::CallbackPoint => {
                     if ps.name == "onChange" {
                         has_on_change = true;
                     }
@@ -309,6 +309,7 @@ impl Checker<'_> {
                         PropTy::CallbackStr => vec![Type::String],
                         PropTy::CallbackBool => vec![Type::Bool],
                         PropTy::CallbackNum => vec![Type::Number],
+                        PropTy::CallbackPoint => vec![Type::Number, Type::Number],
                         _ => Vec::new(),
                     };
                     let (f, _) = self.callback(&value, &params, Some(Type::Void));

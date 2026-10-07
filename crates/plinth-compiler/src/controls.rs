@@ -25,6 +25,9 @@ pub enum PropTy {
     CallbackBool,
     /// `(value: number) => void`
     CallbackNum,
+    /// `(x: number, y: number) => void` (UI API 1.12 pointer events; the
+    /// event value is the list `[x, y]`, core 1.12 spreads it).
+    CallbackPoint,
     /// `Signal<string> | string`
     ValueStr,
     /// `Signal<boolean> | boolean`
@@ -545,6 +548,9 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("label", T::Str, false, P(prop::LABEL)),
             p("onKeyDown", T::CallbackStr, false, Ev(event::KEY_DOWN)),
             p("onKeyUp", T::CallbackStr, false, Ev(event::KEY_UP)),
+            p("onPointerDown", T::CallbackPoint, false, Ev(event::POINTER_DOWN)),
+            p("onPointerMove", T::CallbackPoint, false, Ev(event::POINTER_MOVE)),
+            p("onPointerUp", T::CallbackPoint, false, Ev(event::POINTER_UP)),
         ],
         children: ChildKind::Nodes,
     },
@@ -577,6 +583,9 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("disabled", T::Bool, false, P(prop::DISABLED)),
             p("onKeyDown", T::CallbackStr, false, Ev(event::KEY_DOWN)),
             p("onKeyUp", T::CallbackStr, false, Ev(event::KEY_UP)),
+            p("onPointerDown", T::CallbackPoint, false, Ev(event::POINTER_DOWN)),
+            p("onPointerMove", T::CallbackPoint, false, Ev(event::POINTER_MOVE)),
+            p("onPointerUp", T::CallbackPoint, false, Ev(event::POINTER_UP)),
         ],
         children: ChildKind::Nodes,
     },
@@ -591,6 +600,9 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("width", T::Size(prop::WIDTH_FRACTION), false, P(prop::WIDTH)),
             p("maxWidth", T::Size(prop::MAX_WIDTH_FRACTION), false, P(prop::MAX_WIDTH)),
             p("grow", T::Int, false, P(prop::GROW)),
+            p("onPointerDown", T::CallbackPoint, false, Ev(event::POINTER_DOWN)),
+            p("onPointerMove", T::CallbackPoint, false, Ev(event::POINTER_MOVE)),
+            p("onPointerUp", T::CallbackPoint, false, Ev(event::POINTER_UP)),
         ],
         children: ChildKind::None,
     },
@@ -601,6 +613,9 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("label", T::Str, false, P(prop::LABEL)),
             p("onKeyDown", T::CallbackStr, false, Ev(event::KEY_DOWN)),
             p("onKeyUp", T::CallbackStr, false, Ev(event::KEY_UP)),
+            p("onPointerDown", T::CallbackPoint, false, Ev(event::POINTER_DOWN)),
+            p("onPointerMove", T::CallbackPoint, false, Ev(event::POINTER_MOVE)),
+            p("onPointerUp", T::CallbackPoint, false, Ev(event::POINTER_UP)),
         ],
         children: ChildKind::Nodes,
     },

@@ -183,6 +183,9 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("files_call", &[I32, I32, I32, I32, I32], &[]),
     // -- plinth:time onFrame (core 1.12, docs/GAPS.md G5) --------------------
     ("set_frame", &[I32, I32], &[F64]),
+    // -- Several callback arguments (core 1.12) ----------------------------
+    ("arg_at_f64", &[I32], &[F64]),
+    ("arg_at_i32", &[I32], &[I32]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -262,6 +265,8 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("report", 10),
     ("files_call", 11),
     ("set_frame", 12),
+    ("arg_at_f64", 12),
+    ("arg_at_i32", 12),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).

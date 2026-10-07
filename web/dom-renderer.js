@@ -1049,6 +1049,40 @@ export class DomRenderer {
     return now;
   }
 
+  /**
+   * UI API 1.12: the pointer events of the node `getId()` on `e`. `x` and `y`
+   * are from the top-left corner of `e`, in units of `pxPerUnit(rect)` pixels.
+   * A pointer-down captures the pointer, so the element also gets the moves
+   * outside it and the pointer-up (a drag), as on the desktop.
+   */
+  pointerEvents(e, getId, pxPerUnit) {
+    const has = (code) => this.node(getId())?.listeners.get(code) !== undefined;
+    const send = (code, ev) => {
+      if (!has(code)) return;
+      const r = e.getBoundingClientRect();
+      const k = Math.max(pxPerUnit(r), Number.EPSILON);
+      this.fire(getId(), code, [(ev.clientX - r.left) / k, (ev.clientY - r.top) / k]);
+    };
+    e.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0 || !(has(Event.pointerDown) || has(Event.pointerMove) || has(Event.pointerUp))) return;
+      try {
+        e.setPointerCapture(ev.pointerId);
+      } catch {
+        // A synthetic event has no active pointer to capture.
+      }
+      send(Event.pointerDown, ev);
+    });
+    e.addEventListener("pointermove", (ev) => send(Event.pointerMove, ev));
+    e.addEventListener("pointerup", (ev) => {
+      if (ev.button === 0) send(Event.pointerUp, ev);
+    });
+  }
+
+  /** A box with a pointer-move handler takes touch moves itself (no page scroll on a drag). */
+  static touchAction(n) {
+    return n.listeners.get(Event.pointerMove) !== undefined ? "none" : null;
+  }
+
   primitiveBoxView(kname) {
     const e = el("div", `pl-${kname}`);
     let id = 0;
@@ -1068,6 +1102,7 @@ export class DomRenderer {
     };
     e.addEventListener("keydown", key(Event.keyDown));
     e.addEventListener("keyup", key(Event.keyUp));
+    this.pointerEvents(e, () => id, () => UNIT);
     if (kname === "pressable") {
       const press = () => {
         if (!disabled) this.fire(id, Event.press);
@@ -1086,7 +1121,10 @@ export class DomRenderer {
       slot: e,
       update: (n) => {
         id = n.id;
-        last = applyStyle(e, primitiveStyle(n), last);
+        const css = primitiveStyle(n);
+        const touch = DomRenderer.touchAction(n);
+        if (touch) css["touch-action"] = touch;
+        last = applyStyle(e, css, last);
         partials = this.partialClasses(e, n, partials);
         const label = n.props.get(Prop.label) ?? null;
         if (kname === "pressable") {
@@ -1118,10 +1156,16 @@ export class DomRenderer {
     const svg = svgEl("svg", { class: "pl-canvas", role: "img", preserveAspectRatio: "xMidYMid meet" });
     let lastShapes = null;
     let last = {};
+    let id = 0;
+    let viewWidth = 100;
+    // Pointer positions in view units: the canvas scales the view to its width.
+    this.pointerEvents(svg, () => id, (r) => r.width / viewWidth);
     return {
       el: svg,
       update: (n) => {
+        id = n.id;
         const vw = Math.max(1, n.props.get(Prop.viewWidth) ?? 100);
+        viewWidth = vw;
         const vh = Math.max(1, n.props.get(Prop.viewHeight) ?? 100);
         setAttr(svg, "viewBox", `0 0 ${vw} ${vh}`);
         setAttr(svg, "aria-label", n.props.get(Prop.label) ?? null);
@@ -1134,6 +1178,8 @@ export class DomRenderer {
         const grow = n.props.get(Prop.grow);
         if (typeof grow === "number" && grow > 0) css.flex = `${Math.min(Math.trunc(grow), 100)} 1 0px`;
         css["aspect-ratio"] = `${vw} / ${vh}`;
+        const touch = DomRenderer.touchAction(n);
+        if (touch) css["touch-action"] = touch;
         last = applyStyle(svg, css, last);
         const text = n.props.get(Prop.shapes) ?? "";
         if (text === lastShapes) return;

@@ -5,7 +5,8 @@
 // boxes in it (UI API 1.9), placed by their insets. All sizes are spacing
 // units (4 px); the insets are fractional units (UI API 1.11), so the ball
 // moves the same distance on each tick. Keys: hold the arrow keys or W/S on the court to move the
-// paddle, Space starts and pauses (UI API 1.9 onKeyDown/onKeyUp). The
+// paddle, Space starts and pauses (UI API 1.9 onKeyDown/onKeyUp). Drag on
+// the court with a mouse or a finger to move the paddle (UI API 1.12). The
 // buttons below the court do the same for touch and pointer users.
 import { app, signal, computed, Screen, Section, Box, Span, Pressable } from "plinth:ui";
 import { onFrame, cancelFrame, monotonicNow } from "plinth:time";
@@ -23,6 +24,7 @@ import {
   NET_W,
   HALF_W,
   WIN_SCORE,
+  PLAYER_SPEED,
 } from "./game";
 
 /** One game tick: 1/60 s. The loop runs once per display frame (onFrame,
@@ -37,6 +39,9 @@ const DASHES: number[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 function Pong() {
   const game = signal<Game>(newGame());
   const move = signal(0);
+  // UI API 1.12: while a pointer (a mouse button or a finger) is down on the
+  // court, the paddle goes toward it at its normal speed.
+  const aim = signal<number | null>(null);
   const timer = signal<number | null>(null);
   // Measured frame rate (frames per second over the last second).
   const rate = signal(0);
@@ -52,7 +57,11 @@ function Pong() {
   };
 
   const frame = (dt: number) => {
-    const next = step(game(), move(), Math.min(dt, MAX_FRAME_MS) / TICK_MS);
+    const k = Math.min(dt, MAX_FRAME_MS) / TICK_MS;
+    const target = aim();
+    // The pointer gives a part of a full move near the target, so the paddle stops on it.
+    const dir = target === null ? move() : k > 0 ? Math.max(-1, Math.min(1, (target - game().leftY) / (PLAYER_SPEED * k))) : 0;
+    const next = step(game(), dir, k);
     game.set(next);
     if (next.leftY <= 0 || next.leftY >= FIELD_H - PADDLE_H) {
       move.set(0);
@@ -106,6 +115,9 @@ function Pong() {
       startStop();
     }
   };
+  const pointer = (x: number, y: number) => {
+    aim.set(Math.max(0, Math.min(FIELD_H - PADDLE_H, y - PADDLE_H / 2)));
+  };
   const keyUp = (key: string) => {
     if ((key === "ArrowUp" || key === "w") && move() < 0) {
       move.set(0);
@@ -142,6 +154,13 @@ function Pong() {
             focus={{ border: "accent" }}
             onKeyDown={keyDown}
             onKeyUp={keyUp}
+            onPointerDown={pointer}
+            onPointerMove={(x, y) => {
+              if (aim() !== null) {
+                pointer(x, y);
+              }
+            }}
+            onPointerUp={() => aim.set(null)}
           >
             <Box label="Net" position="absolute" left={PADDLE_W + HALF_W} top={0} width={NET_W} height={FIELD_H} justify="between" paddingY={1}>
               {DASHES.map((d) => (

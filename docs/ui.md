@@ -284,6 +284,14 @@ the default, or `"row"`), `wrap`, `gap`, `padding`, `paddingX`, `paddingY`,
   or a lower-case letter or digit. A held key gives one down and one up
   (no repeats). An element with a key handler is a tab stop: give it a
   `label`. `examples/pong` uses both.
+- **Pointer (UI API 1.12, core 1.12).** `onPointerDown`, `onPointerMove`
+  and `onPointerUp` on `Box`, `Pressable`, `Scroll` and `Canvas` get
+  `(x, y)`: the position from the top-left corner of the element, in
+  spacing units on a box and in view units on a `Canvas` (fractional). A
+  mouse, a pen or a finger. After a pointer-down in the element, it also
+  gets the moves outside it and the pointer-up, so a drag works. On the
+  web, a box with `onPointerMove` takes touch moves itself (no page scroll).
+  `examples/pong` aims the paddle with a drag on the court.
 - The runtime gives a `Pressable` its hover and disabled states.
 - **Partial styles (UI API 1.7).** `hover`, `active` and `focus` (on `Box`,
   `Pressable`, `Scroll`) and `compact`, `regular`, `wide` (also on `Span`)

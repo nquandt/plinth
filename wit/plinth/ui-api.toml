@@ -4,7 +4,10 @@
 # enum ids. The compiler, the guest runtime and the host all generate their
 # constants from it. Never reuse or renumber an id inside one major version.
 
-version = "1.11"
+version = "1.12"
+# UI API 1.12: the pointer events `pointer-down`, `pointer-move`, `pointer-up`
+# on Box, Pressable, Scroll and Canvas. Their value is a list `[x, y]`; the
+# core (1.12) passes the items as the callback's arguments.
 # UI API 1.11: no new ids. `width`, `height`, `maxWidth`, `maxHeight` (in
 # spacing units) and the insets `top`, `left`, `right`, `bottom` take
 # fractional units (a number prop; whole-number int props stay valid).
@@ -140,6 +143,9 @@ submit = 3       # value: the current value
 close = 6        # value: null (sheet onClose; UI API 1.2)
 key-down = 7     # value: the key name (UI API 1.9, Level 2 boxes; no repeats)
 key-up = 8       # value: the key name (UI API 1.9)
+pointer-down = 9 # value: [x, y] in the element (UI API 1.12): spacing units on a box, view units on a Canvas
+pointer-move = 10 # value: [x, y]; also outside the element while the button is down after a pointer-down in it
+pointer-up = 11  # value: [x, y]; to the element that got the pointer-down
 
 [enums.button-role]
 default = 0

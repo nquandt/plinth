@@ -113,3 +113,105 @@ fn primitives_roles_and_layout() {
     let image = cx.capture_screenshot(window.into()).expect("render the primitives");
     image.save(shots.join("primitives-compact.png")).expect("write the screenshot");
 }
+
+/// UI API 1.12: pointer events on the desktop, from gpui mouse events. A box
+/// gives the position in spacing units from its top-left corner, a Canvas in
+/// view units; after a pointer-down the element also gets the moves outside
+/// it and the pointer-up. The same facts as `checkPong` in `run-a11y.mjs`.
+#[test]
+fn pointer_events_give_element_positions() {
+    use gpui::{MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, Pixels, Point, point};
+    const APP: &str = r#"
+import { app, signal, Screen, Box, Canvas, Text } from "plinth:ui";
+
+function Home() {
+  const log = signal("none");
+  return (
+    <Screen title="Pointer">
+      <Box label="Pad" width={50} height={25} bg="surface"
+           onPointerDown={(x, y) => log.set(`pad down ${x} ${y}`)}
+           onPointerMove={(x, y) => log.set(`pad move ${x} ${y}`)}
+           onPointerUp={(x, y) => log.set(`pad up ${x} ${y}`)} />
+      <Canvas label="Sketch" viewWidth={100} viewHeight={50} width={50} shapes={[]}
+              onPointerDown={(x, y) => log.set(`sketch down ${x} ${y}`)} />
+      <Text>{log()}</Text>
+    </Screen>
+  );
+}
+
+export default app({ screens: { home: { title: "Pointer", component: Home } } });
+"#;
+    let fs = plinth_compiler::driver::MemFs::default().with("app/main.tsx", APP);
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &[]).expect("compile");
+    let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+    let artifact = artifact.unwrap_or_else(|| panic!("the pointer app has errors:\n{}", diags.join("\n")));
+
+    let platform = gpui_platform::current_platform(true);
+    let mut cx = HeadlessAppContext::with_platform(platform.text_system(), std::sync::Arc::new(()), || {
+        gpui_wgpu::WgpuHeadlessRenderer::new()
+            .map(|r| Box::new(r) as Box<dyn PlatformHeadlessRenderer>)
+            .map_err(|e| log::error!("no headless renderer: {e:#}"))
+            .ok()
+    });
+    cx.update(plinth_ui::init);
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let commits = guest.init(&[]).unwrap();
+    let port = Box::new(WasmGuest { guest, _runner: runner });
+    let window = cx.open_window(size(px(800.), px(600.)), move |_, cx| cx.new(|cx| PlinthRoot::new(port, commits, "indigo", cx))).unwrap();
+    let handle = window.into();
+    cx.update(|cx| window.update(cx, |_, window, _| window.set_a11y_forced(true))).unwrap();
+    cx.run_until_parked();
+
+    // AccessKit bounds are device pixels; mouse positions are logical pixels.
+    let scale = f64::from(cx.update(|cx| window.update(cx, |_, window, _| window.scale_factor())).unwrap());
+    let tree = cx.update(|cx| window.update(cx, |_, window, _| window.a11y_tree().cloned())).unwrap().unwrap();
+    let origin = |role: Role, name: &str| {
+        let b = tree
+            .nodes
+            .iter()
+            .find(|(_, n)| n.role() == role && n.label() == Some(name))
+            .and_then(|(_, n)| n.bounds())
+            .unwrap_or_else(|| panic!("no {role:?} {name:?}"));
+        (b.x0 / scale, b.y0 / scale)
+    };
+    let pad = origin(Role::Group, "Pad");
+    let sketch = origin(Role::Image, "Sketch");
+    let at = |o: (f64, f64), dx: f64, dy: f64| -> Point<Pixels> { point(px((o.0 + dx) as f32), px((o.1 + dy) as f32)) };
+    let send = |cx: &mut HeadlessAppContext, input: PlatformInput| {
+        cx.update_window(handle, |_, window, cx| {
+            window.dispatch_event(input, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+    let down = |p| PlatformInput::MouseDown(MouseDownEvent { position: p, modifiers: Default::default(), button: MouseButton::Left, click_count: 1, first_mouse: false });
+    let mv = |p, held: bool| PlatformInput::MouseMove(MouseMoveEvent { position: p, pressed_button: held.then_some(MouseButton::Left), modifiers: Default::default() });
+    let up = |p| PlatformInput::MouseUp(MouseUpEvent { position: p, modifiers: Default::default(), button: MouseButton::Left, click_count: 1 });
+    let log = |cx: &mut HeadlessAppContext| {
+        let tree = cx.update(|cx| window.update(cx, |_, window, _| window.a11y_tree().cloned())).unwrap().unwrap();
+        tree.nodes
+            .iter()
+            .filter_map(|(_, n)| n.label().or(n.value()).map(str::to_owned))
+            .find(|l| l.starts_with("pad ") || l.starts_with("sketch ") || l == "none")
+            .unwrap_or_default()
+    };
+
+    // A box: spacing units (4 px) from its top-left corner.
+    send(&mut cx, mv(at(pad, 10.0, 10.0), false));
+    assert_eq!(log(&mut cx), "pad move 2.5 2.5", "a move over the box");
+    send(&mut cx, down(at(pad, 40.0, 20.0)));
+    assert_eq!(log(&mut cx), "pad down 10 5");
+    // While the button is down, the box gets the moves outside it and the up.
+    send(&mut cx, mv(at(pad, 400.0, 300.0), true));
+    assert_eq!(log(&mut cx), "pad move 100 75", "a drag outside the box");
+    send(&mut cx, up(at(pad, 400.0, 300.0)));
+    assert_eq!(log(&mut cx), "pad up 100 75");
+    send(&mut cx, mv(at(pad, 404.0, 300.0), false));
+    assert_eq!(log(&mut cx), "pad up 100 75", "no moves outside the box after the up");
+
+    // A Canvas: view units (the 100 x 50 view is 200 px wide: 2 px a unit).
+    send(&mut cx, down(at(sketch, 30.0, 12.0)));
+    assert_eq!(log(&mut cx), "sketch down 15 6");
+    send(&mut cx, up(at(sketch, 30.0, 12.0)));
+}

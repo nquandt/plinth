@@ -385,8 +385,20 @@ interface KeyHandlers {
   onKeyUp?: (key: string) => void;
 }
 
+/**
+ * Pointer events (UI API 1.12): a mouse, a pen or a finger. `x` and `y` are
+ * from the top-left corner of the element, in spacing units on a box and in
+ * view units on a `Canvas` (fractional). After a pointer-down in the
+ * element, it also gets the moves outside it and the pointer-up (a drag).
+ */
+interface PointerHandlers {
+  onPointerDown?: (x: number, y: number) => void;
+  onPointerMove?: (x: number, y: number) => void;
+  onPointerUp?: (x: number, y: number) => void;
+}
+
 /** A layout box. `label` names it as a group for assistive technology. */
-export declare function Box(props: BoxStyle & KeyHandlers & { label?: string }): Element;
+export declare function Box(props: BoxStyle & KeyHandlers & PointerHandlers & { label?: string }): Element;
 
 interface SpanLook {
   size?: "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
@@ -418,11 +430,11 @@ export declare function Span(props: {
 
 /** A box that the user can press: a button or a link. It is a tab stop; Enter and Space press it. */
 export declare function Pressable(
-  props: BoxStyle & KeyHandlers & { label: string; role: "button" | "link"; onPress: () => void; disabled?: boolean },
+  props: BoxStyle & KeyHandlers & PointerHandlers & { label: string; role: "button" | "link"; onPress: () => void; disabled?: boolean },
 ): Element;
 
 /** A box that scrolls along its direction. Give it a height or a max height. */
-export declare function Scroll(props: BoxStyle & KeyHandlers & { label?: string }): Element;
+export declare function Scroll(props: BoxStyle & KeyHandlers & PointerHandlers & { label?: string }): Element;
 
 // -- Canvas (UI API 1.10, docs/UI-ADVANCED.md U4) --------------------------
 // Shapes in a view space of `viewWidth` x `viewHeight`. The canvas keeps
@@ -442,7 +454,7 @@ export declare function line(x1: number, y1: number, x2: number, y2: number, col
 export declare function canvasText(x: number, y: number, text: string, color: ColorToken, size?: number): Shape;
 
 /** A drawing. `label` describes it for assistive technology (required). */
-export declare function Canvas(props: {
+export declare function Canvas(props: PointerHandlers & {
   label: string;
   viewWidth: number;
   viewHeight: number;

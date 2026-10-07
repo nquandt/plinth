@@ -148,6 +148,22 @@ courtKey(Event.keyDown, "s");
 tickAll();
 assert.ok(paddleTop("Your paddle") > held, "S moves the paddle down");
 courtKey(Event.keyUp, "s");
+// UI API 1.12: a drag on the court aims the paddle; the value [x, y] gives
+// the callback two arguments (core 1.12).
+const courtPointer = (eventCode, x, y) => {
+  const c = nodes().find((n) => String(n.props.get(Prop.label) ?? "").startsWith("Court"));
+  app.onEvent({ kind: "ui", handler: c.listeners.get(eventCode), event: eventCode, value: [x, y] });
+};
+courtPointer(Event.pointerDown, 30, 10);
+for (let i = 0; i < 40; i++) tickAll();
+assert.equal(paddleTop("Your paddle"), 5, "the paddle center goes to the pointer");
+courtPointer(Event.pointerMove, 30, 30.5);
+for (let i = 0; i < 30; i++) tickAll();
+assert.ok(Math.abs(paddleTop("Your paddle") - 25.5) < 1e-6, `the paddle follows the drag: ${paddleTop("Your paddle")}`);
+courtPointer(Event.pointerUp, 30, 30.5);
+courtPointer(Event.pointerMove, 30, 2);
+for (let i = 0; i < 10; i++) tickAll();
+assert.ok(Math.abs(paddleTop("Your paddle") - 25.5) < 1e-6, "a move without a button down does not move the paddle");
 
 // -- Bounces and a point --------------------------------------------------------
 // Follow the ball until the first point: watch for a wall bounce (vertical

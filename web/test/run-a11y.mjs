@@ -158,6 +158,10 @@ async function openPage(cdpPort) {
   await send("Page.enable");
   await send("Runtime.enable");
   await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+  // A background tab gets no animation frames (`onFrame`, core 1.12, uses
+  // requestAnimationFrame): make this tab the visible, focused one.
+  await send("Page.bringToFront");
+  await send("Emulation.setFocusEmulationEnabled", { enabled: true });
   /** One frame: a CDP session (out of process) or an execution context (in the page process). */
   const evalIn = async (t, expression) => {
     let res;
@@ -744,7 +748,26 @@ async function checkPong(cdpPort, base) {
     if (!(held < before)) throw new Error(`holding ArrowUp did not move the paddle up: ${before} -> ${held}`);
     await sleep(200);
     if ((await top()) !== held) throw new Error("the paddle moved after the key was released");
-    return `moved ${Math.round(before - held)} px while ArrowUp was held`;
+    // UI API 1.12: a mouse drag on the court aims the paddle (its center
+    // goes to the pointer), also when the drag leaves the court.
+    const court = await page.eval(`(() => { const r = document.querySelector('#app [aria-label^="Court"]').getBoundingClientRect(); return { x: r.left, y: r.top, h: r.height }; })()`);
+    const mouse = (type, y, buttons) =>
+      page.send("Input.dispatchMouseEvent", { type, x: court.x + 60, y, button: "left", buttons, clickCount: type === "mouseMoved" ? 0 : 1 });
+    const near = (want) => `Math.abs(${paddle}.getBoundingClientRect().top - ${court.y + want}) < 1.5 ? true : null`;
+    await mouse("mousePressed", court.y + 20, 1);
+    await page.waitFor(near(0), 3000).catch(async () => {
+      throw new Error(`a press near the top did not move the paddle to the top: ${(await top()) - court.y} px`);
+    });
+    await mouse("mouseMoved", court.y + 150, 1);
+    await page.waitFor(near(130), 3000).catch(async () => {
+      throw new Error(`the paddle did not follow the drag to 130 px: ${(await top()) - court.y} px`);
+    });
+    await mouse("mouseMoved", court.y + court.h + 24, 1);
+    await page.waitFor(near(court.h - 40), 3000).catch(async () => {
+      throw new Error(`a drag below the court did not take the paddle to the bottom: ${(await top()) - court.y} px`);
+    });
+    await mouse("mouseReleased", court.y + court.h + 24, 0);
+    return `moved ${Math.round(before - held)} px while ArrowUp was held; a mouse drag aims the paddle`;
   } finally {
     await page.close();
   }

@@ -108,16 +108,37 @@ pub struct Callable {
 }
 
 static ARG: GlobalCell<Val> = GlobalCell::new(Val::None);
+/// All the arguments of the current call (core 1.12): `ARG` is the first.
+/// A thunk reads the others with `arg_at_f64`/`arg_at_i32`.
+static ARGS: GlobalCell<[Val; MAX_ARGS]> = GlobalCell::new([Val::None; MAX_ARGS]);
+/// The most arguments that the runtime passes to app code.
+pub const MAX_ARGS: usize = 4;
 static RESULT: GlobalCell<Val> = GlobalCell::new(Val::None);
 static MAIN: GlobalCell<Option<u32>> = GlobalCell::new(None);
 
 /// Calls app code. The thunk reads `arg` at entry and sets the result last,
 /// so nested calls do not disturb the registers.
 pub fn invoke(c: Callable, arg: Val) -> Val {
-    ARG.set(arg);
+    invoke_args(c, &[arg])
+}
+
+/// Calls app code with several arguments (core 1.12; at most `MAX_ARGS`,
+/// the others are dropped). A parameter with no argument gets `None`.
+pub fn invoke_args(c: Callable, args: &[Val]) -> Val {
+    let mut all = [Val::None; MAX_ARGS];
+    for (slot, v) in all.iter_mut().zip(args) {
+        *slot = *v;
+    }
+    ARG.set(all[0]);
+    ARGS.set(all);
     RESULT.set(Val::None);
     call_thunk(c.thunk, c.env);
     RESULT.take()
+}
+
+/// The argument at `i` of the current call (`None` past the end).
+fn arg_at(i: i32) -> Val {
+    usize::try_from(i).ok().and_then(|i| ARGS.get().get(i).copied()).unwrap_or(Val::None)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -565,6 +586,10 @@ abi! {
 
     // -- plinth:time onFrame (core 1.12, docs/GAPS.md G5) ----------------------
     fn __plinth_rt_set_frame(thunk: i32, env: i32) -> f64 { host::set_frame(Callable { thunk: thunk as u32, env: env as u32 }) }
+    // -- Several callback arguments (core 1.12): a thunk reads its second
+    // and later parameters with these (the first with `arg_f64`/`arg_i32`).
+    fn __plinth_rt_arg_at_f64(i: i32) -> f64 { arg_at(i).f64() }
+    fn __plinth_rt_arg_at_i32(i: i32) -> i32 { arg_at(i).i32() }
 
     // -- plinth:time date/time additions (SPEC.md §8.5, docs/GAPS.md gap #5) --
     fn __plinth_rt_tz_offset_minutes(ms: f64) -> f64 { host::timezone_offset(ms as i64) as f64 }
