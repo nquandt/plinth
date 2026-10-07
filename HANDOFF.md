@@ -6,6 +6,7 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 - `CONTRIBUTING.md`: commands.
 - `docs/ui.md` (all controls, Level 2 primitives, Canvas, lifecycle), `docs/host-apis.md`, `docs/language.md`.
 - `docs/GAPS.md`: known gaps and what was fixed. The newest sections: "Robustness", "Desktop frame cost", "Async code size", "wasmi engine".
+- `docs/PRODUCTION.md`: the production readiness checklist (gate levels Preview, Beta, 1.0). Update an item's status when its work merges.
 - `docs/UPDATES.md`: updates without a reinstall (design and status).
 - `docs/HUB.md` (the App Hub), `docs/REGISTRY.md`, `docs/web-hub.md`.
 - Design drafts: `docs/VALIDATION.md`, `docs/STORAGE.md`, `docs/UI-ADVANCED.md`, `docs/EXPERIENCE.md`.
@@ -170,6 +171,8 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 - **CI:** self-hosted runner files and `ci.yml` (owner steps open, §0.2). Pushed to GitHub up to `b6e766e`.
 
 ## 10. Next steps (in order)
+
+`docs/PRODUCTION.md` §16 lists the items that block the Preview level. Prefer them to the items below when the owner agrees.
 
 1. **wasmi, the rest** (steps 1–2 merged; details in GAPS "wasmi engine (2026-10-07)"): (a) run `--test monkey`, `async_await`, `files`, `hub_api` and `net` with `PLINTH_ENGINE=wasmi` — `files`, `hub_api` and `net` exercise imports that never ran on wasmi; (b) release speed numbers, wasmtime against wasmi (`apps::pong_plays_a_point`, `sevenguis::cells_formulas_propagate_and_find_cycles`, `perf.rs` `list_10k_perf` with `--release --ignored`); (c) check `FUEL_PER_MS` with more workloads (calibrated from two, with a 15x spread); (d) a wasmi job in CI (for example `PLINTH_ENGINE=wasmi` for the errors and language suites); (e) step 3: move the engine-free host state into its own crate, so an iOS build does not depend on wasmtime; (f) find out why opt-level 3 on the `wasmi` crate crashes a Windows debug build, and report it upstream if it is a wasmi bug.
 2. **Updates, the rest** (steps 1–3 done, UPDATES §9.1): the `prompt` dialog, re-consent for new capabilities on a self-update, `onUpgrade(fromVersion)`, then the web service worker cache, `apply = "live"`, mobile.
