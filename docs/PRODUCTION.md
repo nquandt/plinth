@@ -60,7 +60,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 |---|---|---|---|---|
 | R1 | GC and allocator have no known leaks; memory stays level under random use | Preview | Done | `tests/monkey.rs`, GAPS "Robustness" |
 | R2 | Desktop limits: time limit, memory cap, stack limit stop only the app, with a plain reason | Preview | Done | `tests/errors.rs` "Limits" |
-| R3 | Web limits: a time limit (Worker and watchdog) and a memory cap | Beta | Open | GAPS R1, R2; HANDOFF §10 item 5 |
+| R3 | Web limits: a time limit (Worker and watchdog) and a memory cap | Beta | Open | Design written, not implemented: GAPS "R1/R2 design", SPEC §10.3. The core must move into a per-app Worker so the watchdog can `terminate()` it; too large for one pass. HANDOFF §10 item 5 |
 | R4 | wasmi engine passes all suites (monkey, async, files, hub, net) and runs in CI | Beta | Partial | HANDOFF §10 item 1 (a)–(d) |
 | R5 | Engine-free host state crate (no wasmtime dependency for iOS) | 1.0 | Open | HANDOFF §10 item 1 (e). Needed for iOS (PR-Q1). |
 | R6 | Performance budgets in the gate: start time, frame cost, memory per app, `.plnt` size | Beta | Partial | `frame_cost.rs`, counter size guard in `tests/e2e.rs`. Next: write the budgets in a doc and fail the gate when an example exceeds them. |

@@ -777,10 +777,86 @@ Open:
 
 | # | Area | What | Suggested fix |
 |---|---|---|---|
-| R1 | Web host | No time limit: an endless loop in an app blocks its frame (and the page, if the browser keeps the sandboxed frame in the same process). | Run the core in a dedicated Worker per app with a watchdog that ends the worker; the frame keeps only the DOM. |
-| R2 | Web host | No memory cap of its own: the browser's limit applies. | Give the core's memory a `maximum` (an import with a limit) on the web, as `StoreLimits` does on the desktop. |
+| R1 | Web host | No time limit: an endless loop in an app blocks its frame (and the page, if the browser keeps the sandboxed frame in the same process). | Run the core in a dedicated Worker per app with a watchdog that ends the worker; the frame keeps only the DOM. Design below. Not implemented. |
+| R2 | Web host | No memory cap of its own: the browser's limit applies. | Cap the core's wasm memory at 64 MiB. Design below. Not implemented. |
 | R3 | Compiler | A sum of more than 1000 terms is `PL1000`; `tsc` accepts it. | Convert left-deep binary chains without recursion (an explicit stack in the parser, checker and codegen). Low: hand-written code does not get near the limit. |
 | R4 | Tests | The mutation test only changes valid programs, at the text level. | Add structure-aware changes (swap two expressions of the same kind, change a type annotation) and a nightly run with a large `PLINTH_FUZZ_ITERS`. |
+
+### R1/R2 design (2026-10-07, not implemented)
+
+Looked at giving the web host the desktop's two limits (2 s per `init`/`on-event` call,
+64 MiB memory, the same plain stop reasons). This is a bigger change than the rest of
+the web host gets in one pass (it moves where the core runs), so it stays a design note
+instead of a half-finished split. Nothing in this section is code yet.
+
+**R1, the time limit.** The core must run off the document's main thread, because the
+main thread is the only place that can forcibly stop a stuck computation (`Worker.
+terminate()`; there is no such thing for a function call on the same thread as the DOM).
+So: each app's `PlinthApp` (today `plinth-web.js`, used by `app-frame.js` and the Node
+tests) moves into a dedicated `Worker`, one per app. The document that owns the DOM
+(`app-frame.js`'s `container`, `dom-renderer.js`'s `DomRenderer`) keeps a small proxy
+object with the same shape `PlinthApp` has today (`init()`, `onEvent()`, `onCommit`,
+`onStop`, `onError`, `stopped`), so `DomRenderer` and `app-frame.js` barely change: the
+proxy posts a message to the Worker instead of calling the core directly, and relays the
+Worker's messages back as `onCommit`/`onStop`/`onError` calls.
+
+The watchdog lives in the proxy, on the main thread: before posting an `init` or an event
+to the Worker, it starts a 2 s timer; the Worker answers with a `"call-done"` message
+after it returns from that call (trap or not), which clears the timer. If the timer
+fires first, the proxy calls `worker.terminate()` and reports the stop itself, with the
+same reason the desktop gives for its epoch interrupt: "the app is not responding (time
+limit reached)". This matches the desktop's rule: the limit is per call, not per session
+(SPEC §10.5), and a slow `init` is covered the same as a slow `on-event`.
+
+Each host import in `plinth-web.js`'s `hostImports`, checked for whether it still works
+from inside a Worker:
+
+| Import | Works from a Worker as is | Notes |
+|---|---|---|
+| `ui.commit` | Yes, over `postMessage` | The op buffer already crosses a boundary for the sandboxed frame today (frame → parent); it crosses one more (Worker → document). Transfer the `Uint8Array`'s buffer, do not clone it. |
+| `dev.log`, `error.report` | Yes, over `postMessage` | Fire-and-forget, as today. |
+| `time.now`, `time.monotonic-now`, `time.timezone-offset` | Yes, unchanged | `Date` and `performance.now()` exist in a Worker. |
+| `time.set-timer`, `time.cancel-timer` | Yes, unchanged | `setTimeout`/`setInterval` exist in a Worker. |
+| `time.set-frame-timer` | No, needs a proxy | `requestAnimationFrame` does not exist in a plain dedicated Worker. The Worker asks the document for frame ticks (one `postMessage` request, one `dt` message back per frame) instead of calling `requestAnimationFrame` itself. |
+| `store.kv-*` | No, needs a cache | `localStorage` does not exist in a Worker. Reuse the pattern the sandboxed Hub frame already uses for its own kv (`hub-storage.js`'s `frameKvStore`): the document sends a full kv snapshot when the Worker starts; the Worker answers reads from that cache (so `kv-get`/`kv-keys` stay synchronous) and posts writes to the document to persist, fire-and-forget. |
+| `dialog.alert/confirm/prompt` | Yes, unchanged shape | Already a request-id-now, completion-later call (`askDialog`); the completion now arrives from the document over `postMessage` instead of a resolved Promise. |
+| `net.fetch` | Yes, unchanged shape | Same request/completion shape; `fetch` would even work inside the Worker directly, but routing it through the document keeps the one already-checked `net:` capability path and the sandboxed frame's "the parent makes the request" rule (docs/web-hub.md §4) in one place. |
+| `files.*` | Yes, unchanged shape | Same request/completion shape, relayed to the document (which owns the `FileSpace`/IndexedDB). |
+| `clipboard.write-text` | Yes, unchanged | Already fire-and-forget. |
+| `clipboard.read-text` | No, needs a cache | `navigator.clipboard` does not exist in a Worker. Same fix as today's synchronous-cache trick, one level further out: the Worker keeps `clipboardCache`, returns it synchronously, and the document posts a fresh value back after its own async `navigator.clipboard.readText()` resolves. |
+| `hub.*` | Yes, unchanged | `FrameHub` (`hub-host.js`) is a plain JS object over a JSON snapshot, with no DOM access; it can run inside the Worker exactly as it runs inside the frame document today, using the same `send`/`ask` shape, now posting to the document instead of to the parent frame. |
+
+So two imports (`store.kv`, `clipboard.read-text`) and one (`time.set-frame-timer`) need a
+cache or a proxy; the rest cross the new boundary with no change in shape, because the
+existing frame ↔ parent protocol (`app-frame.js` ↔ `frame-host.js`) already solved the
+same problem one layer out (an opaque-origin frame that also cannot touch `localStorage`
+or the clipboard directly). The Worker split adds a second, inner hop of the same kind.
+
+Fallback for the single-file export (`plinth build --target web --single-file`,
+SPEC §10.3): a `Worker` can start from a `Blob` URL built from the bundled script text
+(`new Worker(URL.createObjectURL(new Blob([source], { type: "text/javascript" })))`), so
+the export does not need a second file on disk. If that turns out not to work in some
+target (for example a very old browser, or a page served with a strict Content Security
+Policy that blocks blob: workers), the fallback is the current no-Worker code path,
+kept behind a feature check (`typeof Worker === "function"`), with no time limit and no
+memory cap — the same gap this item exists to close, so the fallback must stay rare.
+
+**R2, the memory cap.** The core's wasm memory is defined inside the core module itself
+(`(memory (export "memory") ...)`, no `maximum`); `plinth-web.js`'s `loadCore` just
+instantiates it as is. Capping it from the web host, without changing the core build
+(which also serves the desktop, where the cap is `StoreLimits`, not a wasm-declared
+max), means patching the already-encoded max into the module's memory section before
+`WebAssembly.instantiate`, the same kind of raw byte surgery `plinth-web.js` already
+does to read the app module's table-import minimum (`readTableImportMin`): find the
+memory section (id 5), and if its one memory has no max (the size flag's bit 0 is 0),
+re-encode that one section with the flag set and a max of 1024 pages (64 MiB at 64 KiB
+per page), splicing the new section bytes in place of the old ones (its length prefix
+changes, so the bytes after it shift; sections before it do not move). A grow past the
+cap then fails the way an unbounded grow past the engine's own limit already fails today
+(`memory.grow` returns -1 inside the module), which is exactly the path the desktop's
+`trap_oom` (`crates/plinth-rt`'s allocator) already turns into "trap: out of memory" — so
+once the memory section is patched, the existing `stop_reason` plumbing in `plinth-web.js`
+needs no change; the cap only needs to exist before instantiation.
 
 ## wasmi engine (2026-10-07)
 
