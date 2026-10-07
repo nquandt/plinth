@@ -1,6 +1,6 @@
 # Updates without a reinstall (design draft)
 
-Status: draft from the owner's brainstorm of 2026-10-07. §9 step 1 (core patch versions and the author's `core` policy, SPEC.md §10.5) and steps 2-3 (the signed feed format and the desktop updater, with rollback) are done, 2026-10-07. The rest of this document is still a design draft. Open questions are marked UP-Q*.
+Status: draft from the owner's brainstorm of 2026-10-07. §9 step 1 (core patch versions and the author's `core` policy, SPEC.md §10.5) and steps 2-3 (the signed feed format and the desktop updater, with rollback) are done, 2026-10-07. Re-consent for new capabilities and the desktop restart prompt (`apply = "prompt"`) are done, 2026-10-07 (§6, §9.1). The rest of this document is still a design draft. Open questions are marked UP-Q*.
 
 ## 1. Goal
 
@@ -55,7 +55,9 @@ apply = "next-start"   # "prompt" | "next-start" | "live"
 core = "follow"        # "patch" | "pinned"
 ```
 
-`ProjectConfig` (`plinth.toml`) carries this into the manifest's `updates` field unchanged (`plinth_package::UpdatesConfig`). An old `plinth.toml`, or a manifest built before this field existed, has no `updates`: the app never checks for updates. `apply = "live"` is rejected at `plinth build` time (not implemented, UP-Q2); `apply = "prompt"` parses but the desktop host does not yet show the restart prompt it implies (a stub dialog is still open work, see "What is open" below) -- it runs `next-start` instead, so an author who sets it today still gets updates, just not the prompt.
+`ProjectConfig` (`plinth.toml`) carries this into the manifest's `updates` field unchanged (`plinth_package::UpdatesConfig`). An old `plinth.toml`, or a manifest built before this field existed, has no `updates`: the app never checks for updates. `apply = "live"` is rejected at `plinth build` time (not implemented, UP-Q2).
+
+`apply = "prompt"` (built, 2026-10-07, desktop host): when the feed check of this start stores a newer version, the host shows a small banner at the top of the app window: "An update is ready. Restart now?", with "Restart" and "Later". The host owns this banner, as it owns the error banner (`PlinthRoot::show_update_prompt`). The banner is not modal: the app stays usable. "Restart" closes the app and starts it again in the same process, on the new version; if the new version adds a capability, the consent window comes first (§6). "Later" removes the banner; the new version then runs at the next start, as with `next-start`. The host does not check the feed again after a restart in the same process.
 
 `apply = "live"` replaces a running app and keeps its state, with the same signal snapshot that hot reload uses (SPEC §13). It needs care when the shape of the state changes.
 
@@ -65,7 +67,11 @@ core = "follow"        # "patch" | "pinned"
 - **No downgrade:** versions only go up (`plinth_package::is_newer`); a feed cannot roll a user back to an old, unsafe version. The comparison is against the newest version already downloaded, or the embedded version if nothing has been downloaded yet.
 - **Rollback:** if a new set stops at start (a trap in `init`, or the load itself failing) two times in a row, the host goes back to the embedded set and reports it (the log, and `updater::rollback_report` for the error banner path). One failure does not roll back; a success in between resets the count. The "This app stopped" path (2026-10-07) gives the per-start signal (`open_app_reporting_init`/`run_reporting_init`).
 - **Data:** the host stores the app version with the app's data; an `onUpgrade(fromVersion)` hook lets an app move its data. A rollback must not lose data that a newer version wrote (UP-Q5). **Still open:** this hook does not exist yet.
-- **Capabilities:** an update that declares a new capability asks the user again, as the Hub does. **Still open** for the desktop updater: today it does not compare the downloaded package's capabilities against the embedded one, so it does not yet ask again. A capability change in a self-update is a gap to close before this ships to real users (see "What is open" below).
+- **Capabilities (built, 2026-10-07):** an update that declares a new capability asks the user again, with the Hub's rule (`docs/HUB.md` §7.3 step 3; the shared functions are `plinth_hub::added_capabilities`, `undecided` and `is_granted`). The updater stores a new version as `pending.plnt`. At the next start, `updater::prepare_start` compares its capabilities with the capabilities of the embedded package (the user accepted them at install) and with the decisions that the user made for earlier updates (`state.json`, `grants`):
+  - No added Medium or High capability without a decision: the new version runs with no question. A Low or None capability is granted by default, as in the Hub. A removed capability needs no consent.
+  - Else the host shows the consent window (`consent::show`) for the new capabilities only, each with its risk and the app's reason. **Continue** records each decision and runs the new version; a capability set to "Don't allow" is refused in the policy, and the app gets `denied` for it (`updater::refused_for_run`). **Cancel** keeps the previous version (the last accepted download, else the embedded package).
+  - **After Cancel, the host does not ask again for the same version** (`declined-version` in `state.json`), and the feed check does not download it again. A newer version replaces it, and the host asks again. We chose this so that a user who said no is not asked at each start.
+  - A decision does not depend on the version: a later version with the same capability runs with no question.
 
 ## 7. The feed format (built, 2026-10-07)
 
@@ -133,9 +139,10 @@ core = "follow"        # "patch" | "pinned"
 
 ### 9.1 What is open, after steps 2-3
 
-- **`plinth run`** (running a `.plnt` directly, not a single-file export) does not check for updates; only a `plinth native` executable's embedded-payload path (`run_payload` in `plinth-cli`) does. This matches `docs/UPDATES.md` §1: the update mechanism is for a distributable the user already installed, not for a package a developer points the CLI at directly.
-- **`apply = "prompt"`** parses and is carried into the manifest, but the desktop host has no restart dialog yet; it behaves like `next-start`.
-- **Capability re-consent on update** (§6 "Capabilities") is not checked: the updater does not compare the downloaded package's declared capabilities against the embedded one before using it.
+- **`plinth run`** (running a `.plnt` directly, not a single-file export) does not check for updates; only a `plinth native` executable's embedded-payload path (`plinth_host_desktop::run_payload`, which both `plinth` and `plinth-host` call) does. This matches `docs/UPDATES.md` §1: the update mechanism is for a distributable the user already installed, not for a package a developer points the CLI at directly.
+- **`apply = "prompt"`: done (2026-10-07)** on the desktop host (§5). Tests: `updater::prompt_for` (unit), and the banner in `plinth-shoot` `tests/update_prompt.rs` (headless). A click on "Restart" in a live window is not tested automatically.
+- **Capability re-consent on update: done (2026-10-07)** (§6 "Capabilities"). Tests: `updater::update_consent` and `refused_capabilities` (unit), and the state steps (ask, Cancel, no second question, a newer version, Continue, "Don't allow") in the `updater` tests. The consent window is the Hub's window, which is not tested in a live window.
+- **`plinth-host`** (the stub that `plinth native` uses when it is next to the CLI) now runs the updater too (`plinth_host_desktop::run_payload`). Before, only the `plinth` executable did.
 - **`onUpgrade(fromVersion)`** (§6 "Data", UP-Q5) does not exist.
 - **The project core key** (item 5 of §4, UP-Q4) does not exist; a core from the feed is accepted only by the digest the signed feed lists.
 - **The web host and mobile** (§9 steps 4 and 6) are untouched.

@@ -104,7 +104,7 @@ Production apps run code from many publishers. This area must be complete before
 | S2 | Every web app in a sandboxed iframe with an opaque origin | Preview | Done | SPEC §10.3 |
 | S3 | `net` blocks private network ranges unless `net.local` | Preview | Done | `plinth-runner-wasmtime/src/policy.rs`. Next: the same test on the web host. |
 | S4 | Packages and update feeds are signed (Ed25519); no downgrade | Preview | Done | `plinth-package::feed`, desktop updater |
-| S5 | Re-consent when an update asks for new capabilities | Beta | Open | UPDATES §9.1 |
+| S5 | Re-consent when an update asks for new capabilities | Beta | Done | `plinth-host-desktop::updater` (`update_consent`, `prepare_start`), the Hub (`docs/HUB.md` §7.3 step 3); UPDATES §6 |
 | S6 | Project key that signs cores and the Hub; key rotation and revocation | Beta | Decide | HANDOFF §0.2 item 3; HANDOFF §10 item 12 |
 | S7 | `SECURITY.md`: how to report a vulnerability, response time | Beta | Open | |
 | S8 | Dependency audit in CI (`cargo deny` or `cargo audit`, `npm audit`) | Beta | Open | |
@@ -133,7 +133,7 @@ Production apps run code from many publishers. This area must be complete before
 | D1 | npm packages: `@plinth/cli`, platform packages, `create-plinth` | Beta | Partial | `npm/`, `release.yml`. Next: publish them; test `npm create plinth` on all three OSes. |
 | D2 | Release pipeline tested on all platforms, with a changelog | Beta | Partial | `docs/RELEASING.md`. Only Windows is tested; no changelog step. |
 | D3 | Desktop self-update: signed feed, rollback, no downgrade | Preview | Done | `plinth-host-desktop::updater` |
-| D4 | Update `prompt` dialog and `onUpgrade(fromVersion)` | Beta | Open | UPDATES §9.1 |
+| D4 | Update `prompt` dialog and `onUpgrade(fromVersion)` | Beta | Partial | The desktop restart prompt is done (UPDATES §5). Next: `onUpgrade(fromVersion)` (needs a core change; UPDATES §9.1). |
 | D5 | Web updates (service worker cache) | Beta | Open | UPDATES §9.1 |
 | D6 | A public registry and the Hub app on desktop and web | Beta | Partial | `docs/HUB.md`, `docs/REGISTRY.md`, `docs/web-hub.md`. Next: host a first registry. |
 | D7 | Update policy decisions (UP-Q1..Q6) | Beta | Decide | `docs/UPDATES.md` |
