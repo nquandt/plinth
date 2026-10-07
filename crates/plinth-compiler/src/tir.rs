@@ -323,6 +323,9 @@ pub enum TExprKind {
     /// `setTimeout`/`setInterval`: `(ms, repeat, callback)`. Returns the
     /// timer id as a `number` (SPEC.md §8.5, `plinth:time`).
     TimerNew(Box<TExpr>, bool, Box<TExpr>),
+    /// `onFrame(callback)` (core 1.12): a frame timer. The callback gets
+    /// the milliseconds since the previous frame. Returns the timer id.
+    FrameNew(Box<TExpr>),
     /// `plinth:dialog`'s `alert`/`confirm`/`prompt`: `(rt function name,
     /// message, done callback)`. Returns `void`; the done callback carries
     /// the result (SPEC.md §8.4, §8.5).

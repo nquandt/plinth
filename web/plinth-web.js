@@ -240,6 +240,10 @@ export function parseManifest(manifestText) {
  * a local cache immediately) and `readText` returns the cached value (and
  * kicks off an async read to refresh the cache for next time). Timers are
  * real (JS `setTimeout`/`setInterval`), driven by `scheduleTimerEvent`.
+ * Frame timers (core 1.12, `onFrame`) share one `requestFrame` loop (default
+ * `requestAnimationFrame`, which the browser stops in a hidden page; the
+ * loop stops with `cancelFrame` when the last frame timer stops) and fire
+ * through `scheduleFrameEvent(id, dt)`.
  */
 /**
  * The default dialog answers: the browser's own dialogs when they exist
@@ -264,6 +268,9 @@ function hostImports(
     reportError = (s) => console.error(s),
     scheduleTimerEvent,
     cancelTimerEvent,
+    scheduleFrameEvent,
+    requestFrame = globalThis.requestAnimationFrame?.bind(globalThis) ?? ((cb) => setTimeout(() => cb(performance.now()), 16)),
+    cancelFrame = globalThis.cancelAnimationFrame?.bind(globalThis) ?? clearTimeout,
     kvStore,
     capabilities = new Set(),
     refused = new Set(),
@@ -454,6 +461,19 @@ function hostImports(
 
   let nextTimer = 1;
   const timers = new Map(); // id -> JS handle
+  // Frame timers (core 1.12): one loop for all of them, so they get the same
+  // `dt`, the milliseconds since the previous frame (0 for the first).
+  const frameTimers = new Set();
+  let frameHandle = null; // the pending frame request, while the loop runs
+  let lastFrame = null;
+  function frameTick(t) {
+    frameHandle = null;
+    const dt = lastFrame === null ? 0 : Math.max(0, t - lastFrame);
+    lastFrame = t;
+    for (const id of [...frameTimers]) if (frameTimers.has(id)) scheduleFrameEvent(id, dt);
+    if (frameTimers.size > 0 && frameHandle === null) frameHandle = requestFrame(frameTick);
+    else if (frameTimers.size === 0) lastFrame = null;
+  }
   const storeReason = kvStore ? capReason("store.kv") : DeniedReason.undeclared;
   let clipboardCache = null;
   // The clipboard: `navigator.clipboard` by default; the web App Hub's
@@ -504,7 +524,24 @@ function hostImports(
         v.setUint8(retptr, 0); // ok
         v.setUint32(retptr + 4, id, true);
       },
+      "set-frame-timer"(retptr) {
+        if (!scheduleFrameEvent) {
+          writeDeniedAt4(retptr);
+          return;
+        }
+        const id = nextTimer++;
+        frameTimers.add(id);
+        if (frameHandle === null) frameHandle = requestFrame(frameTick);
+        const v = mem();
+        v.setUint8(retptr, 0); // ok
+        v.setUint32(retptr + 4, id, true);
+      },
       "cancel-timer"(id) {
+        if (frameTimers.delete(id) && frameTimers.size === 0) {
+          if (frameHandle !== null) cancelFrame(frameHandle);
+          frameHandle = null;
+          lastFrame = null;
+        }
         const t = timers.get(id);
         if (!t) return;
         if (t.repeat) clearInterval(t.handle);
@@ -786,6 +823,7 @@ export class PlinthApp {
    */
   async load(coreBytes, appBytes, opts = {}) {
     const scheduleTimerEvent = opts.scheduleTimerEvent ?? ((id) => this.onEvent({ kind: "timer", timer: id }));
+    const scheduleFrameEvent = opts.scheduleFrameEvent ?? ((id, dt) => this.onEvent({ kind: "frame", timer: id, dt }));
     const completeRequest = (id, result) => this.onEvent({ kind: "completion", request: id, result });
     const { id: appId, capabilities } = opts.manifestText ? parseManifest(opts.manifestText) : { id: "", capabilities: new Set() };
     const kvStore =
@@ -793,6 +831,7 @@ export class PlinthApp {
     this.core = await loadCore(coreBytes, {
       ...opts,
       scheduleTimerEvent,
+      scheduleFrameEvent,
       completeRequest,
       capabilities,
       refused: opts.refused ?? new Set(),

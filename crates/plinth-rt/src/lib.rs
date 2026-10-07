@@ -33,7 +33,7 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 4] = *b"1.11";
+static CORE_VERSION: [u8; 4] = *b"1.12";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;
@@ -240,6 +240,10 @@ impl bindings::Guest for Rt {
                 }
                 plinth_protocol::Event::Timer { timer } => {
                     host::dispatch_timer(timer);
+                    settle();
+                }
+                plinth_protocol::Event::Frame { timer, dt } => {
+                    host::dispatch_frame(timer, dt);
                     settle();
                 }
                 plinth_protocol::Event::Completion { request, result } => {
@@ -558,6 +562,9 @@ abi! {
     fn __plinth_rt_files_call(thunk: i32, env: i32, op: i32, path: i32, text: i32) {
         host::files_call(Callable { thunk: thunk as u32, env: env as u32 }, op, path, text)
     }
+
+    // -- plinth:time onFrame (core 1.12, docs/GAPS.md G5) ----------------------
+    fn __plinth_rt_set_frame(thunk: i32, env: i32) -> f64 { host::set_frame(Callable { thunk: thunk as u32, env: env as u32 }) }
 
     // -- plinth:time date/time additions (SPEC.md §8.5, docs/GAPS.md gap #5) --
     fn __plinth_rt_tz_offset_minutes(ms: f64) -> f64 { host::timezone_offset(ms as i64) as f64 }

@@ -126,6 +126,9 @@ struct HostState {
     policy: Policy,
     kv: Kv,
     timers: TimerQueue,
+    /// When the host last fired the frame timers (core 1.12); `None` before
+    /// the first frame and after the last frame timer stops.
+    last_frame: Option<Instant>,
     clipboard: Box<dyn Clipboard>,
     monotonic_origin: Instant,
     requests: RequestQueue,
@@ -185,6 +188,11 @@ impl bindings::plinth::app::time::Host for HostState {
 
     fn cancel_timer(&mut self, timer: u32) {
         self.timers.cancel(timer);
+    }
+
+    fn set_frame_timer(&mut self) -> Result<u32, HostError> {
+        // `time` needs no capability (SPEC.md §11): always allowed.
+        Ok(self.timers.set_frame(Instant::now()))
     }
 
     fn timezone_offset(&mut self, ms: i64) -> i32 {
@@ -593,6 +601,7 @@ impl Runner {
             policy,
             kv,
             timers: TimerQueue::new(),
+            last_frame: None,
             clipboard,
             monotonic_origin: Instant::now(),
             requests: RequestQueue::new(),
@@ -697,6 +706,33 @@ impl Guest {
         let mut w = plinth_protocol::Writer::new();
         for timer in due {
             w.event(&plinth_protocol::Event::Timer { timer });
+        }
+        self.on_event(w.as_bytes())
+    }
+
+    /// Whether the guest has a frame timer (core 1.12, `onFrame`). While it
+    /// has one, the host draws frames without a pause and calls
+    /// `fire_frame` before each frame.
+    pub fn wants_frames(&self) -> bool {
+        !self.store.data().timers.frames().is_empty()
+    }
+
+    /// Sends one `frame` event (protocol `Event::Frame`) to each frame
+    /// timer, with the milliseconds since the previous frame (0 for the
+    /// first), and returns the committed op buffers. Returns `Ok(vec![])`
+    /// with no call if the guest has no frame timer.
+    pub fn fire_frame(&mut self, now: Instant) -> Result<Vec<Vec<u8>>> {
+        let data = self.store.data_mut();
+        let frames = data.timers.frames();
+        if frames.is_empty() {
+            data.last_frame = None;
+            return Ok(Vec::new());
+        }
+        let dt = data.last_frame.map_or(0.0, |last| now.saturating_duration_since(last).as_secs_f64() * 1000.0);
+        data.last_frame = Some(now);
+        let mut w = plinth_protocol::Writer::new();
+        for timer in frames {
+            w.event(&plinth_protocol::Event::Frame { timer, dt });
         }
         self.on_event(w.as_bytes())
     }

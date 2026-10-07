@@ -22,6 +22,16 @@ export declare function clearTimeout(id: number): void;
 /** Cancels a timer made with `setInterval`. */
 export declare function clearInterval(id: number): void;
 
+/** Calls `callback` before each frame that the screen draws (core 1.12),
+ * with `dt`, the milliseconds since the previous frame (0 for the first).
+ * Use it for motion: move by `speed * dt`, not by a fixed step. The host
+ * sends no frames while the window is hidden, so `dt` can be large after
+ * the window comes back; limit it. Returns an id for `cancelFrame`. */
+export declare function onFrame(callback: (dt: number) => void): number;
+
+/** Stops a frame timer made with `onFrame`. */
+export declare function cancelFrame(id: number): void;
+
 // -- Date and time (SPEC.md §4.7, §8.5; docs/GAPS.md gap #5) ---------------
 //
 // `now()` already gives milliseconds since the Unix epoch, UTC. These add

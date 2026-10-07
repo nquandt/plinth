@@ -181,6 +181,8 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("report", &[I32], &[]),
     // -- plinth:files (core 1.11, docs/STORAGE.md §2, §3) --------------------
     ("files_call", &[I32, I32, I32, I32, I32], &[]),
+    // -- plinth:time onFrame (core 1.12, docs/GAPS.md G5) --------------------
+    ("set_frame", &[I32, I32], &[F64]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -259,13 +261,14 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("set_drain", 10),
     ("report", 10),
     ("files_call", 11),
+    ("set_frame", 12),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).
 pub fn added_in(name: &str) -> u32 {
     ADDED_IN.iter().find(|(n, _)| *n == name).map_or(0, |(_, m)| *m)
 }
-pub const CORE_MINOR: u32 = 11;
+pub const CORE_MINOR: u32 = 12;
 
 /// Array kinds for `arr_new` (the runtime's built-in type ids).
 pub const ARR_F64: i32 = 1;

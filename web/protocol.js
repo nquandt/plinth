@@ -23,6 +23,8 @@ export const EventCode = {
   LIFECYCLE: 0x04,
   VISIBLE_ROWS: 0x05,
   SNAPSHOT_REQUEST: 0x06,
+  // Core 1.12: a display frame for a frame timer, with the ms since the previous frame.
+  FRAME: 0x07,
 };
 
 export const NavKind = {
@@ -236,7 +238,7 @@ class ByteWriter {
   }
 }
 
-/** Encodes one event. `event` is `{kind: "ui"|"timer"|"lifecycle"|"visible-rows"|"snapshot-request", ...}`. */
+/** Encodes one event. `event` is `{kind: "ui"|"timer"|"frame"|"lifecycle"|"visible-rows"|"snapshot-request", ...}`. */
 export function encodeEvent(event) {
   const w = new ByteWriter();
   switch (event.kind) {
@@ -254,6 +256,11 @@ export function encodeEvent(event) {
     case "timer":
       w.u8(EventCode.TIMER);
       w.u32(event.timer);
+      break;
+    case "frame":
+      w.u8(EventCode.FRAME);
+      w.u32(event.timer);
+      w.value(event.dt);
       break;
     case "lifecycle":
       w.u8(EventCode.LIFECYCLE);

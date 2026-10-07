@@ -1,6 +1,6 @@
 // Node test of examples/pong on the web host: it starts the game, steps the
-// game loop by hand (the app's setInterval goes to a fake timer that the
-// test fires), presses the paddle buttons, and reads the court from the
+// game loop by hand (the app's onFrame loop, core 1.12, goes to a fake
+// requestFrame that the test fires as a 60 Hz display), presses the paddle buttons, and reads the court from the
 // tree: the ball moves, bounces from the walls and the paddles, and a
 // point is scored. It also measures the time of one tick (event + commit).
 //
@@ -22,18 +22,23 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 // The court (examples/pong/app/game.ts), in spacing units.
 const FIELD_H = 48, PADDLE_H = 10, PADDLE_W = 2, BALL = 2, HALF_W = 37, NET_W = 1, FIELD_W = 75;
 
-// A fake setInterval: the host's `set-timer` calls the global functions, so
-// the test owns the clock. `tickAll()` fires every live interval once.
-const intervals = new Map();
+// A fake display: the host's frame loop asks `requestFrame` for each frame,
+// so the test owns the clock. `tickAll()` draws one frame (1/60 s later);
+// `frames.size` is 1 while the game loop runs.
+const frames = new Map();
 let nextHandle = 1;
-globalThis.setInterval = (fn, _ms) => {
+let clock = 1000;
+const requestFrame = (fn) => {
   const h = nextHandle++;
-  intervals.set(h, fn);
+  frames.set(h, fn);
   return h;
 };
-globalThis.clearInterval = (h) => intervals.delete(h);
+const cancelFrame = (h) => frames.delete(h);
 const tickAll = () => {
-  for (const fn of [...intervals.values()]) fn();
+  clock += 1000 / 60;
+  const due = [...frames.values()];
+  frames.clear();
+  for (const fn of due) fn(clock);
 };
 
 const plntPath = path.join(root, "examples/pong/dist/pong.plnt");
@@ -47,7 +52,7 @@ app.onCommit = (ops) => {
   opCount += ops.length;
   tree.apply(ops);
 };
-await app.load(core, appWasm, { log: () => {}, manifestText });
+await app.load(core, appWasm, { log: () => {}, manifestText, requestFrame, cancelFrame });
 app.init([]);
 
 const nodes = () => [...tree.nodes.values()];
@@ -91,33 +96,33 @@ assert.equal(paddleTop("Your paddle"), centerY);
 const start = ball();
 // The ball starts in the middle of the court (fractional units, UI API 1.11).
 assert.deepEqual(start, { x: (FIELD_W - BALL) / 2, y: (FIELD_H - BALL) / 2 });
-assert.equal(intervals.size, 0, "no game loop before Start");
+assert.equal(frames.size, 0, "no game loop before Start");
 
 // -- Start: the ball moves toward the computer ---------------------------------
 press("Start");
-assert.equal(intervals.size, 1, "Start starts the game loop");
+assert.equal(frames.size, 1, "Start starts the game loop");
 assert.ok(labelled("Pause"), "the start button now pauses");
 for (let i = 0; i < 10; i++) tickAll();
 const moved = ball();
 assert.ok(moved.x > start.x, `the ball moves right: ${JSON.stringify([start, moved])}`);
 assert.notEqual(moved.y, start.y, "the ball also moves up or down");
-// The ball moves the same distance on each tick (whole units gave steps of 1, ..., 0).
+// The ball moves the same distance on each frame (whole units gave steps of 1, ..., 0).
 const xs = [ball().x];
 for (let i = 0; i < 5; i++) {
   tickAll();
   xs.push(ball().x);
 }
 const steps = xs.slice(1).map((x, i) => x - xs[i]);
-assert.ok(steps.every((s) => Math.abs(s - 0.9) < 1e-9), `even steps of 0.9 units: ${steps}`);
+assert.ok(steps.every((s) => Math.abs(s - 0.9) < 1e-6), `even steps of 0.9 units: ${steps}`);
 
 // Pause stops the loop; Resume starts it again.
 press("Pause");
-assert.equal(intervals.size, 0);
+assert.equal(frames.size, 0);
 const paused = ball();
 tickAll();
 assert.deepEqual(ball(), paused);
 press("Resume");
-assert.equal(intervals.size, 1);
+assert.equal(frames.size, 1);
 
 // -- The player's paddle -------------------------------------------------------
 press("Up");
@@ -155,7 +160,7 @@ let tickTimes = [];
 let ticks = 0;
 const ops0 = opCount;
 const points = () => scores()[0] + scores()[1];
-while ((!wallBounce || !computerReturn || points() === 0) && ticks < 3000 && intervals.size > 0) {
+while ((!wallBounce || !computerReturn || points() === 0) && ticks < 3000 && frames.size > 0) {
   // Keep the player's paddle away from the ball, so the computer scores.
   const t0 = performance.now();
   tickAll();
@@ -190,14 +195,14 @@ press("Stop");
 assert.ok(playerReturn, "the player's paddle returned the ball");
 
 // -- To the end: the computer wins when the player stands still ------------------
-for (let i = 0; i < 20000 && intervals.size > 0; i++) tickAll();
-assert.equal(intervals.size, 0, "the loop stops when the game is over");
+for (let i = 0; i < 20000 && frames.size > 0; i++) tickAll();
+assert.equal(frames.size, 0, "the loop stops when the game is over");
 const [you, cpu] = scores();
 assert.ok(you === 5 || cpu === 5, `one side has 5 points: ${you}:${cpu}`);
 assert.ok(texts().includes(cpu === 5 ? "The computer wins." : "You win!"));
 press("Play again");
 assert.deepEqual(scores(), [0, 0]);
-assert.equal(intervals.size, 1);
+assert.equal(frames.size, 1);
 
 // -- Measurements ------------------------------------------------------------------
 tickTimes.sort((a, b) => a - b);

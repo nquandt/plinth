@@ -71,6 +71,13 @@ interface time {
   /// (`plinth:time`'s date/time additions, docs/GAPS.md gap #5); the web
   /// host uses `-Date.getTimezoneOffset()`.
   timezone-offset: func(ms: s64) -> s32;
+
+  /// Core 1.12: starts a frame timer. The host sends a `frame` event
+  /// (SPEC.md §8.4) for it before each frame that it draws, with the
+  /// milliseconds since the previous frame (0 for the first), until
+  /// `cancel-timer` is called. The host sends no frames while the window is
+  /// hidden or minimized. Returns the timer id (the same ids as `set-timer`).
+  set-frame-timer: func() -> result<u32, host-error>;
 }
 
 /// A per-app key/value store (SPEC.md §8.5; capability: `store.kv`).

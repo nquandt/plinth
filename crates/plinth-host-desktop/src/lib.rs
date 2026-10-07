@@ -221,6 +221,16 @@ impl GuestPort for WasmGuest {
         r
     }
 
+    fn wants_frames(&self) -> bool {
+        self.guest.wants_frames()
+    }
+
+    fn fire_frame(&mut self, now: std::time::Instant) -> Result<Vec<Vec<u8>>> {
+        let r = self.guest.fire_frame(now);
+        print_logs(&mut self.guest);
+        r
+    }
+
     fn pending_dialogs(&self) -> Vec<plinth_ui::PendingDialog> {
         self.guest
             .pending_dialogs()

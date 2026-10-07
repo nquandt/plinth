@@ -35,6 +35,9 @@ pub const TIME_NAMES: &[&str] = &[
     "setInterval",
     "clearTimeout",
     "clearInterval",
+    // Core 1.12 (docs/GAPS.md G5).
+    "onFrame",
+    "cancelFrame",
     // Date/time additions (docs/GAPS.md gap #5).
     "timezoneOffset",
     "dateParts",
@@ -84,7 +87,8 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "monotonicNow" => Binding::Std(StdFn::TimeMonotonicNow),
             "setTimeout" => Binding::Std(StdFn::SetTimeout),
             "setInterval" => Binding::Std(StdFn::SetInterval),
-            "clearTimeout" | "clearInterval" => Binding::Std(StdFn::ClearTimer),
+            "onFrame" => Binding::Std(StdFn::OnFrame),
+            "clearTimeout" | "clearInterval" | "cancelFrame" => Binding::Std(StdFn::ClearTimer),
             "timezoneOffset" => Binding::Std(StdFn::TimezoneOffset),
             "dateParts" => Binding::Std(StdFn::DateParts),
             "makeDate" => Binding::Std(StdFn::MakeDate),
@@ -321,6 +325,14 @@ impl Checker<'_> {
                 let ms = self.expr_with(&args[1], &Type::Number);
                 let ms = self.coerce(ms, &Type::Number);
                 TExpr::new(TExprKind::TimerNew(Box::new(ms), f == StdFn::SetInterval, Box::new(cb)), Type::Number, span)
+            }
+            StdFn::OnFrame => {
+                if args.len() != 1 {
+                    self.err(code::ARG_COUNT, span, "`onFrame` takes a callback that gets the milliseconds since the previous frame");
+                    return TExpr::new(TExprKind::Num(0.0), Type::Number, span);
+                }
+                let (cb, _) = self.callback(&args[0], &[Type::Number], Some(Type::Void));
+                TExpr::new(TExprKind::FrameNew(Box::new(cb)), Type::Number, span)
             }
             StdFn::ClearTimer => {
                 if !one_arg(self, "clearTimeout/clearInterval") {

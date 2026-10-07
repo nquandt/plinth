@@ -49,6 +49,19 @@ pub trait GuestPort {
         Ok(Vec::new())
     }
 
+    /// Whether the guest has a frame timer (core 1.12, `onFrame`): the host
+    /// then draws frames without a pause. The default has none.
+    fn wants_frames(&self) -> bool {
+        false
+    }
+
+    /// Dispatches a `frame` event to each frame timer and returns the op
+    /// buffers the guest committed. The default does nothing.
+    fn fire_frame(&mut self, now: Instant) -> anyhow::Result<Vec<Vec<u8>>> {
+        let _ = now;
+        Ok(Vec::new())
+    }
+
     /// `plinth:dialog` requests the guest opened that no answer has closed
     /// yet (SPEC.md §8.4, §8.5). The default (no dialog host API access)
     /// has none.
@@ -441,12 +454,40 @@ impl PlinthRoot {
                 }
             }
         }
-        if !changed {
+        // A timer or a result can start a frame timer (`onFrame`) with no
+        // change to the tree: draw a frame so that the frames start.
+        if !changed && !self.guest.wants_frames() {
             return;
         }
         self.sync_fields(cx);
         self.sync_dialog(cx);
         cx.notify();
+    }
+
+    /// Fires the guest's frame timers (core 1.12, `onFrame`) before a frame
+    /// is drawn, and asks gpui for the next frame while a frame timer runs.
+    /// gpui draws no frames for a hidden window, so the frames stop too.
+    fn drive_frames(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.stopped.is_some() || !self.guest.wants_frames() {
+            return;
+        }
+        match self.guest.fire_frame(Instant::now()) {
+            Ok(commits) => {
+                if !commits.is_empty() {
+                    self.apply_commits(commits);
+                    self.sync_fields(cx);
+                    self.sync_dialog(cx);
+                }
+            }
+            Err(e) => {
+                log::error!("the app stopped: {e:#}");
+                self.stopped = Some(format!("{e:#}"));
+                return;
+            }
+        }
+        if self.guest.wants_frames() {
+            window.request_animation_frame();
+        }
     }
 
     /// Drains the launch requests of a Hub UI guest (`docs/HUB.md` §4.2).
@@ -786,6 +827,7 @@ impl Render for PlinthRoot {
         #[cfg(debug_assertions)]
         let trace_start = std::env::var_os("PLINTH_TRACE_RENDER").is_some().then(Instant::now);
 
+        self.drive_frames(window, cx);
         self.class = WidthClass::from_width(window.viewport_size().width);
         self.ensure_fields(cx);
         if !self.focused_once {

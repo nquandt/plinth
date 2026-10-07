@@ -74,6 +74,16 @@ pub fn dispatch_timer(timer: u32) {
     crate::reactive::untracked(|| invoke(callable, Val::None));
 }
 
+/// Dispatches a `frame` event (core 1.12) to the callback of the frame
+/// timer `timer`, with `dt`, the milliseconds since the previous frame. A
+/// frame timer repeats until `clear_timer`.
+pub fn dispatch_frame(timer: u32, dt: f64) {
+    let Some(callable) = TIMERS.with(|t| t.iter().find(|x| x.id == timer).map(|x| x.callable)) else {
+        return; // Canceled or unknown; not an error.
+    };
+    crate::reactive::untracked(|| invoke(callable, Val::F64(dt)));
+}
+
 /// A pending async host call: the request id the host gave us, and the
 /// callback to invoke when its `completion` event (SPEC.md §8.4) arrives.
 struct Request {
@@ -201,6 +211,26 @@ pub fn set_timer(callable: Callable, ms: f64, repeat: bool) -> f64 {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = (callable, ms, repeat);
+        0.0
+    }
+}
+
+/// `onFrame` (core 1.12): starts a frame timer and returns its id (as a
+/// `number`) for `cancelFrame`, which is `clear_timer`.
+pub fn set_frame(callable: Callable) -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        match host::time::set_frame_timer() {
+            Ok(id) => {
+                TIMERS.with(|t| t.push(Timer { id, callable, one_shot: false }));
+                id as f64
+            }
+            Err(_) => 0.0,
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = callable;
         0.0
     }
 }

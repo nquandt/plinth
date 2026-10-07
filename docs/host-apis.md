@@ -13,7 +13,7 @@ the user grants before the app can use it.
 Clocks and timers. No capability is needed.
 
 ```ts
-import { now, monotonicNow, setTimeout, setInterval, clearTimeout, clearInterval } from "plinth:time";
+import { now, monotonicNow, setTimeout, setInterval, clearTimeout, clearInterval, onFrame, cancelFrame } from "plinth:time";
 ```
 
 | Function | Notes |
@@ -22,9 +22,17 @@ import { now, monotonicNow, setTimeout, setInterval, clearTimeout, clearInterval
 | `monotonicNow()` | Monotonic milliseconds from an arbitrary origin; use it to measure elapsed time. Never goes backwards. |
 | `setTimeout(callback, ms)` / `setInterval(callback, ms)` | Return a timer id. |
 | `clearTimeout(id)` / `clearInterval(id)` | Canceling an unknown or already-fired timer is not an error. |
+| `onFrame(callback)` | Core 1.12. Calls `callback(dt)` before each frame that the host draws, with `dt`, the milliseconds since the previous frame (0 for the first). Returns a timer id. Use it for motion and games: move by `speed * dt`. |
+| `cancelFrame(id)` | Stops a frame timer. |
 
 The desktop host polls timers every 15 ms and delivers one firing per
-poll; it does not catch up missed ticks.
+poll; it does not catch up missed ticks. Frame timers do not use this
+poll: the desktop host fires them in the gpui frame (it asks for the next
+frame while a frame timer runs), and the web host uses
+`requestAnimationFrame`. Both hosts send no frames while the window is
+hidden or minimized (the browser stops animation frames in a hidden tab),
+so `dt` can be large after the window comes back: limit it (Pong takes at
+most 50 ms in one step).
 
 ### Date and time (docs/GAPS.md gap #5)
 

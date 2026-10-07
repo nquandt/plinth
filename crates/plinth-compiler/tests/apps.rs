@@ -71,8 +71,9 @@ impl Harness {
     }
 
     /// Fires every timer due by `now` and applies what the guest commits.
-    fn fire_timers(&mut self, now: Instant) {
-        let commits = self.guest.fire_due_timers(now).unwrap();
+    /// One display frame (core 1.12, `onFrame`) at `now`.
+    fn fire_frame(&mut self, now: Instant) {
+        let commits = self.guest.fire_frame(now).unwrap();
         for log in self.guest.take_logs() {
             eprintln!("guest: {log}");
         }
@@ -337,15 +338,17 @@ fn pong_plays_a_point() {
     assert_eq!(scores(&h), (0, 0));
     assert_eq!(paddle(&h, "Your paddle"), (FIELD_H - PADDLE_H) / 2);
     let start = ball(&h);
-    assert!(h.guest.next_timer_deadline().is_none(), "no loop before Start");
+    assert!(!h.guest.wants_frames(), "no loop before Start");
 
     press(&mut h, "Start");
     let t0 = Instant::now();
     let mut now = t0;
+    // The game loop runs on display frames (core 1.12, `onFrame`): here a
+    // 60 Hz display. The first frame has dt 0.
     let mut tick = |h: &mut Harness| -> Duration {
-        now += Duration::from_millis(16);
+        now += Duration::from_nanos(16_666_667);
         let s = Instant::now();
-        h.fire_timers(now);
+        h.fire_frame(now);
         s.elapsed()
     };
     for _ in 0..10 {
@@ -354,7 +357,7 @@ fn pong_plays_a_point() {
     let moved = ball(&h);
     assert!(moved.0 > start.0 && moved.1 != start.1, "the ball moves: {start:?} -> {moved:?}");
     // UI API 1.11: the insets are fractional units, so the ball moves the
-    // same distance on each tick (whole units gave steps of 1, 1, ..., 0).
+    // same distance on each frame (whole units gave steps of 1, 1, ..., 0).
     let ball_x = |h: &Harness| h.tree.get(labelled(h, "Ball")).unwrap().prop(prop::LEFT).and_then(Value::as_number).unwrap();
     let mut xs = vec![ball_x(&h)];
     for _ in 0..5 {
@@ -362,10 +365,10 @@ fn pong_plays_a_point() {
         xs.push(ball_x(&h));
     }
     let steps: Vec<f64> = xs.windows(2).map(|w| w[1] - w[0]).collect();
-    assert!(steps.iter().all(|s| (s - 0.9).abs() < 1e-9), "even steps of 0.9 units: {steps:?}");
+    assert!(steps.iter().all(|s| (s - 0.9).abs() < 1e-6), "even steps of 0.9 units: {steps:?}");
 
     press(&mut h, "Pause");
-    assert!(h.guest.next_timer_deadline().is_none(), "Pause stops the loop");
+    assert!(!h.guest.wants_frames(), "Pause stops the loop");
     press(&mut h, "Resume");
 
     press(&mut h, "Up");
@@ -386,7 +389,7 @@ fn pong_plays_a_point() {
     let mut prev = ball(&h);
     let mut times = Vec::new();
     let mut n = 0;
-    while (!wall || !ret || scores(&h) == (0, 0)) && n < 3000 && h.guest.next_timer_deadline().is_some() {
+    while (!wall || !ret || scores(&h) == (0, 0)) && n < 3000 && h.guest.wants_frames() {
         times.push(tick(&mut h));
         n += 1;
         let b = ball(&h);
@@ -456,4 +459,77 @@ export default app({ screens: { home: { title: "Home", component: Home } } });
     let mv = labelled(&h, ControlKind::Pressable, "Move");
     h.fire(mv, event::PRESS, Value::Null);
     assert!((num(&h, prop::LEFT) - 2.4).abs() < 1e-9);
+}
+
+/// Core 1.12: `onFrame` calls back once per display frame with the
+/// milliseconds since the previous frame (0 for the first); `cancelFrame`
+/// stops it, and the frames stop with the last frame timer.
+#[test]
+fn on_frame_gets_the_frame_time() {
+    const APP: &str = r#"
+import { app, signal, Screen, Text, Button } from "plinth:ui";
+import { onFrame, cancelFrame } from "plinth:time";
+
+function Home() {
+  const total = signal(0);
+  const count = signal(0);
+  const id = signal<number | null>(null);
+  const start = () => {
+    id.set(onFrame((dt) => {
+      total.set(total() + dt);
+      count.set(count() + 1);
+    }));
+  };
+  const stop = () => {
+    const t = id();
+    if (t !== null) {
+      cancelFrame(t);
+      id.set(null);
+    }
+  };
+  return (
+    <Screen title="Home">
+      <Text>{`${count()} frames, ${total()} ms`}</Text>
+      <Button label="Start" onPress={start} />
+      <Button label="Stop" onPress={stop} />
+    </Screen>
+  );
+}
+
+export default app({ screens: { home: { title: "Home", component: Home } } });
+"#;
+    let fs = plinth_compiler::driver::MemFs::default().with("app/main.tsx", APP);
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &[]).expect("compile");
+    let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+    let art = artifact.unwrap_or_else(|| panic!("errors:\n{}", diags.join("\n")));
+    assert!(art.runtime.ends_with("1.12"), "onFrame needs core 1.12: {}", art.runtime);
+    let mut h = Harness::start(&art.component);
+    let button = |h: &Harness, label: &str| h.find(ControlKind::Button, |n| n.str_prop(prop::LABEL) == Some(label))[0];
+    let text = |h: &Harness| h.text_of(h.find(ControlKind::Text, |_| true)[0]);
+
+    let t0 = Instant::now();
+    h.fire_frame(t0);
+    assert!(!h.guest.wants_frames());
+    assert_eq!(text(&h), "0 frames, 0 ms", "no frames before onFrame");
+
+    let start = button(&h, "Start");
+    h.fire(start, event::PRESS, Value::Null);
+    assert!(h.guest.wants_frames());
+    assert_eq!(h.guest.next_timer_deadline(), None, "a frame timer is not a timed timer");
+    h.fire_frame(t0 + Duration::from_millis(100));
+    h.fire_frame(t0 + Duration::from_millis(110));
+    h.fire_frame(t0 + Duration::from_millis(135));
+    assert_eq!(text(&h), "3 frames, 35 ms", "dt is 0, then 10 and 25");
+
+    let stop = button(&h, "Stop");
+    h.fire(stop, event::PRESS, Value::Null);
+    assert!(!h.guest.wants_frames());
+    h.fire_frame(t0 + Duration::from_millis(150));
+    assert_eq!(text(&h), "3 frames, 35 ms", "no frames after cancelFrame");
+
+    // A new frame timer starts again from dt 0.
+    h.fire(start, event::PRESS, Value::Null);
+    h.fire_frame(t0 + Duration::from_millis(500));
+    h.fire_frame(t0 + Duration::from_millis(520));
+    assert_eq!(text(&h), "5 frames, 55 ms");
 }

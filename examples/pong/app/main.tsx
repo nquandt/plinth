@@ -8,7 +8,7 @@
 // paddle, Space starts and pauses (UI API 1.9 onKeyDown/onKeyUp). The
 // buttons below the court do the same for touch and pointer users.
 import { app, signal, computed, Screen, Section, Box, Span, Pressable } from "plinth:ui";
-import { setInterval, clearInterval, monotonicNow } from "plinth:time";
+import { onFrame, cancelFrame, monotonicNow } from "plinth:time";
 import { Math } from "plinth:core";
 import {
   Game,
@@ -25,8 +25,12 @@ import {
   WIN_SCORE,
 } from "./game";
 
-/** The game loop interval: about 60 ticks per second. */
-const TICK_MS = 16;
+/** One game tick: 1/60 s. The loop runs once per display frame (onFrame,
+ * core 1.12) and steps the game by the frame time in ticks. */
+const TICK_MS = 1000 / 60;
+/** The longest frame time that the game takes in one step (a frame after a
+ * pause or a hidden window counts as this). */
+const MAX_FRAME_MS = 50;
 /** The dashes of the net. */
 const DASHES: number[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
@@ -34,7 +38,7 @@ function Pong() {
   const game = signal<Game>(newGame());
   const move = signal(0);
   const timer = signal<number | null>(null);
-  // Measured tick rate (ticks per second over the last second).
+  // Measured frame rate (frames per second over the last second).
   const rate = signal(0);
   const rateStart = signal(0);
   const rateTicks = signal(0);
@@ -42,13 +46,13 @@ function Pong() {
   const stopLoop = () => {
     const id = timer();
     if (id !== null) {
-      clearInterval(id);
+      cancelFrame(id);
       timer.set(null);
     }
   };
 
-  const tick = () => {
-    const next = step(game(), move());
+  const frame = (dt: number) => {
+    const next = step(game(), move(), Math.min(dt, MAX_FRAME_MS) / TICK_MS);
     game.set(next);
     if (next.leftY <= 0 || next.leftY >= FIELD_H - PADDLE_H) {
       move.set(0);
@@ -72,7 +76,7 @@ function Pong() {
       if (timer() === null) {
         rateStart.set(monotonicNow());
         rateTicks.set(0);
-        timer.set(setInterval(tick, TICK_MS));
+        timer.set(onFrame(frame));
       }
     } else {
       stopLoop();
@@ -90,7 +94,7 @@ function Pong() {
     if (g.phase === "over") {
       return g.winner === "left" ? "You win!" : "The computer wins.";
     }
-    return rate() > 0 ? `Rally ${g.rally} · ${rate()} ticks/s` : `Rally ${g.rally}`;
+    return rate() > 0 ? `Rally ${g.rally} · ${rate()} frames/s` : `Rally ${g.rally}`;
   });
   // Keys on the court: a held key moves the paddle until it is released.
   const keyDown = (key: string) => {

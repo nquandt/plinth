@@ -2294,7 +2294,8 @@ pub(crate) fn expr_children(e: &TExpr) -> Vec<&TExpr> {
         | TExprKind::SignalPeek(o)
         | TExprKind::ComputedNew(o)
         | TExprKind::ComputedGet(o)
-        | TExprKind::EffectNew(o) => out.push(o),
+        | TExprKind::EffectNew(o)
+        | TExprKind::FrameNew(o) => out.push(o),
         TExprKind::Index(a, b)
         | TExprKind::Num2(_, a, b)
         | TExprKind::Int2(_, a, b)
@@ -2366,7 +2367,8 @@ pub(crate) fn expr_children_mut(e: &mut TExpr) -> Vec<&mut TExpr> {
         | TExprKind::SignalPeek(o)
         | TExprKind::ComputedNew(o)
         | TExprKind::ComputedGet(o)
-        | TExprKind::EffectNew(o) => out.push(o),
+        | TExprKind::EffectNew(o)
+        | TExprKind::FrameNew(o) => out.push(o),
         TExprKind::Index(a, b)
         | TExprKind::Num2(_, a, b)
         | TExprKind::Int2(_, a, b)

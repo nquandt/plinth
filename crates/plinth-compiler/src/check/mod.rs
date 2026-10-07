@@ -77,6 +77,7 @@ pub enum StdFn {
     TimeMonotonicNow,
     SetTimeout,
     SetInterval,
+    OnFrame,
     ClearTimer,
     ClipboardWriteText,
     ClipboardReadText,

@@ -1,9 +1,10 @@
 // The Pong rules, without any UI. All positions and sizes are spacing
 // units (one unit is 4 px), the same units that the court uses in
-// main.tsx; speeds are units per tick. The UI calls `step` once per timer
-// tick with a fixed time step, so the game is deterministic (no random
-// numbers: plinth:core has no Math.random, so the serve angles come from
-// a fixed list).
+// main.tsx; speeds are units per tick, and one tick is 1/60 s. The UI calls
+// `step` once per display frame with `k`, the frame time in ticks, so the
+// ball moves by `speed * k` (the same speed at 60 Hz and 144 Hz). With
+// `k = 1` the game is deterministic (no random numbers: plinth:core has no
+// Math.random, so the serve angles come from a fixed list).
 import { Math } from "plinth:core";
 
 /** The width of the field between the two paddles. */
@@ -117,29 +118,33 @@ function hits(ballY: number, paddleY: number): boolean {
   return ballY + BALL > paddleY && ballY < paddleY + PADDLE_H;
 }
 
-/** Moves the computer's paddle toward the ball, at a limited speed. */
-function computer(g: Game): void {
+/** Moves the computer's paddle toward the ball, at a limited speed, for `k` ticks. */
+function computer(g: Game, k: number): void {
   // When the ball goes away, the computer goes back to the center.
   const target = g.velX > 0 ? g.ballY + BALL / 2 - PADDLE_H / 2 : (FIELD_H - PADDLE_H) / 2;
-  const delta = clamp(target - g.rightY, -COMPUTER_SPEED, COMPUTER_SPEED);
+  const delta = clamp(target - g.rightY, -COMPUTER_SPEED * k, COMPUTER_SPEED * k);
   g.rightY = clamp(g.rightY + delta, 0, FIELD_H - PADDLE_H);
 }
 
-/** One tick of the game. `move` is the player's paddle direction. */
-export function step(prev: Game, move: Move): Game {
+/**
+ * `k` ticks of the game (1 is 1/60 s; a frame at 60 Hz). `move` is the
+ * player's paddle direction. Keep `k` small (the UI limits it to 3): a
+ * large step can take the ball through a paddle.
+ */
+export function step(prev: Game, move: Move, k: number): Game {
   if (prev.phase !== "playing") {
     return prev;
   }
   const g: Game = { ...prev };
-  g.leftY = clamp(g.leftY + move * PLAYER_SPEED, 0, FIELD_H - PADDLE_H);
-  computer(g);
+  g.leftY = clamp(g.leftY + move * PLAYER_SPEED * k, 0, FIELD_H - PADDLE_H);
+  computer(g, k);
   if (g.wait > 0) {
-    g.wait = g.wait - 1;
+    g.wait = Math.max(0, g.wait - k);
     return g;
   }
 
-  g.ballX = g.ballX + g.velX;
-  g.ballY = g.ballY + g.velY;
+  g.ballX = g.ballX + g.velX * k;
+  g.ballY = g.ballY + g.velY * k;
 
   // The top and bottom walls.
   if (g.ballY < 0) {

@@ -53,6 +53,9 @@ pub mod event_code {
     /// module-level signals. The guest replies with an `Op::Snapshot` in
     /// its next commit.
     pub const SNAPSHOT_REQUEST: u8 = 0x06;
+    /// Core 1.12: a display frame for a frame timer (`plinth:time`
+    /// `onFrame`), with the milliseconds since the previous frame.
+    pub const FRAME: u8 = 0x07;
 }
 
 /// `kind` values of the `navigate` op.
@@ -223,6 +226,9 @@ pub enum Event {
     Ui { handler: u32, event: u16, value: Value },
     Completion { request: u32, result: Value },
     Timer { timer: u32 },
+    /// Core 1.12: a display frame for the frame timer `timer`; `dt` is the
+    /// milliseconds since the previous frame (0 for the first).
+    Frame { timer: u32, dt: f64 },
     Lifecycle { kind: u8 },
     VisibleRows { list: u32, from: u32, to: u32 },
     /// Dev-only (SPEC.md §13): asks for a hot-reload signal snapshot.
@@ -400,6 +406,11 @@ impl Writer {
                 self.u8(event_code::TIMER);
                 self.u32(*timer);
             }
+            Event::Frame { timer, dt } => {
+                self.u8(event_code::FRAME);
+                self.u32(*timer);
+                self.value(&Value::Number(*dt));
+            }
             Event::Lifecycle { kind } => {
                 self.u8(event_code::LIFECYCLE);
                 self.u8(*kind);
@@ -526,6 +537,7 @@ impl<'a> Reader<'a> {
             event_code::UI => Event::Ui { handler: self.u32()?, event: self.u16()?, value: self.value()? },
             event_code::COMPLETION => Event::Completion { request: self.u32()?, result: self.value()? },
             event_code::TIMER => Event::Timer { timer: self.u32()? },
+            event_code::FRAME => Event::Frame { timer: self.u32()?, dt: self.value()?.as_number().unwrap_or(0.0) },
             event_code::LIFECYCLE => Event::Lifecycle { kind: self.u8()? },
             event_code::VISIBLE_ROWS => {
                 Event::VisibleRows { list: self.u32()?, from: self.u32()?, to: self.u32()? }
@@ -595,6 +607,7 @@ mod tests {
             Event::Ui { handler: 4, event: event::CHANGE, value: Value::Str("abc".into()) },
             Event::Completion { request: 9, result: Value::Int(-3) },
             Event::Timer { timer: 2 },
+            Event::Frame { timer: 4, dt: 16.5 },
             Event::Lifecycle { kind: 1 },
             Event::VisibleRows { list: 5, from: 0, to: 20 },
             Event::SnapshotRequest,

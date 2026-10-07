@@ -534,6 +534,7 @@ The `kind`, `prop`, `event`, and enum ids are generated from one table in `wit/p
 | `timer` | `0x03` | `timer: u32` |
 | `lifecycle` | `0x04` | `kind: u8` (foreground, background, low-memory, before-quit) |
 | `visible-rows` | `0x05` | `list: u32`, `from: u32`, `to: u32` (if host-side virtualization asks for rows) |
+| `frame` | `0x07` | `timer: u32`, `dt: Value` (a number: the milliseconds since the previous frame, 0 for the first). Core 1.12: the host sends it before each frame that it draws, for each frame timer (`time.set-frame-timer`, `plinth:time` `onFrame`). |
 
 **Two-way bindings** (`TextField value={sig}`): the host updates the displayed control at once and sends a `ui` event. The guest updates the signal. It does **not** echo a `set-prop` back to the host unless the value differs (for example, input filtering). This rule stops the cursor from jumping and stops feedback loops.
 
