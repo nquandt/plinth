@@ -216,7 +216,7 @@ An uncaught rejection does not stop the app. The host reports it as an uncaught 
 Notes:
 
 - On the desktop, the kv store is keyed by the app id only, and the private file space and the SQL database by the owner and the app id.
-- On the web, only one browser tab of an origin at a time can open the SQL databases (`docs/SQL.md` §9 W5). A web export (`plinth build --target web`) does not have `sql` yet.
+- On the web, only one browser tab of an origin at a time can open the SQL databases (`docs/SQL.md` §9 W5). The folder form of a web export (`plinth build --target web`) has `sql`: it writes the SQLite files (about 1.5 MB) next to `plinth.js`. A single-file export (`--single-file`) does not have `sql`: each call rejects with `Error("denied:unsupported")`, and `plinth build` writes a warning.
 - On the desktop, the files of an unsigned package are in a new space after each build. Sign your package (see [publishing.md](publishing.md)) to keep the same space across versions.
 - On the web, all data is in the storage of the page origin. The apps cannot read the data of other apps, but code of the page can (`docs/THREAT-MODEL.md` §6).
 - [host-apis.md](../host-apis.md) "Support on each host" has the other differences between hosts.

@@ -524,9 +524,16 @@ fn build_web(dir: &Path, out: Option<PathBuf>, single_file: bool, sign: bool, re
     let core_version = plinth_compiler::cores::core_version(core).context("the built-in core has no version")?;
     let version = plinth_compiler::cores::format_version(core_version);
     let file = plnt_path.file_name().and_then(|n| n.to_str()).context("package file name")?.to_owned();
-    let web = web_export::WebApp { name: &app.title, plnt: (&plnt, &file), core: (core, &version) };
+    let sql = app.capabilities.iter().any(|c| c == web_export::SQL_CAPABILITY);
+    let web = web_export::WebApp { name: &app.title, plnt: (&plnt, &file), core: (core, &version), sql };
     let dist = plnt_path.parent().unwrap_or(Path::new("."));
     if single_file {
+        if sql {
+            eprintln!(
+                "warning: {} declares store.sql, but a single-file web export has no SQL engine: each sql call answers \"denied:unsupported\". Use the folder form (no --single-file) for store.sql.",
+                app.title
+            );
+        }
         let out = out.unwrap_or_else(|| plnt_path.with_extension("html"));
         if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
@@ -537,7 +544,8 @@ fn build_web(dir: &Path, out: Option<PathBuf>, single_file: bool, sign: bool, re
     } else {
         let out = out.unwrap_or_else(|| dist.join("web"));
         web_export::write_folder(&out, &web)?;
-        println!("made {} ({}, core {version}): put the folder on any static web host", out.display(), app.title);
+        let with_sql = if sql { ", with the SQLite engine for store.sql" } else { "" };
+        println!("made {} ({}, core {version}{with_sql}): put the folder on any static web host", out.display(), app.title);
     }
     Ok(true)
 }

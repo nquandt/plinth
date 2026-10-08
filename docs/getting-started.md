@@ -320,7 +320,9 @@ plinth build --target web --single-file
 ```
 
 writes one file, `dist/<name>.html`, with everything inline. Open it from
-disk, attach it to an email, or put it on a web host.
+disk, attach it to an email, or put it on a web host. A single file does
+not have `store.sql`: if your app declares it, use the folder form.
+`plinth build` writes a warning.
 
 To show an app in your own page, load `plinth.js` and add the element:
 
@@ -334,7 +336,10 @@ cannot reach it. The element takes the width of its container and the
 height of the app (`height="fill"`: the height that you give the
 element). The app gets the capabilities that `plinth.toml` declares, with
 no consent screen, and its `store.kv` data stays in the browser storage of
-your site. A `plinth:net` request needs CORS on the target server. See
+your site. For an app that declares `store.sql`, the folder also has
+`sql-worker.js`, `sql.js` and `vendor/sqlite-wasm/`, and the element has
+`sql="sql-worker.js"`: the page runs SQLite in a Worker, and the database
+stays in the browser storage (OPFS) of your site. A `plinth:net` request needs CORS on the target server. See
 SPEC.md §10.3.
 
 ## 9. Next steps

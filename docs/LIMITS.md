@@ -41,7 +41,7 @@ Plinth is not ready for production apps. The current level is "before Preview".
 | Limit | Item |
 |---|---|
 | Notifications show on Windows and on the web. On Linux and macOS, `plinth:notify`'s `show` answers "unsupported". On the web, the browser asks for the permission; some browsers ask only after a click, and then `show` answers "unsupported". | H3 |
-| `store.sql` on the web: one tab of an origin at a time can open the databases; without OPFS (an old browser) the databases are in memory and go away when the page closes; a web export (`plinth build --target web`) answers `denied:unsupported`; a statement or a parameter text is at most 16 Mi characters. `docs/SQL.md` §9 lists all differences. | H4 |
+| `store.sql` on the web: one tab of an origin at a time can open the databases; without OPFS (an old browser) the databases are in memory and go away when the page closes; a single-file web export (`plinth build --target web --single-file`) answers `denied:unsupported` (the folder form has `store.sql`); a statement or a parameter text is at most 16 Mi characters. `docs/SQL.md` §9 lists all differences. | H4 |
 | No sync of app data between the devices of one user. | H6 |
 | No camera, microphone or location. | SPEC §11 |
 | Hot reload keeps signals with simple values only. Signals with arrays, objects, `Map` or `Set` start again. | SPEC §13 |

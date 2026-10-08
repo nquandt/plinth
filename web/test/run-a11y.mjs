@@ -890,8 +890,8 @@ async function checkStopBanner(cdpPort, base) {
 /**
  * The web export (SPEC.md §10.3). The folder form of notes on a plain static
  * server (no CORS headers): `<plinth-app>` runs the app in a sandboxed
- * frame, a note goes into the kv data of the page origin and is there
- * again after a reload. The single-file form of todo from disk (file://):
+ * frame, a note goes into the `store.sql` database of the page origin
+ * (SQLite in a Worker of the page, OPFS) and is there again after a reload. The single-file form of todo from disk (file://):
  * the app runs and typing works in the frame. Returns the axe result of
  * the notes frame.
  */
@@ -925,7 +925,9 @@ async function checkWebExport(cdpPort) {
     await frame.waitFor(`${addNote} && !${addNote}.disabled ? true : null`, 5000);
     await frame.eval(`${addNote}.click()`);
     await frame.waitFor(`document.getElementById("app").innerText.includes("Exported note") ? true : null`, 5000);
-    await page.waitFor(`Object.keys(localStorage).some((k) => k.startsWith("plinth-hub:kv:dev.plinth.examples.notes:")) ? true : null`, 5000);
+    // store.sql: the export runs SQLite in a Worker of the page, with OPFS of the page origin.
+    const opfs = await page.eval(`(async () => { try { const d = await navigator.storage.getDirectory(); await d.getDirectoryHandle(".plinth-sql"); return true; } catch { return false; } })()`);
+    if (!opfs) throw new Error("the SQL database of the export is not in OPFS (no .plinth-sql folder)");
     const height = await page.eval(`document.querySelector("plinth-app > iframe").getBoundingClientRect().height`);
     if (height < 200) throw new Error(`the app frame is ${height} px high; height="fill" must give it the page`);
     await page.navigate(`${base}/`);
@@ -935,7 +937,7 @@ async function checkWebExport(cdpPort) {
     await page.navigate(pathToFileURL(single).href);
     await page.waitFor(state, 20000);
     await typeKeys(page, frame, () => frame.eval(`document.querySelector("#app input[type=text]").focus()`));
-    return { violations, note: "notes from a static server (kv kept across a reload), todo from one file on disk" };
+    return { violations, note: "notes from a static server (store.sql in OPFS, kept across a reload), todo from one file on disk" };
   } finally {
     await page.close();
     server.close();

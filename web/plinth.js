@@ -5525,6 +5525,15 @@ class AppFrame {
 // The host gives the app the capabilities that its manifest declares. The
 // kv data of the app belongs to the origin of the page.
 //
+// `store.sql` (docs/SQL.md §2): when the element has a `sql` attribute (the
+// URL of `sql-worker.js`), the page runs SQLite in that Worker, with OPFS of
+// the page origin. The folder form of an export writes the Worker, `sql.js`
+// and the SQLite Wasm build next to `plinth.js` and sets the attribute. The
+// page loads `sql.js` (next to the Worker) only at the start of an app that
+// declares `store.sql`, so other pages do not load it. Without the
+// attribute (a single-file export), a `store.sql` call answers
+// `denied:unsupported`.
+//
 // This file is only a part of the bundle `plinth.js`
 // (`scripts/gen-plinth-js.mjs`); the bundle gives `defineElement` the frame
 // document and its own URL.
@@ -5561,6 +5570,24 @@ async function loadBytes(ref, doc = document) {
 function defaultCoreUrl(runtime, baseUrl) {
   const version = String(runtime ?? "").replace(/^plinth-core\//, "") || "1.0";
   return new URL(`plinth-core-${version}.wasm`, baseUrl).href;
+}
+
+/** One `SqlWorkerHost` for each SQL Worker URL: all apps of the page share the Worker. */
+const sqlHosts = new Map();
+
+/**
+ * The `store.sql` engine of the page for the Worker at `workerUrl`. It loads
+ * `SqlWorkerHost` from `sql.js` next to the Worker (`sql-worker.js` imports
+ * the same file).
+ */
+async function pageSqlHost(workerUrl) {
+  if (!sqlHosts.has(workerUrl)) {
+    sqlHosts.set(
+      workerUrl,
+      import(new URL("sql.js", workerUrl).href).then(({ SqlWorkerHost }) => new SqlWorkerHost(new URL(workerUrl))),
+    );
+  }
+  return sqlHosts.get(workerUrl);
 }
 
 /** `localStorage`, or a memory store if the page cannot use it (some file:// pages, private modes). */
@@ -5613,7 +5640,8 @@ ${dark}
  * Attributes: `src` (a URL or `#id` of a `.plnt`), `core` (a URL or `#id`
  * of the core; default `defaultCoreUrl`), `height` (`content`, the
  * default: the element takes the height of the app; `fill`: the app fills
- * the height that the page gives the element).
+ * the height that the page gives the element), `sql` (a URL of
+ * `sql-worker.js`: the app gets `store.sql`; see the top of this file).
  *
  * The element sets `data-state` to `loading`, `running` or `failed`.
  */
@@ -5657,6 +5685,9 @@ function defineElement({ frameDocument, baseUrl, styleCss }) {
       if (!this.isConnected) return;
       const title = manifest.name || manifest.id || "Plinth app";
       const fill = this.getAttribute("height") === "fill";
+      const sqlRef = this.getAttribute("sql");
+      const sql = sqlRef && manifest.capabilities.has("store.sql") ? await pageSqlHost(new URL(sqlRef, document.baseURI).href) : null;
+      if (!this.isConnected) return;
       const frame = new AppFrame({
         appId: manifest.id,
         title,
@@ -5665,6 +5696,7 @@ function defineElement({ frameDocument, baseUrl, styleCss }) {
         declared: [...manifest.capabilities],
         refused: [],
         store: new HubStore(pageStorage("localStorage"), pageStorage("sessionStorage")),
+        sql,
         srcdoc: frameDocument({ title, fill }),
         autoHeight: !fill,
         onStarted: () => (this.dataset.state = "running"),
