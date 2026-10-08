@@ -194,6 +194,11 @@ impl Db {
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
         conn.set_limit(Limit::SQLITE_LIMIT_ATTACHED, 0)?;
+        // Temporary tables, indexes and large sorts stay in memory, not in
+        // temporary files that the quota does not count (`docs/SQL.md`
+        // SQL-Q6). `HEAP_LIMIT` limits that memory.
+        conn.pragma_update(None, "temp_store", "MEMORY")?;
+        set_heap_limit();
 
         let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
         let max_pages = (self.limits.quota / page_size.max(512) as u64).max(1);
@@ -414,11 +419,30 @@ fn authorize(action: &AuthAction<'_>) -> Authorization {
 }
 
 /// The error text the app sees for a SQLite error.
+/// The most memory that SQLite can use in this process, for all databases
+/// together: the page caches, and the temporary data that `temp_store =
+/// MEMORY` keeps in memory. SQLite has only a limit for the whole process,
+/// not one for each database. A statement past it fails with
+/// `sql: out of memory`; the app keeps running.
+pub const HEAP_LIMIT: i64 = 512 << 20;
+
+fn set_heap_limit() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    // SAFETY: `sqlite3_hard_heap_limit64` only sets a number in SQLite's
+    // global memory state; it is safe to call at any time.
+    ONCE.call_once(|| unsafe {
+        rusqlite::ffi::sqlite3_hard_heap_limit64(HEAP_LIMIT);
+    });
+}
+
+const OUT_OF_MEMORY: &str = "sql: out of memory";
+
 fn sql_error(e: &rusqlite::Error) -> String {
     if let Some(code) = e.sqlite_error_code() {
         match code {
             ErrorCode::OperationInterrupted => return TOO_LONG.into(),
             ErrorCode::DiskFull => return FULL.into(),
+            ErrorCode::OutOfMemory => return OUT_OF_MEMORY.into(),
             _ => {}
         }
     }
@@ -792,6 +816,26 @@ mod tests {
         let rows = db.query("SELECT title FROM docs WHERE docs MATCH ? ORDER BY rank", r#"["milk"]"#).unwrap();
         assert_eq!(json(&rows), json(r#"[{"title":"Groceries"}]"#));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn temporary_data_stays_in_memory_under_the_heap_limit() {
+        let (db, dir) = open("temp");
+        assert_eq!(db.exec("PRAGMA temp_store = FILE", "").unwrap_err(), "sql: not authorized");
+        db.internal.store(true, Ordering::SeqCst);
+        let mode: i64 = db.conn.query_row("PRAGMA temp_store", [], |r| r.get(0)).unwrap();
+        db.internal.store(false, Ordering::SeqCst);
+        assert_eq!(mode, 2, "temp_store is MEMORY");
+        // A negative value reads the limit and does not change it.
+        assert_eq!(unsafe { rusqlite::ffi::sqlite3_hard_heap_limit64(-1) }, HEAP_LIMIT);
+        db.exec("CREATE TEMP TABLE t (x)", "").unwrap();
+        db.exec("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000) INSERT INTO t SELECT i FROM n", "")
+            .unwrap();
+        db.query("SELECT x FROM t ORDER BY x DESC LIMIT 1", "").unwrap();
+        let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, [FILE_NAME], "no temporary file next to the database");
+        drop(db);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
