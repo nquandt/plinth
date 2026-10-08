@@ -7,22 +7,33 @@
 //! position in `keys`. Only the functions here read or write it.
 //!
 //! `delete` does not move entries: it marks the entry as a hole. Thus
-//! `set`, `get`, `has` and `delete` are O(1) on average. The holes go away
-//! in `compact`, which the compiler calls before code that reads the
-//! arrays directly (`keys()`, `values()`, `entries()`, `JSON.stringify`,
-//! the headers of `fetch`), and when the table grows. A `for…of` or
-//! `forEach` loop skips the holes with `live`.
+//! `set`, `get`, `has` and `delete` are O(1) on average. Loops skip the
+//! holes with `live`; `keys()`, `values()`, `entries()`, `JSON.stringify`
+//! and the `fetch` headers read a copy without the holes (`live_copy`).
+//!
+//! **Iteration.** A `for…of` or `forEach` loop over a map calls `iter(+1)`
+//! before it starts and `iter(-1)` in a `finally` (so also after `break`,
+//! `return`, `continue` to an outer loop, or an exception). While the
+//! count is above zero, no function here moves an entry: a growing table
+//! keeps the holes, and `clear` makes every entry a hole. Thus a loop visits
+//! each live entry one time, visits the entries that its body adds, and
+//! does not visit the entries that its body deletes, as in JS. When the
+//! count goes back to zero, the holes go away if they are many. If the
+//! count stays above zero (an `async` function that never continues after
+//! an `await` in such a loop), the only effect is that this map keeps its
+//! holes: the results stay correct.
 //!
 //! Layout of `index` (`i32` words): `[0]` the number of entries (with the
 //! holes) that the index knows, `[1]` the number of holes, `[2]` the table
-//! size `C` (a power of two), then `C` slots (`EMPTY`, `DELETED` or an
-//! entry position), then `C / 2` hole flags (1 = hole), one per position.
-//! The table is at most half full, so a probe always finds an empty slot.
+//! size `C` (a power of two), `[3]` the number of active loops, then `C`
+//! slots (`EMPTY`, `DELETED` or an entry position), then `C / 2` hole flags
+//! (1 = hole), one per position. The table is at most half full, so a
+//! probe always finds an empty slot.
 //!
 //! The index is valid only when `[0]` is the length of `keys`. Otherwise
-//! (a new map, a map from `JSON.parse`, or after `clear`) the next call
-//! builds it again from `keys`. Thus the compiler can make a map with an
-//! empty `index` array and fill `keys`/`values` directly.
+//! (a new map, or a map from `JSON.parse`) the next call builds it again
+//! from `keys`. Thus the compiler can make a map with an empty `index`
+//! array and fill `keys`/`values` directly.
 //!
 //! Key kinds come from the kind of the `keys` array: a reference array
 //! holds strings (compared by content), an `f64` array numbers (compared
@@ -32,11 +43,13 @@
 use crate::arrays;
 use crate::gc::{T_ARR_F64, T_ARR_REF, load_u32, store_u32};
 use crate::strings;
+use alloc::vec::Vec;
 
 const SYNC: u32 = 0;
 const HOLES: u32 = 1;
 const CAP: u32 = 2;
-const SLOTS: u32 = 3;
+const ITER: u32 = 3;
+const SLOTS: u32 = 4;
 const EMPTY: i32 = -1;
 const DELETED: i32 = -2;
 
@@ -101,8 +114,16 @@ fn set_word(index: u32, i: u32, v: i32) {
     unsafe { store_u32(arrays::raw(index).0 + i * 4, v as u32) }
 }
 
+fn has_header(index: u32) -> bool {
+    arrays::len(index) > SLOTS
+}
+
 fn valid(keys: u32, index: u32) -> bool {
-    arrays::len(index) > SLOTS && word(index, SYNC) as u32 == arrays::len(keys)
+    has_header(index) && word(index, SYNC) as u32 == arrays::len(keys)
+}
+
+fn loops(index: u32) -> i32 {
+    if has_header(index) { word(index, ITER) } else { 0 }
 }
 
 fn flag_at(index: u32, pos: u32) -> u32 {
@@ -110,15 +131,14 @@ fn flag_at(index: u32, pos: u32) -> u32 {
 }
 
 /// Moves the live entries of `keys` and `values` (0 for a `Set`) to the
-/// front, in order, and drops the holes. The index knows the first `known`
-/// entries; the entries after them are new, so not holes.
-fn compact_entries(keys: u32, values: u32, index: u32, known: u32) {
+/// front, in order, and drops the holes. `dead[pos]` marks the holes.
+fn compact_entries(keys: u32, values: u32, dead: &[bool]) {
     let n = arrays::len(keys);
     let (kd, ks) = arrays::raw(keys);
     let (vd, vs) = if values != 0 { arrays::raw(values) } else { (0, 0) };
     let mut w = 0;
     for pos in 0..n {
-        if pos < known && word(index, flag_at(index, pos)) != 0 {
+        if dead.get(pos as usize).copied().unwrap_or(false) {
             continue;
         }
         if w != pos {
@@ -138,12 +158,20 @@ fn compact_entries(keys: u32, values: u32, index: u32, known: u32) {
 }
 
 /// Builds the index again from `keys`. `known` is `Some(n)` when the index
-/// is correct for the first `n` entries; then the holes are dropped first.
+/// is correct for the first `n` entries: then its holes stay holes, and
+/// they are dropped from the arrays only when no loop is active. Keeps the
+/// loop count.
 fn rebuild(keys: u32, values: u32, index: u32, known: Option<u32>) {
+    let active = loops(index);
+    let mut dead: Vec<bool> = Vec::new();
     if let Some(known) = known
         && word(index, HOLES) > 0
     {
-        compact_entries(keys, values, index, known);
+        dead = (0..known).map(|pos| word(index, flag_at(index, pos)) != 0).collect();
+        if active == 0 {
+            compact_entries(keys, values, &dead);
+            dead.clear();
+        }
     }
     let n = arrays::len(keys);
     let mut cap: u32 = 8;
@@ -152,13 +180,20 @@ fn rebuild(keys: u32, values: u32, index: u32, known: Option<u32>) {
     }
     arrays::reset_i32(index, SLOTS + cap + cap / 2, EMPTY);
     set_word(index, SYNC, n as i32);
-    set_word(index, HOLES, 0);
     set_word(index, CAP, cap as i32);
+    set_word(index, ITER, active);
+    let mut holes = 0;
     for pos in 0..cap / 2 {
-        set_word(index, SLOTS + cap + pos, 0);
+        let d = dead.get(pos as usize).copied().unwrap_or(false);
+        holes += d as i32;
+        set_word(index, SLOTS + cap + pos, d as i32);
     }
+    set_word(index, HOLES, holes);
     let mask = cap - 1;
     for pos in 0..n {
+        if dead.get(pos as usize).copied().unwrap_or(false) {
+            continue;
+        }
         let k = key_at(keys, pos);
         let mut i = hash(k) & mask;
         loop {
@@ -177,10 +212,14 @@ fn rebuild(keys: u32, values: u32, index: u32, known: Option<u32>) {
     }
 }
 
-fn find(keys: u32, index: u32, k: Key) -> i32 {
+fn ensure(keys: u32, index: u32) {
     if !valid(keys, index) {
         rebuild(keys, 0, index, None);
     }
+}
+
+fn find(keys: u32, index: u32, k: Key) -> i32 {
+    ensure(keys, index);
     let mask = word(index, CAP) as u32 - 1;
     let mut i = hash(k) & mask;
     loop {
@@ -211,7 +250,7 @@ pub fn find_i32(keys: u32, index: u32, key: i32) -> i32 {
 /// it pushes a new key (one that `find` did not find) and its value.
 pub fn add(keys: u32, values: u32, index: u32) {
     let n = arrays::len(keys);
-    if n == 0 || arrays::len(index) <= SLOTS || word(index, SYNC) as u32 != n - 1 {
+    if n == 0 || !has_header(index) || word(index, SYNC) as u32 != n - 1 {
         rebuild(keys, values, index, None);
         return;
     }
@@ -258,21 +297,36 @@ pub fn remove(keys: u32, values: u32, index: u32, pos: i32) {
     set_word(index, flag, 1);
     let holes = word(index, HOLES) + 1;
     set_word(index, HOLES, holes);
-    // Every entry is a hole: start again with empty arrays.
-    if holes as u32 == arrays::len(keys) {
+    // Every entry is a hole and no loop is active: start again with empty
+    // arrays.
+    if holes as u32 == arrays::len(keys) && loops(index) == 0 {
+        clear(keys, values, index);
+    }
+}
+
+/// `clear()`. With an active loop, every entry becomes a hole (the loop
+/// then visits only the entries added after the `clear`); else the arrays
+/// become empty.
+pub fn clear(keys: u32, values: u32, index: u32) {
+    let active = loops(index);
+    if active == 0 {
         arrays::truncate(keys, 0);
         if values != 0 {
             arrays::truncate(values, 0);
         }
         rebuild(keys, values, index, None);
+        return;
     }
-}
-
-/// Drops the holes, so that `keys` and `values` hold exactly the entries.
-pub fn compact(keys: u32, values: u32, index: u32) {
-    if valid(keys, index) && word(index, HOLES) > 0 {
-        rebuild(keys, values, index, Some(arrays::len(keys)));
+    ensure(keys, index);
+    let n = arrays::len(keys);
+    let cap = word(index, CAP) as u32;
+    for i in 0..cap {
+        set_word(index, SLOTS + i, EMPTY);
     }
+    for pos in 0..n {
+        set_word(index, SLOTS + cap + pos, 1);
+    }
+    set_word(index, HOLES, n as i32);
 }
 
 /// The number of entries (`size`).
@@ -287,4 +341,37 @@ pub fn live(keys: u32, index: u32, pos: i32) -> i32 {
         return 1;
     }
     (word(index, flag_at(index, pos as u32)) == 0) as i32
+}
+
+/// A new array with the elements of `arr` (`keys` or `values`) at the
+/// positions that are not holes, in order. The map does not change.
+pub fn live_copy(arr: u32, keys: u32, index: u32) -> u32 {
+    let n = arrays::len(arr).min(arrays::len(keys));
+    let holes = valid(keys, index) && word(index, HOLES) > 0;
+    let out = arrays::new(crate::gc::type_of(arr), n);
+    let (src, size) = arrays::raw(arr);
+    let dst = arrays::raw(out).0;
+    let mut w = 0;
+    for pos in 0..n {
+        if holes && word(index, flag_at(index, pos)) != 0 {
+            continue;
+        }
+        unsafe { core::ptr::copy_nonoverlapping((src + pos * size) as *const u8, (dst + w * size) as *mut u8, size as usize) };
+        w += 1;
+    }
+    arrays::set_len(out, w);
+    out
+}
+
+/// A loop over the map starts (`delta` 1) or ends (`delta` -1). When the
+/// last loop ends and at least half of the entries are holes, the holes go
+/// away.
+pub fn iter(keys: u32, values: u32, index: u32, delta: i32) {
+    ensure(keys, index);
+    let count = (word(index, ITER) + delta).max(0);
+    set_word(index, ITER, count);
+    let holes = word(index, HOLES);
+    if count == 0 && holes > 0 && holes as u32 * 2 >= arrays::len(keys) {
+        rebuild(keys, values, index, Some(arrays::len(keys)));
+    }
 }

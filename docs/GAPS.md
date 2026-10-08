@@ -1086,13 +1086,25 @@ work.
   `get`, `set`, `has` and `delete`, and `delete` moved each later entry.
   Now the map struct has a third field, `index`, a hash table from a key
   to its position. Only the new core 1.13 functions `kv_find_str`,
-  `kv_find_f64`, `kv_find_i32`, `kv_add`, `kv_remove`, `kv_compact`,
-  `kv_size` and `kv_live` read it (`plinth-rt/src/kv.rs`). The table
-  grows by doubling and is at most half full. `delete` marks a hole and
-  moves nothing; the holes go away when the table grows and before code
-  that reads the arrays directly (`keys()`, `values()`, `entries()`,
-  `JSON.stringify`, the `fetch` headers). Loops skip the holes. The order
-  stays the insertion order.
+  `kv_find_f64`, `kv_find_i32`, `kv_add`, `kv_remove`, `kv_clear`,
+  `kv_size`, `kv_live`, `kv_live_copy` and `kv_iter` read it
+  (`plinth-rt/src/kv.rs`). The table grows by doubling and is at most
+  half full. `delete` marks a hole and moves nothing. Loops skip the
+  holes; `keys()`, `values()`, `entries()`, `JSON.stringify` and the
+  `fetch` headers read a copy without the holes. The order stays the
+  insertion order.
+- Iteration: a `for…of` or `forEach` over a map calls `kv_iter(+1)`
+  before it starts and `kv_iter(-1)` in a `finally` (thus also after
+  `break`, `return` and an exception). While a loop is active, no entry
+  moves: a growing table keeps the holes, and `clear` makes every entry
+  a hole. Thus a loop visits each live entry one time, visits the
+  entries that its body adds, and does not visit the entries that its
+  body deletes, as in JS, also when the table grows during the loop and
+  for nested loops over the same map. The holes go away when the table
+  grows with no active loop, and when the last loop ends and at least
+  half of the entries are holes. If the count stays above zero (an
+  `async` function that never continues after an `await` in such a
+  loop), that map only keeps its holes; the results stay correct.
 - `sort` was a generated insertion sort (O(n^2)). Now it is a generated
   stable merge sort: an insertion sort of each run of 8, then bottom-up
   merges into a copy.
@@ -1112,7 +1124,10 @@ The same benchmark after the fix (release build):
 Tests: `crates/plinth-compiler/tests/collections.rs` (20,000 string keys,
 20,000 number keys in a `Set`, insertion order after delete and set
 again, delete in a loop, an LRU with 50,000 moves, GC stress with holes,
-a stable sort, a sort of 20,000 numbers, `join` of 100,000 numbers).
+a stable sort, a sort of 20,000 numbers, `join` of 100,000 numbers,
+loops that add many keys to a map with holes, `keys()` and
+`JSON.stringify` in a `forEach`, nested loops, and `break`, `return` and
+`throw` out of a loop).
 Before the fix, the large cases went over the 2 s call limit or ran out
 of memory.
 

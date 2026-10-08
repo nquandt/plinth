@@ -213,3 +213,11 @@ pub(crate) fn reset_i32(p: u32, words: u32, fill: i32) {
     }
     unsafe { store_u32(p + 8, words) };
 }
+
+/// Sets the length of `p` to `n`, which must be at most the capacity. The
+/// elements below `n` must be set.
+pub(crate) fn set_len(p: u32, n: u32) {
+    if n <= unsafe { load_u32(p + 12) } {
+        unsafe { store_u32(p + 8, n) };
+    }
+}

@@ -1967,8 +1967,10 @@ impl Checker<'_> {
     // already has (`Index`, `Assign(Place::Index, ..)`, `arr_push_*`/
     // `arr_pop_*`) plus the core's hash index (`kv_*`, core 1.13,
     // `plinth-rt/src/kv.rs`): `get`, `set`, `has` and `delete` are O(1) on
-    // average. `delete` leaves a hole; code that reads the arrays directly
-    // calls `kv_compact` first, and loops skip holes with `kv_live`.
+    // average. `delete` leaves a hole. Loops skip holes with `kv_live` and
+    // tell the core that they run (`kv_iter`, in a `finally`), so that no
+    // entry moves during a loop; code that needs the arrays without holes
+    // reads a copy (`kv_live_copy`).
 
     /// A value that produces nothing on the stack, for the tail of a
     /// `Type::Void` block (unlike `TExprKind::Null`, which always pushes a
@@ -1999,7 +2001,7 @@ impl Checker<'_> {
         }
     }
 
-    /// `kv_add`/`kv_compact(keys, values, index)` as a statement. `obj` must
+    /// `kv_add`/`kv_clear(keys, values, index)` as a statement. `obj` must
     /// be a variable (it is read three times).
     fn kv_rt_stmt(&self, name: &'static str, obj: &TExpr, sid: crate::types::StructId, span: Span) -> TStmt {
         let args = vec![self.kv_field(obj, sid, 0, span), self.kv_values_or_null(obj, sid, span), self.kv_index(obj, sid, span)];
@@ -2034,13 +2036,55 @@ impl Checker<'_> {
         TExpr::new(TExprKind::Rt("kv_live", vec![self.kv_field(obj, sid, 0, span), self.kv_index(obj, sid, span), i]), Type::Bool, span)
     }
 
-    /// `o` in a new variable, then `kv_compact`: the statements, and a read
-    /// of the variable.
-    pub(super) fn kv_compacted(&mut self, o: TExpr, sid: crate::types::StructId, span: Span) -> (Vec<TStmt>, TExpr) {
-        let obj_v = self.temp(o.ty.clone());
-        let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
-        let compact = self.kv_rt_stmt("kv_compact", &obj_r, sid, span);
-        (vec![TStmt::Let(obj_v, Some(o)), compact], obj_r)
+    /// `kv_iter(keys, values, index, delta)`: a loop over the map starts (1)
+    /// or ends (-1). `obj` must be a variable.
+    fn kv_iter_stmt(&self, obj: &TExpr, sid: crate::types::StructId, delta: f64, span: Span) -> TStmt {
+        let d = TExpr::new(TExprKind::Coerce(Coercion::NumToI32, bx(self.num_lit(delta, span))), Type::Bool, span);
+        let args = vec![self.kv_field(obj, sid, 0, span), self.kv_values_or_null(obj, sid, span), self.kv_index(obj, sid, span), d];
+        TStmt::Expr(TExpr::new(TExprKind::Rt("kv_iter", args), Type::Void, span))
+    }
+
+    /// Wraps a loop over the map `obj` (a variable): `kv_iter(+1)`, then the
+    /// loop in a `try` whose `finally` calls `kv_iter(-1)`, so the count
+    /// goes down after a `break`, a `return`, a jump to an outer loop or an
+    /// exception too.
+    fn kv_iterating(&self, obj: &TExpr, sid: crate::types::StructId, body: Vec<TStmt>, span: Span) -> Vec<TStmt> {
+        vec![
+            self.kv_iter_stmt(obj, sid, 1.0, span),
+            TStmt::Try { body, catch: None, finally: Some(vec![self.kv_iter_stmt(obj, sid, -1.0, span)]) },
+        ]
+    }
+
+    /// Field `idx` of the map `obj` (a variable) without the holes, as a new
+    /// array (`kv_live_copy`).
+    fn kv_live_copy(&self, obj: &TExpr, sid: crate::types::StructId, idx: u32, span: Span) -> TExpr {
+        let arr = self.kv_field(obj, sid, idx, span);
+        let ty = arr.ty.clone();
+        TExpr::new(TExprKind::Rt("kv_live_copy", vec![arr, self.kv_field(obj, sid, 0, span), self.kv_index(obj, sid, span)]), ty, span)
+    }
+
+    /// `kv_live_copy` of field `idx` in a new variable: the `Let`, and a read.
+    fn kv_live_copy_var(&mut self, obj: &TExpr, sid: crate::types::StructId, idx: u32, span: Span) -> (TStmt, TExpr) {
+        let copy = self.kv_live_copy(obj, sid, idx, span);
+        let ty = copy.ty.clone();
+        let v = self.temp(ty.clone());
+        (TStmt::Let(v, Some(copy)), TExpr::new(TExprKind::Var(v), ty, span))
+    }
+
+    /// A new `Map` struct with the entries of the map `o` and no holes (an
+    /// empty index), for code in the core that reads the arrays directly
+    /// (the `fetch` headers). The map `o` does not change.
+    pub(super) fn kv_live_struct(&mut self, o: TExpr, sid: crate::types::StructId, span: Span) -> TExpr {
+        let ty = o.ty.clone();
+        let obj_v = self.temp(ty.clone());
+        let obj_r = TExpr::new(TExprKind::Var(obj_v), ty.clone(), span);
+        let index = TExpr::new(TExprKind::ArrayLit(Vec::new()), Type::Array(Box::new(Type::Int)), span);
+        let lit = TExpr::new(
+            TExprKind::StructLit(sid, vec![self.kv_live_copy(&obj_r, sid, 0, span), self.kv_live_copy(&obj_r, sid, 1, span), index]),
+            ty.clone(),
+            span,
+        );
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(obj_v, Some(o))], bx(lit)), ty, span)
     }
 
     /// `m.has(key)` / `s.has(key)`.
@@ -2056,12 +2100,14 @@ impl Checker<'_> {
         TExpr::new(TExprKind::Block(vec![TStmt::Let(obj_v, Some(o))], bx(found)), Type::Bool, span)
     }
 
-    /// `arr_copy_of` of field `idx` of `o` after `kv_compact`.
+    /// `keys()`/`values()`: a new array with field `idx` of `o`, without
+    /// the holes.
     fn kv_copy_field(&mut self, o: TExpr, sid: crate::types::StructId, idx: u32, span: Span) -> TExpr {
-        let (stmts, obj_r) = self.kv_compacted(o, sid, span);
-        let copy = self.arr_copy_of(self.kv_field(&obj_r, sid, idx, span), span);
+        let obj_v = self.temp(o.ty.clone());
+        let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
+        let copy = self.kv_live_copy(&obj_r, sid, idx, span);
         let ty = copy.ty.clone();
-        TExpr::new(TExprKind::Block(stmts, bx(copy)), ty, span)
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(obj_v, Some(o))], bx(copy)), ty, span)
     }
 
     /// A fresh copy of `arr` (`arr_slice(arr, 0, MAX)`, the same op `.slice()`
@@ -2107,20 +2153,6 @@ impl Checker<'_> {
         let f = if elem_ty.repr() == crate::types::Repr::F64 { "arr_pop_f64" } else { "arr_pop_i32" };
         let pop = TExpr::new(TExprKind::Rt(f, vec![arr]), elem_ty, span);
         TStmt::Expr(TExpr::new(TExprKind::Coerce(Coercion::Discard, bx(pop)), Type::Void, span))
-    }
-
-    /// `while (arr.length > 0) arr.pop();`
-    fn arr_clear(&mut self, arr: TExpr, span: Span) -> Vec<TStmt> {
-        let arr_v = self.temp(arr.ty.clone());
-        let arr_r = TExpr::new(TExprKind::Var(arr_v), arr.ty.clone(), span);
-        let cond = TExpr::new(
-            TExprKind::Cmp(CmpOp::Gt, EqKind::F64, bx(self.arr_len_of(arr_r.clone(), span)), bx(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
-            Type::Bool,
-            span,
-        );
-        let id = self.prog.new_loop();
-        let pop = self.arr_pop_discard(arr_r, span);
-        vec![TStmt::Let(arr_v, Some(arr)), TStmt::Loop { id, cond: Some(cond), test_after: false, update: None, body: vec![pop] }]
     }
 
     /// `m.delete(k)` / `s.delete(v)`: finds the key with the hash index and
@@ -2284,13 +2316,9 @@ impl Checker<'_> {
         let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))), Type::Number, span);
         let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
         let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![TStmt::If(live, prologue, Vec::new())] };
-        let compact = self.kv_rt_stmt("kv_compact", &obj_r, sid, span);
-        Some(vec![
-            TStmt::Let(obj_v, Some(obj)),
-            compact,
-            TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
-            loop_stmt,
-        ])
+        let mut out = vec![TStmt::Let(obj_v, Some(obj))];
+        out.extend(self.kv_iterating(&obj_r, sid, vec![TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))), loop_stmt], span));
+        Some(out)
     }
 
     fn map_method(&mut self, o: TExpr, k: &Type, v: &Type, prop: &str, prop_span: Span, args: &[Expr], span: Span) -> TExpr {
@@ -2388,9 +2416,7 @@ impl Checker<'_> {
                 let obj_v = self.temp(o.ty.clone());
                 let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
                 let mut body = vec![TStmt::Let(obj_v, Some(o))];
-                body.extend(self.arr_clear(self.kv_field(&obj_r, sid, 0, span), span));
-                body.extend(self.arr_clear(self.kv_field(&obj_r, sid, 1, span), span));
-                body.extend(self.arr_clear(self.kv_index(&obj_r, sid, span), span));
+                body.push(self.kv_rt_stmt("kv_clear", &obj_r, sid, span));
                 TExpr::new(TExprKind::Block(body, bx(self.void_tail(span))), Type::Void, span)
             }
             // `m.forEach((value, key) => ...)` (JS order: value first): an
@@ -2423,14 +2449,9 @@ impl Checker<'_> {
                 let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(len_r)), Type::Bool, span);
                 let id = self.prog.new_loop();
                 let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![call] };
-                let compact = self.kv_rt_stmt("kv_compact", &obj_r, sid, span);
-                let prelude = vec![
-                    TStmt::Let(obj_v, Some(o)),
-                    compact,
-                    TStmt::Let(f_v, Some(f)),
-                    TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
-                    loop_stmt,
-                ];
+                let mut prelude = vec![TStmt::Let(obj_v, Some(o)), TStmt::Let(f_v, Some(f))];
+                let looped = vec![TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))), loop_stmt];
+                prelude.extend(self.kv_iterating(&obj_r, sid, looped, span));
                 TExpr::new(TExprKind::Block(prelude, bx(self.void_tail(span))), Type::Void, span)
             }
             // `.keys()`/`.values()` as a plain array (not only as a bare
@@ -2460,8 +2481,8 @@ impl Checker<'_> {
                 let var = |id: VarId, ty: &Type| TExpr::new(TExprKind::Var(id), ty.clone(), span);
                 let obj_v = self.temp(o.ty.clone());
                 let obj_r = var(obj_v, &o.ty);
-                let keys = self.kv_field(&obj_r, sid, 0, span);
-                let values = self.kv_field(&obj_r, sid, 1, span);
+                let (let_keys, keys) = self.kv_live_copy_var(&obj_r, sid, 0, span);
+                let (let_values, values) = self.kv_live_copy_var(&obj_r, sid, 1, span);
                 let res_v = self.temp(res_ty.clone());
                 let len_v = self.temp(Type::Number);
                 let i_v = self.temp(Type::Number);
@@ -2476,10 +2497,10 @@ impl Checker<'_> {
                 let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r), bx(self.num_lit(1.0, span))), Type::Number, span);
                 let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
                 let id = self.prog.new_loop();
-                let compact = self.kv_rt_stmt("kv_compact", &obj_r, sid, span);
                 let stmts = vec![
                     TStmt::Let(obj_v, Some(o)),
-                    compact,
+                    let_keys,
+                    let_values,
                     TStmt::Let(res_v, Some(TExpr::new(TExprKind::ArrayLit(Vec::new()), res_ty.clone(), span))),
                     TStmt::Let(len_v, Some(self.arr_len_of(keys, span))),
                     TStmt::Let(i_v, Some(self.num_lit(0.0, span))),
@@ -2549,8 +2570,7 @@ impl Checker<'_> {
                 let obj_v = self.temp(o.ty.clone());
                 let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
                 let mut body = vec![TStmt::Let(obj_v, Some(o))];
-                body.extend(self.arr_clear(self.kv_field(&obj_r, sid, 0, span), span));
-                body.extend(self.arr_clear(self.kv_index(&obj_r, sid, span), span));
+                body.push(self.kv_rt_stmt("kv_clear", &obj_r, sid, span));
                 TExpr::new(TExprKind::Block(body, bx(self.void_tail(span))), Type::Void, span)
             }
             // `s.forEach(v => ...)`: same shape as `Map.forEach`, over the
@@ -2579,14 +2599,9 @@ impl Checker<'_> {
                 let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(len_r)), Type::Bool, span);
                 let id = self.prog.new_loop();
                 let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![call] };
-                let compact = self.kv_rt_stmt("kv_compact", &obj_r, sid, span);
-                let prelude = vec![
-                    TStmt::Let(obj_v, Some(o)),
-                    compact,
-                    TStmt::Let(f_v, Some(f)),
-                    TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
-                    loop_stmt,
-                ];
+                let mut prelude = vec![TStmt::Let(obj_v, Some(o)), TStmt::Let(f_v, Some(f))];
+                let looped = vec![TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))), loop_stmt];
+                prelude.extend(self.kv_iterating(&obj_r, sid, looped, span));
                 TExpr::new(TExprKind::Block(prelude, bx(self.void_tail(span))), Type::Void, span)
             }
             // `.keys()`/`.values()` as a plain array: both are the same
@@ -3478,8 +3493,8 @@ impl Checker<'_> {
         let id = self.prog.new_loop();
         let obj_v = self.temp(value.ty.clone());
         let obj_r = TExpr::new(TExprKind::Var(obj_v), value.ty.clone(), span);
-        let keys = self.kv_field(&obj_r, sid, 0, span);
-        let values = self.kv_field(&obj_r, sid, 1, span);
+        let (let_keys, keys) = self.kv_live_copy_var(&obj_r, sid, 0, span);
+        let (let_values, values) = self.kv_live_copy_var(&obj_r, sid, 1, span);
         let len = self.arr_len_of(keys.clone(), span);
         let len_v = self.temp(Type::Number);
         let len_r = TExpr::new(TExprKind::Var(len_v), Type::Number, span);
@@ -3510,10 +3525,10 @@ impl Checker<'_> {
         let open = TExpr::new(TExprKind::Str("{".into()), Type::String, span);
         let close = TExpr::new(TExprKind::Str("}".into()), Type::String, span);
         let result = self.json_parts_end(acc_v, close, span);
-        let compact = self.kv_rt_stmt("kv_compact", &obj_r, sid, span);
         let body = vec![
             TStmt::Let(obj_v, Some(value)),
-            compact,
+            let_keys,
+            let_values,
             TStmt::Let(len_v, Some(len)),
             TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
             TStmt::Let(acc_v, Some(TExpr::new(TExprKind::ArrayLit(vec![(false, open)]), Type::Array(Box::new(Type::String)), span))),

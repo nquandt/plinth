@@ -224,7 +224,9 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("kv_find_i32", &[I32, I32, I32], &[I32]),
     ("kv_add", &[I32, I32, I32], &[]),
     ("kv_remove", &[I32, I32, I32, I32], &[]),
-    ("kv_compact", &[I32, I32, I32], &[]),
+    ("kv_clear", &[I32, I32, I32], &[]),
+    ("kv_live_copy", &[I32, I32, I32], &[I32]),
+    ("kv_iter", &[I32, I32, I32, I32], &[]),
     ("kv_size", &[I32, I32], &[I32]),
     ("kv_live", &[I32, I32, I32], &[I32]),
 ];
@@ -344,7 +346,9 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("kv_find_i32", 13),
     ("kv_add", 13),
     ("kv_remove", 13),
-    ("kv_compact", 13),
+    ("kv_clear", 13),
+    ("kv_live_copy", 13),
+    ("kv_iter", 13),
     ("kv_size", 13),
     ("kv_live", 13),
 ];

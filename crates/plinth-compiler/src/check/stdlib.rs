@@ -1060,11 +1060,10 @@ impl Checker<'_> {
                             let want = Type::Map(Box::new(Type::String), Box::new(Type::String));
                             let te = self.expr_with(value, &want);
                             let te = self.coerce(te, &want);
-                            // The core reads the arrays directly: drop the
-                            // holes of deleted headers first.
+                            // The core reads the arrays directly: give it a
+                            // copy without the holes of deleted headers.
                             let sid = self.map_struct(&Type::String, &Type::String);
-                            let (stmts, read) = self.kv_compacted(te, sid, value.span);
-                            headers = Some(TExpr::new(TExprKind::Block(stmts, Box::new(read)), want, value.span));
+                            headers = Some(self.kv_live_struct(te, sid, value.span));
                         }
                         "body" => {
                             let te = self.expr_with(value, &Type::String.nullable());

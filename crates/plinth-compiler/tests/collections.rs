@@ -585,3 +585,89 @@ fn map_used_as_an_lru_keeps_its_size_and_order() {
   const ks = m.keys();"#;
     assert_eq!(shown(body, r#"m.size + "|" + ks[0] + "|" + ks[98] + "|" + ks[99] + "|" + (m.get("k0") ?? 0)"#), "100|k0|k99|k3|500");
 }
+
+// -- Iteration while the map changes (each live entry one time, new entries
+// visited, deleted ones not), also when the table grows during the loop.
+
+/// A map `m` of `k0`..`k99` without the multiples of 3 (66 live entries,
+/// 34 holes), and `seen`, a count of visits for each key.
+const HOLED: &str = r#"
+  const m = new Map<string, number>();
+  for (let i = 0; i < 100; i++) { m.set("k" + i, i); }
+  for (let i = 0; i < 100; i += 3) { m.delete("k" + i); }
+  const seen = new Map<string, number>();
+  let most = 0;
+  const visit = (k: string) => { const c = (seen.get(k) ?? 0) + 1; seen.set(k, c); if (c > most) { most = c; } };"#;
+
+#[test]
+fn for_of_that_adds_many_keys_visits_each_entry_one_time() {
+    let body = format!(
+        "{HOLED}\n  for (const [k, v] of m) {{ visit(k); if (k.startsWith(\"k\")) {{ for (let j = 0; j < 10; j++) {{ m.set(\"n\" + k + \"_\" + j, j); }} }} }}"
+    );
+    assert_eq!(
+        shown(&body, r#"seen.size + "|" + most + "|" + seen.has("k0") + seen.has("nk1_9") + "|" + m.size + "|" + m.keys()[0] + "," + m.keys()[66]"#),
+        "726|1|falsetrue|726|k1,nk1_0"
+    );
+}
+
+#[test]
+fn for_each_that_adds_many_keys_visits_each_entry_one_time() {
+    let body = format!(
+        "{HOLED}\n  m.forEach((v, k) => {{ visit(k); if (k.startsWith(\"k\")) {{ for (let j = 0; j < 10; j++) {{ m.set(\"n\" + k + \"_\" + j, j); }} m.delete(\"k\" + (v + 1)); }} }});"
+    );
+    // Each visited `k<i>` deletes `k<i+1>` before the loop gets to it.
+    let out = shown(&body, r#"seen.size + "|" + most + "|" + seen.has("k1") + seen.has("k2") + seen.has("k4") + "|" + m.size"#);
+    assert_eq!(out, "363|1|truefalsetrue|363");
+}
+
+#[test]
+fn keys_and_json_inside_for_each_of_a_map_with_holes() {
+    let body = r#"
+  const m = new Map<string, number>();
+  m.set("a", 1); m.set("b", 2); m.set("c", 3); m.set("d", 4);
+  m.delete("b");
+  let out = "";
+  m.forEach((v, k) => { out += k + "=" + m.keys().join("") + JSON.stringify(m) + ";"; if (k === "a") { m.delete("c"); m.set("e", 5); } });"#;
+    let main = show(body, "out").replace("from \"plinth:ui\";", "from \"plinth:ui\";\nimport { JSON } from \"plinth:core\";");
+    assert_eq!(text_of(&run(&main), ControlKind::Text), r#"a=acd{"a":1,"c":3,"d":4};d=ade{"a":1,"d":4,"e":5};e=ade{"a":1,"d":4,"e":5};"#);
+}
+
+#[test]
+fn nested_loops_over_the_same_map() {
+    let body = r#"
+  const m = new Map<string, number>();
+  m.set("x", 0); m.set("a", 1); m.set("b", 2); m.set("c", 3);
+  m.delete("x");
+  let outer = "";
+  let pairs = 0;
+  for (const [k1, v1] of m) {
+    outer += k1;
+    for (const [k2, v2] of m) {
+      pairs++;
+      if (k1 === "a" && k2 === "a") { for (let j = 0; j < 20; j++) { m.set("n" + j, j); } }
+    }
+  }
+  m.forEach((v, k) => { m.forEach((w, q) => { if (q === "b") { m.delete("b"); } }); });
+  let after = "";
+  for (const k of m.keys()) { after += k; }"#;
+    assert_eq!(shown(body, r#"outer.slice(0, 5) + "|" + outer.length + "|" + pairs + "|" + after.slice(0, 5) + "|" + m.size"#), "abcn0|53|529|acn0n|22");
+}
+
+#[test]
+fn break_return_and_throw_out_of_a_loop_then_more_changes() {
+    let body = r#"
+  const m = new Map<string, number>();
+  for (let i = 0; i < 10; i++) { m.set("k" + i, i); }
+  const firstOver = (lim: number): string => { for (const [k, v] of m) { if (v > lim) { return k; } } return ""; };
+  let r = firstOver(4);
+  for (const k of m.keys()) { if (k === "k2") { break; } }
+  for (const [k, v] of m) { if (v === 5) { break; } }
+  m.forEach((v, k) => { if (v === 1) { return; } });
+  try { for (const [k, v] of m) { if (v === 3) { throw new Error("stop"); } } } catch (e) { r += "!"; }
+  for (const [k, v] of m) { for (const [q, w] of m) { if (w === 2) { break; } } if (v === 6) { continue; } }
+  for (let i = 0; i < 2000; i++) { const k = "k" + (i % 10); const v = m.get(k) ?? 0; m.delete(k); m.set(k, v + 1); }
+  m.delete("k4"); m.set("k4", 0); m.delete("k7");
+  let out = "";
+  for (const [k, v] of m) { out += k; }"#;
+    assert_eq!(shown(body, r#"r + "|" + out + "|" + m.size + "|" + (m.get("k0") ?? 0)"#), "k5!|k0k1k2k3k5k6k8k9k4|9|200");
+}

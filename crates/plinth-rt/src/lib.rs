@@ -680,7 +680,9 @@ abi! {
     fn __plinth_rt_kv_find_i32(keys: i32, index: i32, key: i32) -> i32 { kv::find_i32(ptr(keys), ptr(index), key) }
     fn __plinth_rt_kv_add(keys: i32, values: i32, index: i32) { kv::add(ptr(keys), ptr(values), ptr(index)) }
     fn __plinth_rt_kv_remove(keys: i32, values: i32, index: i32, pos: i32) { kv::remove(ptr(keys), ptr(values), ptr(index), pos) }
-    fn __plinth_rt_kv_compact(keys: i32, values: i32, index: i32) { kv::compact(ptr(keys), ptr(values), ptr(index)) }
+    fn __plinth_rt_kv_clear(keys: i32, values: i32, index: i32) { kv::clear(ptr(keys), ptr(values), ptr(index)) }
+    fn __plinth_rt_kv_live_copy(arr: i32, keys: i32, index: i32) -> i32 { kv::live_copy(ptr(arr), ptr(keys), ptr(index)) as i32 }
+    fn __plinth_rt_kv_iter(keys: i32, values: i32, index: i32, delta: i32) { kv::iter(ptr(keys), ptr(values), ptr(index), delta) }
     fn __plinth_rt_kv_size(keys: i32, index: i32) -> i32 { kv::size(ptr(keys), ptr(index)) }
     fn __plinth_rt_kv_live(keys: i32, index: i32, pos: i32) -> i32 { kv::live(ptr(keys), ptr(index), pos) }
 
