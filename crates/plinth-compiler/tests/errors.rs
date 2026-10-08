@@ -212,7 +212,8 @@ export default app({ screens: { home: { title: "Home", component: Home } } });
 fn an_uncaught_exception_in_a_handler_is_reported_and_the_app_keeps_running() {
     let (mut guest, mut tree) = start(HANDLER_SRC);
     press(&mut guest, &mut tree, "fail").expect("an uncaught throw must not trap");
-    assert_eq!(guest.take_errors(), vec!["Uncaught Error: handler failed".to_string()]);
+    // The report names the place of the `throw` (`docs/PRODUCTION.md` L9).
+    assert_eq!(guest.take_errors(), vec!["Uncaught Error: handler failed (app/main.tsx:3)".to_string()]);
     // The write before the throw stays; the one after it never ran.
     assert_eq!(text(&tree), "count 100");
     press(&mut guest, &mut tree, "inc").expect("the app still runs");
@@ -240,7 +241,7 @@ fn an_uncaught_exception_at_module_init_is_reported_then_stops() {
     let runner = Runner::new().unwrap();
     let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
     assert!(guest.init(&[]).is_err());
-    assert_eq!(guest.take_errors(), vec!["Uncaught Error: init".to_string()]);
+    assert_eq!(guest.take_errors(), vec!["Uncaught Error: init (app/main.tsx:2)".to_string()]);
 }
 
 #[test]
@@ -254,7 +255,7 @@ export default app({ screens: { home: { title: "Home", component: Home } } });
 "#;
     let (mut guest, mut tree) = start(main);
     press(&mut guest, &mut tree, "go").unwrap();
-    assert_eq!(guest.take_errors(), vec!["Uncaught Oops: custom".to_string()]);
+    assert_eq!(guest.take_errors(), vec!["Uncaught Oops: custom (app/main.tsx:4)".to_string()]);
 }
 
 // -- Traps are not exceptions ---------------------------------------------------
@@ -276,7 +277,8 @@ export default app({ screens: { home: { title: "Home", component: Home } } });
 "#;
     let (mut guest, mut tree) = start(main);
     let e = press(&mut guest, &mut tree, "go").expect_err("an out-of-bounds read traps, even inside `try`");
-    assert_eq!(e.to_string(), "array index out of bounds", "the host shows the core's reason: {e:#}");
+    // The core's reason, then the place of the trap (L9).
+    assert_eq!(e.to_string(), with_place("array index out of bounds", "app/main.tsx:8"), "the host shows the core's reason: {e:#}");
 }
 
 #[test]
@@ -295,7 +297,94 @@ function Home() {
 export default app({ screens: { home: { title: "Home", component: Home } } });
 "#;
     let (mut guest, mut tree) = start(main);
-    assert!(press(&mut guest, &mut tree, "go").is_err());
+    let e = press(&mut guest, &mut tree, "go").expect_err("a failed cast traps");
+    if engine_gives_places() {
+        assert!(e.to_string().ends_with(" (app/main.tsx:8)"), "the place of the cast: {e}");
+    }
+}
+
+// -- The place of a trap (docs/PRODUCTION.md L9) ---------------------------------------
+
+/// True when the engine gives the code offsets of a trap: wasmtime does,
+/// wasmi (`PLINTH_ENGINE=wasmi`) does not, so its reasons have no place.
+fn engine_gives_places() -> bool {
+    std::env::var("PLINTH_ENGINE").map_or(true, |v| v != "wasmi")
+}
+
+/// `reason (place)` on an engine that gives places, else `reason`.
+fn with_place(reason: &str, place: &str) -> String {
+    if engine_gives_places() { format!("{reason} ({place})") } else { reason.to_owned() }
+}
+
+const INDEX_LIB: &str = r#"export function pick(a: number[], i: number): number {
+  const n = a.length;
+  return a[i] + n;
+}
+"#;
+
+const INDEX_MAIN: &str = r#"import { app, Screen, Text, Button, signal } from "plinth:ui";
+import { pick } from "./lib";
+const m = signal("start");
+function Home() {
+  return <Screen title="Home">
+    <Text>{m()}</Text>
+    <Button label="go" onPress={() => {
+      const a = [1, 2, 3];
+      m.set("v" + pick(a, 9));
+    }} />
+  </Screen>;
+}
+export default app({ screens: { home: { title: "Home", component: Home } } });
+"#;
+
+fn index_app() -> plinth_compiler::Artifact {
+    let fs = MemFs::default().with("app/main.tsx", INDEX_MAIN).with("app/lib.ts", INDEX_LIB);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    artifact.unwrap_or_else(|| panic!("compile errors:\n{}", render(&front)))
+}
+
+fn press_go_in(component: &[u8]) -> String {
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        tree.apply(&commit).unwrap();
+    }
+    press(&mut guest, &mut tree, "go").expect_err("an out-of-bounds read traps").to_string()
+}
+
+#[test]
+fn an_index_trap_names_the_file_and_line_of_the_innermost_app_frame() {
+    let artifact = index_app();
+    assert!(plinth_compiler::srcmap::find(&artifact.app).is_some(), "app.wasm has a source map");
+    // The trap is in the core (`arr_get`); the innermost app frame is
+    // `pick`, line 3 of app/lib.ts.
+    assert_eq!(press_go_in(&artifact.component), with_place("array index out of bounds", "app/lib.ts:3"));
+}
+
+#[test]
+fn an_app_module_with_no_source_map_gives_the_plain_reason() {
+    let artifact = index_app();
+    let plain = plinth_compiler::srcmap::strip(&artifact.app).unwrap();
+    assert!(plain.len() < artifact.app.len(), "the map is gone");
+    assert!(plinth_compiler::srcmap::find(&plain).is_none());
+    // An old package: the host links it the same way, and the reason has
+    // no place.
+    let component = plinth_compiler::split::link_app(plinth_compiler::link::runtime(), &plain).unwrap();
+    assert_eq!(press_go_in(&component), "array index out of bounds");
+}
+
+#[test]
+fn a_bad_source_map_is_ignored() {
+    let artifact = index_app();
+    let mut bad = plinth_compiler::srcmap::strip(&artifact.app).unwrap();
+    // A custom section `plinth-srcmap` with an unknown version.
+    let name = plinth_compiler::srcmap::SECTION.as_bytes();
+    bad.extend_from_slice(&[0, (name.len() + 3) as u8, name.len() as u8]);
+    bad.extend_from_slice(name);
+    bad.extend_from_slice(&[9, 9]);
+    let component = plinth_compiler::split::link_app(plinth_compiler::link::runtime(), &bad).unwrap();
+    assert_eq!(press_go_in(&component), "array index out of bounds");
 }
 
 // -- Limits: a bad app stops; the host and other apps keep running -----------------
@@ -352,7 +441,7 @@ fn assert_stops(runner: &Runner, mut guest: Guest, mut tree: Tree, want: &str) {
 fn an_endless_loop_hits_the_time_limit() {
     let runner = Runner::new().unwrap();
     let (guest, tree) = start_limited(&runner, &limit_app("let i = 0; while (i >= 0) { i = i + 1; }"), SHORT);
-    assert_stops(&runner, guest, tree, "not responding");
+    assert_stops(&runner, guest, tree, &with_place("not responding (time limit reached)", "app/main.tsx:6"));
 }
 
 #[test]
@@ -372,7 +461,7 @@ fn endless_recursion_overflows_the_stack_and_stops_the_app() {
         "function deep(n: number): number { return deep(n + 1) + 1; }\nconst m = signal",
     );
     let (guest, tree) = start_limited(&runner, &main, SHORT);
-    assert_stops(&runner, guest, tree, "too many nested calls");
+    assert_stops(&runner, guest, tree, &with_place("too many nested calls (stack overflow)", "app/main.tsx:2"));
 }
 
 #[test]
@@ -391,7 +480,7 @@ fn endless_allocation_hits_the_memory_limit() {
     let mut tree = tree;
     let e = press(&mut guest, &mut tree, "go").expect_err("the call must fail");
     // The top message is the plain reason that the host shows.
-    assert_eq!(e.to_string(), "out of memory", "{e:#}");
+    assert_eq!(e.to_string(), with_place("out of memory", "app/main.tsx:6"), "{e:#}");
     let e = press(&mut guest, &mut tree, "ping").expect_err("a stopped app is not called again");
     assert!(format!("{e:#}").contains("stopped earlier"), "{e:#}");
 }

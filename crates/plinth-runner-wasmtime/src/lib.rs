@@ -762,7 +762,10 @@ impl Runner {
                 let app = App::instantiate(&mut store, &component, &linker)
                     .map_err(anyhow::Error::from)
                     .context("instantiate the app")?;
-                Ok(Guest::Wasmtime(WasmtimeGuest { store, app, deadline_ticks: ticks, poisoned: false }))
+                // The source map of the app code, for the place of a trap
+                // (`docs/PRODUCTION.md` L9). An app built before it has none.
+                let srcmap = plinth_link::srcmap::find(bytes);
+                Ok(Guest::Wasmtime(WasmtimeGuest { store, app, deadline_ticks: ticks, poisoned: false, srcmap }))
             }
             #[cfg(feature = "wasmi")]
             Backend::Wasmi { engine } => {
@@ -814,6 +817,9 @@ pub struct WasmtimeGuest {
     deadline_ticks: u64,
     /// Set after a trap. A trapped instance is never called again.
     poisoned: bool,
+    /// The source map of the linked module (`plinth_link::srcmap`), if the
+    /// app has one.
+    srcmap: Option<plinth_link::srcmap::SrcMap>,
 }
 
 impl Guest {
@@ -992,7 +998,7 @@ impl Guest {
     // below is unreachable; that is expected, not a bug.
     #[allow(irrefutable_let_patterns, unreachable_patterns)]
     fn call_wasmtime(&mut self, f: impl FnOnce(&App, &mut Store<HostState>) -> wasmtime::Result<()>) -> Result<Vec<Vec<u8>>> {
-        let Guest::Wasmtime(WasmtimeGuest { store, app, deadline_ticks, poisoned }) = self else {
+        let Guest::Wasmtime(WasmtimeGuest { store, app, deadline_ticks, poisoned, srcmap }) = self else {
             unreachable!("call_wasmtime on a non-wasmtime guest")
         };
         if *poisoned {
@@ -1004,7 +1010,10 @@ impl Guest {
         let commits = std::mem::take(&mut store.data_mut().commits);
         if let Err(e) = result {
             *poisoned = true;
-            let reason = stop_reason(&e, &store.data().logs[logs_before..]);
+            let mut reason = stop_reason(&e, &store.data().logs[logs_before..]);
+            if let Some(place) = srcmap.as_ref().and_then(|m| trap_place(m, &e)) {
+                reason = format!("{reason} ({place})");
+            }
             log::error!(target: "plinth::app", "the app stopped: {reason}: {e:?}");
             return Err(anyhow::Error::from(e).context(reason));
         }
@@ -1030,6 +1039,17 @@ impl Guest {
         }
         Ok(commits)
     }
+}
+
+/// The source place (`app/main.tsx:12`) of the innermost app frame of a
+/// trap, from the wasm backtrace and the source map. Frames of the core
+/// and of the component's own small modules have no map entry.
+fn trap_place(map: &plinth_link::srcmap::SrcMap, e: &wasmtime::Error) -> Option<String> {
+    let bt = e.downcast_ref::<wasmtime::WasmBacktrace>()?;
+    bt.frames().iter().find_map(|f| {
+        let (file, line) = map.lookup(f.func_index(), u32::try_from(f.func_offset()?).ok()?)?;
+        Some(format!("{file}:{line}"))
+    })
 }
 
 /// A short, plain reason for a failed guest call, for the host's "This

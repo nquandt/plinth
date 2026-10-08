@@ -17,6 +17,7 @@
 
 use crate::link::{AppCode, Layout};
 use crate::rt_abi;
+use crate::srcmap::{self, SrcMap};
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -158,6 +159,20 @@ fn remap_body(remap: &mut Remap, encoded: &[u8]) -> Result<wasm_encoder::Functio
     Ok(f)
 }
 
+/// The offset of each instruction of an encoded body (with its size
+/// prefix), from the start of the body after the size.
+fn body_offsets(encoded: &[u8]) -> Result<Vec<u32>> {
+    srcmap::instr_offsets(body_of(encoded)?)
+}
+
+/// An encoded body without its size prefix.
+fn body_of(encoded: &[u8]) -> Result<&[u8]> {
+    let mut r = BinaryReader::new(encoded, 0);
+    let size = r.read_var_u32()? as usize;
+    let start = r.original_position();
+    encoded.get(start..start + size).context("a bad function body")
+}
+
 fn encoded(f: &wasm_encoder::Function) -> Vec<u8> {
     let mut bytes = Vec::new();
     wasm_encoder::Encode::encode(f, &mut bytes);
@@ -225,10 +240,32 @@ pub fn encode_app(al: &AppLayout, app: &AppCode) -> Result<Vec<u8>> {
     );
     let mut functions = FunctionSection::new();
     let mut code = CodeSection::new();
-    for ((ty, _), body) in app.funcs.iter().zip(&bodies) {
+    // For the source map: the encoded body of each mapped function, by its
+    // index in `app` (codegen gives instruction indices).
+    let mut new_bodies: HashMap<u32, Vec<u8>> = HashMap::new();
+    let mapped: std::collections::HashSet<u32> = app.srcmap.iter().flat_map(|m| m.funcs.iter().map(|f| f.func)).collect();
+    for (j, ((ty, _), body)) in app.funcs.iter().zip(&bodies).enumerate() {
         functions.function(*ty);
-        code.function(&remap_body(&mut remap, body)?);
+        let f = remap_body(&mut remap, body)?;
+        if mapped.contains(&(n + j as u32)) {
+            new_bodies.insert(n + j as u32, encoded(&f));
+        }
+        code.function(&f);
     }
+    let srcmap = match &app.srcmap {
+        Some(m) => {
+            // Only the entries where the code can stop, then byte offsets.
+            let mut m = m.clone();
+            let mut offsets: HashMap<u32, Vec<u32>> = HashMap::new();
+            for f in &mut m.funcs {
+                let Some(enc) = new_bodies.get(&f.func) else { continue };
+                f.entries = srcmap::needed_entries(&f.entries, body_of(enc)?)?;
+                offsets.insert(f.func, body_offsets(enc)?);
+            }
+            Some(m.map(|f| remap.funcs.get(f as usize).copied(), |f, i| offsets.get(&f)?.get(i as usize).copied()))
+        }
+        None => None,
+    };
     let mut globals = GlobalSection::new();
     for (ty, init) in &app.globals {
         globals.global(GlobalType { val_type: *ty, mutable: true, shared: false }, init);
@@ -264,6 +301,9 @@ pub fn encode_app(al: &AppLayout, app: &AppCode) -> Result<Vec<u8>> {
     let minor = al.imports.iter().zip(&used).filter(|(_, u)| **u).map(|((name, _), _)| rt_abi::added_in(name)).max().unwrap_or(0);
     let needs = format!("{}.{minor}", rt_abi::CORE_MAJOR);
     module.section(&CustomSection { name: CORE_SECTION.into(), data: needs.as_bytes().into() });
+    if let Some(map) = srcmap.filter(|m| !m.is_empty()) {
+        module.section(&CustomSection { name: srcmap::SECTION.into(), data: map.encode().into() });
+    }
     let bytes = module.finish();
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(&bytes)
@@ -360,9 +400,11 @@ pub fn load_app(rt: &[u8], rt_layout: &Layout, app: &[u8]) -> Result<AppCode> {
     let mut raw_globals: Vec<(wasmparser::GlobalType, Vec<u8>)> = Vec::new();
     let mut table: Vec<u32> = Vec::new();
     let mut start = None;
+    let mut srcmap_bytes: Option<&[u8]> = None;
     for payload in Parser::new(0).parse_all(app) {
         match payload? {
             Payload::Version { .. } | Payload::End(_) | Payload::DataCountSection { .. } | Payload::CodeSectionStart { .. } => {}
+            Payload::CustomSection(c) if c.name() == srcmap::SECTION => srcmap_bytes = Some(c.data()),
             Payload::CustomSection(_) => {}
             Payload::TypeSection(r) => {
                 for group in r {
@@ -459,6 +501,7 @@ pub fn load_app(rt: &[u8], rt_layout: &Layout, app: &[u8]) -> Result<AppCode> {
         }
     }
 
+    let imported = funcs.len() as u32;
     let defined_base = rt_layout.func_count;
     for j in 0..func_types.len() as u32 {
         funcs.push(defined_base + j);
@@ -483,7 +526,29 @@ pub fn load_app(rt: &[u8], rt_layout: &Layout, app: &[u8]) -> Result<AppCode> {
     }
     out.table = table.iter().map(|&f| remap.funcs[f as usize]).collect();
     out.start = start.map(|f| remap.funcs[f as usize]);
+    // A source map that does not fit is left out: it never stops an app.
+    out.srcmap = srcmap_bytes.and_then(|b| SrcMap::decode(b).ok()).map(|m| link_srcmap(&m, imported, &bodies, &out.funcs, &remap.funcs));
     Ok(out)
+}
+
+/// Moves the source map of an app module to the linked module: the
+/// function indices of `remap` and the offsets of the linked bodies. Both
+/// bodies have the same instructions (`remap_body` copies them one by one),
+/// so an offset maps through its instruction index.
+fn link_srcmap(map: &SrcMap, imported: u32, bodies: &[Vec<u8>], linked: &[(u32, wasm_encoder::Function)], remap: &[u32]) -> SrcMap {
+    let defined = |f: u32| f.checked_sub(imported).map(|j| j as usize).filter(|j| *j < bodies.len() && *j < linked.len());
+    let mut cache: HashMap<u32, Option<(Vec<u32>, Vec<u32>)>> = HashMap::new();
+    map.map(
+        |f| defined(f).and_then(|_| remap.get(f as usize).copied()),
+        |f, off| {
+            let entry = cache.entry(f).or_insert_with(|| {
+                let j = defined(f)?;
+                Some((body_offsets(&bodies[j]).ok()?, body_offsets(&encoded(&linked[j].1)).ok()?))
+            });
+            let (old, new) = entry.as_ref()?;
+            new.get(srcmap::instr_at(old, off)? as usize).copied()
+        },
+    )
 }
 
 trait EncodeLeb {

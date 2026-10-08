@@ -9,3 +9,4 @@ pub mod cores;
 pub mod link;
 pub mod rt_abi;
 pub mod split;
+pub mod srcmap;

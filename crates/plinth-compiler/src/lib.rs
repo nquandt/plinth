@@ -6,7 +6,7 @@ pub mod check;
 pub mod controls;
 // The linker and the cores live in `plinth-link`, which hosts use without
 // the compiler.
-pub use plinth_link::{cores, link, rt_abi, split};
+pub use plinth_link::{cores, link, rt_abi, split, srcmap};
 pub mod diag;
 pub mod driver;
 pub mod lower;
@@ -85,7 +85,9 @@ fn compile_impl(fs: &dyn FileSystem, capabilities: &[String], dev: bool) -> anyh
     let layout = link::layout_with(rt, extra)?;
     anyhow::ensure!(layout.missing.is_empty(), "the built-in core lacks {:?}; rebuild plinth-rt", layout.missing);
     let app_layout = split::app_layout(extra);
-    let code = codegen::generate(&program, &app_layout.layout, main);
+    // Every build has source locations (`docs/PRODUCTION.md` L9); `plinth
+    // build --release` removes the source map section (`optimize.rs`).
+    let code = codegen::generate(&program, &app_layout.layout, main, Some(&front.sources));
     let app = split::encode_app(&app_layout, &code)?;
     let runtime = split::runtime_field(&app);
     // Link the app module the same way a host does, so each build checks

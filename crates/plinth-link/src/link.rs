@@ -64,6 +64,11 @@ pub struct AppCode {
     /// Passive data segments, from `Layout::data_count`.
     pub data: Vec<Vec<u8>>,
     pub start: Option<u32>,
+    /// The source map of the app functions (`srcmap`), with the function
+    /// indices of this code. In codegen output a position is an
+    /// instruction index; after `split::load_app` it is a byte offset in the
+    /// linked body. `link` writes it as the custom section `plinth-srcmap`.
+    pub srcmap: Option<crate::srcmap::SrcMap>,
 }
 
 struct RtSections<'a> {
@@ -363,6 +368,9 @@ pub fn link(rt: &[u8], layout: &Layout, app: &AppCode) -> Result<Vec<u8>> {
     flush_until(&mut out, ORDER.len(), &mut emitted)?;
     for r in pending_custom.drain(..) {
         emit_custom(&mut out, &rt_sections.bytes[r.clone()])?;
+    }
+    if let Some(map) = app.srcmap.as_ref().filter(|m| !m.is_empty()) {
+        out.section(&wasm_encoder::CustomSection { name: crate::srcmap::SECTION.into(), data: map.encode().into() });
     }
 
     let bytes = out.finish();

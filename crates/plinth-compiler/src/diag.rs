@@ -151,6 +151,11 @@ impl Sources {
         &self.files[f.0 as usize].1
     }
 
+    /// The path and the text of `f`, if it is a file of this compilation.
+    pub fn file(&self, f: FileId) -> Option<(&str, &str)> {
+        self.files.get(f.0 as usize).map(|(p, t)| (p.as_str(), t.as_str()))
+    }
+
     /// 1-based line and column (in UTF-16 units, as tsc reports them).
     pub fn line_col(&self, span: Span) -> (usize, usize) {
         let text = self.text(span.file);

@@ -13,7 +13,9 @@
 //!   rooted global holds.
 //! - Thunks adapt closures to the runtime's `(env) -> ()` calls.
 
+use crate::diag::{FileId, Sources, Span};
 use crate::link::{AppCode, Layout};
+use crate::srcmap::{FuncMap, SrcMap};
 use crate::rt_abi::{ARR_F64, ARR_I32, ARR_REF, FIRST_USER_TYPE, HEADER, STR_BYTES};
 use crate::tir::*;
 use crate::types::{Repr, StructId, Type};
@@ -81,6 +83,51 @@ pub struct Codegen<'p> {
     /// use. `flag` is 1 while an exception is pending; `value` is the
     /// thrown `Error`.
     exc: Option<(u32, u32)>,
+    /// The source lines for the source map and for the location of an
+    /// uncaught `throw` (`docs/PRODUCTION.md` L9). `None`: no locations.
+    locator: Option<Locator<'p>>,
+    /// The source map records, by codegen function index, with instruction
+    /// indices as positions (`split::encode_app` makes them byte offsets).
+    src_funcs: Vec<FuncMap>,
+    /// The global that holds the location text of the last `throw` (a
+    /// string literal such as ` (app/main.tsx:12)`, or 0), made with the
+    /// exception globals when there is a locator.
+    exc_loc: Option<u32>,
+}
+
+/// Finds the source file and line of a span, for the source map.
+pub struct Locator<'a> {
+    sources: &'a Sources,
+    /// The start offset of each line, for each file used so far.
+    line_starts: HashMap<FileId, Vec<u32>>,
+    /// The index of each file in `paths`.
+    files: HashMap<FileId, u32>,
+    paths: Vec<String>,
+}
+
+impl<'a> Locator<'a> {
+    pub fn new(sources: &'a Sources) -> Self {
+        Locator { sources, line_starts: HashMap::new(), files: HashMap::new(), paths: Vec::new() }
+    }
+
+    /// `(file index, 1-based line)` of the start of `span`; `None` for a
+    /// span that the compiler made (no source).
+    fn locate(&mut self, span: Span) -> Option<(u32, u32)> {
+        if span.start == 0 && span.end == 0 {
+            return None;
+        }
+        let (path, text) = self.sources.file(span.file)?;
+        let starts = self.line_starts.entry(span.file).or_insert_with(|| {
+            std::iter::once(0).chain(text.bytes().enumerate().filter(|(_, b)| *b == b'\n').map(|(i, _)| i as u32 + 1)).collect()
+        });
+        let line = starts.partition_point(|&s| s <= span.start) as u32;
+        let next = self.paths.len() as u32;
+        let file = *self.files.entry(span.file).or_insert(next);
+        if file == next {
+            self.paths.push(path.to_owned());
+        }
+        Some((file, line))
+    }
 }
 
 /// A `finally` block that a `return`, `break` or `continue` inside its
@@ -148,7 +195,9 @@ fn table_ref(layout: &Layout, slot: u32) -> Vec<I<'static>> {
     }
 }
 
-pub fn generate(prog: &Program, layout: &Layout, main: FuncId) -> AppCode {
+/// Generates the app code. With `sources`, the code gets a source map and
+/// an uncaught `throw` names its file and line (`docs/PRODUCTION.md` L9).
+pub fn generate(prog: &Program, layout: &Layout, main: FuncId, sources: Option<&Sources>) -> AppCode {
     let mut g = Codegen {
         prog,
         layout,
@@ -174,6 +223,9 @@ pub fn generate(prog: &Program, layout: &Layout, main: FuncId) -> AppCode {
         closures_throw: false,
         throwing_methods: HashSet::new(),
         exc: None,
+        locator: sources.map(Locator::new),
+        src_funcs: Vec::new(),
+        exc_loc: None,
     };
     g.find_captures();
     g.find_throwers();
@@ -209,6 +261,10 @@ pub fn generate(prog: &Program, layout: &Layout, main: FuncId) -> AppCode {
     let mut data = Vec::new();
     data.push(g.literal_bytes());
     data.push(g.type_table_bytes());
+    let srcmap = g.locator.take().map(|l| {
+        g.src_funcs.sort_by_key(|f| f.func);
+        SrcMap { files: l.paths, funcs: std::mem::take(&mut g.src_funcs) }
+    });
     AppCode {
         types: g.types,
         funcs: g.bodies.into_iter().map(|b| b.expect("every reserved function has a body")).collect(),
@@ -216,6 +272,7 @@ pub fn generate(prog: &Program, layout: &Layout, main: FuncId) -> AppCode {
         table: g.table,
         data,
         start: Some(start_idx),
+        srcmap,
     }
 }
 
@@ -509,7 +566,38 @@ impl<'p> Codegen<'p> {
         }
         let e = (self.global(), self.global());
         self.exc = Some(e);
+        if self.locator.is_some() {
+            self.exc_loc = Some(self.global());
+        }
         e
+    }
+
+    /// `(file index, line)` of a span, when the build has locations.
+    fn locate(&mut self, span: Span) -> Option<(u32, u32)> {
+        self.locator.as_mut()?.locate(span)
+    }
+
+    /// The string literal global of the location text of a `throw` at
+    /// `span`: ` (app/main.tsx:12)`.
+    fn throw_site(&mut self, span: Span) -> Option<u32> {
+        let (file, line) = self.locate(span)?;
+        let text = format!(" ({}:{line})", self.locator.as_ref()?.paths[file as usize]);
+        Some(self.literal(&text))
+    }
+
+    /// Adds the source map record of function `func` from the marks of its
+    /// code generator: the file of the first mark, and the lines of the
+    /// marks in that file.
+    fn add_locs(&mut self, func: u32, locs: Vec<(u32, (u32, u32))>) {
+        let Some(&(_, (file, _))) = locs.first() else { return };
+        let mut entries: Vec<(u32, u32)> = Vec::new();
+        for (i, (f, line)) in locs {
+            if f != file || entries.last().is_some_and(|l| l.1 == line) {
+                continue;
+            }
+            entries.push((i, line));
+        }
+        self.src_funcs.push(FuncMap { func, file, entries });
     }
 
     /// Code for a boundary where app code returns to the runtime (a thunk,
@@ -520,18 +608,30 @@ impl<'p> Codegen<'p> {
         let sid = self.prog.error_class.expect("a program that throws has the Error class");
         let (name_off, _) = self.structs[sid as usize].offsets[0];
         let (msg_off, _) = self.structs[sid as usize].offsets[1];
-        vec![
+        let mut code = vec![
             I::GlobalGet(flag),
             I::If(BlockType::Empty),
             I::I32Const(0),
             I::GlobalSet(flag),
             I::GlobalGet(val),
             I::I32Load(mem(name_off, Repr::Ref)),
-            I::GlobalGet(val),
-            I::I32Load(mem(msg_off, Repr::Ref)),
-            I::Call(self.layout.rt("uncaught")),
-            I::End,
-        ]
+        ];
+        let message = [I::GlobalGet(val), I::I32Load(mem(msg_off, Repr::Ref))];
+        match self.exc_loc {
+            // The message and the location of the `throw`, if it has one:
+            // "Uncaught Error: boom (app/main.tsx:12)". No block parameters:
+            // a release build allows only MVP blocks (`optimize.rs`).
+            Some(loc) => {
+                code.extend([I::GlobalGet(loc), I::If(BlockType::Result(ValType::I32))]);
+                code.extend(message.clone());
+                code.extend([I::GlobalGet(loc), I::Call(self.layout.rt("str_concat")), I::Else]);
+                code.extend(message);
+                code.push(I::End);
+            }
+            None => code.extend(message),
+        }
+        code.extend([I::Call(self.layout.rt("uncaught")), I::End]);
+        code
     }
 
     /// The may-throw analysis: a function can throw if it has a `throw`, or
@@ -706,8 +806,10 @@ impl<'p> Codegen<'p> {
         }
         fg.emit(I::End);
         let ty = self.type_of(params, vt(def.ret.repr()));
+        let locs = std::mem::take(&mut fg.locs);
         let f = fg.finish();
         self.set_body(idx, ty, f);
+        self.add_locs(idx, locs);
     }
 }
 
@@ -886,6 +988,11 @@ struct FnGen {
     handlers: Vec<u32>,
     /// The enclosing `finally` blocks.
     finallies: Vec<FinallyCx>,
+    /// Source map marks: `(instruction index, (file, line))` where the line
+    /// changes (`mark`).
+    locs: Vec<(u32, (u32, u32))>,
+    /// The `(file, line)` of the code that is emitted now.
+    cur: Option<(u32, u32)>,
 }
 
 impl FnGen {
@@ -905,6 +1012,21 @@ impl FnGen {
             ret: Repr::Void,
             handlers: Vec::new(),
             finallies: Vec::new(),
+            locs: Vec::new(),
+            cur: None,
+        }
+    }
+
+    /// The code from here on comes from source line `at` (no change for
+    /// `None`).
+    fn mark(&mut self, at: Option<(u32, u32)>) {
+        let Some(at) = at else { return };
+        self.cur = Some(at);
+        let i = self.code.len() as u32;
+        match self.locs.last_mut() {
+            Some(last) if last.0 == i => last.1 = at,
+            Some(last) if last.1 == at => {}
+            _ => self.locs.push((i, at)),
         }
     }
 
@@ -1369,14 +1491,24 @@ impl FnGen {
             }
             TStmt::Throw(e) => {
                 let (flag, val) = g.exc_globals();
+                let site = g.throw_site(e.span);
                 self.expr(g, e);
                 self.emit(I::GlobalSet(val));
+                if let Some(loc) = g.exc_loc {
+                    match site {
+                        Some(lit) => self.emit(I::GlobalGet(lit)),
+                        None => self.emit(I::I32Const(0)),
+                    }
+                    self.emit(I::GlobalSet(loc));
+                }
                 self.emit(I::I32Const(1));
                 self.emit(I::GlobalSet(flag));
                 self.propagate();
             }
             TStmt::Trap(e) => {
+                let here = g.locate(e.span);
                 self.expr(g, e);
+                self.mark(here);
                 self.rt(g, "throw");
                 self.emit(I::Unreachable);
             }
@@ -1469,7 +1601,21 @@ impl FnGen {
 
     // -- Expressions --------------------------------------------------------
 
+    /// Emits `e`. Its code maps to its source line; the code of its parts
+    /// maps to theirs, and the code after a part maps to `e` again (a call
+    /// after its arguments).
     fn expr(&mut self, g: &mut Codegen, e: &TExpr) {
+        let here = g.locate(e.span);
+        if here.is_none() {
+            return self.expr_code(g, e);
+        }
+        let outer = self.cur;
+        self.mark(here);
+        self.expr_code(g, e);
+        self.mark(outer);
+    }
+
+    fn expr_code(&mut self, g: &mut Codegen, e: &TExpr) {
         let r = e.repr();
         match &e.kind {
             TExprKind::Num(v) => match r {
