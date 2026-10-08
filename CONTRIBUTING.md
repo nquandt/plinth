@@ -10,6 +10,9 @@ change, and where to start.
 - [`gpui-ce`](https://github.com/nquandt/gpui-ce) checked out next to
   this repository, so it resolves as `../gpui-ce`
 - Node 22+ (for the npm scripts and the `tsc` checks on the examples)
+- A C++17 compiler: the `plinth` CLI builds Binaryen (`wasm-opt`) into itself.
+  Windows: the MSVC build tools (already needed by Rust). Linux: `g++`
+  (`build-essential`). macOS: the Xcode command line tools.
 - **Windows** is the only platform this project currently tests. Linux
   and macOS builds exist in CI but are best effort; please say so in
   your PR if you cannot verify them.

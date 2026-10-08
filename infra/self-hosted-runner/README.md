@@ -40,7 +40,7 @@ To download the agent again: extract `actions-runner-win-x64-<version>.zip` from
 2. Inside WSL (`wsl -d Ubuntu`), install the packages that gpui-ce needs and the service. These commands need your sudo password:
 
    ```bash
-   sudo apt-get install -y libxkbcommon-x11-dev libxcb-shape0-dev libxcb-xfixes0-dev
+   sudo apt-get install -y build-essential libxkbcommon-x11-dev libxcb-shape0-dev libxcb-xfixes0-dev
    sudo cp /mnt/c/repos/plinth/infra/self-hosted-runner/plinth-runner.service /etc/systemd/system/
    sudo systemctl enable --now plinth-runner
    ```

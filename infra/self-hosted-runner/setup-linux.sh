@@ -24,5 +24,5 @@ mkdir -p /mnt/u/ci-runners/logs
 echo "agent: $agent ($(cat "$agent/bin/Runner.Listener.deps.json" >/dev/null 2>&1 && echo ok))"
 echo
 echo "Now run these two commands (they need your sudo password):"
-echo "  sudo apt-get install -y libxkbcommon-x11-dev libxcb-shape0-dev libxcb-xfixes0-dev"
+echo "  sudo apt-get install -y build-essential libxkbcommon-x11-dev libxcb-shape0-dev libxcb-xfixes0-dev"
 echo "  sudo cp $(wslpath -a "$here" 2>/dev/null || echo "$here")/plinth-runner.service /etc/systemd/system/ && sudo systemctl enable --now plinth-runner"
