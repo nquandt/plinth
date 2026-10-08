@@ -4,13 +4,14 @@
 //! fetcher. Checks:
 //!
 //! 1. A host on v1.0.0 picks up v1.1.0 after `check` against the server,
-//!    and runs it on the next start (`updater::pick`).
+//!    and runs it on the next start (`updater::prepare_start`, then
+//!    `updater::pick`).
 //! 2. Two failed starts in a row of the downloaded set roll back to the
 //!    embedded set, and the rollback is reported.
 //!
 //! No `gpui` window is involved (`updater::pick`/`report_*` have no
 //! `gpui` dependency), so this test stands in for "a host instance" with
-//! the same state-machine calls `plinth-cli`'s `run_payload` makes
+//! the same state-machine calls `plinth_host_desktop::run_payload` makes
 //! (`docs/UPDATES.md` §8 step 4, 5).
 
 use plinth_host_desktop::updater::{self, CheckOutcome, Pick};
@@ -82,7 +83,9 @@ fn second_start_picks_up_a_newer_version_from_a_real_server() {
     let outcome = updater::check(&state_dir, app_id, &feed_url, "stable", "1.0.0", &identity.key_id(), updater::http_fetch).unwrap();
     assert_eq!(outcome, CheckOutcome::Updated("1.1.0".into()));
 
-    // Second start: the downloaded, verified v1.1.0 is picked.
+    // Second start: v1.1.0 adds no capability, so `prepare_start` asks
+    // nothing and makes it the downloaded set; then it is picked.
+    assert_eq!(updater::prepare_start(&state_dir, "1.0.0", &[]), None);
     match updater::pick(&state_dir, "1.0.0") {
         Pick::Downloaded(path) => {
             let pkg = Package::read(&std::fs::read(path).unwrap()).unwrap();
@@ -100,6 +103,7 @@ fn two_failed_starts_roll_back_to_embedded() {
 
     let state_dir = updater::app_dir(&temp_dir("state"), app_id);
     updater::check(&state_dir, app_id, &feed_url, "stable", "1.0.0", &identity.key_id(), updater::http_fetch).unwrap();
+    assert_eq!(updater::prepare_start(&state_dir, "1.0.0", &[]), None);
 
     // Start 1: picks the downloaded set, then fails (`init` trapped).
     let picked = match updater::pick(&state_dir, "1.0.0") {

@@ -56,8 +56,8 @@ Plinth is not ready for production apps. The current level is "before Preview".
 
 | Limit | Item |
 |---|---|
-| A self-update cannot ask the user first (`prompt` acts as `next-start`). | D4 |
-| A self-update that asks for new capabilities does not ask the user for consent again. | S5 |
+| A self-update cannot run app code to move data to a new format (`onUpgrade(fromVersion)` does not exist). | D4 |
+| The restart prompt for `apply = "prompt"` is on the desktop host only. | D4 |
 | Web apps have no offline update cache. | D5 |
 
 ## Developer tools
