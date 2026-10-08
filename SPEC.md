@@ -376,7 +376,7 @@ Every control is a typed JSX intrinsic from `plinth:ui`. Props in **bold** are r
 | Control | Props |
 |---|---|
 | `Action` (value, not a tag) | **label**, **onPress**, `icon?`, `role?`, `shortcut?` |
-| `Menu` | **label**, **actions** |
+| `Menu` | **label**, **actions**, `open?`, `onClose?` (1.13) |
 
 **Escape hatch**
 
@@ -399,6 +399,8 @@ UI API 1.2 adds the controls `Checkbox`, `TextArea`, `Slider`, `NumberField`, `P
 - `Slider` also follows pointer drag on its track, snapped to `step`.
 - **UI API 1.3** adds `Image` (**src**, **alt**, `aspect?: "square" | "wide" | "tall"`). `src` must be a string literal that names a file in the project's `assets/` directory (`PL4008` otherwise), and `alt` must not be empty (`PL4009`). `plinth build` puts the files in the `.plnt` under `assets/`. The host renders an image from the package, sized by the runtime from `aspect` and the width class, and shows a placeholder with the `alt` text if the asset is missing. (Follow-up: limit the height of large images on regular and wide windows.)
 - Every control has an AccessKit role, name and state. Interactive controls take keyboard focus (Tab) and activation (Enter or Space; arrows for `Slider`).
+- **UI API 1.13** adds the event `onContextMenu(x, y)` (id `context-menu`) on `Box`, `Pressable`, `Scroll`, `Canvas` and `Row`, with the units of the pointer events (UI API 1.12, `docs/ui.md`). A right mouse button, the menu key or Shift+F10 on the focused element (then `x, y` are its center), or the browser `contextmenu` event (also a long press on Android) fires it. Only the innermost element with a handler gets it, and an element with a handler is a tab stop. On the web, the host prevents the browser menu only where the app has a handler. `Menu` gets `open` (a `Signal<boolean>` or a boolean, bound both ways) and `onClose`: a `Menu` with `open` has no button, and when the app opens it in an `onContextMenu` handler, it shows at the point of the event. Escape, an outside click or an action closes it, and the focus goes back to where it was.
+- A modal layer (`Dialog`, `Sheet`, a host dialog, an open menu) blocks all pointer input to the controls under it, on every host.
 
 ### 6.4 Layout rules (runtime-owned)
 
