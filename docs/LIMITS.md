@@ -31,7 +31,7 @@ Plinth is not ready for production apps. The current level is "before Preview".
 | No translations of app strings and no right-to-left layout. | U8, U9 |
 | No drag and drop between apps or with the operating system (files, text). Drag and drop inside one app works (UI API 1.13). | U6, GAPS G4 |
 | IME composition (for example Chinese or Japanese input) is not tested on the desktop host. The web host uses the browser's input fields. | U5 |
-| The app does not follow all system settings yet: high contrast, text scale and reduced motion. | U7 |
+| An app cannot read the system settings (dark, high contrast, text size, reduced motion): the runtime theme follows them, but an animation with `onFrame` keeps its motion when the user asks for reduced motion. On Linux and macOS, the desktop host follows only light and dark. | U7 |
 | The desktop accessibility tree is not checked with a screen reader yet (Narrator, VoiceOver, Orca). On the desktop, a text field has its name on the group around it, not on the text input itself. | U3 |
 | No animated transitions and no sound. | U10, U11 |
 | Each nested flex box about doubles the layout work of its subtree on the desktop. Keep layouts flat. | R7 |

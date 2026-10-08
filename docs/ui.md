@@ -472,6 +472,33 @@ with the files and the text of the operating system (`docs/GAPS.md` G4).
   its edge during a drag, reorder in a `Grid`. `examples/todo` moves its
   tasks.
 
+## Theme and system settings
+
+- The runtime owns the theme: the type scale, the color tokens, the
+  corner radii and the focus ring. An app chooses only its `accent`.
+- The theme follows the system settings, at start and when they change
+  (PRODUCTION U7):
+  - **Dark mode:** the window appearance on the desktop,
+    `prefers-color-scheme` on the web.
+  - **High contrast:** a high-contrast variant of the tokens. Text and
+    its background are at least 7:1, `border` is the text color,
+    `text.muted` is not faint, and the focus ring is 3 px. On Windows,
+    the OS high-contrast colors win. On the web, `prefers-contrast:
+    more`; in `forced-colors: active` the browser colors win.
+  - **Text size:** the Windows "Text size" setting (100 % to 225 %) or
+    the browser default font size scales all text. Buttons, the
+    navigation and rows grow with it. On the desktop, the space inside
+    the standard controls grows too (it is in rem); the space of a `Box`
+    (spacing units) does not.
+  - **Reduced motion:** no host transitions, and no caret blink in a
+    text field.
+- Colors in a `Box`, a `Span` and a `Canvas` are tokens, so they follow
+  the settings too. An app cannot read the settings: an animation with
+  `onFrame` keeps its motion.
+- For tests: `PLINTH_THEME=dark|light`, `PLINTH_HIGH_CONTRAST=1|0`,
+  `PLINTH_TEXT_SCALE=2` (or `200%`) and `PLINTH_REDUCED_MOTION=1|0` force
+  a setting on the desktop (`plinth run`, `plinth shoot`).
+
 ## Layout rules the runtime owns
 
 - **Forms** stack fields vertically. Labels sit above the field on a

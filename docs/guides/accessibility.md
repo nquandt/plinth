@@ -18,12 +18,17 @@ Level 1 controls (`Button`, `TextField`, `Toggle`, `List`, `Row`, `Dialog` and t
   - A `Sheet`, a `Dialog` and the host dialogs take the focus when they open and keep it: Tab and Shift+Tab stay in them. Escape closes them (also from a text field in them), and the focus goes back to the control that had it before. A `Dialog` with a form (UI API 1.13) gives the focus to its first field; Enter in a field does not close it.
   - Alt+Up and Alt+Down move the focused row of a `List` with `onReorder` (UI API 1.13), also when a control in the row has the focus. The focus stays on the row. A `Row` in such a list is a tab stop and tells its keys to assistive technology. If the rows of your list are not `Row`s, put a control that takes the focus in each row.
   - Drag and drop (UI API 1.13) needs a keyboard path. For a list, Alt+Up and Alt+Down are the path. For a drop target, give the source element `onContextMenu` and a `Menu` with "Move to ..." actions, or a button. A polite live region tells the result of each drag and each move ("Moved Apple to position 3 of 3").
-- **Visible focus.** The control with the keyboard focus has a ring in the accent color (2 px). On the web, it is the `:focus-visible` outline.
+- **Visible focus.** The control with the keyboard focus has a ring in the accent color (2 px, 3 px in high contrast). On the web, it is the `:focus-visible` outline.
 - **Images.** `Image` needs an `alt` text that is not empty (`PL4009`).
 - **Icons.** An `Icon` is decorative by default (hidden from assistive technology). Give it a `label` when it carries meaning.
 - **Errors.** `TextField.error` shows a message under the field and marks the field as invalid (`aria-invalid` on the web).
 - **Destructive actions.** An `Action` with `role="destructive"` asks for confirmation, unless you set `confirm={false}`.
-- **Light and dark.** The theme follows the system setting (the window appearance on the desktop, `prefers-color-scheme` on the web).
+- **System settings.** The theme follows the system settings, at start and when they change (PRODUCTION U7). You do not write code for them:
+  - Light and dark: the window appearance on the desktop, `prefers-color-scheme` on the web.
+  - High contrast: on Windows, the high-contrast setting and its colors; on the web, `prefers-contrast: more`. Text and its background are at least 7:1, the borders are in the text color, and muted text is not faint. In forced colors (`forced-colors: active`, Windows high contrast in a browser), the browser colors win, and controls keep a border.
+  - Text size: on Windows, the "Text size" setting (100 % to 225 %); on the web, the default font size of the browser. Text, buttons and the navigation grow; a row puts its controls on a second line when the title has no space.
+  - Reduced motion: on Windows, "Animation effects" off; on the web, `prefers-reduced-motion: reduce`. The host shows no transitions, and the caret in a text field does not blink.
+  - Use theme color tokens only (`"text"`, `"surface"`, `"accent"` ...). Then a `Box` and a `Canvas` follow the settings too.
 
 ## 2. Level 2 primitives: what you must do
 
@@ -106,13 +111,14 @@ The automatic check does not find all problems. Also do these checks:
 
 1. Use the app with the keyboard only: Tab, Shift+Tab, Enter, Space, the arrow keys, Escape. Each action must be possible, and you must always see where the focus is.
 2. Use a screen reader on the desktop (for example Narrator on Windows) and in a browser. Each control must have a name that tells its purpose.
-3. Use the app in the light and the dark theme.
+3. Use the app in the light and the dark theme, in high contrast, and with the text size at 200 %. To force a setting on the desktop, set `PLINTH_THEME=dark`, `PLINTH_HIGH_CONTRAST=1`, `PLINTH_TEXT_SCALE=2` or `PLINTH_REDUCED_MOTION=1` before `plinth run` or `plinth shoot`. In a browser, use the DevTools rendering panel ("Emulate CSS media feature").
 
 ## 5. Limits
 
 These are not done yet (`docs/LIMITS.md`, `docs/PRODUCTION.md` U3–U7):
 
-- The app does not follow the system settings for high contrast, text scale and reduced motion.
+- An app cannot read the system settings. A `Canvas` that moves with `onFrame` keeps its motion when the user asks for reduced motion.
+- On Linux and macOS, the desktop host follows only light and dark (`docs/PLATFORM-TODO.md`).
 - IME input (for example Chinese or Japanese) is not tested on the desktop.
 - There is no test that compares the web HTML with the desktop AccessKit tree, and the desktop tree is not checked with a screen reader yet (Narrator, VoiceOver, Orca).
 - On the desktop, a text field has its name on the group around it, not on the text input node itself (a gpui-ce limit). A screen reader can read the field without its label.
