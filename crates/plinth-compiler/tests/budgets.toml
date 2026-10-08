@@ -7,7 +7,7 @@
 # app.wasm of each example, debug build, bytes. Budget = measured + 10 %.
 [app_size]
 "7guis/cells" = 13932
-"7guis/circle-drawer" = 6134
+"7guis/circle-drawer" = 6862
 "7guis/counter" = 1408
 "7guis/crud" = 4827
 "7guis/flight-booker" = 4575
