@@ -225,6 +225,13 @@ In M1, `plinth:core` exports `Math`, `parseNumber`, `toString` and `console`; `p
 M2 adds three modules:
 - `plinth:time`: `now()`, `monotonicNow()`, `setTimeout(f, ms)`, `setInterval(f, ms)`, `clearTimeout(id)` and `clearInterval(id)`. A timer id is a `number`. No capability is necessary.
 - `plinth:store`: `kv.get(key): string | null`, `kv.set(key, value)`, `kv.remove(key)` and `kv.keys(): string[]`. Capability `store.kv`.
+
+Core 1.13 adds:
+- `plinth:store` `sql` (`docs/SQL.md`): `sql.exec(statement, params?)`, `sql.query<T>(statement, params?)` (each row decoded into `T` as `JSON.parse<T>` does), `sql.batch(steps)` (one transaction) and `sql.migrate(steps)` (append-only steps, `PRAGMA user_version`). Every call returns a `Promise`. One SQLite database for each app, on every host. Capability `store.sql`. A statement that is not a string literal or a `const` gives the warning `PL2026`.
+- `plinth:locale` (`docs/I18N.md`): `locale()`, `direction()`, `formatNumber`, `formatDate`, `pluralCategory`, `formatList` and `compare`. They are synchronous, need no capability, and update when the locale changes (the `lifecycle` event, §8.4). The desktop formats with ICU4X, the web with `Intl`.
+- `Map` and `Set` are hash tables in the core. A loop over a map or a set visits each entry one time, also when the loop body adds or deletes entries.
+
+`docs/migrations/core-1.13.md` lists every item of core 1.13.
 - `plinth:clipboard`: `writeText(text)` and `readText()`. Capabilities `clipboard.write` and `clipboard.read`.
 
 A call to a module function whose capability is not in `plinth.toml` is the compile error `PL1007`.
@@ -491,8 +498,9 @@ world app {
     commit: func(ops: list<u8>);           // one batched op buffer per flush
   }
   // Host APIs (each gated by a capability)
-  import store;  import fs;  import net;  import time;
-  import clipboard;  import notify;  import dialog;  import locale;  import canvas;
+  import store;  import files;  import sql;  import net;  import time;
+  import clipboard;  import notify;  import dialog;  import locale;  import hub;
+  import dev;  // dev.log, error.report
 
   export init: func(args: list<u8>);       // build the initial tree
   export on-event: func(ev: list<u8>);     // one or more events, batched
@@ -564,7 +572,8 @@ The `kind`, `prop`, `event`, and enum ids are generated from one table in `wit/p
 - Each host API module is a WIT interface. Fallible calls return `result<T, error>`.
 - Calls that can block (net, file dialogs, large reads) return a `request: u32` at once and finish through a `completion` event. Synchronous calls are permitted only when they are guaranteed fast (clock, locale, kv get from cache).
 - Every call checks the capability policy (§11). A denied call returns `error.denied(reason)` and never traps.
-- **Status (M2):** `wit/plinth/app.wit` has the interfaces `error` (`host-error`, `denied-reason`), `time` (`now`, `monotonic-now`, `set-timer`, `cancel-timer`), `store` (`kv-get`, `kv-set`, `kv-delete`, `kv-keys`) and `clipboard` (`write-text`, `read-text`). All of these calls are synchronous. The host fires timers with the `timer` event. The desktop host wakes at the next timer deadline (and at least each 15 ms, for net results) and fires every due timer. A late repeating timer does not catch up missed ticks. Frame timers (core 1.12) fire in the display frame, not on this loop. The kv store is a JSON file at `%APPDATA%\plinthpps\<id>\kv.json`.
+- **Status (M2):** `wit/plinth/app.wit` has the interfaces `error` (`host-error`, `denied-reason`), `time` (`now`, `monotonic-now`, `set-timer`, `cancel-timer`), `store` (`kv-get`, `kv-set`, `kv-delete`, `kv-keys`) and `clipboard` (`write-text`, `read-text`). All of these calls are synchronous. The host fires timers with the `timer` event. The desktop host wakes at the next timer deadline (and at least each 15 ms, for net results) and fires every due timer. A late repeating timer does not catch up missed ticks. Frame timers (core 1.12) fire in the display frame, not on this loop. The kv store is a JSON file at `%APPDATA%\plinth\apps\<id>\kv.json`.
+- **Status (2026-10-08):** `wit/plinth/app.wit` is the full list. It also has `dialog`, `notify`, `net`, `files`, `hub`, `sql` and `locale`, and the snapshot test `wit_append_only` keeps it append-only. `docs/host-apis.md` gives the behavior and the tests of each interface on each host. `docs/migrations/` lists what each core minor added.
 
 ---
 
@@ -600,7 +609,7 @@ trait WasmRunner {
 | iOS | `wasmi` (an interpreter in Rust, no JIT) | iOS does not permit JIT. **Decided (owner, 2026-10-07): iOS runs Wasm with an interpreter**, so an app, a core or an update that arrives after install runs the same way as an embedded one (`docs/UPDATES.md`). `wasmi` keeps the host in Rust with gpui, its API is close to wasmtime's, and it has fuel (time limit) and a resource limiter (memory cap). Other candidates: WasmKit (Swift; a second language next to gpui) and wasmtime's Pulley interpreter (the same runner and component model, but wasmi 2 is about two times faster, owner 2026-10-07; a debug build of Pulley also was too slow for the test suite). AOT (`wasm2c`) is at most a later, optional speed-up for an embedded app. *(Q3 is still open for the Hub on iOS.)* |
 | Web | browser `WebAssembly` | The core module and the app module run as two Wasm instances on one page (the side-module model of §18.3). A JavaScript host (`web/`) renders the tree as DOM elements (M5). |
 
-**Status (wasmi, 2026-10-07):** the desktop runner has a second engine, wasmi (`PLINTH_ENGINE=wasmi`, feature `wasmi`): all host imports, a fuel time limit and the memory cap. The errors, language, 7GUIs and apps suites pass on it. Open: the other suites, release speed numbers, a crate without wasmtime for iOS (`docs/GAPS.md`, "wasmi engine").
+**Status (wasmi, 2026-10-08):** the desktop runner has a second engine, wasmi (`PLINTH_ENGINE=wasmi`, feature `wasmi`): all host imports, a fuel time limit and the memory cap. Every compiler suite that runs apps passes on it. `bash scripts/ci-local.sh wasmi` and a CI job run it (the slow suites run by hand). In a release build, wasmi is 7 to 11 times slower than wasmtime. The time limit is fuel: `FUEL_PER_MS` is 2,000,000, from release numbers. Open: a crate without wasmtime for iOS (PRODUCTION R5), and a faster debug build of wasmi (`docs/GAPS.md`, "wasmi engine").
 
 **Fuel and limits:** each runner enforces a time limit for each event (wasmtime epoch interruption on desktop) and a memory cap. If a handler is too slow, the host interrupts it and shows the standard "app is not responding" UI.
 
@@ -758,6 +767,7 @@ A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version i
   - `pinned`: the exact core build the app was built with, matched by digest. If it is not installed, the host names the missing core (version and digest) instead of substituting another build.
 
   If there is no matching core, the host tells the user which core to install.
+- **Shipped minors are frozen.** When a minor version ships (`rt_abi::SHIPPED_MINOR`), its functions and layout constants never change, and no function is added to it; a new function goes into the next minor. The test `core_abi_frozen` checks this against `crates/plinth-link/core-abi.snapshot`, and `cores/shipped/` keeps each shipped core file. Each new minor gets a migration guide in `docs/migrations/` (a test checks it). Status (2026-10-08): 1.12 is shipped and frozen; 1.13 is open.
 - **Backward compatibility.** Because a core only adds functions inside its major version, the newest core of a major version runs every older app of that major version (under `follow`). A breaking change makes a new major version, and the old and the new core stay installed side by side.
 - **The native part of a host** (the renderer and the host APIs) must also support every host interface that a core imports. A minor core version can add an interface (core 1.3 added `plinth:app/dialog`), so a host must check a core's imports before it uses the core, and use only cores whose imports it supports. A host that ships a core also ships the support for it; an installed core from elsewhere can need a newer host.
 - **The author's core policy** (`plinth.toml`, carried into the manifest field `core`):
