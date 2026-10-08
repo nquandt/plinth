@@ -272,6 +272,21 @@ impl Db {
         let mut stmt = self.conn.prepare(sql).map_err(|e| sql_error(&e))?;
         bind(&mut stmt, &params)?;
         let names: Vec<String> = stmt.column_names().into_iter().map(str::to_owned).collect();
+        // The keys of a row in column order; a repeated name keeps its first
+        // place and its last value. (Not a `serde_json::Map`: its order
+        // depends on the `preserve_order` feature, which other crates of a
+        // build can turn on. The web engine, `web/sql.js`, writes the same order.)
+        let mut keys: Vec<&str> = Vec::with_capacity(names.len());
+        let mut slot: Vec<usize> = Vec::with_capacity(names.len());
+        for name in &names {
+            match keys.iter().position(|k| *k == name.as_str()) {
+                Some(at) => slot.push(at),
+                None => {
+                    slot.push(keys.len());
+                    keys.push(name);
+                }
+            }
+        }
         let max = self.limits.max_result;
         let mut out = Vec::from(&b"["[..]);
         let mut failure: Option<String> = None;
@@ -279,7 +294,7 @@ impl Db {
             let mut rows = stmt.raw_query();
             let mut first = true;
             while let Some(row) = rows.next()? {
-                let mut obj = serde_json::Map::with_capacity(names.len());
+                let mut values = vec![serde_json::Value::Null; keys.len()];
                 for (i, name) in names.iter().enumerate() {
                     let v = match row.get_ref(i)? {
                         ValueRef::Null => serde_json::Value::Null,
@@ -293,13 +308,22 @@ impl Db {
                             return Ok(());
                         }
                     };
-                    obj.insert(name.clone(), v);
+                    values[slot[i]] = v;
                 }
                 if !first {
                     out.push(b',');
                 }
                 first = false;
-                serde_json::to_writer(&mut out, &obj).expect("a JSON map writes to a Vec");
+                out.push(b'{');
+                for (k, (key, value)) in keys.iter().zip(&values).enumerate() {
+                    if k > 0 {
+                        out.push(b',');
+                    }
+                    serde_json::to_writer(&mut out, key).expect("a JSON string writes to a Vec");
+                    out.push(b':');
+                    serde_json::to_writer(&mut out, value).expect("a JSON value writes to a Vec");
+                }
+                out.push(b'}');
                 if out.len() + 1 > max {
                     failure = Some(TOO_LARGE.into());
                     return Ok(());
@@ -634,6 +658,21 @@ mod tests {
         assert_eq!(r.changes, 2);
         // A statement that gives rows also runs in `exec`, with no changes.
         assert_eq!(db.exec("SELECT 1", "").unwrap().changes, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row_keys_are_in_column_order() {
+        let (db, dir) = open("keys");
+        // The exact text, also when a build turns on serde_json's
+        // `preserve_order`; a repeated name keeps its first place and its last value.
+        assert_eq!(db.query("SELECT 2 AS b, 1 AS a, 3 AS b, 2.0 AS c", "").unwrap(), r#"[{"b":3,"a":1,"c":2.0}]"#);
+        // REAL and INTEGER values (the web engine, `web/test/run-sql.mjs`, checks the same text).
+        let reals = "SELECT 2.0 AS c, 1e308 * 10 AS d, 9007199254740993 AS e, 1e21 AS f, 1.5e-7 AS g, 0.1 AS h, -0.0 AS i, 123456789012345680000.0 AS j";
+        assert_eq!(
+            db.query(reals, "").unwrap(),
+            r#"[{"c":2.0,"d":null,"e":9007199254740993,"f":1e+21,"g":1.5e-7,"h":0.1,"i":-0.0,"j":1.2345678901234568e+20}]"#
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

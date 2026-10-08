@@ -71,6 +71,9 @@ async function start(msg) {
     // plinth:files: the page keeps the files (its IndexedDB, one namespace
     // for this app) and checks the capability and the path again.
     files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
+    // store.sql: the page runs the database (SQLite in its own Worker, with
+    // OPFS of the page origin) and checks the capability again.
+    sql: { call: (kind, statement, params) => ask("sql-run", { kind, statement, params }) },
     // plinth:notify: an opaque origin cannot use the Notification API, so
     // the page shows the notification (it checks the capability again).
     notify: {

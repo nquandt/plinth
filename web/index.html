@@ -15,6 +15,7 @@
       import { readPlnt, localStorageKvStore, parseManifest } from "./plinth-web.js";
       import { WorkerApp, startAppWorker } from "./app-worker.js";
       import { Tree, DomRenderer } from "./dom-renderer.js";
+      import { SqlWorkerHost } from "./sql.js";
 
       const container = document.getElementById("app");
 
@@ -52,6 +53,8 @@
           log: (s) => console.log("[app]", s),
           manifestText,
           kvStore: localStorageKvStore(window.localStorage, `plinth:${parseManifest(manifestText).id}:`),
+          // store.sql: SQLite in a Worker of this page (OPFS of this origin).
+          sql: new SqlWorkerHost(new URL("./sql-worker.js", import.meta.url)).space(parseManifest(manifestText).id),
         });
 
         new DomRenderer(tree, container, app, assets);

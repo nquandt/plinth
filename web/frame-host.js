@@ -17,6 +17,8 @@
 // - dialogs (`plinth:dialog`), drawn by the page;
 // - the private space of `plinth:files`, in the page's IndexedDB (one
 //   namespace for each app id), with the same checks as the desktop host;
+// - the database of `store.sql`, in a SQLite Worker of the page (`sql.js`:
+//   OPFS of the page origin, one database for each app id);
 // - the content height that the frame reports (`autoHeight`).
 //
 // The page decides what the app may do (consent, grants) and gives the
@@ -89,6 +91,9 @@ export function hostDialog(kind, message, title = "") {
  * - `fetchImpl`: default `fetch`.
  * - `files`: the `FileSpace` of this app for `plinth:files`; default: the
  *   page's IndexedDB (`idbFileBackend(appId)`), or memory without IndexedDB.
+ * - `sql`: the page's `store.sql` engine (`SqlWorkerHost` of `sql.js`, or
+ *   anything with its `space(appId)`); default none: an allowed call
+ *   answers "denied:unsupported".
  * - `notify`: the `plinth:notify` backend (`{ show, cancel }`); default:
  *   `browserNotify()`, the page's `Notification` API, with `notifyIcon` (a
  *   URL, optional) as the icon. One backend for each frame, so `cancel`
@@ -106,6 +111,7 @@ export class AppFrame {
     this.files =
       opts.files ?? new FileSpace(typeof indexedDB !== "undefined" ? idbFileBackend(opts.appId) : memoryFileBackend());
     this.notify = opts.notify ?? browserNotify(globalThis.Notification, { icon: opts.notifyIcon });
+    this.sql = opts.sql ? opts.sql.space(opts.appId) : null;
     // `allow-scripts` only: an opaque origin, no forms, no popups, no modal
     // dialogs, no top navigation, no same-origin access.
     this.element = el("iframe", { class: "host-frame", sandbox: "allow-scripts", title: opts.title ?? opts.appId });
@@ -205,6 +211,22 @@ export class AppFrame {
         }
         const op = msg.type.slice("files-".length);
         this.files.call(op, msg.path, op === "write" ? msg.text : null).then((r) => this.answer(msg.id, r));
+        break;
+      }
+      case "sql-run": {
+        // The frame checked the capability; the page checks it again.
+        if (!this.allowed("store.sql")) {
+          this.answer(msg.id, [false, 0, "", this.declared.has("store.sql") ? "denied:refused" : "denied:undeclared"]);
+          break;
+        }
+        if (!this.sql) {
+          this.answer(msg.id, [false, 0, "", "denied:unsupported"]);
+          break;
+        }
+        Promise.resolve()
+          .then(() => this.sql.call(msg.kind, msg.statement, msg.params))
+          .catch((e) => [false, 0, "", `sql: ${e?.message ?? e}`])
+          .then((r) => this.answer(msg.id, r));
         break;
       }
       case "notify-show": {

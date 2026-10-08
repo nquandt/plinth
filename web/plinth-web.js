@@ -349,6 +349,13 @@ function manifestEntry(manifestText) {
 const DeniedReason = { undeclared: 0, refused: 1, unsupported: 2 };
 
 /**
+ * The longest statement or parameter text of one `store.sql` call
+ * (characters). The bridge to the page carries no more; a longer call
+ * answers "sql: the call is too large" (a web limit, docs/LIMITS.md).
+ */
+export const MAX_SQL_TEXT = 16 * 1024 * 1024;
+
+/**
  * A `plinth:notify` backend on the browser's `Notification` API (SPEC.md
  * §11, docs/host-apis.md "plinth:notify"): `{ show(title, body, tag),
  * cancel(tag) }`. `show` resolves with "shown", "unsupported" or
@@ -657,6 +664,7 @@ function hostImports(
     hub = null,
     netFetch = null,
     files = null,
+    sql = null,
     onCommitBytes = null,
     notify = null,
   } = {},
@@ -741,13 +749,27 @@ function hostImports(
     return id;
   }
   // store.sql (core 1.13, docs/SQL.md): the same request id and
-  // `[ok, int, text, error]` completion as `net.fetch`. The web engine is
-  // step 3 of docs/SQL.md §7; until then an allowed call answers
-  // "denied:unsupported" (a denied call never traps).
-  function openSql() {
+  // `[ok, int, text, error]` completion as `net.fetch`. The capability
+  // check comes first, then the kind, then the backend, as on the desktop;
+  // a denied call answers "denied:<reason>" and never traps. `sql` (`{
+  // call(kind, statement, params) }`) is the page's engine (`sql.js`),
+  // reached through the frame's bridge; with no `sql` (Node, the
+  // stand-alone page) an allowed call answers "denied:unsupported".
+  function openSql(kind, statement, params) {
     const id = nextRequest++;
-    const reason = capReason("store.sql") ?? DeniedReason.unsupported;
-    Promise.resolve().then(() => completeRequest?.(id, [false, 0, "", deniedText(reason)]));
+    const reason = capReason("store.sql");
+    let early = null;
+    if (reason !== null) early = deniedText(reason);
+    else if (kind > 3) early = `sql: unknown call kind ${kind}`;
+    else if (!sql) early = deniedText(DeniedReason.unsupported);
+    else if (statement.length > MAX_SQL_TEXT || params.length > MAX_SQL_TEXT) early = "sql: the call is too large";
+    const run =
+      early !== null
+        ? Promise.resolve([false, 0, "", early])
+        : Promise.resolve()
+            .then(() => sql.call(kind, statement, params))
+            .catch((e) => [false, 0, "", `sql: ${e?.message ?? e}`]);
+    run.then((result) => completeRequest?.(id, result));
     return id;
   }
   function mem() {
@@ -1065,8 +1087,8 @@ function hostImports(
     // Core 1.13: run(kind, statement(ptr, len), params(ptr, len)) returns
     // the request id directly.
     "plinth:app/sql@1.0.0": {
-      run(_kind, _sPtr, _sLen, _pPtr, _pLen) {
-        return openSql();
+      run(kind, sPtr, sLen, pPtr, pLen) {
+        return openSql(kind, readString(sPtr, sLen), readString(pPtr, pLen));
       },
     },
     "plinth:app/clipboard@1.0.0": {
@@ -1317,6 +1339,9 @@ export class PlinthApp {
       // `plinth:files`: the caller's space (the frame's bridge to the page),
       // else a space in memory for this app (Node, the stand-alone page).
       files: opts.files ?? new FileSpace(memoryFileBackend(opts.filesMap)),
+      // `store.sql`: the page's engine (`sql.js`, through the frame's
+      // bridge), else none: an allowed call answers "denied:unsupported".
+      sql: opts.sql ?? null,
       onCommit: (ops) => this.onCommit(ops),
     });
     this.appInstance = await linkApp(this.core, appBytes);

@@ -1,0 +1,191 @@
+# The shared app cases of `store.sql` (docs/SQL.md §7 step 3). The desktop
+# test (`tests/sql.rs`, wasmtime and wasmi) and the web test
+# (`web/test/run-sql.mjs`, the real core in Node) read this file, build each
+# case, run it on a new database and compare the result with `expect`: the
+# two hosts must give the same text.
+#
+# Format: `=== template`, then `=== case <name>` sections, each with
+# `--- decls`, `--- body` and `--- expect`. The template is the app; the
+# test puts the decls and the body in place of `{decls}` and `{body}`. The
+# body is the body of `async function run(): Promise<string>`; the button
+# sets the text to `done:<result>`, or to `done:err:<message>` when the body
+# throws. `expect` is the text after `done:`. Lines of a section are taken
+# as they are (trailing empty lines are removed).
+
+=== template
+import { app, Screen, Text, Button, signal } from "plinth:ui";
+import { sql } from "plinth:store";
+import { JSON } from "plinth:core";
+const result = signal("waiting");
+{decls}
+async function run(): Promise<string> {
+{body}
+}
+async function go(): Promise<void> {
+  try {
+    const r = await run();
+    result.set("done:" + r);
+  } catch (e) {
+    result.set("done:err:" + e.message);
+  }
+}
+function Home() {
+  return <Screen title="Home">
+    <Text>{result()}</Text>
+    <Button label="go" onPress={() => { go(); }} />
+  </Screen>;
+}
+export default app({ screens: { home: { title: "Home", component: Home } } });
+
+=== case exec_and_query_round_trip
+--- decls
+interface Note { id: number; title: string; done: boolean }
+const SCHEMA = [
+  "CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL UNIQUE, done INTEGER NOT NULL DEFAULT 0)",
+  "CREATE INDEX notes_done ON notes (done)",
+];
+const INSERT = "INSERT INTO notes (title, done) VALUES (?, ?)";
+--- body
+  const v = await sql.migrate(SCHEMA);
+  const a = await sql.exec(INSERT, ["Buy milk", false]);
+  const b = await sql.exec(INSERT, ["Wörld 🌍", true]);
+  const c = await sql.exec("UPDATE notes SET title = title || '!' WHERE id > ?", [0]);
+  const rows = await sql.query<Note>("SELECT id, title, done FROM notes ORDER BY id");
+  const open = await sql.query<Note>("SELECT id, title, done FROM notes WHERE done = ? ORDER BY id", [false]);
+  return v + "|" + a.changes + "," + a.lastInsertId + "|" + b.lastInsertId + "|" + c.changes + "|" + JSON.stringify(rows) + "|" + open.length;
+--- expect
+2|1,1|2|2|[{"id":1,"title":"Buy milk!","done":false},{"id":2,"title":"Wörld 🌍!","done":true}]|1
+
+=== case query_reads_a_boolean_from_0_and_1_and_nullable_columns
+--- decls
+interface Row { flag: boolean; maybe: boolean | null; n: number | null; s: string | null }
+--- body
+  await sql.migrate(["CREATE TABLE t (id INTEGER PRIMARY KEY, flag INTEGER, maybe INTEGER, n REAL, s TEXT)"]);
+  await sql.batch([
+    { sql: "INSERT INTO t (flag, maybe, n, s) VALUES (?, ?, ?, ?)", params: [true, null, 1.5, "x"] },
+    { sql: "INSERT INTO t (flag, maybe, n, s) VALUES (?, ?, ?, ?)", params: [0, 1, null, null] },
+  ]);
+  const rows = await sql.query<Row>("SELECT flag, maybe, n, s FROM t ORDER BY id");
+  return JSON.stringify(rows);
+--- expect
+[{"flag":true,"maybe":null,"n":1.5,"s":"x"},{"flag":false,"maybe":true,"n":null,"s":null}]
+
+=== case a_row_that_does_not_match_the_type_rejects
+--- decls
+interface Wrong { id: string }
+interface Missing { id: number; nope: string }
+interface Flag { flag: boolean }
+--- body
+  await sql.migrate(["CREATE TABLE t (id INTEGER PRIMARY KEY, flag INTEGER)"]);
+  await sql.exec("INSERT INTO t (flag) VALUES (2)");
+  let r = "";
+  try { await sql.query<Wrong>("SELECT id FROM t"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  try { await sql.query<Missing>("SELECT id FROM t"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  try { await sql.query<Flag>("SELECT flag FROM t"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  const none = await sql.query<Wrong>("SELECT id FROM t WHERE id > 100");
+  return r + none.length;
+--- expect
+sql: a row does not match the type `Wrong[]`;sql: a row does not match the type `Missing[]`;sql: a row does not match the type `Flag[]`;0
+
+=== case sql_errors_reject_and_the_app_keeps_running
+--- decls
+interface Note { id: number; title: string; done: boolean }
+const SCHEMA = [
+  "CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL UNIQUE, done INTEGER NOT NULL DEFAULT 0)",
+  "CREATE INDEX notes_done ON notes (done)",
+];
+const INSERT = "INSERT INTO notes (title, done) VALUES (?, ?)";
+--- body
+  await sql.migrate(SCHEMA);
+  let r = "";
+  try { await sql.exec("SELEC 1"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  try { await sql.exec(INSERT, ["one"]); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  try { await sql.exec("ATTACH DATABASE 'x.db' AS x"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  try { await sql.exec("BEGIN"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  try { await sql.exec(INSERT, ["one", false]); await sql.exec(INSERT, ["one", true]); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  try { await sql.exec("SELECT 1; SELECT 2"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  try { await sql.query<Note>("SELECT * FROM nope"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  try { await sql.exec("PRAGMA journal_mode = OFF"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  try { await sql.query<{ b: number }>("SELECT x'00' AS b"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  await sql.exec(INSERT, ["still works", false]);
+  const rows = await sql.query<Note>("SELECT * FROM notes");
+  return r + rows.length;
+--- expect
+sql: near "SELEC": syntax error in SELEC 1 at offset 0;sql: the statement has 2 parameters, but the call gives 1;sql: not authorized;sql: not authorized;sql: UNIQUE constraint failed: notes.title;sql: give one statement only;sql: no such table: nope;sql: not authorized;sql: the column "b" is a BLOB, which store.sql cannot read;2
+
+=== case a_failed_batch_step_rolls_back_all_steps
+--- decls
+interface Note { id: number; title: string; done: boolean }
+const SCHEMA = [
+  "CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL UNIQUE, done INTEGER NOT NULL DEFAULT 0)",
+  "CREATE INDEX notes_done ON notes (done)",
+];
+const INSERT = "INSERT INTO notes (title, done) VALUES (?, ?)";
+--- body
+  await sql.migrate(SCHEMA);
+  await sql.exec(INSERT, ["a", false]);
+  let r = "";
+  try {
+    await sql.batch([
+      { sql: INSERT, params: ["b", false] },
+      { sql: "UPDATE notes SET done = 1" },
+      { sql: INSERT, params: ["a", true] },
+    ]);
+    r = "ok";
+  } catch (e) {
+    r = e.message;
+  }
+  const rows = await sql.query<Note>("SELECT * FROM notes");
+  // A batch from an array value.
+  const steps: { sql: string; params: string[] }[] = [];
+  for (const t of ["c", "d"]) {
+    steps.push({ sql: "INSERT INTO notes (title) VALUES (?)", params: [t] });
+  }
+  await sql.batch(steps);
+  const after = await sql.query<Note>("SELECT * FROM notes ORDER BY id");
+  return r + "|" + JSON.stringify(rows) + "|" + after.map((n) => n.title).join(",");
+--- expect
+sql: UNIQUE constraint failed: notes.title|[{"id":1,"title":"a","done":false}]|a,c,d
+
+=== case migrate_runs_only_the_new_steps
+--- decls
+--- body
+  const steps = ["CREATE TABLE a (x INTEGER)", "INSERT INTO a (x) VALUES (1)"];
+  const v1 = await sql.migrate(steps);
+  const v2 = await sql.migrate(steps);
+  const v3 = await sql.migrate(["CREATE TABLE a (x INTEGER)", "INSERT INTO a (x) VALUES (1)", "INSERT INTO a (x) VALUES (2)"]);
+  const rows = await sql.query<{ x: number }>("SELECT x FROM a ORDER BY x");
+  let r = "";
+  try { await sql.migrate(["CREATE TABLE a (x INTEGER)"]); r = "ok"; } catch (e) { r = e.message; }
+  return v1 + "," + v2 + "," + v3 + "|" + JSON.stringify(rows) + "|" + r;
+--- expect
+2,2,3|[{"x":1},{"x":2}]|sql: the database is at version 3, but there are only 1 migration steps (steps are append-only)
+
+=== case full_text_search_with_fts5
+--- decls
+interface Hit { title: string; snippet: string }
+const SEARCH = "SELECT title, snippet(docs, 1, '[', ']', '…', 4) AS snippet FROM docs WHERE docs MATCH ? ORDER BY rank";
+--- body
+  await sql.migrate(["CREATE VIRTUAL TABLE docs USING fts5(title, body)"]);
+  await sql.batch([
+    { sql: "INSERT INTO docs (title, body) VALUES (?, ?)", params: ["Shopping", "buy milk and bread"] },
+    { sql: "INSERT INTO docs (title, body) VALUES (?, ?)", params: ["Garden", "water the plants, then buy seeds"] },
+    { sql: "INSERT INTO docs (title, body) VALUES (?, ?)", params: ["Work", "write the report"] },
+  ]);
+  const hits = await sql.query<Hit>(SEARCH, ["buy"]);
+  const none = await sql.query<Hit>(SEARCH, ["nothing"]);
+  return hits.map((h) => h.title).sort().join(",") + "|" + hits.length + "|" + none.length + "|" + hits.filter((h) => h.title === "Shopping")[0].snippet;
+--- expect
+Garden,Shopping|2|0|[buy] milk and bread
+
+=== case rows_as_a_map_keep_the_column_order
+--- decls
+--- body
+  await sql.migrate(["CREATE TABLE t (z INTEGER, a REAL, m INTEGER)"]);
+  await sql.exec("INSERT INTO t VALUES (?, ?, ?)", [3, 2.5, 9007199254740991]);
+  const rows = await sql.query<Map<string, number>>("SELECT z, a, m FROM t");
+  let r = "";
+  for (const [k, v] of rows[0]) { r = r + k + "=" + v + ";"; }
+  return r;
+--- expect
+z=3;a=2.5;m=9007199254740991;

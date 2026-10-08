@@ -1,0 +1,8 @@
+id = "dev.plinth.test.sql-fixture"
+name = "SQL Fixture"
+version = "0.1.0"
+publisher = "plinth"
+
+[[capabilities]]
+name = "store.sql"
+rationale = "Test fixture: keeps notes in a SQL database (web/test/run-a11y.mjs)."

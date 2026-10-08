@@ -24,6 +24,11 @@ import { checkPackage, checkCore } from "./hub-integrity.js";
 import { HubHost, indexedDbPersist, memoryPersist } from "./hub-host.js";
 import { HubStore, memoryStorage } from "./hub-storage.js";
 import { AppFrame } from "./frame-host.js";
+import { SqlWorkerHost } from "./sql.js";
+
+// store.sql of every app on this page: one SQLite Worker (OPFS of this
+// origin, one database for each app id), started at the first call.
+const pageSql = new SqlWorkerHost(new URL("./sql-worker.js", import.meta.url));
 
 const container = document.getElementById("app");
 const status = document.getElementById("host-status");
@@ -215,6 +220,7 @@ function openAppWindow(entry, version, pkg, core) {
     declared: version.capabilities,
     refused: host.refusedFor(entry.id, version.capabilities),
     store: appData,
+    sql: pageSql,
     onStarted: () => {
       document.body.dataset.running = entry.id;
       announce(`${entry.name} is open.`);
@@ -356,6 +362,7 @@ async function start() {
     declared: version.capabilities.map((c) => c.name ?? c),
     refused: [],
     store: appData,
+    sql: pageSql,
     hub: host,
     onStarted: () => {
       document.body.dataset.ready = "true";

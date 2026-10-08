@@ -17,6 +17,7 @@
 // in the browser, a small Map-backed object in the test).
 
 import { MAX_PATH as FILES_MAX_PATH, MAX_FILE as FILES_MAX_FILE } from "./files.js";
+import { MAX_SQL_TEXT } from "./plinth-web.js";
 
 /** The kv quota of one app, in characters (UTF-16 code units) of keys and values. */
 export const KV_QUOTA = 512 * 1024;
@@ -245,6 +246,8 @@ const FRAME_TYPES = {
   "files-list": { id: "number", path: "string" },
   "files-stat": { id: "number", path: "string" },
   "files-remove": { id: "number", path: "string" },
+  // store.sql (core 1.13): the page runs the database of the app.
+  "sql-run": { id: "number", kind: "number", statement: "string", params: "string" },
   // plinth:notify (core 1.12): the page shows the notification.
   "notify-show": { id: "number", title: "string" },
   "notify-cancel": { tag: "string" },
@@ -281,6 +284,12 @@ export function checkFrameMessage(data) {
     if (data.path.length > FILES_MAX_PATH) return null;
     if (data.type === "files-write" && data.text.length > FILES_MAX_FILE) return null;
     if (data.type !== "files-write" && data.text !== undefined) return null;
+  }
+  if (data.type === "sql-run") {
+    // The page's engine checks the call again (docs/SQL.md §4); this only
+    // bounds the kind and the sizes.
+    if (!Number.isInteger(data.kind) || data.kind < 0 || data.kind > 255) return null;
+    if (data.statement.length > MAX_SQL_TEXT || data.params.length > MAX_SQL_TEXT) return null;
   }
   if (data.type === "notify-show") {
     const optional = (v) => v === null || (typeof v === "string" && v.length <= MAX_NOTIFY_TEXT);

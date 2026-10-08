@@ -2,7 +2,7 @@
 
 This document is the design of `store.sql`: a SQL database for each app. It is checklist item H4 in `docs/PRODUCTION.md`. The owner decided on 2026-10-07 that Plinth gives apps a SQL store (`docs/STORAGE.md` ST-Q1).
 
-Status: 2026-10-08. Steps 1 and 2 of §7 are done: apps call `store.sql` on the desktop host, on wasmtime and on wasmi (core 1.13). The web host does not have it yet (step 3); there each call rejects with `Error("denied:unsupported")`.
+Status: 2026-10-08. Steps 1, 2 and 3 of §7 are done: apps call `store.sql` on the desktop host (wasmtime and wasmi, core 1.13) and on the web host (the official SQLite Wasm build in a Worker of the page, with OPFS). §9 gives the differences of the web engine. A web export (`plinth build --target web`) does not have it yet: there each call rejects with `Error("denied:unsupported")`.
 
 ## 1. Goals
 
@@ -20,7 +20,7 @@ SQLite on every host, so that the SQL dialect and the results are the same.
 |---|---|---|
 | Desktop | SQLite through `rusqlite` with the bundled SQLite build, in the host, on a worker thread | `<app id>+sql/store.sqlite`, next to the app's private space (`sql::database_dir`). The folder is not in the private space, so `plinth:files` cannot read or change the database, and the database does not count toward the files quota. |
 | Mobile | The same as the desktop (gpui hosts, Rust) | The same as the desktop, on the device |
-| Web | The official SQLite Wasm build in a Worker of the **parent page** (the host shell), with the OPFS VFS (`opfs-sahpool`) | OPFS of the page origin, one file for each app id |
+| Web | The official SQLite Wasm build (`web/vendor/sqlite-wasm/`, `docs/DEPENDENCIES.md`) in a dedicated Worker of the **parent page** (the host shell), with the OPFS VFS `opfs-sahpool` (`web/sql.js`, `web/sql-worker.js`) | OPFS of the page origin, folder `.plinth-sql`, one database for each app id in lower case (`/<app id>/store.sqlite` in the pool). `plinth:files` on the web keeps its files in IndexedDB, so it cannot reach the database. Without OPFS (Node, an old browser), each database is in memory and goes away when the page closes. |
 
 **Why the parent page on the web:** an app runs in a sandboxed frame with an opaque origin, and its code runs in a Worker of that frame (SPEC §10.3). An opaque origin has no storage, so OPFS is not available there. The parent page has an origin and storage. So the parent runs the database, and the app's calls go over the existing bridge, as `files` calls do (`web/frame-host.js`).
 
@@ -87,7 +87,7 @@ Core 1.12 is shipped and frozen, so this feature is in **core 1.13**.
 
 - WIT: a new interface `sql` with one call `run(kind: u8, statement: string, params: string) -> u32` (a request id). `params` and the result are JSON text. The completion uses the existing 4-field result list (`ok`, an int, `text`, `error`).
 - Core 1.13: one new function, `sql_call(thunk, env, kind, statement, params)`, that starts a call (as `files_call` does for `files`). The completion is read with the existing `net_result_*` functions. The decoding of rows into `T` uses the JSON decoder that the compiler already generates for `JSON.parse<T>`, so the core gets no SQL-specific decoder.
-- Every host must supply the WIT import `sql.run`, because the core imports it. The web host (`web/plinth-web.js`) answers `denied:unsupported` until step 3.
+- Every host must supply the WIT import `sql.run`, because the core imports it. The web host (`web/plinth-web.js`) sends the call to the page as the bridge message `sql-run` (`web/README.md`).
 - The compiler: the `sql` module in `std/store.d.ts`, the generic `query<T>` lowering to the typed JSON decoder, the warning of §3, and the capability.
 
 ## 6. Sync and backup
@@ -98,7 +98,7 @@ The database is one file in the private space. When the sync engine (`docs/STORA
 
 1. **Done.** The desktop engine: `rusqlite` in the runner's `HostState` on a worker thread, the authorizer, the limits, and unit tests (`crates/plinth-runner-wasmtime/src/sql.rs`). The module comment gives the JSON shapes of the calls.
 2. **Done.** WIT `sql.run`, core 1.13 (`sql_call`), the capability `store.sql` (Low), the host import on wasmtime and wasmi, `std/store.d.ts`, the compiler (`crates/plinth-compiler/src/check/sql.rs`, the 0/1 booleans in the row decoder, warning `PL2026`), and `crates/plinth-compiler/tests/sql.rs` on both engines. The web host has a stub that answers `denied:unsupported`.
-3. The web engine: SQLite Wasm with OPFS in a Worker of the parent page, the bridge messages, and Node and Edge tests. The same SQL test file runs on both hosts and compares the results.
+3. **Done.** The web engine (`web/sql.js`, `web/sql-worker.js`): SQLite Wasm 3.53.4 with `opfs-sahpool` in a Worker of the parent page, the same authorizer, limits and error texts as the desktop, and the bridge message `sql-run`. The shared case file `crates/plinth-compiler/tests/sql_cases.txt` runs on both hosts (`tests/sql.rs` and `web/test/run-sql.mjs`), and the results must be the same text. `web/test/run-sql.mjs` also runs the cases of the desktop unit tests on the web engine. `web/test/run-a11y.mjs` (by hand, Edge) runs a fixture app in the web App Hub: the data stays in OPFS after a reload of the page.
 4. The notes app (VALIDATION V2) uses it for its index and search (SQLite FTS5).
 5. Docs: `docs/host-apis.md`, `docs/guides/storage.md`, `docs/LIMITS.md`, `docs/PRODUCTION.md` H4.
 
@@ -111,5 +111,25 @@ The database is one file in the private space. When the sync engine (`docs/STORA
 | SQL-Q3 | `BLOB` values? | Needs a byte-array type in the language; the `files` API covers most binary data. |
 | SQL-Q4 | Full-text search (FTS5) on every host? | The bundled SQLite and the official Wasm build both include FTS5; check the size. |
 | SQL-Q5 | One database for each app, or named databases? | One is simpler and enough for V2; named databases can come later with no break. |
-| SQL-Q6 | Temporary data (temporary tables, large sorts) used SQLite temporary files that the quota does not count. | Done on the desktop: `temp_store = MEMORY`, which an app cannot change, and a heap limit of 512 MiB for the whole host process (`sql::HEAP_LIMIT`; SQLite has no limit for each database). A statement past it fails with `sql: out of memory`. The web engine (step 3) must do the same. |
+| SQL-Q6 | Temporary data (temporary tables, large sorts) used SQLite temporary files that the quota does not count. | Done on the desktop: `temp_store = MEMORY`, which an app cannot change, and a heap limit of 512 MiB for the whole host process (`sql::HEAP_LIMIT`; SQLite has no limit for each database). A statement past it fails with `sql: out of memory`. Done on the web: `temp_store = MEMORY`, and the Wasm memory of the SQLite Worker has a maximum of 512 MiB (`HEAP_LIMIT` in `web/sql.js`; the Wasm build has no `sqlite3_hard_heap_limit64`). |
 | SQL-Q7 | The authorizer refuses plain `VACUUM` (it attaches a database internally), so an app cannot make its file smaller. | The host can run `VACUUM` itself with the bypass flag, for example from a Hub "Compact" action or when the free pages are more than half the file. |
+
+## 9. The web engine: differences from the desktop
+
+The web engine has the same rules, limits, JSON shapes and error texts as the desktop engine. `web/test/run-sql.mjs` checks this. These things are different:
+
+| # | Web | Desktop | Why |
+|---|---|---|---|
+| W1 | One SQLite Worker for the page runs the calls of all apps, one at a time. A statement of one app (at most 2 s) delays the calls of the other apps on the page. | One worker thread for each app. | One Wasm instance and one OPFS pool for the page. Usually one app runs at a time. |
+| W2 | The memory limit is the maximum size of the Wasm memory of the SQLite Worker: 512 MiB for all databases, with SQLite's own data. | `sqlite3_hard_heap_limit64` (512 MiB for the host process). | The Wasm build does not export the heap limit function. The error text is the same: `sql: out of memory`. |
+| W3 | The Wasm build has no extension loading at all (`SQLITE_OMIT_LOAD_EXTENSION`). `SELECT load_extension('x')` fails with `sql: no such function: load_extension`. | The authorizer refuses it: `sql: not authorized`. | Both refuse it; only the text is different. |
+| W4 | Without OPFS (Node, an old browser), each database is in memory and goes away when the page closes. The page writes a warning to the console one time. The calls work. | Always a file. | A page without OPFS has no synchronous file access for SQLite. |
+| W5 | `opfs-sahpool` keeps the files open with exclusive access. A second tab of the same origin cannot open the pool while the first tab has it; its calls fail with `sql: the database engine did not start: <reason>`. (Not tested yet.) | Each host process opens the file; SQLite locks it. | A limit of `opfs-sahpool`. The `opfs` VFS, which allows more tabs, needs a cross-origin isolated page (COOP and COEP headers). |
+| W6 | The database name is the app id in lower case, with no owner part (the same rule as `plinth:files` on the web). | `<owner>/<app id>+sql/store.sqlite`. | The web host has one owner for each origin. |
+| W7 | A statement or a parameter text longer than 16 Mi characters fails at once with `sql: the call is too large` (`MAX_SQL_TEXT` in `web/plinth-web.js`). | No limit (only memory). | The text crosses two `postMessage` bridges (Worker to frame to page). |
+| W8 | The page size of a new database is 8192 bytes. | 4096 bytes. | The default of each build. The quota is in bytes (`max_page_count` comes from the page size), so the limit is the same. |
+| W9 | SQLite 3.53.4. | SQLite 3.53.2 (`libsqlite3-sys` 0.38.2). | Each build has its own SQLite. The shared cases give the same text on both. |
+| W10 | An integer parameter binds as an integer when its JSON text is an integer in the i64 range, as `serde_json` does on the desktop. A browser without the source text in `JSON.parse` revivers (Chrome before 114, Firefox before 135) binds each number with no fraction as an integer. | `serde_json`. | The core writes the parameters as JSON text. |
+| W11 | A web export (`plinth build --target web`) does not have `store.sql` yet: an allowed call answers `denied:unsupported`. The web App Hub and the stand-alone page (`web/index.html`) have it. | Not applicable. | The export must also write the SQLite Worker and the Wasm build (about 1.5 MB) next to `plinth.js`. A single-file export cannot start a module Worker from a file. |
+
+The row text: each row is a JSON object with its keys in column order. A repeated column name keeps its first place and its last value. A REAL value is written as `serde_json` writes it (for example `2.0`, `1e+16`, `1e-6`), and an INTEGER value keeps all its digits. The desktop engine writes the same text. (It does not use `serde_json::Map`, because the key order of that map changes with the `preserve_order` feature, which another crate of a build can turn on.)

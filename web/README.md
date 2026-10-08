@@ -2,7 +2,9 @@
 
 Runs the SAME `.plnt` package and the SAME runtime core file the desktop
 host uses, directly in a browser. No bundler, no build step, no npm
-dependency: plain ES modules (SPEC.md §18.3, the "browse mode" side-module
+dependency (the one third-party part, the SQLite Wasm build for
+`store.sql`, is a vendored copy in `vendor/sqlite-wasm/`, see
+`docs/DEPENDENCIES.md`): plain ES modules (SPEC.md §18.3, the "browse mode" side-module
 model — no static linking happens in the browser).
 
 ## Try it: the web App Hub
@@ -76,13 +78,15 @@ itself, not in a sandboxed frame: use it for tests and development only.
 | `plinth.js` | GENERATED (`scripts/gen-plinth-js.mjs`): the web host as one ES module, for web exports. It defines `<plinth-app>`. |
 | `plinth-app.js` | The `<plinth-app>` element (only in the bundle): reads the package (`src`, a URL or `#id` with base64), finds the core (`core`, or `plinth-core-<version>.wasm` next to `plinth.js`), and runs the app in an `AppFrame` with an inline frame document. Attributes `height="content"` (default) or `fill`; `data-state` is `loading`, `running` or `failed`. |
 | `files.js` | `plinth:files`: the path rules (`checkPath`), `FileSpace` (results, quota, call order), and the backends: memory and the page's IndexedDB. No DOM. |
+| `sql.js`, `sql-worker.js` | `store.sql` (`docs/SQL.md`): `SqlEngine` (the same authorizer, limits, JSON shapes and error texts as the desktop engine, on the SQLite Wasm build), `serveSql` (the Worker side), `SqlWorkerHost` (the page side: one module Worker of `sql-worker.js` for the page, started at the first call; `space(appId)` for `AppFrame`). The Worker uses the OPFS VFS `opfs-sahpool` (folder `.plinth-sql`); without OPFS, each database is in memory. No DOM. Not in `plinth.js`. |
+| `vendor/sqlite-wasm/` | The official SQLite Wasm build (`sqlite3.mjs`, `sqlite3.wasm`), not changed. Version, hashes and license: `docs/DEPENDENCIES.md`. |
 | `hub-storage.js` | The bridge messages (`checkFrameMessage`, `startMessage`) and the kv store of the page (`HubStore`, one namespace for each app) and of the frame (`frameKvStore`). No DOM. |
 | `hub-integrity.js` | Package checks with WebCrypto: SHA-256 against the registry, the manifest, the Ed25519 signature (`signature.json`), the core digest. No DOM. |
 | `registry-client.js` | Reads a registry (`docs/REGISTRY.md`): the service index, the app list, app documents, cores, search. No DOM. |
 | `hub-host.js` | The `plinth:hub` backend (`HubHost`): browse mode (the library is the registry listing), grants, blocks, pins, groups and updates in IndexedDB, the JSON of the desktop `HubService`. No DOM. |
 | `hub.html`, `hub-shell.js` | The web App Hub (`docs/web-hub.md`): a thin bootstrap that runs the signed Hub app (`examples/hub`) from the registry in its own sandboxed frame with `hub-host.js` (`FrameHub` in the frame), plus the host consent window and the app window (an `AppFrame`). |
 | `test/run-*.mjs` | Node 22 tests (same `WebAssembly` API as the browser) that exercise `plinth-web.js`, `protocol.js`, the bridge, the package checks and the Hub backend directly, with no DOM (`run-hub-host.mjs` also runs the Hub app). `scripts/ci-local.sh` runs all of them except `run-a11y.mjs`. |
-| `test/run-a11y.mjs` | By hand (needs Edge and the axe-core CDN): axe-core on 5 apps and on the web App Hub in headless Edge, over the DevTools protocol; the Hub app, the consent window, apps in the sandboxed frame, kv isolation, files isolation (Files saves a file in the page's IndexedDB; Files Fixture cannot list or read it), the digest check, typing and the stopwatch in the frame; plus the in-place renderer checks (typing, a held click during timer ticks, hover and text selection across ticks, a TextArea selection across a commit, row identity in todo, and one changed row of big-list's 10,000 with its time). `--hub-only` checks only the hub; `--typing-only` runs only the renderer checks; `--export-only` checks only the web export (notes from a plain static server, todo as a single file from disk); `A11Y_SHOTS=<folder>` saves screenshots of the hub. |
+| `test/run-a11y.mjs` | By hand (needs Edge and the axe-core CDN): axe-core on 5 apps and on the web App Hub in headless Edge, over the DevTools protocol; the Hub app, the consent window, apps in the sandboxed frame, kv isolation, files isolation (Files saves a file in the page's IndexedDB; Files Fixture cannot list or read it), `store.sql` (SQL Fixture: the page's SQLite Worker with OPFS, the authorizer and the time limit, the data after a reload of the page), the digest check, typing and the stopwatch in the frame; plus the in-place renderer checks (typing, a held click during timer ticks, hover and text selection across ticks, a TextArea selection across a commit, row identity in todo, and one changed row of big-list's 10,000 with its time). `--hub-only` checks only the hub; `--typing-only` runs only the renderer checks; `--export-only` checks only the web export (notes from a plain static server, todo as a single file from disk); `A11Y_SHOTS=<folder>` saves screenshots of the hub. |
 
 ## Host APIs in the browser
 
@@ -94,6 +98,7 @@ itself, not in a sandboxed frame: use it for tests and development only.
 | `clipboard` | Works with `navigator.clipboard` (in a frame: through the page), gated on `clipboard.write`/`clipboard.read`. The interface is synchronous and the browser API is not: `writeText` is fire-and-forget; `readText` returns the last known value and starts an async read for the next call, so the first read can return nothing. The browser can ask for permission, and it gives the clipboard only to a secure page (HTTPS or `localhost`). |
 | `dialog` | Stand-alone: the browser's own `alert`/`confirm`/`prompt`. In a frame: dialogs that the page draws. The answer is a `completion` event. |
 | `net` | Works with `fetch`, checked against the manifest's `net:<host>`/`net:*`/`net.local` and the refused capabilities. In a frame the page makes the request (checked again there), so it has the page's origin and no cookies. The target server must allow CORS. |
+| `store` (sql) | `store.sql` (core 1.13), gated on `store.sql`. The page runs SQLite in its own Worker (`sql.js`, OPFS of the page origin, one database for each app id); in a frame the call crosses the bridge (`sql-run`), and the page checks the capability again. Stand-alone (`index.html`): the same Worker of the page. Without OPFS, or in Node with `localSqlHost`: in memory. A web export and a host with no `sql` option answer `denied:unsupported`. `docs/SQL.md` §9. |
 | `files` | `plinth:files` (core 1.11) on the app's private space, gated on `files.private`. In a frame: the page keeps the files in its IndexedDB (database `plinth-files`, keys `[app id in lower case, path]`) and checks the capability and every path again (`files.js`, the same rules as the desktop host). Stand-alone and in Node: in memory (`FileSpace` on `memoryFileBackend`). |
 | `notify` | `plinth:notify` (core 1.12), gated on `notify`: the browser's `Notification` API (`browserNotify`). In a frame (an opaque origin cannot use the API): the page shows it and checks the capability again. Stand-alone: the page itself. Permission "denied" answers `denied:refused`; no permission question, no API or a sandboxed page answers "unsupported". The tag replaces; `cancel` closes. In Node: "unsupported". |
 | `hub` | With a backend (`opts.hub`, `hub-host.js`) and `hub.manage` granted: the web App Hub. Else every call is `denied(unsupported)` (or `denied(refused)`). |
@@ -117,6 +122,7 @@ Frame to page:
 | `net-fetch` | `id`, `url`, `method`, `headers` (`[[name, value]]`), `body` (string or null) | Checks `net:` again, makes the request, `answer` with `[ok, status, text, error]` (`error` is `"denied:<reason>"` or `"network: …"`). |
 | `files-read`, `files-list`, `files-stat`, `files-remove` | `id`, `path` | `plinth:files`: checks `files.private` again, runs the call on the app's space (`FileSpace`, which checks the path again), `answer` with `[ok, 0, text, error]` (`error` is `"denied:<reason>"`, `"invalid-path: <rule>"`, `"not-found"`, …; docs/host-apis.md). A `path` longer than 1024 characters is refused. |
 | `files-write` | `id`, `path`, `text` | The same, for `write`. A `text` longer than 8 MiB is refused. |
+| `sql-run` | `id`, `kind` (0 `exec`, 1 `query`, 2 `batch`, 3 `migrate`; an integer from 0 to 255), `statement`, `params` (JSON text) | `store.sql`: checks `store.sql` again, runs the call on the app's database (`AppFrame` option `sql`), `answer` with `[ok, int, text, error]` (`error` is `"denied:<reason>"` or `"sql: …"`). A `statement` or `params` longer than 16 Mi characters is refused (the app's Worker answers such a call at once with `sql: the call is too large`). |
 | `notify-show` | `id`, `title`, `body` (string or null), `tag` (string or null) | `plinth:notify`: checks `notify` again, shows the notification (`browserNotify`), `answer` with `"shown"`, `"unsupported"` or `"denied:<reason>"`. Each text is at most 4096 characters. |
 | `notify-cancel` | `tag` | Closes the open notification of this app with that tag. |
 | `size` | `height` | The content height in CSS pixels; the page sizes the iframe if `autoHeight`. |
@@ -132,7 +138,7 @@ Page to frame:
 | `hub-state` | `state`: the page changed the `plinth:hub` state (for example the consent window). |
 | `answer` | `id`, `value`: the answer to a request with that `id`. |
 
-`AppFrame` options (`frame-host.js`): `appId`, `title`, `pkg`, `core`, `declared`, `refused`, `store` (a `HubStore`), `quota`, `src` or `srcdoc`, `autoHeight`, `askDialog`, `fetchImpl`, `files` (a `FileSpace`; default: the page's IndexedDB), `onStarted`, `onFailed`. The page decides the grants; the pair only applies them.
+`AppFrame` options (`frame-host.js`): `appId`, `title`, `pkg`, `core`, `declared`, `refused`, `store` (a `HubStore`), `quota`, `src` or `srcdoc`, `autoHeight`, `askDialog`, `fetchImpl`, `files` (a `FileSpace`; default: the page's IndexedDB), `sql` (a `SqlWorkerHost`; default none, so `store.sql` answers `denied:unsupported`; `hub-shell.js` gives one for the page), `onStarted`, `onFailed`. The page decides the grants; the pair only applies them.
 
 ## Not done yet
 

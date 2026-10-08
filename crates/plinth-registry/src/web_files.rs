@@ -23,6 +23,11 @@ pub const FILES: &[(&str, &[u8])] = &[
     ("protocol.js", include_bytes!("../../../web/protocol.js")),
     ("zip.js", include_bytes!("../../../web/zip.js")),
     ("files.js", include_bytes!("../../../web/files.js")),
+    ("sql.js", include_bytes!("../../../web/sql.js")),
+    ("sql-worker.js", include_bytes!("../../../web/sql-worker.js")),
+    // The official SQLite Wasm build for `store.sql` (docs/DEPENDENCIES.md).
+    ("vendor/sqlite-wasm/sqlite3.mjs", include_bytes!("../../../web/vendor/sqlite-wasm/sqlite3.mjs")),
+    ("vendor/sqlite-wasm/sqlite3.wasm", include_bytes!("../../../web/vendor/sqlite-wasm/sqlite3.wasm")),
     ("ui-api.js", include_bytes!("../../../web/ui-api.js")),
     ("style.css", include_bytes!("../../../web/style.css")),
 ];

@@ -1310,6 +1310,13 @@ function manifestEntry(manifestText) {
 const DeniedReason = { undeclared: 0, refused: 1, unsupported: 2 };
 
 /**
+ * The longest statement or parameter text of one `store.sql` call
+ * (characters). The bridge to the page carries no more; a longer call
+ * answers "sql: the call is too large" (a web limit, docs/LIMITS.md).
+ */
+const MAX_SQL_TEXT = 16 * 1024 * 1024;
+
+/**
  * A `plinth:notify` backend on the browser's `Notification` API (SPEC.md
  * §11, docs/host-apis.md "plinth:notify"): `{ show(title, body, tag),
  * cancel(tag) }`. `show` resolves with "shown", "unsupported" or
@@ -1618,6 +1625,7 @@ function hostImports(
     hub = null,
     netFetch = null,
     files = null,
+    sql = null,
     onCommitBytes = null,
     notify = null,
   } = {},
@@ -1702,13 +1710,27 @@ function hostImports(
     return id;
   }
   // store.sql (core 1.13, docs/SQL.md): the same request id and
-  // `[ok, int, text, error]` completion as `net.fetch`. The web engine is
-  // step 3 of docs/SQL.md §7; until then an allowed call answers
-  // "denied:unsupported" (a denied call never traps).
-  function openSql() {
+  // `[ok, int, text, error]` completion as `net.fetch`. The capability
+  // check comes first, then the kind, then the backend, as on the desktop;
+  // a denied call answers "denied:<reason>" and never traps. `sql` (`{
+  // call(kind, statement, params) }`) is the page's engine (`sql.js`),
+  // reached through the frame's bridge; with no `sql` (Node, the
+  // stand-alone page) an allowed call answers "denied:unsupported".
+  function openSql(kind, statement, params) {
     const id = nextRequest++;
-    const reason = capReason("store.sql") ?? DeniedReason.unsupported;
-    Promise.resolve().then(() => completeRequest?.(id, [false, 0, "", deniedText(reason)]));
+    const reason = capReason("store.sql");
+    let early = null;
+    if (reason !== null) early = deniedText(reason);
+    else if (kind > 3) early = `sql: unknown call kind ${kind}`;
+    else if (!sql) early = deniedText(DeniedReason.unsupported);
+    else if (statement.length > MAX_SQL_TEXT || params.length > MAX_SQL_TEXT) early = "sql: the call is too large";
+    const run =
+      early !== null
+        ? Promise.resolve([false, 0, "", early])
+        : Promise.resolve()
+            .then(() => sql.call(kind, statement, params))
+            .catch((e) => [false, 0, "", `sql: ${e?.message ?? e}`]);
+    run.then((result) => completeRequest?.(id, result));
     return id;
   }
   function mem() {
@@ -2026,8 +2048,8 @@ function hostImports(
     // Core 1.13: run(kind, statement(ptr, len), params(ptr, len)) returns
     // the request id directly.
     "plinth:app/sql@1.0.0": {
-      run(_kind, _sPtr, _sLen, _pPtr, _pLen) {
-        return openSql();
+      run(kind, sPtr, sLen, pPtr, pLen) {
+        return openSql(kind, readString(sPtr, sLen), readString(pPtr, pLen));
       },
     },
     "plinth:app/clipboard@1.0.0": {
@@ -2278,6 +2300,9 @@ class PlinthApp {
       // `plinth:files`: the caller's space (the frame's bridge to the page),
       // else a space in memory for this app (Node, the stand-alone page).
       files: opts.files ?? new FileSpace(memoryFileBackend(opts.filesMap)),
+      // `store.sql`: the page's engine (`sql.js`, through the frame's
+      // bridge), else none: an allowed call answers "denied:unsupported".
+      sql: opts.sql ?? null,
       onCommit: (ops) => this.onCommit(ops),
     });
     this.appInstance = await linkApp(this.core, appBytes);
@@ -2371,7 +2396,7 @@ function plainReason(err, lastTrap) {
   }
   return msg;
 }
-  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, SRCMAP_SECTION, moduleBodies, decodeSrcMap, trapPlace, readPlnt, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, defaultAskDialog, loadCore, linkApp, PlinthApp, stopReason };
+  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, SRCMAP_SECTION, moduleBodies, decodeSrcMap, trapPlace, readPlnt, MAX_SQL_TEXT, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, defaultAskDialog, loadCore, linkApp, PlinthApp, stopReason };
   })();
 
   // ---- dom-renderer.js
@@ -4398,6 +4423,7 @@ class DomRenderer {
 // in the browser, a small Map-backed object in the test).
 
 const { MAX_PATH: FILES_MAX_PATH, MAX_FILE: FILES_MAX_FILE } = __files;
+const { MAX_SQL_TEXT } = __plinth_web;
 
 /** The kv quota of one app, in characters (UTF-16 code units) of keys and values. */
 const KV_QUOTA = 512 * 1024;
@@ -4626,6 +4652,8 @@ const FRAME_TYPES = {
   "files-list": { id: "number", path: "string" },
   "files-stat": { id: "number", path: "string" },
   "files-remove": { id: "number", path: "string" },
+  // store.sql (core 1.13): the page runs the database of the app.
+  "sql-run": { id: "number", kind: "number", statement: "string", params: "string" },
   // plinth:notify (core 1.12): the page shows the notification.
   "notify-show": { id: "number", title: "string" },
   "notify-cancel": { tag: "string" },
@@ -4662,6 +4690,12 @@ function checkFrameMessage(data) {
     if (data.path.length > FILES_MAX_PATH) return null;
     if (data.type === "files-write" && data.text.length > FILES_MAX_FILE) return null;
     if (data.type !== "files-write" && data.text !== undefined) return null;
+  }
+  if (data.type === "sql-run") {
+    // The page's engine checks the call again (docs/SQL.md §4); this only
+    // bounds the kind and the sizes.
+    if (!Number.isInteger(data.kind) || data.kind < 0 || data.kind > 255) return null;
+    if (data.statement.length > MAX_SQL_TEXT || data.params.length > MAX_SQL_TEXT) return null;
   }
   if (data.type === "notify-show") {
     const optional = (v) => v === null || (typeof v === "string" && v.length <= MAX_NOTIFY_TEXT);
@@ -4736,8 +4770,8 @@ function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA, hub = n
 //   `frameKvStore` in `hub-storage.js`).
 // - `clipboard`: `write-text` goes to the document; `read-text` answers from
 //   the cache of the Worker and asks the document for a new value.
-// - `dialog`, `net.fetch`, `files.*`: a request id at once, the answer from
-//   the document later (`ask`/`answer`), as before.
+// - `dialog`, `net.fetch`, `files.*`, `sql.run`: a request id at once, the
+//   answer from the document later (`ask`/`answer`), as before.
 // - `hub.*` (the Hub app only): `FrameHub` runs in the Worker on its
 //   snapshot; its `hub-save`, `hub-launch` and `hub-call` messages go out
 //   through the document.
@@ -4851,6 +4885,7 @@ function runWorker(scope) {
       },
       netFetch: (url, method, headers, body) => ask("net-fetch", { url, method, headers, body }),
       files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
+      sql: { call: (kind, statement, params) => ask("sql-run", { kind, statement, params }) },
       notify: {
         show: (title, body, tag) => ask("notify-show", { title, body, tag }),
         cancel: (tag) => send({ type: "notify-cancel", tag }),
@@ -4955,7 +4990,9 @@ class WorkerApp {
    * the Worker gets a snapshot, and each write comes back to this store);
    * `kvQuota` (characters; the Worker refuses a write over it, as
    * `frameKvStore`); `refused`; `log`; `reportError`; `askDialog`;
-   * `clipboard`; `netFetch`; `files` (a `FileSpace`); `notify` (`{ show,
+   * `clipboard`; `netFetch`; `files` (a `FileSpace`); `sql` (`{ call(kind,
+   * statement, params) }`, the page's `store.sql` engine; none: an allowed
+   * call answers "denied:unsupported"); `notify` (`{ show,
    * cancel }`; default `browserNotify()`, the page's `Notification` API);
    * `memoryLimitPages`;
    * `timeLimitMs` (the time limit of one call; default `CALL_TIME_LIMIT_MS`);
@@ -5162,6 +5199,7 @@ class WorkerApp {
     if (type === "net-fetch") return o.netFetch ? o.netFetch(f.url, f.method, f.headers, f.body) : httpFetch(f.url, f.method, f.headers, f.body);
     if (type === "notify-show") return this._notify().show(f.title, f.body ?? null, f.tag ?? null);
     if (type.startsWith("files-")) return this.files.call(type.slice("files-".length), f.path, f.text ?? null);
+    if (type === "sql-run") return o.sql ? o.sql.call(f.kind, f.statement, f.params) : [false, 0, "", "denied:unsupported"];
     if (type === "hub-call" && o.ask) return o.ask(type, f);
     throw new Error(`unknown request ${type}`);
   }
@@ -5190,6 +5228,8 @@ class WorkerApp {
 // - dialogs (`plinth:dialog`), drawn by the page;
 // - the private space of `plinth:files`, in the page's IndexedDB (one
 //   namespace for each app id), with the same checks as the desktop host;
+// - the database of `store.sql`, in a SQLite Worker of the page (`sql.js`:
+//   OPFS of the page origin, one database for each app id);
 // - the content height that the frame reports (`autoHeight`).
 //
 // The page decides what the app may do (consent, grants) and gives the
@@ -5262,6 +5302,9 @@ function hostDialog(kind, message, title = "") {
  * - `fetchImpl`: default `fetch`.
  * - `files`: the `FileSpace` of this app for `plinth:files`; default: the
  *   page's IndexedDB (`idbFileBackend(appId)`), or memory without IndexedDB.
+ * - `sql`: the page's `store.sql` engine (`SqlWorkerHost` of `sql.js`, or
+ *   anything with its `space(appId)`); default none: an allowed call
+ *   answers "denied:unsupported".
  * - `notify`: the `plinth:notify` backend (`{ show, cancel }`); default:
  *   `browserNotify()`, the page's `Notification` API, with `notifyIcon` (a
  *   URL, optional) as the icon. One backend for each frame, so `cancel`
@@ -5279,6 +5322,7 @@ class AppFrame {
     this.files =
       opts.files ?? new FileSpace(typeof indexedDB !== "undefined" ? idbFileBackend(opts.appId) : memoryFileBackend());
     this.notify = opts.notify ?? browserNotify(globalThis.Notification, { icon: opts.notifyIcon });
+    this.sql = opts.sql ? opts.sql.space(opts.appId) : null;
     // `allow-scripts` only: an opaque origin, no forms, no popups, no modal
     // dialogs, no top navigation, no same-origin access.
     this.element = el("iframe", { class: "host-frame", sandbox: "allow-scripts", title: opts.title ?? opts.appId });
@@ -5378,6 +5422,22 @@ class AppFrame {
         }
         const op = msg.type.slice("files-".length);
         this.files.call(op, msg.path, op === "write" ? msg.text : null).then((r) => this.answer(msg.id, r));
+        break;
+      }
+      case "sql-run": {
+        // The frame checked the capability; the page checks it again.
+        if (!this.allowed("store.sql")) {
+          this.answer(msg.id, [false, 0, "", this.declared.has("store.sql") ? "denied:refused" : "denied:undeclared"]);
+          break;
+        }
+        if (!this.sql) {
+          this.answer(msg.id, [false, 0, "", "denied:unsupported"]);
+          break;
+        }
+        Promise.resolve()
+          .then(() => this.sql.call(msg.kind, msg.statement, msg.params))
+          .catch((e) => [false, 0, "", `sql: ${e?.message ?? e}`])
+          .then((r) => this.answer(msg.id, r));
         break;
       }
       case "notify-show": {
@@ -5697,6 +5757,9 @@ async function start(msg) {
     // plinth:files: the page keeps the files (its IndexedDB, one namespace
     // for this app) and checks the capability and the path again.
     files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
+    // store.sql: the page runs the database (SQLite in its own Worker, with
+    // OPFS of the page origin) and checks the capability again.
+    sql: { call: (kind, statement, params) => ask("sql-run", { kind, statement, params }) },
     // plinth:notify: an opaque origin cannot use the Notification API, so
     // the page shows the notification (it checks the capability again).
     notify: {

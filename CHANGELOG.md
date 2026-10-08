@@ -29,6 +29,7 @@ No public release yet. The first release is a Preview for Windows and the web. `
 - `plinth build --release` (also with `--target web`, and `plinth native <dir> --release`): makes the app module about 14 % smaller with Binaryen `wasm-opt -Oz`, which is built into `plinth`. The output is deterministic, and `plinth` checks that the optimized module keeps its imports and its `plinth-core` section and links into the core. `docs/guides/performance.md` §8 has the measurements.
 - `store.sql`, step 1 (`docs/SQL.md` §7, PRODUCTION H4): the desktop runner has a SQLite engine for each app (`<app id>+sql/store.sqlite`, next to the private space so that `plinth:files` cannot reach it; `rusqlite` with the bundled SQLite and FTS5). It has `exec`, `query`, `batch` and `migrate` on a worker thread, an authorizer (no `ATTACH`, no extensions, only safe `PRAGMA`s), a 2 s statement limit, a 256 MiB quota and a 16 MiB result limit. Apps cannot call it yet: the API comes with core 1.13 (step 2).
 - `store.sql`, step 2 (core 1.13, capability `store.sql`, Low risk): `import { sql } from "plinth:store"` gives `sql.exec(statement, params?)`, `sql.query<T>(statement, params?)`, `sql.batch(steps)` and `sql.migrate(steps)`, each a `Promise`. `query<T>` decodes the rows into `T` (a `boolean` field reads 0 and 1); a row that does not match `T` rejects the promise. A SQL error rejects with `Error("sql: ...")`. The compiler gives warning `PL2026` for a statement that is not a string literal or a `const`. Desktop (wasmtime and wasmi) only; the web host answers `denied:unsupported` until step 3.
+- `store.sql`, step 3 (web host): the page runs the official SQLite Wasm build (3.53.4, `web/vendor/sqlite-wasm/`) in its own Worker with OPFS (`opfs-sahpool`), one database for each app id. The app's calls go over the frame bridge (`sql-run`). The authorizer, the limits and the error texts are the same as on the desktop; `docs/SQL.md` §9 lists the differences (for example, without OPFS the database is in memory). The web App Hub and `web/index.html` have it; a web export does not have it yet.
 - Core 1.13 starts (not shipped): it adds `sql_call`. An app that uses `store.sql` needs core 1.13; other apps still run on core 1.12.
 
 ### Changed
@@ -45,6 +46,7 @@ No public release yet. The first release is a Preview for Windows and the web. `
 
 ### Fixed
 
+- `store.sql` on the desktop: the keys of a row are always in column order. Before, the order changed with the build (sorted, or in column order when another crate turned on the `preserve_order` feature of `serde_json`). A `query<Map<string, V>>` row now has the column order on every host.
 - `core = "patch"` now keeps an app on patches of the core minor version that built it. Before, it used the lowest core the app needs, so a small app built with core 1.12 did not link on a host with only 1.12. The manifest records `core-built`.
 
 ### Security

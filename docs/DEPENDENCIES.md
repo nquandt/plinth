@@ -11,7 +11,7 @@ The audit has two parts:
   - **licenses**: each crate must have a license from the allow list (§2), or an exception (§3).
   - **bans**: a wildcard version (`*`) fails the check. Duplicate versions of a crate give a warning.
   - **sources**: crates come only from crates.io and from the git repositories in `deny.toml`. gpui-ce comes in by path (`../gpui-ce`).
-- **`npm audit`** in `editors/vscode`. This is the only npm package with third-party packages (all of them are dev tools: `typescript`, `@types/node`, `@types/vscode`). The packages under `npm/` have no third-party dependencies: `npm/cli` has optional dependencies only on its own platform packages (`@plinth/cli-*`).
+- **`npm audit`** in `editors/vscode`. This is the only npm package with third-party packages (all of them are dev tools: `typescript`, `@types/node`, `@types/vscode`). The packages under `npm/` have no third-party dependencies: `npm/cli` has optional dependencies only on its own platform packages (`@plinth/cli-*`). The web host has no npm package. Its one third-party part, the SQLite Wasm build, is a vendored copy (§2, "Web host: the SQLite Wasm build"). `npm audit` does not see it: check the SQLite release notes and advisories by hand when you update it.
 
 Commands:
 
@@ -52,6 +52,22 @@ A binary that contains Apache-2.0 code (for example the desktop host, which cont
 `plinth-cli` uses the `wasm-opt` crate (MIT OR Apache-2.0) for `plinth build --release`. Its `wasm-opt-sys` part contains the C++ source of Binaryen (Apache-2.0) and compiles it into the `plinth` binary with the `cc` and `cxx` crates. Thus a build of `plinth-cli` needs a C++17 compiler (MSVC on Windows, `g++` or `clang++` on Linux and macOS). The default feature `dwarf` (LLVM DWARF code) is off. The notice file (L1) must include Binaryen.
 
 `plinth-runner-wasmtime` uses the `rusqlite` crate (MIT) for `store.sql` (`docs/SQL.md`), with the features `bundled`, `hooks` and `limits`. With `bundled`, its `libsqlite3-sys` part (MIT) compiles the C source of SQLite (public domain) into the host with the `cc` crate. Thus a build of the runner needs a C compiler (MSVC on Windows, `cc` on Linux and macOS). The bundled build has FTS5. The dependency is not behind a feature flag: a clean build of `libsqlite3-sys` takes about 11 s in a debug build and 17 s in a release build (Windows, 2026-10-08), and it compiles in parallel with other crates. For the wasm32 target, `rusqlite` also brings `sqlite-wasm-rs` and `rsqlite-vfs` (MIT) into the checked graph. The web host does not use them (it uses the official SQLite Wasm build, `docs/SQL.md` §2). The notice file (L1) must include SQLite.
+
+### Web host: the SQLite Wasm build
+
+The web host runs `store.sql` (`docs/SQL.md` §2) on the official SQLite Wasm build. It is a vendored copy, not an npm dependency at run time and not a CDN file: the web host has no build step and no npm dependency (`web/README.md`), and `plinth registry serve --web` embeds the web files in the `plinth` binary (`crates/plinth-registry/src/web_files.rs`), so the files must be in the repository.
+
+| Item | Value |
+|---|---|
+| Package | `@sqlite.org/sqlite-wasm` 3.53.4-build2 on npm (`https://github.com/sqlite/sqlite-wasm`), the build of SQLite 3.53.4 (source id `2026-07-24 19:02:57 bf7c7f30…`), Emscripten 5.0.5 |
+| Files | `web/vendor/sqlite-wasm/sqlite3.mjs` (the package file `dist/index.mjs`, 642,742 bytes) and `web/vendor/sqlite-wasm/sqlite3.wasm` (`dist/sqlite3.wasm`, 868,907 bytes). Not changed. |
+| SHA-256 | `sqlite3.mjs`: `a6d3fe46aa3f924e7686329f97b0564549ef1f787e0c19924179aef7f72bcc01`; `sqlite3.wasm`: `2ee8f3dab694532afc8840e07703127287662d08b74e6ff50491ce63f00d5752` |
+| npm tarball | `sha512-kQVArGJA4z7s56Dm8t+eTBXad4LiohuVj9pfgDNOcxa+Ic5xMrWlLPTq6cT0hw5S4MIvtpsraW+B0wD+IPvC7A==` (with npm provenance) |
+| License | SQLite and the SQLite JavaScript code: public domain. The Emscripten glue code in `sqlite3.mjs`: MIT and University of Illinois/NCSA (the header of the file). The npm package: Apache-2.0. All are permissive (§2). |
+| Size | About 1.5 MB on disk (0.87 MB Wasm, 0.64 MB JavaScript); the `plinth` binary is that much larger. A page loads it only at the first `store.sql` call of an app. A `.plnt` package does not contain it (the host owns the runtime). |
+| Runtime dependencies | None. |
+
+To update it: `npm pack @sqlite.org/sqlite-wasm@<version>`, extract `dist/index.mjs` as `sqlite3.mjs` and `dist/sqlite3.wasm`, write the new version and hashes in this table, run `node web/test/run-sql.mjs`, `cargo test -p plinth-compiler --test sql`, and `node web/test/run-a11y.mjs --hub-only` (Edge, OPFS). Read the SQLite release notes for changes to the authorizer, error texts and the `opfs-sahpool` VFS. The notice file (L1) must include the SQLite Wasm build.
 
 ## 3. Exceptions
 

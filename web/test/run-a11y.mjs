@@ -1031,7 +1031,7 @@ function startHubServer(exe, dir) {
 }
 
 const HUB_APPS = ["counter", "notes", "budget", "utility", "todo", "timer", "calculator", "files-demo", "hub"];
-const ID = (app) => (app === "hub" ? "dev.plinth.hub" : app === "files-fixture" ? "dev.plinth.test.files-fixture" : `dev.plinth.examples.${app}`);
+const ID = (app) => (app === "hub" ? "dev.plinth.hub" : app.endsWith("-fixture") ? `dev.plinth.test.${app}` : `dev.plinth.examples.${app}`);
 
 /**
  * The web App Hub in headless Edge (docs/web-hub.md): `hub.html` runs the
@@ -1055,6 +1055,8 @@ async function checkHub(cdpPort) {
   }
   // A second app with `plinth:files`, for the isolation check.
   await copyFile(path.join(root, "web/test/fixtures/files-fixture/dist/files-fixture.plnt"), path.join(reg, "files-fixture.plnt"));
+  // An app with `store.sql`: SQLite with OPFS in a Worker of the page.
+  await copyFile(path.join(root, "web/test/fixtures/sql-fixture/dist/sql-fixture.plnt"), path.join(reg, "sql-fixture.plnt"));
   const env = { ...process.env, PLINTH_PUBLISHER_DIR: path.join(dir, "publisher") };
   execFileSync(exe, ["publisher", "init", "--name", "you"], { env, stdio: "ignore" });
   const key = execFileSync(exe, ["publisher", "show"], { env, encoding: "utf8" }).trim().split(/\s+/).pop();
@@ -1132,7 +1134,7 @@ async function checkHub(cdpPort) {
       await hub.waitFor(`document.querySelectorAll("#app .pl-row").length > 0 ? true : null`, 10000);
       const rows = await hub.eval(`[...document.querySelectorAll("#app .pl-row-title")].map((t) => t.textContent).join(",")`);
       // By app id: the examples, then the test fixture.
-      if (rows !== "Budget,Calculator,Counter,Files,Notes,Stopwatch,Todo,Utility,Files Fixture") {
+      if (rows !== "Budget,Calculator,Counter,Files,Notes,Stopwatch,Todo,Utility,Files Fixture,SQL Fixture") {
         throw new Error(`the Hub library shows ${rows}`);
       }
       await hubAxe(`hub library (${scheme})`);
@@ -1284,6 +1286,34 @@ async function checkHub(cdpPort) {
     await frame.waitFor(`[...document.querySelectorAll("#app .pl-row-title")].some((t) => t.textContent === "secret.md") ? true : null`, 10000);
     await closeApp();
 
+    // store.sql: the page runs SQLite in its own Worker with OPFS (the
+    // frame has an opaque origin and no storage). The data stays after a
+    // reload of the page; the authorizer and the time limit work.
+    const press = async (label) => {
+      await frame.waitFor(`${button(label)} ? true : null`, 10000);
+      const done = `(document.getElementById("app").innerText.match(/done:[^\\n]*/) ?? [""])[0]`;
+      const before = await frame.eval(done);
+      await frame.eval(`${button(label)}.click()`);
+      await frame.waitFor(`${done} && ${done} !== ${JSON.stringify(before)} ? true : null`, 15000).catch(() => {});
+      return (await frame.eval(`document.getElementById("app").innerText`)).match(/done:[^\n]*/)?.[0] ?? "";
+    };
+    await openApp("SQL Fixture");
+    await waitRunning(ID("sql-fixture"));
+    let got = await press("add");
+    if (got !== "done:rows:1") throw new Error(`SQL Fixture add: ${got}`);
+    got = await press("refused");
+    if (got !== "done:sql: not authorized;sql: not authorized;sql: the query took too long") throw new Error(`SQL Fixture refused: ${got}`);
+    await closeApp();
+    const opfs = await page.eval(`navigator.storage.getDirectory().then((d) => d.getDirectoryHandle(".plinth-sql")).then(() => "yes", (e) => String(e))`);
+    if (opfs !== "yes") throw new Error(`no OPFS folder .plinth-sql: ${opfs}`);
+    await page.navigate(`${base}/`);
+    await page.waitFor(`document.body.dataset.ready === "true" ? true : null`, 20000);
+    await openApp("SQL Fixture");
+    await waitRunning(ID("sql-fixture"));
+    got = await press("count");
+    if (got !== "done:v2:rows:1:hits:1") throw new Error(`SQL Fixture after a reload: ${got}`);
+    await closeApp();
+
     // A package that does not match the registry digest does not open.
     await openApp("Calculator");
     await page.waitFor(`document.body.dataset.notice ? true : null`, 10000);
@@ -1330,7 +1360,7 @@ async function checkHub(cdpPort) {
     await hubAxe("hub library (phone)");
     await shot("library-phone");
     await page.send("Emulation.clearDeviceMetricsOverride");
-    console.log("  Hub app from the registry, Discover, sandboxed frame, consent window, kv isolation, files isolation, grant from the Hub app, digest check, typing and stopwatch in the frame, phone width: ok");
+    console.log("  Hub app from the registry, Discover, sandboxed frame, consent window, kv isolation, files isolation, store.sql with OPFS after a reload, grant from the Hub app, digest check, typing and stopwatch in the frame, phone width: ok");
   } finally {
     await page.close();
     child.kill();

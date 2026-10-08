@@ -25,8 +25,8 @@
 //   `frameKvStore` in `hub-storage.js`).
 // - `clipboard`: `write-text` goes to the document; `read-text` answers from
 //   the cache of the Worker and asks the document for a new value.
-// - `dialog`, `net.fetch`, `files.*`: a request id at once, the answer from
-//   the document later (`ask`/`answer`), as before.
+// - `dialog`, `net.fetch`, `files.*`, `sql.run`: a request id at once, the
+//   answer from the document later (`ask`/`answer`), as before.
 // - `hub.*` (the Hub app only): `FrameHub` runs in the Worker on its
 //   snapshot; its `hub-save`, `hub-launch` and `hub-call` messages go out
 //   through the document.
@@ -140,6 +140,7 @@ export function runWorker(scope) {
       },
       netFetch: (url, method, headers, body) => ask("net-fetch", { url, method, headers, body }),
       files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
+      sql: { call: (kind, statement, params) => ask("sql-run", { kind, statement, params }) },
       notify: {
         show: (title, body, tag) => ask("notify-show", { title, body, tag }),
         cancel: (tag) => send({ type: "notify-cancel", tag }),
@@ -244,7 +245,9 @@ export class WorkerApp {
    * the Worker gets a snapshot, and each write comes back to this store);
    * `kvQuota` (characters; the Worker refuses a write over it, as
    * `frameKvStore`); `refused`; `log`; `reportError`; `askDialog`;
-   * `clipboard`; `netFetch`; `files` (a `FileSpace`); `notify` (`{ show,
+   * `clipboard`; `netFetch`; `files` (a `FileSpace`); `sql` (`{ call(kind,
+   * statement, params) }`, the page's `store.sql` engine; none: an allowed
+   * call answers "denied:unsupported"); `notify` (`{ show,
    * cancel }`; default `browserNotify()`, the page's `Notification` API);
    * `memoryLimitPages`;
    * `timeLimitMs` (the time limit of one call; default `CALL_TIME_LIMIT_MS`);
@@ -451,6 +454,7 @@ export class WorkerApp {
     if (type === "net-fetch") return o.netFetch ? o.netFetch(f.url, f.method, f.headers, f.body) : httpFetch(f.url, f.method, f.headers, f.body);
     if (type === "notify-show") return this._notify().show(f.title, f.body ?? null, f.tag ?? null);
     if (type.startsWith("files-")) return this.files.call(type.slice("files-".length), f.path, f.text ?? null);
+    if (type === "sql-run") return o.sql ? o.sql.call(f.kind, f.statement, f.params) : [false, 0, "", "denied:unsupported"];
     if (type === "hub-call" && o.ask) return o.ask(type, f);
     throw new Error(`unknown request ${type}`);
   }

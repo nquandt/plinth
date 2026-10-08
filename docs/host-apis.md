@@ -119,8 +119,11 @@ await sql.batch([
 
 On the desktop host, the database is `store.sqlite` in the folder
 `<private space folder>+sql`, next to the `plinth:files` space and not in
-it. The web host does not have `sql` yet (step 3 of `docs/SQL.md` §7): each
-call rejects with `Error("denied:unsupported")`.
+it. On the web host, the page runs SQLite (the official Wasm build) in its
+own Worker with OPFS, one database for each app id; without OPFS the
+database is in memory. A web export does not have `sql` yet: each call
+rejects with `Error("denied:unsupported")`. `docs/SQL.md` §9 lists the
+differences of the web engine.
 
 ## `plinth:clipboard`
 
@@ -485,7 +488,7 @@ covers it. There are three hosts:
 | `dialog` | A modal overlay that the desktop host draws, one request at a time. Escape cancels; Enter confirms. | Same as wasmtime. | Stand-alone: the browser's `alert`, `confirm` and `prompt`. In a frame: a dialog that the page draws (`hostDialog`), because a sandboxed frame cannot show a browser dialog. In Node: a declined answer. |
 | `net` | `ureq` on a worker thread. Time limit 20 s. Body limit 8 MiB (`MAX_BODY`). No redirects. The private-address check runs on the host text and again on the addresses after DNS resolution. | Same as wasmtime. | **Different.** `fetch` with a 20 s time limit, `redirect: "manual"` and `credentials: "omit"`. The host code has no body limit. The private-address check runs only on the host text (`docs/THREAT-MODEL.md` §6 item 1). In a frame, the page makes the request, so the request has the origin of the page. The server must allow CORS. |
 | `files` | A folder for each owner and app id under `%APPDATA%\plinth\spaces\private\`. One worker thread for each app, in call order. 8 MiB for one file, 50 MiB for the space. | Same as wasmtime. | In a frame: the page IndexedDB (database `plinth-files`). Stand-alone and in Node: in memory, so the files go away at a reload. The same path rules and limits as the desktop (`web/files.js`). |
-| `store` (sql) | SQLite (`rusqlite`, bundled, with FTS5): `store.sqlite` in `<private space folder>+sql`. One worker thread for each app, in call order. 2 s for one statement, 256 MiB for the database, 16 MiB for a query result. | Same as wasmtime. | **Not yet** (step 3 of `docs/SQL.md` §7): each call answers `denied:unsupported` (or `denied:undeclared` or `denied:refused` if the capability is not granted). |
+| `store` (sql) | SQLite (`rusqlite`, bundled, with FTS5): `store.sqlite` in `<private space folder>+sql`. One worker thread for each app, in call order. 2 s for one statement, 256 MiB for the database, 16 MiB for a query result. | Same as wasmtime. | **Different.** The official SQLite Wasm build in one Worker of the page for all apps (`web/sql.js`), with the OPFS VFS `opfs-sahpool` (folder `.plinth-sql`, one database for each app id in lower case). The same authorizer, limits and error texts; the memory limit is the Wasm memory of the Worker (512 MiB). Without OPFS: in memory. A web export answers `denied:unsupported`. `docs/SQL.md` §9. |
 | `notify` | Windows: a WinRT toast; the tag replaces and `cancel` removes. Linux and macOS: `show` answers "unsupported". | Same as wasmtime. | **Different.** The browser's `Notification` API, shown by the page for the app frame. The tag replaces, `cancel` closes. A browser-denied permission answers `denied:refused`; no permission question or no API answers "unsupported". |
 | `hub` | Only for a package that a trusted Hub key signed, with a Hub backend. Else each call answers `denied:unsupported` (or `denied:refused`). | Same as wasmtime. | Only in the web App Hub (`hub-host.js`, browse mode, `docs/web-hub.md` §3.1). Else each call answers `denied:unsupported`. |
 | `error.report` | The runner logs the text and keeps it (`Guest::take_errors`). The desktop host shows the last one in a banner with "Dismiss". | Same as wasmtime. | `reportError`, which is `console.error` by default, and `PlinthApp.onError`. |
@@ -511,7 +514,7 @@ runs every web test except `run-a11y.mjs` (by hand).
 | `dialog` | `async_await.rs` (`the_dialogs_example_greets_with_three_awaits` and other tests) | `async_await.rs`, wasmi gate | **no test** (`run-hub-storage.mjs` checks only the shape of the bridge message) |
 | `net` | `net.rs` (local server: GET, POST, status, denied, private addresses, DNS), unit tests in `net.rs` and `policy.rs` | `net.rs`, wasmi gate | `run-net.mjs`, `run-net-private.mjs`, `run-hub-storage.mjs` (the check of the page) |
 | `files` | `files.rs`, unit tests in `plinth-runner-wasmtime/src/files.rs` | `files.rs`, wasmi gate | `run-files.mjs`, `run-a11y.mjs` (files isolation in the frame) |
-| `store` (sql) | `sql.rs` (compiled apps: round trip, booleans, wrong types, errors, batch rollback, migrate, denied, FTS5, the warning), unit tests in `plinth-runner-wasmtime/src/sql.rs` | `sql.rs`, wasmi gate | **no test** (no web engine yet) |
+| `store` (sql) | `sql.rs` (compiled apps: the shared cases of `sql_cases.txt`, the file on disk, denied, the warning), unit tests in `plinth-runner-wasmtime/src/sql.rs` | `sql.rs`, wasmi gate | `run-sql.mjs` (the engine with the cases of the desktop unit tests, the shared cases of `sql_cases.txt` built by the CLI, the Worker protocol, denied calls), `run-a11y.mjs` (a fixture app in the web App Hub in Edge: OPFS after a reload) |
 | `notify` | `notify.rs` (a hand-written core caller and compiled apps, with `MemoryNotify`), unit tests in `plinth-runner-wasmtime/src/notify.rs` and `plinth-host-desktop/src/notify.rs` (the real toast only by hand: `--ignored`) | `notify.rs`, wasmi gate | `run-notify.mjs` (a fake `Notification`, `notify-demo`), `run-a11y.mjs` (`notify-demo` export in Edge, without and with the permission) |
 | `hub` | `hub_api.rs`, `hub_ui.rs`, `plinth-host-desktop/tests/hub_host.rs` | `hub_api.rs`, `hub_ui.rs`, wasmi gate | `run-hub-host.mjs`, `run-a11y.mjs` (the Hub app in the browser) |
 | `error.report` | `errors.rs`, `async_await.rs` (uncaught rejections) | `errors.rs`, `async_await.rs`, wasmi gate | `run-stop.mjs` |

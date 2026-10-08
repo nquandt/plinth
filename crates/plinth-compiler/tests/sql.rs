@@ -3,6 +3,10 @@
 //! rows decoded into `T` (a `boolean` reads 0 and 1), errors that reject the
 //! promise, a denied call, the PL2026 warning, and FTS5. The suite runs on
 //! wasmtime, and on wasmi with `PLINTH_ENGINE=wasmi`.
+//!
+//! The app cases are in `sql_cases.txt`, which the web test
+//! (`web/test/run-sql.mjs`) also runs: both hosts must give the same text
+//! (step 3 of `docs/SQL.md` §7).
 
 use plinth_compiler::driver::MemFs;
 use plinth_protocol::{ControlKind, Event, NodeId, Value, Writer, event};
@@ -33,36 +37,85 @@ fn compile(src: &str) -> plinth_compiler::Artifact {
     })
 }
 
+/// The shared cases (`tests/sql_cases.txt`): the web test
+/// (`web/test/run-sql.mjs`) reads the same file and must give the same text.
+struct Cases {
+    template: String,
+    cases: Vec<Case>,
+}
+
+struct Case {
+    name: String,
+    decls: String,
+    body: String,
+    expect: String,
+}
+
+fn cases() -> Cases {
+    let text = include_str!("sql_cases.txt").replace("\r\n", "\n");
+    let mut template: Vec<&str> = Vec::new();
+    let mut cases: Vec<(String, [Vec<&str>; 3])> = Vec::new();
+    // 0 template, 1 a case with no field yet, 2.. the fields of a case.
+    let mut at: Option<usize> = None;
+    for line in text.split('\n') {
+        if line == "=== template" {
+            at = Some(0);
+            continue;
+        }
+        if let Some(name) = line.strip_prefix("=== case ") {
+            cases.push((name.to_owned(), Default::default()));
+            at = Some(1);
+            continue;
+        }
+        if at.is_some_and(|a| a >= 1) {
+            let field = match line {
+                "--- decls" => Some(2),
+                "--- body" => Some(3),
+                "--- expect" => Some(4),
+                _ => None,
+            };
+            if let Some(f) = field {
+                at = Some(f);
+                continue;
+            }
+        }
+        match at {
+            Some(0) => template.push(line),
+            Some(f @ 2..=4) => cases.last_mut().unwrap().1[f - 2].push(line),
+            _ => assert!(
+                line.trim().is_empty() || line.starts_with('#'),
+                "sql_cases.txt: a line outside a section: {line}"
+            ),
+        }
+    }
+    let join = |mut lines: Vec<&str>| {
+        while lines.last() == Some(&"") {
+            lines.pop();
+        }
+        lines.join("\n")
+    };
+    Cases {
+        template: join(template),
+        cases: cases
+            .into_iter()
+            .map(|(name, [decls, body, expect])| Case {
+                name,
+                decls: join(decls),
+                body: join(body),
+                expect: join(expect),
+            })
+            .collect(),
+    }
+}
+
 /// One app: `decls` at the top level, and `body` is the body of `async
-/// function go()`, run by the button. `go` sets the text to `done:<r>`, or
-/// to `done:err:<message>` when the body throws.
+/// function run()`, run by the button. The button sets the text to
+/// `done:<r>`, or to `done:err:<message>` when the body throws.
 fn app_src(decls: &str, body: &str) -> String {
-    format!(
-        r#"import {{ app, Screen, Text, Button, signal }} from "plinth:ui";
-import {{ sql }} from "plinth:store";
-import {{ JSON }} from "plinth:core";
-const result = signal("waiting");
-{decls}
-async function run(): Promise<string> {{
-{body}
-}}
-async function go(): Promise<void> {{
-  try {{
-    const r = await run();
-    result.set("done:" + r);
-  }} catch (e) {{
-    result.set("done:err:" + e.message);
-  }}
-}}
-function Home() {{
-  return <Screen title="Home">
-    <Text>{{result()}}</Text>
-    <Button label="go" onPress={{() => {{ go(); }}}} />
-  </Screen>;
-}}
-export default app({{ screens: {{ home: {{ title: "Home", component: Home }} }} }});
-"#
-    )
+    cases()
+        .template
+        .replacen("{decls}", decls, 1)
+        .replacen("{body}", body, 1)
 }
 
 struct App {
@@ -169,6 +222,20 @@ fn run_once(name: &str, decls: &str, body: &str) -> String {
     r
 }
 
+#[test]
+fn the_shared_cases_give_the_expected_text() {
+    let all = cases();
+    assert!(all.cases.len() >= 8, "sql_cases.txt has the cases");
+    for case in &all.cases {
+        assert_eq!(
+            run_once(&case.name, &case.decls, &case.body),
+            case.expect,
+            "case {}",
+            case.name
+        );
+    }
+}
+
 const NOTES: &str = r#"
 interface Note { id: number; title: string; done: boolean }
 const SCHEMA = [
@@ -177,23 +244,6 @@ const SCHEMA = [
 ];
 const INSERT = "INSERT INTO notes (title, done) VALUES (?, ?)";
 "#;
-
-#[test]
-fn exec_and_query_round_trip() {
-    let body = r#"
-  const v = await sql.migrate(SCHEMA);
-  const a = await sql.exec(INSERT, ["Buy milk", false]);
-  const b = await sql.exec(INSERT, ["Wörld 🌍", true]);
-  const c = await sql.exec("UPDATE notes SET title = title || '!' WHERE id > ?", [0]);
-  const rows = await sql.query<Note>("SELECT id, title, done FROM notes ORDER BY id");
-  const open = await sql.query<Note>("SELECT id, title, done FROM notes WHERE done = ? ORDER BY id", [false]);
-  return v + "|" + a.changes + "," + a.lastInsertId + "|" + b.lastInsertId + "|" + c.changes + "|" + JSON.stringify(rows) + "|" + open.length;
-"#;
-    assert_eq!(
-        run_once("roundtrip", NOTES, body),
-        r#"2|1,1|2|2|[{"id":1,"title":"Buy milk!","done":false},{"id":2,"title":"Wörld 🌍!","done":true}]|1"#
-    );
-}
 
 #[test]
 fn the_database_is_on_disk_next_to_the_private_space() {
@@ -228,118 +278,6 @@ fn the_database_is_on_disk_next_to_the_private_space() {
 }
 
 #[test]
-fn query_reads_a_boolean_from_0_and_1_and_nullable_columns() {
-    let decls = r#"
-interface Row { flag: boolean; maybe: boolean | null; n: number | null; s: string | null }
-"#;
-    let body = r#"
-  await sql.migrate(["CREATE TABLE t (id INTEGER PRIMARY KEY, flag INTEGER, maybe INTEGER, n REAL, s TEXT)"]);
-  await sql.batch([
-    { sql: "INSERT INTO t (flag, maybe, n, s) VALUES (?, ?, ?, ?)", params: [true, null, 1.5, "x"] },
-    { sql: "INSERT INTO t (flag, maybe, n, s) VALUES (?, ?, ?, ?)", params: [0, 1, null, null] },
-  ]);
-  const rows = await sql.query<Row>("SELECT flag, maybe, n, s FROM t ORDER BY id");
-  return JSON.stringify(rows);
-"#;
-    assert_eq!(
-        run_once("bools", decls, body),
-        r#"[{"flag":true,"maybe":null,"n":1.5,"s":"x"},{"flag":false,"maybe":true,"n":null,"s":null}]"#
-    );
-}
-
-#[test]
-fn a_row_that_does_not_match_the_type_rejects() {
-    let decls = r#"
-interface Wrong { id: string }
-interface Missing { id: number; nope: string }
-interface Flag { flag: boolean }
-"#;
-    let body = r#"
-  await sql.migrate(["CREATE TABLE t (id INTEGER PRIMARY KEY, flag INTEGER)"]);
-  await sql.exec("INSERT INTO t (flag) VALUES (2)");
-  let r = "";
-  try { await sql.query<Wrong>("SELECT id FROM t"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
-  try { await sql.query<Missing>("SELECT id FROM t"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
-  try { await sql.query<Flag>("SELECT flag FROM t"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
-  const none = await sql.query<Wrong>("SELECT id FROM t WHERE id > 100");
-  return r + none.length;
-"#;
-    assert_eq!(
-        run_once("wrongtype", decls, body),
-        "sql: a row does not match the type `Wrong[]`;sql: a row does not match the type `Missing[]`;sql: a row does not match the type `Flag[]`;0"
-    );
-}
-
-#[test]
-fn sql_errors_reject_and_the_app_keeps_running() {
-    let body = r#"
-  await sql.migrate(SCHEMA);
-  let r = "";
-  try { await sql.exec("SELEC 1"); r = r + "ok;"; } catch (e) { r = r + e.message.slice(0, 5) + ";"; }
-  try { await sql.exec(INSERT, ["one"]); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
-  try { await sql.exec("ATTACH DATABASE 'x.db' AS x"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
-  try { await sql.exec("BEGIN"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
-  await sql.exec(INSERT, ["still works", false]);
-  const rows = await sql.query<Note>("SELECT * FROM notes");
-  return r + rows.length;
-"#;
-    assert_eq!(
-        run_once("errors", NOTES, body),
-        "sql: ;sql: the statement has 2 parameters, but the call gives 1;sql: not authorized;sql: not authorized;1"
-    );
-}
-
-#[test]
-fn a_failed_batch_step_rolls_back_all_steps() {
-    let body = r#"
-  await sql.migrate(SCHEMA);
-  await sql.exec(INSERT, ["a", false]);
-  let r = "";
-  try {
-    await sql.batch([
-      { sql: INSERT, params: ["b", false] },
-      { sql: "UPDATE notes SET done = 1" },
-      { sql: INSERT, params: ["a", true] },
-    ]);
-    r = "ok";
-  } catch (e) {
-    r = e.message.startsWith("sql: ") ? "rejected" : e.message;
-  }
-  const rows = await sql.query<Note>("SELECT * FROM notes");
-  // A batch from an array value.
-  const steps: { sql: string; params: string[] }[] = [];
-  for (const t of ["c", "d"]) {
-    steps.push({ sql: "INSERT INTO notes (title) VALUES (?)", params: [t] });
-  }
-  await sql.batch(steps);
-  const after = await sql.query<Note>("SELECT * FROM notes ORDER BY id");
-  return r + "|" + JSON.stringify(rows) + "|" + after.map((n) => n.title).join(",");
-"#;
-    assert_eq!(
-        run_once("batch", NOTES, body),
-        r#"rejected|[{"id":1,"title":"a","done":false}]|a,c,d"#
-    );
-}
-
-#[test]
-fn migrate_runs_only_the_new_steps() {
-    let body = r#"
-  const steps = ["CREATE TABLE a (x INTEGER)", "INSERT INTO a (x) VALUES (1)"];
-  const v1 = await sql.migrate(steps);
-  const v2 = await sql.migrate(steps);
-  const v3 = await sql.migrate(["CREATE TABLE a (x INTEGER)", "INSERT INTO a (x) VALUES (1)", "INSERT INTO a (x) VALUES (2)"]);
-  const rows = await sql.query<{ x: number }>("SELECT x FROM a ORDER BY x");
-  let r = "";
-  try { await sql.migrate(["CREATE TABLE a (x INTEGER)"]); r = "ok"; } catch (e) { r = e.message; }
-  return v1 + "," + v2 + "," + v3 + "|" + JSON.stringify(rows) + "|" + r;
-"#;
-    assert_eq!(
-        run_once("migrate", "", body),
-        r#"2,2,3|[{"x":1},{"x":2}]|sql: the database is at version 3, but there are only 1 migration steps (steps are append-only)"#
-    );
-}
-
-#[test]
 fn a_call_without_the_capability_is_denied_and_does_not_trap() {
     let (data, files) = space("denied", "com.example.denied");
     let body = r#"
@@ -361,29 +299,6 @@ fn a_call_without_the_capability_is_denied_and_does_not_trap() {
 "#;
     let mut app = start(&app_src("", body), allowed(), Files::unavailable());
     assert_eq!(app.go(), "denied:unsupported");
-}
-
-#[test]
-fn full_text_search_with_fts5() {
-    let decls = r#"
-interface Hit { title: string; snippet: string }
-const SEARCH = "SELECT title, snippet(docs, 1, '[', ']', '…', 4) AS snippet FROM docs WHERE docs MATCH ? ORDER BY rank";
-"#;
-    let body = r#"
-  await sql.migrate(["CREATE VIRTUAL TABLE docs USING fts5(title, body)"]);
-  await sql.batch([
-    { sql: "INSERT INTO docs (title, body) VALUES (?, ?)", params: ["Shopping", "buy milk and bread"] },
-    { sql: "INSERT INTO docs (title, body) VALUES (?, ?)", params: ["Garden", "water the plants, then buy seeds"] },
-    { sql: "INSERT INTO docs (title, body) VALUES (?, ?)", params: ["Work", "write the report"] },
-  ]);
-  const hits = await sql.query<Hit>(SEARCH, ["buy"]);
-  const none = await sql.query<Hit>(SEARCH, ["nothing"]);
-  return hits.map((h) => h.title).sort().join(",") + "|" + hits.length + "|" + none.length + "|" + hits.filter((h) => h.title === "Shopping")[0].snippet;
-"#;
-    assert_eq!(
-        run_once("fts5", decls, body),
-        "Garden,Shopping|2|0|[buy] milk and bread"
-    );
 }
 
 fn codes(src: &str) -> Vec<&'static str> {
