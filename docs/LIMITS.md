@@ -40,7 +40,7 @@ Plinth is not ready for production apps. The current level is "before Preview".
 
 | Limit | Item |
 |---|---|
-| No notifications. | H3 |
+| Notifications show only on Windows. On Linux, macOS and the web, `plinth:notify`'s `show` answers "unsupported". | H3 |
 | Storage is a key-value store and a private file space. There is no SQL store. | H4 |
 | No sync of app data between the devices of one user. | H6 |
 | No camera, microphone or location. | SPEC §11 |

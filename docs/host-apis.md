@@ -3,8 +3,8 @@
 A Plinth app cannot reach the outside world by itself. Every effect
 outside its own UI — storage, the clipboard, the network, even a modal
 dialog — goes through a **host API module** (`plinth:time`,
-`plinth:store`, `plinth:clipboard`, `plinth:dialog`, `plinth:net` and
-`plinth:files`). Most of these modules are gated by a **capability**:
+`plinth:store`, `plinth:clipboard`, `plinth:dialog`, `plinth:net`,
+`plinth:files` and `plinth:notify`). Most of these modules are gated by a **capability**:
 a named permission that the app must declare in `plinth.toml`, and that
 the user grants before the app can use it.
 
@@ -209,6 +209,43 @@ case-sensitive on the web and not on Windows and macOS.
 **Limits.** 8 MiB for one file; 50 MiB for the private space of one app
 (the sum of the file sizes).
 
+## `plinth:notify`
+
+System notifications (core 1.12, `docs/PRODUCTION.md` H3). Needs the
+`notify` capability. Its risk is Medium ("show notifications"): the Hub
+asks the user one time. The host shows the notification in the system
+notification area, outside the app window.
+
+```ts
+import { show, cancel, lastError } from "plinth:notify";
+
+const result = await show({ title: "Reminder", body: "Your 5 seconds are up.", tag: "reminder" });
+// result is "shown", or "unsupported" when this host has no notification area.
+cancel("reminder");              // removes the notification with this tag
+```
+
+- `show({ title, body?, tag? })` returns a `Promise<NotifyResult>`
+  (`"shown" | "unsupported"`). Write the options as an object literal. A
+  new notification with the same `tag` replaces the old one.
+- `cancel(tag)` removes the notification with `tag`. A tag that the host
+  does not show is not an error.
+- A denied `show` rejects with `Error("denied:<reason>")`. A denied
+  `cancel` does nothing; `lastError()` then gives the reason.
+- "unsupported" is not an error: show the message in the app window
+  instead. `examples/notify-demo` does this.
+
+**Where the host shows them.**
+
+- Windows 10 and later: a toast in the notification center (WinRT
+  `ToastNotificationManager`, `plinth-host-desktop/src/notify.rs`). The
+  host registers an AppUserModelID for each app under
+  `HKCU\Software\Classes\AppUserModelId\Plinth.<app id>`, with the app
+  id as the display name. The tag goes to Windows with at most 64
+  characters. If Windows refuses the toast, `show` answers "unsupported"
+  (the log has a warning).
+- Linux and macOS: not yet. `show` answers "unsupported".
+- Web: not yet. `show` answers "unsupported" (`docs/PRODUCTION.md` H3).
+
 ## `plinth:hub` (privileged)
 
 The Hub UI (`examples/hub`, `docs/HUB.md` §4.1) uses this module. It needs
@@ -300,6 +337,7 @@ call never throws or traps your app — it fails quietly, in a fixed way:
 | `plinth:store` | `kv.get` returns `null`; `kv.set`/`kv.remove` do nothing; `kv.keys()` returns `[]`. |
 | `plinth:clipboard` | `readText()` returns `null`; `writeText()` does nothing. |
 | `plinth:files` | The promise rejects with `Error("denied:<reason>")`; a `done` callback gets the reason as `error`. |
+| `plinth:notify` | `show`'s promise rejects with `Error("denied:<reason>")`; `cancel` does nothing. |
 
 Each denied module exposes `lastError()` (`kv.lastError()`,
 `clipboard`'s module-level `lastError()`), which returns one of:
@@ -373,6 +411,7 @@ covers it. There are three hosts:
 | `dialog` | A modal overlay that the desktop host draws, one request at a time. Escape cancels; Enter confirms. | Same as wasmtime. | Stand-alone: the browser's `alert`, `confirm` and `prompt`. In a frame: a dialog that the page draws (`hostDialog`), because a sandboxed frame cannot show a browser dialog. In Node: a declined answer. |
 | `net` | `ureq` on a worker thread. Time limit 20 s. Body limit 8 MiB (`MAX_BODY`). No redirects. The private-address check runs on the host text and again on the addresses after DNS resolution. | Same as wasmtime. | **Different.** `fetch` with a 20 s time limit, `redirect: "manual"` and `credentials: "omit"`. The host code has no body limit. The private-address check runs only on the host text (`docs/THREAT-MODEL.md` §6 item 1). In a frame, the page makes the request, so the request has the origin of the page. The server must allow CORS. |
 | `files` | A folder for each owner and app id under `%APPDATA%\plinth\spaces\private\`. One worker thread for each app, in call order. 8 MiB for one file, 50 MiB for the space. | Same as wasmtime. | In a frame: the page IndexedDB (database `plinth-files`). Stand-alone and in Node: in memory, so the files go away at a reload. The same path rules and limits as the desktop (`web/files.js`). |
+| `notify` | Windows: a WinRT toast; the tag replaces and `cancel` removes. Linux and macOS: `show` answers "unsupported". | Same as wasmtime. | Not yet: `show` answers "unsupported"; a denied call answers `denied:<reason>` (step 2b of H3). |
 | `hub` | Only for a package that a trusted Hub key signed, with a Hub backend. Else each call answers `denied:unsupported` (or `denied:refused`). | Same as wasmtime. | Only in the web App Hub (`hub-host.js`, browse mode, `docs/web-hub.md` §3.1). Else each call answers `denied:unsupported`. |
 | `error.report` | The runner logs the text and keeps it (`Guest::take_errors`). The desktop host shows the last one in a banner with "Dismiss". | Same as wasmtime. | `reportError`, which is `console.error` by default, and `PlinthApp.onError`. |
 
@@ -396,6 +435,7 @@ runs every web test except `run-a11y.mjs` (by hand).
 | `dialog` | `async_await.rs` (`the_dialogs_example_greets_with_three_awaits` and other tests) | **no test** | **no test** (`run-hub-storage.mjs` checks only the shape of the bridge message) |
 | `net` | `net.rs` (local server: GET, POST, status, denied, private addresses, DNS), unit tests in `net.rs` and `policy.rs` | **no test** | `run-net.mjs`, `run-net-private.mjs`, `run-hub-storage.mjs` (the check of the page) |
 | `files` | `files.rs`, unit tests in `plinth-runner-wasmtime/src/files.rs` | **no test** | `run-files.mjs`, `run-a11y.mjs` (files isolation in the frame) |
+| `notify` | `notify.rs` (a hand-written core caller and compiled apps, with `MemoryNotify`), unit tests in `plinth-runner-wasmtime/src/notify.rs` and `plinth-host-desktop/src/notify.rs` (the real toast only by hand: `--ignored`) | `notify.rs`, by hand | **no test** |
 | `hub` | `hub_api.rs`, `hub_ui.rs`, `plinth-host-desktop/tests/hub_host.rs` | **no test** | `run-hub-host.mjs`, `run-a11y.mjs` (the Hub app in the browser) |
 | `error.report` | `errors.rs`, `async_await.rs` (uncaught rejections) | `errors.rs`, by hand | `run-stop.mjs` |
 
