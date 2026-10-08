@@ -9,9 +9,12 @@
 //! assets/…
 //! ```
 //!
-//! The reader rejects path traversal, absolute paths, duplicate entries,
-//! unknown top-level entries and archives that expand too much. Opening a
-//! package grants nothing.
+//! The reader rejects path traversal, absolute paths, duplicate entries and
+//! archives that expand too much. It keeps an entry that it does not know
+//! (`Package::other_entries`), but never runs it and never serves it as an
+//! asset; the signature covers it. A newer `plinth-profile` gives the
+//! error `NewerFormat` (`docs/COMPATIBILITY.md` §4). Opening a package
+//! grants nothing.
 
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -24,6 +27,48 @@ pub mod publisher;
 pub mod signature;
 
 pub const PROFILE: &str = "plinth/1";
+/// The newest container format version that this build reads.
+pub const PROFILE_VERSION: u32 = 1;
+
+/// The error for a package in a container format that is newer than this
+/// build reads (`docs/COMPATIBILITY.md` §4). It is not "invalid package":
+/// a newer Plinth reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewerFormat {
+    /// The profile of the package, for example `plinth/2`.
+    pub profile: String,
+}
+
+impl std::fmt::Display for NewerFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "This app needs a newer version of Plinth (package format {})", self.profile)
+    }
+}
+
+impl std::error::Error for NewerFormat {}
+
+/// Adds `context` (for example "not a valid .plnt package") to an error of
+/// `Package::read`, except to a `NewerFormat` error: that package is not
+/// invalid, and its message stands alone.
+pub fn read_error(e: anyhow::Error, context: impl std::fmt::Display + Send + Sync + 'static) -> anyhow::Error {
+    if e.is::<NewerFormat>() { e } else { e.context(context) }
+}
+
+/// Checks the bytes of `plinth-profile`: `plinth/N` with `N` from 1 to
+/// `PROFILE_VERSION` is accepted, a larger `N` gives `NewerFormat`, and
+/// any other text is an error.
+fn check_profile(raw: &[u8]) -> Result<()> {
+    let text = std::str::from_utf8(raw).unwrap_or("").trim();
+    let version = text
+        .strip_prefix("plinth/")
+        .filter(|n| !n.is_empty() && n.len() <= 9 && n.bytes().all(|b| b.is_ascii_digit()) && !n.starts_with('0'))
+        .and_then(|n| n.parse::<u32>().ok());
+    match version {
+        Some(n) if (1..=PROFILE_VERSION).contains(&n) => Ok(()),
+        Some(n) => Err(NewerFormat { profile: format!("plinth/{n}") }.into()),
+        None => bail!("the package profile is not valid (expected `{PROFILE}`)"),
+    }
+}
 pub const EXTENSION: &str = "plnt";
 /// The runtime version that this build of the tools targets.
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -59,8 +104,13 @@ pub struct ProjectConfig {
 
 /// `[updates]` in `plinth.toml`, carried into the manifest's `updates`
 /// field unchanged.
+///
+/// The type is lenient, for the manifest (`docs/COMPATIBILITY.md` §4): it
+/// ignores a field that it does not know, and an enum value that it does
+/// not know maps to the default of the field. `ProjectConfig::parse` keeps
+/// `plinth.toml` strict with `check_strict`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(rename_all = "kebab-case")]
 pub struct UpdatesConfig {
     /// The feed URL, for example `https://example.com/myapp/feed.json`.
     pub feed: String,
@@ -72,7 +122,29 @@ pub struct UpdatesConfig {
     pub apply: ApplyPolicy,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+impl UpdatesConfig {
+    /// The fields of `[updates]`, for the strict check of `plinth.toml`.
+    const FIELDS: &[&str] = &["feed", "channel", "check", "apply"];
+}
+
+/// A lenient `Deserialize` for an enum of `[updates]`: a value that this
+/// version does not know (from a newer author tool) maps to the default of
+/// the field, and the host logs it (`docs/COMPATIBILITY.md` §4).
+macro_rules! lenient_enum {
+    ($ty:ident, $field:literal) => {
+        impl<'de> Deserialize<'de> for $ty {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+                let s = String::deserialize(d)?;
+                Ok($ty::from_name(&s).unwrap_or_else(|| {
+                    log::warn!("manifest.toml: `[updates] {}` has the unknown value `{s}`; using `{}`", $field, $ty::default().as_str());
+                    $ty::default()
+                }))
+            }
+        }
+    };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Channel {
     #[default]
@@ -87,19 +159,39 @@ impl Channel {
             Channel::Beta => "beta",
         }
     }
+
+    /// The channel with this name; `None` for a name that this version does not know.
+    pub fn from_name(s: &str) -> Option<Channel> {
+        [Channel::Stable, Channel::Beta].into_iter().find(|c| c.as_str() == s)
+    }
 }
+lenient_enum!(Channel, "channel");
 
 /// When the host checks the feed. Only `on-start` is implemented
 /// (`docs/UPDATES.md` §8 step 4); an interval is future work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CheckPolicy {
     #[default]
     OnStart,
 }
 
+impl CheckPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CheckPolicy::OnStart => "on-start",
+        }
+    }
+
+    /// The policy with this name; `None` for a name that this version does not know.
+    pub fn from_name(s: &str) -> Option<CheckPolicy> {
+        [CheckPolicy::OnStart].into_iter().find(|c| c.as_str() == s)
+    }
+}
+lenient_enum!(CheckPolicy, "check");
+
 /// When a downloaded update takes effect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ApplyPolicy {
     /// Run the new version the next time the app starts (implemented).
@@ -113,6 +205,22 @@ pub enum ApplyPolicy {
     /// for it is rejected by `ProjectConfig::validate`.
     Live,
 }
+
+impl ApplyPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ApplyPolicy::NextStart => "next-start",
+            ApplyPolicy::Prompt => "prompt",
+            ApplyPolicy::Live => "live",
+        }
+    }
+
+    /// The policy with this name; `None` for a name that this version does not know.
+    pub fn from_name(s: &str) -> Option<ApplyPolicy> {
+        [ApplyPolicy::NextStart, ApplyPolicy::Prompt, ApplyPolicy::Live].into_iter().find(|c| c.as_str() == s)
+    }
+}
+lenient_enum!(ApplyPolicy, "apply");
 
 /// The author's policy for which core a built app takes, carried into the
 /// package manifest's `core` field.
@@ -148,11 +256,20 @@ impl CorePolicy {
     }
 }
 
+/// A `[[capabilities]]` table. Lenient, for the manifest: it ignores a
+/// field that it does not know. `ProjectConfig::parse` keeps `plinth.toml`
+/// strict with `check_strict`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
 pub struct Capability {
     pub name: String,
+    /// `ProjectConfig::validate` requires it in `plinth.toml`.
+    #[serde(default)]
     pub rationale: String,
+}
+
+impl Capability {
+    /// The fields of `[[capabilities]]`, for the strict check of `plinth.toml`.
+    const FIELDS: &[&str] = &["name", "rationale"];
 }
 
 /// `manifest.toml` inside a package (SPEC.md §10.2).
@@ -199,8 +316,45 @@ fn default_core_field() -> String {
 impl ProjectConfig {
     pub fn parse(text: &str) -> Result<Self> {
         let c: ProjectConfig = toml::from_str(text).context("plinth.toml is not valid")?;
+        let table: toml::Table = toml::from_str(text).context("plinth.toml is not valid")?;
+        Self::check_strict(&table)?;
         c.validate()?;
         Ok(c)
+    }
+
+    /// `plinth.toml` is strict (`docs/COMPATIBILITY.md` §4): an unknown
+    /// field or an unknown enum value is most likely a typing error. The
+    /// shared types `Capability` and `UpdatesConfig` are lenient for the
+    /// manifest, so this checks the nested tables here. (`ProjectConfig`
+    /// itself denies unknown top-level fields, and `CorePolicy` is strict.)
+    fn check_strict(table: &toml::Table) -> Result<()> {
+        fn known_fields(t: &toml::Table, fields: &[&str], section: &str) -> Result<()> {
+            if let Some(k) = t.keys().find(|k| !fields.contains(&k.as_str())) {
+                bail!("plinth.toml: `{section}` has an unknown field `{k}` (known: {})", fields.join(", "));
+            }
+            Ok(())
+        }
+        if let Some(caps) = table.get("capabilities").and_then(|v| v.as_array()) {
+            for cap in caps.iter().filter_map(|c| c.as_table()) {
+                known_fields(cap, Capability::FIELDS, "[[capabilities]]")?;
+            }
+        }
+        if let Some(updates) = table.get("updates").and_then(|v| v.as_table()) {
+            known_fields(updates, UpdatesConfig::FIELDS, "[updates]")?;
+            let checks: [(&str, fn(&str) -> bool, &str); 3] = [
+                ("channel", |s| Channel::from_name(s).is_some(), "\"stable\", \"beta\""),
+                ("check", |s| CheckPolicy::from_name(s).is_some(), "\"on-start\""),
+                ("apply", |s| ApplyPolicy::from_name(s).is_some(), "\"next-start\", \"prompt\""),
+            ];
+            for (field, known, values) in checks {
+                if let Some(v) = updates.get(field).and_then(|v| v.as_str())
+                    && !known(v)
+                {
+                    bail!("plinth.toml: `[updates] {field}` has the unknown value \"{v}\" (use {values})");
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -299,7 +453,7 @@ pub fn manifest_toml(manifest: &Manifest) -> Result<String> {
 ///
 /// Make a new package with `Package::new`. `Package::read` also keeps the
 /// raw bytes of `manifest.toml` and `plinth-profile`, and the entries that
-/// the host does not use (`source/…`), so that `write` gives them back
+/// the host does not use (`source/…`, unknown entries), so that `write` gives them back
 /// unchanged and `signature::verify` digests the bytes of the file, never
 /// a new serialization.
 #[derive(Debug, Clone)]
@@ -317,8 +471,9 @@ pub struct Package {
     /// bytes of `manifest.toml`. The raw bytes are used while `manifest`
     /// is equal to the parsed value.
     read_manifest: Option<(Manifest, Vec<u8>)>,
-    /// The entries that the host does not use (`source/…`). They are kept
-    /// and signed, but never served as assets and never run.
+    /// The entries that the host does not use (`source/…` and entries that
+    /// this version does not know). They are kept and signed, but never
+    /// served as assets and never run.
     other: Vec<(String, Vec<u8>)>,
 }
 
@@ -410,6 +565,14 @@ impl Package {
         if zip.len() > MAX_ENTRIES {
             bail!("the package has too many entries");
         }
+        // The profile first: a newer format gives `NewerFormat`, not an
+        // error from a rule of this format.
+        {
+            let mut f = zip.by_name("plinth-profile").map_err(|_| anyhow::anyhow!("the package has no plinth-profile"))?;
+            let mut raw = Vec::new();
+            (&mut f).take(64).read_to_end(&mut raw)?;
+            check_profile(&raw)?;
+        }
         let mut seen = std::collections::HashSet::new();
         let mut total = 0u64;
         let (mut profile, mut manifest, mut files) = (None, None, Vec::new());
@@ -442,16 +605,15 @@ impl Package {
             match name.as_str() {
                 "plinth-profile" => profile = Some(data),
                 "manifest.toml" => manifest = Some(data),
-                n if n == "app.wasm" || n.starts_with("assets/") || n.starts_with("source/") || n == "signature.json" => {
-                    files.push((name, data))
-                }
-                other => bail!("the package has an unknown entry `{other}`"),
+                // The entry module, `assets/…`, `signature.json`,
+                // `source/…` and every entry that this version does not
+                // know. An unknown entry goes to `other`: it is kept and
+                // signed, never served and never run.
+                _ => files.push((name, data)),
             }
         }
         let profile = profile.context("the package has no plinth-profile")?;
-        if String::from_utf8_lossy(&profile).trim() != PROFILE {
-            bail!("the package profile is not `{PROFILE}`");
-        }
+        check_profile(&profile)?;
         let manifest_raw = manifest.context("the package has no manifest.toml")?;
         let manifest: Manifest = toml::from_str(std::str::from_utf8(&manifest_raw).context("manifest.toml is not UTF-8")?)
             .context("manifest.toml is not valid")?;
@@ -661,5 +823,140 @@ mod tests {
         let m: Manifest = toml::from_str(toml).unwrap();
         assert_eq!(m.core, "follow");
         assert_eq!(m.core_digest, None);
+    }
+
+    // -- Format compatibility (docs/COMPATIBILITY.md §4) --------------------
+
+    /// A zip with these entries, in order.
+    fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in entries {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(data).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    /// A manifest from a newer author tool: unknown fields at every level
+    /// and unknown enum values in `[updates]`.
+    fn newer_manifest(digest: &str) -> String {
+        format!(
+            r#"id = "dev.plinth.test"
+name = "Test"
+version = "0.2.0"
+publisher = "me"
+ui-api = "1.0"
+runtime = "plinth-rt/test"
+entry = "app.wasm"
+digest = "{digest}"
+core = "nightly"
+future-top-level = "x"
+
+[future-table]
+a = 1
+
+[[capabilities]]
+name = "store.kv"
+rationale = "Save."
+future-field = true
+
+[updates]
+feed = "https://example.com/feed.json"
+channel = "canary"
+check = "hourly"
+apply = "instant"
+future-field = [1, 2]
+"#
+        )
+    }
+
+    #[test]
+    fn a_manifest_with_unknown_fields_and_enum_values_reads() {
+        let wasm = b"\0asm".to_vec();
+        let manifest = newer_manifest(&hex(&Sha256::digest(&wasm)));
+        let bytes = zip_of(&[("plinth-profile", b"plinth/1"), ("manifest.toml", manifest.as_bytes()), ("app.wasm", &wasm)]);
+        let pkg = Package::read(&bytes).unwrap();
+        assert_eq!(pkg.manifest.capabilities, vec![Capability { name: "store.kv".into(), rationale: "Save.".into() }]);
+        let updates = pkg.manifest.updates.as_ref().unwrap();
+        assert_eq!(updates.feed, "https://example.com/feed.json");
+        // An unknown enum value maps to the default of the field.
+        assert_eq!((updates.channel, updates.check, updates.apply), (Channel::Stable, CheckPolicy::OnStart, ApplyPolicy::NextStart));
+        assert_eq!(CorePolicy::parse(&pkg.manifest.core), CorePolicy::Follow);
+        // The raw bytes stay: the unknown fields are written back unchanged.
+        assert_eq!(&*pkg.manifest_bytes().unwrap(), manifest.as_bytes());
+        let again = Package::read(&pkg.write().unwrap()).unwrap();
+        assert_eq!(&*again.manifest_bytes().unwrap(), manifest.as_bytes());
+    }
+
+    #[test]
+    fn plinth_toml_stays_strict() {
+        let base = "id = \"dev.plinth.test\"\nname = \"Test\"\nversion = \"0.1.0\"\npublisher = \"me\"\n";
+        assert!(ProjectConfig::parse(base).is_ok());
+        let good_updates = "[updates]\nfeed = \"https://example.com/feed.json\"\nchannel = \"beta\"\ncheck = \"on-start\"\napply = \"prompt\"\n";
+        assert!(ProjectConfig::parse(&format!("{base}{good_updates}")).is_ok());
+        let bad = [
+            ("future-top-level = \"x\"\n", "future-top-level"),
+            ("[future-table]\na = 1\n", "future-table"),
+            ("[[capabilities]]\nname = \"store.kv\"\nrationale = \"Save.\"\nfuture-field = true\n", "future-field"),
+            ("[[capabilities]]\nname = \"store.kv\"\nrationale = \"Save.\"\nrationnale = \"typo\"\n", "rationnale"),
+            ("[updates]\nfeed = \"https://example.com/feed.json\"\nfuture-field = 1\n", "future-field"),
+            ("[updates]\nfeed = \"https://example.com/feed.json\"\nchannel = \"canary\"\n", "canary"),
+            ("[updates]\nfeed = \"https://example.com/feed.json\"\ncheck = \"hourly\"\n", "hourly"),
+            ("[updates]\nfeed = \"https://example.com/feed.json\"\napply = \"instant\"\n", "instant"),
+            ("core = \"nightly\"\n", "nightly"),
+        ];
+        for (extra, word) in bad {
+            let err = ProjectConfig::parse(&format!("{base}{extra}")).unwrap_err();
+            assert!(format!("{err:#}").contains(word), "{extra}: {err:#}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_entry_is_kept_but_never_an_asset() {
+        let wasm = b"\0asm".to_vec();
+        let pkg = Package::new(config().manifest("1.0", "plinth-rt/test", None, &wasm), wasm.clone(), vec![("assets/a.txt".into(), b"hi".to_vec())]);
+        let manifest = manifest_toml(&pkg.manifest).unwrap();
+        let bytes = zip_of(&[
+            ("plinth-profile", b"plinth/1"),
+            ("future.bin", b"new data"),
+            ("manifest.toml", manifest.as_bytes()),
+            ("app.wasm", &wasm),
+            ("assets/a.txt", b"hi"),
+            ("future/dir/x.wasm", b"\0asm other code"),
+            ("source/app/main.tsx", b"export {}"),
+        ]);
+        let back = Package::read(&bytes).unwrap();
+        assert_eq!(back.assets, vec![("assets/a.txt".to_owned(), b"hi".to_vec())]);
+        let names: Vec<&str> = back.other_entries().iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["future.bin", "future/dir/x.wasm", "source/app/main.tsx"]);
+        assert_eq!(back.component, wasm);
+        // `write` keeps them.
+        let again = Package::read(&back.write().unwrap()).unwrap();
+        assert_eq!(again.other_entries(), back.other_entries());
+    }
+
+    #[test]
+    fn a_newer_profile_needs_a_newer_plinth() {
+        let wasm = b"\0asm".to_vec();
+        let manifest = manifest_toml(&config().manifest("1.0", "plinth-rt/test", None, &wasm)).unwrap();
+        let with_profile =
+            |p: &[u8]| Package::read(&zip_of(&[("plinth-profile", p), ("manifest.toml", manifest.as_bytes()), ("app.wasm", &wasm)]));
+        assert!(with_profile(b"plinth/1").is_ok());
+        assert!(with_profile(b"plinth/1\n").is_ok());
+        for p in [&b"plinth/2"[..], b"plinth/2\n", b"plinth/17"] {
+            let err = with_profile(p).unwrap_err();
+            let newer = err.downcast_ref::<NewerFormat>().expect("a NewerFormat error");
+            assert!(err.to_string().starts_with("This app needs a newer version of Plinth (package format plinth/"), "{err}");
+            assert_eq!(newer.profile, String::from_utf8_lossy(p).trim());
+        }
+        // A newer format may change everything else: the message is the same.
+        let err = Package::read(&zip_of(&[("plinth-profile", b"plinth/2"), ("other.toml", b"x = 1")])).unwrap_err();
+        assert!(err.is::<NewerFormat>(), "{err:#}");
+        for p in [&b"plinth/0"[..], b"plinth/", b"plinth/x", b"plinth/01", b"plinth/-1", b"garbage", b"", b"\xff\xfe"] {
+            let err = with_profile(p).unwrap_err();
+            assert!(!err.is::<NewerFormat>(), "{:?}", String::from_utf8_lossy(p));
+            assert!(err.to_string().contains("not valid"), "{err}");
+        }
+        assert!(!Package::read(&zip_of(&[("manifest.toml", manifest.as_bytes())])).unwrap_err().is::<NewerFormat>());
     }
 }

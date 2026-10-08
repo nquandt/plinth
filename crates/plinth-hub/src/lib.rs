@@ -298,7 +298,7 @@ impl Hub {
     /// already there) and caches the bytes content-addressed. Returns the
     /// app id.
     pub fn add_package(&self, bytes: &[u8]) -> Result<String> {
-        let pkg = plinth_package::Package::read(bytes).context("not a valid .plnt package")?;
+        let pkg = plinth_package::Package::read(bytes).map_err(|e| plinth_package::read_error(e, "not a valid .plnt package"))?;
         plinth_link::cores::link_app_with_policy(&pkg.component, &pkg.manifest.core, pkg.manifest.core_digest.as_deref())
             .context("the package does not link against an installed core")?;
         if self.is_blocked(&pkg.manifest.id)? {
@@ -1337,6 +1337,20 @@ mod tests {
         assert_eq!(back, bytes);
         hub.remove(&id).unwrap();
         assert!(hub.list().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_package_in_a_newer_format_needs_a_newer_plinth() {
+        use std::io::Write as _;
+        let (hub, dir) = temp_hub();
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("plinth-profile", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"plinth/2").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        // The plain message, not "not a valid .plnt package".
+        let err = hub.add_package(&bytes).unwrap_err();
+        assert_eq!(err.to_string(), "This app needs a newer version of Plinth (package format plinth/2)");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -83,7 +83,7 @@ fn incoming_packages(folder: &Path) -> Result<Vec<PathBuf>> {
 /// it and adds its version to the app document (`docs/REGISTRY.md` §8
 /// steps 1-3).
 fn add_package(folder: &Path, bytes: &[u8], report: &mut Report) -> Result<()> {
-    let pkg = plinth_package::Package::read(bytes).context("not a valid .plnt package")?;
+    let pkg = plinth_package::Package::read(bytes).map_err(|e| plinth_package::read_error(e, "not a valid .plnt package"))?;
     plinth_link::cores::link_app_with_policy(&pkg.component, &pkg.manifest.core, pkg.manifest.core_digest.as_deref())
         .context("the package does not link against an installed core")?;
     // A signature that does not check out is refused; an unsigned package

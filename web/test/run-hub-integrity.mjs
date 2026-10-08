@@ -7,7 +7,7 @@
 // Build first: cargo build -p plinth-cli; target/debug/plinth build examples/counter examples/notes
 
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, readdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -182,6 +182,29 @@ async function main() {
     const twice = await rezip(pkg(notesV), (entries) => [...entries, entries.find(([n]) => n === "manifest.toml")]);
     await rejects(checkPackage(twice, { ...notesV, sha256: await sha256Hex(twice) }, "dev.plinth.examples.notes"), /two times/, "a duplicate entry");
 
+    // Format compatibility (docs/COMPATIBILITY.md §4): a newer profile.
+    const withProfile = (p) => rezip(pkg(counterV), (entries) => entries.map(([name, data]) => (name === "plinth-profile" ? [name, Buffer.from(p)] : [name, data])));
+    for (const p of ["plinth/2", "plinth/17\n"]) {
+      const bytes = await withProfile(p);
+      await rejects(checkPackage(bytes, { ...counterV, sha256: await sha256Hex(bytes) }, "dev.plinth.examples.counter"), /^Error: This app needs a newer version of Plinth \(package format plinth\/\d+\)$/, p);
+    }
+    for (const p of ["garbage", "plinth/0", "plinth/x", ""]) {
+      const bytes = await withProfile(p);
+      await rejects(checkPackage(bytes, { ...counterV, sha256: await sha256Hex(bytes) }, "dev.plinth.examples.counter"), /profile is not valid/, JSON.stringify(p));
+    }
+    // An unknown entry: unsigned, the package reads; `plinth sign` covers
+    // the entry, and the web Hub verifies it.
+    const unknown = await rezip(pkg(notesV), (entries) => [...entries.filter(([n]) => n !== "signature.json"), ["future/data.bin", Buffer.from("new")]]);
+    const unknownCheck = await checkPackage(unknown, { ...notesV, signer: undefined, sha256: await sha256Hex(unknown) }, "dev.plinth.examples.notes");
+    assert.equal(unknownCheck.signature.status, "unsigned");
+    const unknownPath = path.join(dir, "unknown.plnt");
+    writeFileSync(unknownPath, unknown);
+    execFileSync(exe, ["sign", unknownPath], { env, stdio: "ignore" });
+    const unknownSigned = new Uint8Array(readFileSync(unknownPath));
+    assert.ok(openZip(unknownSigned).has("future/data.bin"), "plinth sign keeps the unknown entry");
+    const signedCheck = await checkPackage(unknownSigned, { ...notesV, sha256: await sha256Hex(unknownSigned) }, "dev.plinth.examples.notes");
+    assert.equal(signedCheck.signature.status, "verified", "the signature covers the unknown entry");
+
     // The core digest from the core list.
     const cores = JSON.parse(readFileSync(path.join(reg, "cores", "index.json"), "utf8")).cores;
     const coreDir = readdirSync(path.join(reg, "cores")).find((d) => d !== "index.json");
@@ -189,7 +212,7 @@ async function main() {
     await checkCore(coreBytes, cores[0]);
     await rejects(checkCore(coreBytes.slice(1), cores[0]), /does not match the registry digest/);
 
-    console.log("run-hub-integrity.mjs: ok (digests, manifest, Ed25519 signature over every entry, changed manifests refused, not-checked mode, core digest)");
+    console.log("run-hub-integrity.mjs: ok (digests, manifest, Ed25519 signature over every entry, changed manifests refused, newer profile, unknown entries, not-checked mode, core digest)");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -101,7 +101,24 @@ function openZip(bytes) {
     },
   };
 }
-  return { openZip };
+
+/** The newest `.plnt` container format that this host reads (`plinth_package::PROFILE_VERSION`). */
+const PLNT_PROFILE_VERSION = 1;
+
+/**
+ * Checks `plinth-profile` of a `.plnt` zip (docs/COMPATIBILITY.md §4), as
+ * `plinth_package::Package::read` does: `plinth/N` with `N` up to
+ * `PLNT_PROFILE_VERSION` is accepted; a larger `N` gives "This app needs a
+ * newer version of Plinth"; any other text is an error.
+ */
+async function checkPlntProfile(zip) {
+  if (!zip.has("plinth-profile")) throw new Error("the package has no plinth-profile");
+  const text = new TextDecoder().decode(await zip.read("plinth-profile")).trim();
+  const m = /^plinth\/([1-9][0-9]{0,8})$/.exec(text);
+  if (!m) throw new Error("the package profile is not valid (expected `plinth/1`)");
+  if (Number(m[1]) > PLNT_PROFILE_VERSION) throw new Error(`This app needs a newer version of Plinth (package format plinth/${m[1]})`);
+}
+  return { openZip, PLNT_PROFILE_VERSION, checkPlntProfile };
   })();
 
   // ---- protocol.js
@@ -957,7 +974,7 @@ class FileSpace {
 // (web/test/*.mjs) and in the browser (dom-renderer.js consumes its
 // `PlinthApp` events instead).
 
-const { openZip } = __zip;
+const { openZip, checkPlntProfile } = __zip;
 const { decodeOps, encodeEvent, encodeInitArgs } = __protocol;
 const { FileSpace, memoryFileBackend, FILES_CAPABILITY } = __files;
 
@@ -1026,6 +1043,7 @@ function readTableImportMin(bytes) {
 /** Reads `name` (manifest.toml, app.wasm) out of a fetched `.plnt` zip. */
 async function readPlnt(bytes) {
   const zip = openZip(bytes);
+  await checkPlntProfile(zip);
   const manifestText = new TextDecoder().decode(await zip.read("manifest.toml"));
   const appWasm = await zip.read(zip.has("app.wasm") ? "app.wasm" : manifestEntry(manifestText));
   // Assets (SPEC.md §10.1), by path under `assets/` without the prefix, for

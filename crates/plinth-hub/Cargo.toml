@@ -24,3 +24,4 @@ plinth-compiler = { workspace = true }
 toml = { workspace = true }
 ed25519-dalek = { workspace = true }
 rand_core = { workspace = true }
+zip = { workspace = true }

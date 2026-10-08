@@ -296,7 +296,7 @@ fn download_and_store(dir: &Path, feed_url: &str, entry: &FeedVersion, fetch: &i
     if digest != entry.sha256 {
         bail!("{package_url} does not match the feed's sha256 for version {} (expected {}, got {digest})", entry.version, entry.sha256);
     }
-    let pkg = Package::read(&bytes).with_context(|| format!("{package_url} is not a valid .plnt package"))?;
+    let pkg = Package::read(&bytes).map_err(|e| plinth_package::read_error(e, format!("{package_url} is not a valid .plnt package")))?;
     if pkg.manifest.version != entry.version {
         bail!("{package_url}'s manifest says version {}, the feed says {}", pkg.manifest.version, entry.version);
     }

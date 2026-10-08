@@ -299,6 +299,27 @@ mod tests {
     }
 
     #[test]
+    fn unknown_entries_are_signed() {
+        // A package from a newer tool, with an entry that this version does
+        // not know: it reads, `plinth sign` covers the entry, and it verifies.
+        let (pkg, identity) = signed_package("Acme");
+        let mut entries = unzip(&pkg.write().unwrap());
+        entries.push(("future/data.bin".into(), b"new".to_vec()));
+        let mut back = Package::read(&rezip(&entries)).unwrap();
+        back.signature = Some(sign(&back, &identity).unwrap());
+        let file = back.write().unwrap();
+        let again = Package::read(&file).unwrap();
+        assert_eq!(again.other_entries(), [("future/data.bin".to_owned(), b"new".to_vec())]);
+        assert!(again.assets.iter().all(|(n, _)| n.starts_with("assets/")));
+        assert!(verify(&again).unwrap().is_some());
+        // An unknown entry added after signing is refused.
+        let mut entries = unzip(&file);
+        entries.insert(0, ("extra.txt".into(), b"x".to_vec()));
+        let err = verify(&Package::read(&rezip(&entries)).unwrap()).unwrap_err().to_string();
+        assert!(err.contains("does not match its signature"), "{err}");
+    }
+
+    #[test]
     fn an_old_signature_schema_is_refused_with_a_clear_message() {
         let (mut pkg, identity) = signed_package("Acme");
         let mut file: SignatureFile = serde_json::from_slice(&sign(&pkg, &identity).unwrap()).unwrap();

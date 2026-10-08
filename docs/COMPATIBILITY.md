@@ -40,13 +40,18 @@ Status of this file: first version, 2026-10-07.
 
 - `plinth-profile` names the container version. Today it is `plinth/1`. A host reads every profile up to the newest that it knows. A host that gets a newer profile says "This app needs a newer version of Plinth", not "invalid package".
 - Inside `plinth/1`:
-  - The entries (`manifest.toml`, the entry module, `assets/`, `signature.json`, `source/`) keep their meaning. A new optional entry is allowed; a reader ignores an entry that it does not know, but never runs it.
+  - The entries (`manifest.toml`, the entry module, `assets/`, `signature.json`, `source/`) keep their meaning. A new optional entry is allowed; a reader ignores an entry that it does not know, but never runs it and never serves it as an asset. The signature (`plinth.signature/2`) covers it, as it covers every entry.
   - A new manifest field is optional and has a default that gives the old behavior (example: `core`, default `follow`; `updates`, default none).
   - A host ignores a manifest field that it does not know, at every level of the manifest (also inside `[[capabilities]]` and `[updates]`). The author's `plinth.toml` stays strict: the CLI rejects an unknown field there, because it is most likely a typing error.
   - An enum value that a host does not know (for example a new `apply` policy) maps to the safe default of that field, and the host logs it.
 - The zip limits (entry size, total size, entry count) can only grow inside `plinth/1`.
 
-**Status:** the profile check exists (`plinth_package::PROFILE`). The top-level `Manifest` ignores unknown fields, but the nested types `Capability` and `UpdatesConfig` and the enums of `[updates]` are strict in both `plinth.toml` and the manifest. Thus an old host refuses a newer package that adds a field there. Fix: separate lenient manifest types from the strict project types, and add the tests in §7.
+**Status:** done.
+
+- Profile: `Package::read` reads `plinth-profile` first. `plinth/1` up to `plinth_package::PROFILE_VERSION` is accepted. A larger number gives the error `NewerFormat`, "This app needs a newer version of Plinth (package format plinth/N)"; callers do not add "not a valid package" to it (`plinth_package::read_error`). Any other text is an error. The web host does the same check (`checkPlntProfile` in `web/zip.js`, used by `readPlnt` and the web Hub).
+- Entries: `Package::read` keeps an unknown entry in `Package::other_entries`, with `source/…`. The host never serves it and never runs it. `write` writes it again, and the signature covers it.
+- Manifest: `Manifest`, `Capability` and `UpdatesConfig` ignore unknown fields. The enums of `[updates]` (`channel`, `check`, `apply`) map an unknown value to the default of the field and log a warning (`log::warn!`). `ProjectConfig::parse` keeps `plinth.toml` strict: it denies an unknown top-level field, checks the fields of `[[capabilities]]` and `[updates]` and each enum value (`check_strict`), and `core` stays a strict enum.
+- Tests: `plinth-package` (`a_manifest_with_unknown_fields_and_enum_values_reads`, `plinth_toml_stays_strict`, `an_unknown_entry_is_kept_but_never_an_asset`, `a_newer_profile_needs_a_newer_plinth`, `signature::tests::unknown_entries_are_signed`), `plinth-hub` (`a_package_in_a_newer_format_needs_a_newer_plinth`) and `web/test/run-hub-integrity.mjs` (a newer profile, an unknown entry signed by `plinth sign`).
 
 ## 5. Plinth TS (C6)
 
@@ -75,5 +80,7 @@ A deprecation tells authors that an item goes away in the next major version. It
 | Old apps link with the newest core | `tests/e2e.rs` and the app tests link the examples with the newest core | Partial: no frozen old packages yet (C8) |
 | `app.wit` is append-only | A snapshot of every WIT item that a test compares with the current file | Open |
 | Hosts read old packages | Frozen `.plnt` files of each released version, read and run in the gate | Open (C8) |
-| Hosts tolerate new manifest fields | A test that adds unknown fields at every level of a manifest | Open |
+| Hosts tolerate new manifest fields | A test that adds unknown fields at every level of a manifest, and unknown enum values; `plinth.toml` with the same is rejected | Done (`plinth-package` tests, §4) |
+| Hosts keep unknown entries | A package with an unknown entry reads, is signed and verifies; the entry is never an asset | Done (`plinth-package` tests, `run-hub-integrity.mjs`) |
+| A newer profile says "needs a newer Plinth" | `plinth/2` gives `NewerFormat`; a profile that is not valid stays an error | Done (`plinth-package`, `plinth-hub`, `run-hub-integrity.mjs`) |
 | Deprecation warnings | A golden test for each `PLW` code | Open (no deprecation yet) |

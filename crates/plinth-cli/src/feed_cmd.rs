@@ -24,7 +24,7 @@ fn hex(bytes: &[u8]) -> String {
 /// signed feed names its exact digest).
 pub fn add(feed_dir: &Path, package_path: &Path, channel: &str, with_core: bool) -> Result<()> {
     let bytes = std::fs::read(package_path).with_context(|| format!("read {}", package_path.display()))?;
-    let pkg = Package::read(&bytes).with_context(|| format!("{} is not a valid .plnt package", package_path.display()))?;
+    let pkg = Package::read(&bytes).map_err(|e| plinth_package::read_error(e, format!("{} is not a valid .plnt package", package_path.display())))?;
     let identity = publisher::load()?;
     if pkg.manifest.publisher != identity.name {
         bail!(

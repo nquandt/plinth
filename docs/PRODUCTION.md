@@ -32,7 +32,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | C1 | UI API ids are append-only and versioned | Preview | Done | `wit/plinth/ui-api.toml`, version assert in `plinth-protocol` |
 | C2 | Core ABI is append-only (`ADDED_IN`, `CORE_MINOR`, `CORE_PATCH`) | Preview | Done | `crates/plinth-link/src/rt_abi.rs`, SPEC §10.5 |
 | C3 | Ship core 1.12 and freeze it (no more additions to a shipped minor) | Beta | Open | HANDOFF §6: 1.12 is not shipped. Ship it with the first Beta release. |
-| C4 | `.plnt` container and manifest have a format version and a compatibility rule | Beta | Partial | SPEC §10.1, §10.2. Next: write the rule "a host reads every older format version" and add a test with old `.plnt` files. |
+| C4 | `.plnt` container and manifest have a format version and a compatibility rule | Beta | Done | `docs/COMPATIBILITY.md` §4: a newer `plinth-profile` gives "This app needs a newer version of Plinth"; unknown entries are kept (signed, never run, never served); the manifest tolerates unknown fields and enum values at every level; `plinth.toml` stays strict. Tests in `plinth-package`, `plinth-hub` and `web/test/run-hub-integrity.mjs`. Frozen old packages: C8. |
 | C5 | Host interfaces (`wit/plinth/app.wit`) have a version and an append-only rule | Beta | Partial | Next: write the rule in SPEC §8.1 and add a check like the one for `ui-api.toml`. |
 | C6 | Plinth TS language version: a list of the accepted syntax and the deviations from ECMAScript | Beta | Partial | SPEC §4.3, §4.6, `docs/language.md`. Next: give the language a version and freeze the 1.0 subset. |
 | C7 | Deprecation policy: how a feature is marked, how long it stays, what diagnostic the compiler gives | Beta | Open | Write it in SPEC §6.6 and §10.5. |
@@ -215,9 +215,9 @@ Count on 2026-10-07, by gate and status:
 
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
-| Preview | 25 | 0 | 0 |
-| Beta | 0 | 16 | 35 |
-| 1.0 | 1 | 1 | 20 |
+| Preview | 26 | 0 | 0 |
+| Beta | 3 | 15 | 33 |
+| 1.0 | 1 | 1 | 21 |
 | Later (after 1.0) | 0 | 0 | 1 |
 
 **The Preview level is complete** for the documented platforms (Windows and the web, `docs/LIMITS.md`). Preview is only an internal mark until the repository is public (G6).
@@ -225,7 +225,7 @@ Count on 2026-10-07, by gate and status:
 **The next level is Beta.** Start with the items that the owner and the code do not block:
 
 1. C3: ship core 1.12 and freeze it.
-2. C4, C5, C7: write the format, interface and deprecation rules, with tests.
+2. C5, C7: the interface and deprecation checks (C4 is done).
 3. R3: the web time limit and memory cap.
 4. L4: `RegExp`.
 5. H3: notifications.

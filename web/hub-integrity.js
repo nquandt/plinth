@@ -6,7 +6,7 @@
 // `localhost`) and which Node 22 has. No DOM code: `test/run-hub-integrity.mjs`
 // runs this file directly.
 
-import { openZip } from "./zip.js";
+import { openZip, checkPlntProfile } from "./zip.js";
 
 /** Lower-case hex of the SHA-256 digest of `bytes`. */
 export async function sha256Hex(bytes) {
@@ -140,6 +140,7 @@ export async function checkPackage(bytes, version, appId, opts = {}) {
   if (got !== want) throw new Error(`the package does not match the registry digest (expected ${want.slice(0, 12)}…, got ${got.slice(0, 12)}…)`);
 
   const zip = openZip(bytes);
+  await checkPlntProfile(zip);
   if (!zip.has("manifest.toml")) throw new Error("the package has no manifest.toml");
   const manifestText = new TextDecoder().decode(await zip.read("manifest.toml"));
   const manifest = {

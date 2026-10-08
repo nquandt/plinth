@@ -713,7 +713,7 @@ fn dev(dir: &Path) -> Result<ExitCode> {
 /// `docs/HUB.md` §6.1).
 fn sign_file(path: &Path) -> Result<()> {
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let mut pkg = Package::read(&bytes).context("not a valid .plnt package")?;
+    let mut pkg = Package::read(&bytes).map_err(|e| plinth_package::read_error(e, "not a valid .plnt package"))?;
     let identity = plinth_package::publisher::load()?;
     pkg.signature = Some(plinth_package::signature::sign(&pkg, &identity)?);
     std::fs::write(path, pkg.write()?).with_context(|| format!("write {}", path.display()))?;
