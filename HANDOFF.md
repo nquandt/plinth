@@ -203,5 +203,5 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 8. **Storage (`docs/STORAGE.md` §6):** a `vault` space and the Hub UI for spaces; a folder as a space; `watch`; sync. Then the notes app (VALIDATION V2).
 9. **Experience (`docs/EXPERIENCE.md` §7):** Try and Keep, the Privacy page.
 10. **Compiler:** smaller async code (move the promise machinery into the core, GAPS "Async code size"); R3 (chains longer than 1000 terms).
-11. **Platforms:** a GUI window on Linux (WSLg is available) and macOS; then mobile with gpui and wasmi.
+11. **Platforms:** a GUI window on Linux (WSLg is available) and macOS; then mobile with gpui and wasmi. The owner will run agents on Linux and macOS machines for this: every item that needs another OS goes into `docs/PLATFORM-TODO.md`.
 12. **Distribution:** publish the npm packages and a first registry; Hub H2 (signed indexes); key rotation and the project key.

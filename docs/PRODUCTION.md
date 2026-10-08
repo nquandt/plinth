@@ -221,9 +221,11 @@ Count on 2026-10-08, by gate and status. Run `bash scripts/production-status.sh`
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
 | Preview | 26 | 0 | 0 |
-| Beta | 16 | 16 | 20 |
+| Beta | 22 | 16 | 14 |
 | 1.0 | 1 | 2 | 20 |
 | Later (after 1.0) | 0 | 0 | 1 |
+
+**Work for Linux and macOS machines** (the GUI window, the desktop tests, signing, Safari, CI) is collected in `docs/PLATFORM-TODO.md`. The owner will run agents on those machines later.
 
 **The Preview level is complete** for the documented platforms (Windows and the web, `docs/LIMITS.md`). Preview is only an internal mark until the repository is public (G6).
 
