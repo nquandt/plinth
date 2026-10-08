@@ -1572,7 +1572,7 @@ function localStorageKvStore(storage, prefix) {
   };
 }
 
-/** Parses just enough of a `.plnt` manifest to get the app id and declared capability names. */
+/** Parses just enough of a `.plnt` manifest to get the app id, version and declared capability names. */
 function parseManifest(manifestText) {
   const idMatch = manifestText.match(/^id\s*=\s*"([^"]*)"/m);
   const capabilities = new Set();
@@ -1581,7 +1581,61 @@ function parseManifest(manifestText) {
   while ((m = capRe.exec(manifestText))) capabilities.add(m[1]);
   const nameMatch = manifestText.match(/^name\s*=\s*"([^"]*)"/m);
   const runtimeMatch = manifestText.match(/^runtime\s*=\s*"([^"]*)"/m);
-  return { id: idMatch ? idMatch[1] : "", name: nameMatch ? nameMatch[1] : "", runtime: runtimeMatch ? runtimeMatch[1] : "", capabilities };
+  const versionMatch = manifestText.match(/^version\s*=\s*"([^"]*)"/m);
+  return {
+    id: idMatch ? idMatch[1] : "",
+    name: nameMatch ? nameMatch[1] : "",
+    runtime: runtimeMatch ? runtimeMatch[1] : "",
+    version: versionMatch ? versionMatch[1] : "",
+    capabilities,
+  };
+}
+
+// `plinth:app-info` (core 1.13, `PRODUCTION.md` D4, `onUpgrade`): the same
+// numeric `MAJOR.MINOR.PATCH` compare and "should store" rule as the
+// desktop host (`plinth-runner-wasmtime::app_info`). Keep these in sync
+// with that module.
+
+/**
+ * Numeric `MAJOR.MINOR.PATCH` compare, matching
+ * `plinth-runner-wasmtime::app_info::cmp_versions` exactly: a pre-release
+ * tag (`-rc.1`) is lower than the same release with none; two pre-releases
+ * of the same release compare equal. A missing or non-numeric component
+ * reads as 0.
+ */
+function cmpVersions(a, b) {
+  const [aCore, aPre] = splitVersion(a);
+  const [bCore, bPre] = splitVersion(b);
+  for (let i = 0; i < 3; i++) {
+    if (aCore[i] !== bCore[i]) return aCore[i] < bCore[i] ? -1 : 1;
+  }
+  if (aPre === bPre) return 0;
+  return aPre ? -1 : 1;
+}
+
+function splitVersion(version) {
+  const s = String(version ?? "");
+  const dash = s.indexOf("-");
+  const pre = dash !== -1;
+  const core = pre ? s.slice(0, dash) : s;
+  const parts = core
+    .split(".")
+    .slice(0, 3)
+    .map((p) => (/^[0-9]+$/.test(p) ? parseInt(p, 10) : 0));
+  while (parts.length < 3) parts.push(0);
+  return [parts, pre];
+}
+
+/**
+ * Whether the data version should be stored as `version` given the one
+ * currently `stored` (`null`/`undefined` on first install), matching
+ * `plinth-runner-wasmtime::app_info::should_store` exactly: true unless
+ * the stored one is higher than `version` (a downgrade keeps the higher,
+ * already-stored version).
+ */
+function shouldStoreDataVersion(stored, version) {
+  if (stored === null || stored === undefined) return true;
+  return cmpVersions(version, stored) !== -1;
 }
 
 /**
@@ -1781,6 +1835,9 @@ function hostImports(
     onCommitBytes = null,
     notify = null,
     getLocale = () => FALLBACK_LOCALE,
+    appId = "",
+    appVersion = null,
+    dataVersionStore = null,
   } = {},
 ) {
   // A capability is usable when the manifest declares it and the user did
@@ -2047,6 +2104,22 @@ function hostImports(
     else if (frameTimers.size === 0) lastFrame = null;
   }
   const storeReason = kvStore ? capReason("store.kv") : DeniedReason.undeclared;
+  // `plinth:app-info` (core 1.13, PRODUCTION.md D4, onUpgrade): the data
+  // version lives in `dataVersionStore` (PlinthApp.load builds it with a
+  // reserved key prefix, "plinth-data-version:", that can never collide
+  // with an app's own `store.kv` keys, which live under "plinth:<id>:"),
+  // keyed by `appId`. `upgradeClaimed` mirrors the desktop host's
+  // `HostState.upgrade_claimed`: once `data-version()` answers a pending
+  // upgrade, `finishStart` (called after a successful `init`, exposed
+  // below as `__finishStart`) leaves storing to the guest's own
+  // `mark-data-version()` call.
+  let upgradeClaimed = false;
+  function currentDataVersion() {
+    return dataVersionStore ? dataVersionStore.get(appId) : null;
+  }
+  function storeDataVersion(version) {
+    dataVersionStore?.set(appId, version);
+  }
   let clipboardCache = null;
   // The clipboard: `navigator.clipboard` by default; the web App Hub's
   // sandboxed frame gives its own (`{ writeText(text), readText() }`, both
@@ -2161,16 +2234,23 @@ function hostImports(
         return compareIntl(getLocale(), readString(aPtr, aLen), readString(bPtr, bLen));
       },
     },
-    // `plinth:app-info` (core 1.13, PRODUCTION.md D4, onUpgrade): step C
-    // wires these up to the web host's own stored data version. For now,
-    // `data-version` always answers `none` and `mark-data-version` is a
-    // no-op, so the web core still instantiates.
+    // `plinth:app-info` (core 1.13, PRODUCTION.md D4, onUpgrade): the
+    // same rule as the desktop host (`HostState::data_version`/
+    // `mark_data_version`). `data-version` answers a version only when an
+    // upgrade is pending (a stored version exists and is lower than
+    // `appVersion`).
     "plinth:app/app-info@1.0.0": {
       "data-version"(retptr) {
+        if (!appVersion) return writeOptionString(retptr, null);
+        const stored = currentDataVersion();
+        if (stored !== null && cmpVersions(stored, appVersion) === -1) {
+          upgradeClaimed = true;
+          return writeOptionString(retptr, stored);
+        }
         writeOptionString(retptr, null);
       },
       "mark-data-version"() {
-        // step C
+        if (appVersion) storeDataVersion(appVersion);
       },
     },
     "plinth:app/store@1.0.0": {
@@ -2377,6 +2457,17 @@ function hostImports(
         return hubAsync("text", () => hub.update(app), () => null, (e) => e);
       },
     },
+    // Not a WIT import: `loadCore` reads this off the imports object and
+    // hands it to `PlinthApp` as `core.finishStart` (core 1.13,
+    // PRODUCTION.md D4). Mirrors the desktop host's `Guest::finish_start`:
+    // called once after a successful `init`, it stores the current app
+    // version as the data version unless the guest already claimed a
+    // pending upgrade (then storing is `mark-data-version`'s job).
+    __finishStart() {
+      if (upgradeClaimed || !appVersion) return;
+      const stored = currentDataVersion();
+      if (shouldStoreDataVersion(stored, appVersion)) storeDataVersion(appVersion);
+    },
   };
 }
 
@@ -2399,7 +2490,14 @@ async function loadCore(coreWasmBytes, opts = {}) {
   );
   if (!tableExportName) throw new Error("the core does not export its function table (needs --export-table)");
   // The bytes that run, for `trapPlace` (a frame in a core body is not an app frame).
-  return { instance, tableExportName, bytes: bytes instanceof WebAssembly.Module ? null : bytes };
+  return {
+    instance,
+    tableExportName,
+    bytes: bytes instanceof WebAssembly.Module ? null : bytes,
+    // `plinth:app-info` (core 1.13, PRODUCTION.md D4): `PlinthApp.init`
+    // calls this right after a successful `init`.
+    finishStart: imports.__finishStart,
+  };
 }
 
 /**
@@ -2495,9 +2593,18 @@ class PlinthApp {
     const scheduleTimerEvent = opts.scheduleTimerEvent ?? ((id) => this.onEvent({ kind: "timer", timer: id }));
     const scheduleFrameEvent = opts.scheduleFrameEvent ?? ((id, dt) => this.onEvent({ kind: "frame", timer: id, dt }));
     const completeRequest = (id, result) => this.onEvent({ kind: "completion", request: id, result });
-    const { id: appId, capabilities } = opts.manifestText ? parseManifest(opts.manifestText) : { id: "", capabilities: new Set() };
+    const { id: appId, capabilities, version: manifestVersion } = opts.manifestText
+      ? parseManifest(opts.manifestText)
+      : { id: "", capabilities: new Set(), version: "" };
+    const appVersion = opts.appVersion ?? (manifestVersion || null);
     const kvStore =
       opts.kvStore ?? (opts.storage ? localStorageKvStore(opts.storage, `plinth:${appId}:`) : mapKvStore(opts.sharedMap));
+    // `plinth:app-info` (core 1.13, PRODUCTION.md D4): a store kept apart
+    // from `kvStore`, under the reserved prefix "plinth-data-version:" (an
+    // app's own `store.kv` keys live at "plinth:<id>:", so the two can
+    // never collide), keyed by `appId`.
+    const dataVersionStore =
+      opts.dataVersionStore ?? (opts.storage ? localStorageKvStore(opts.storage, "plinth-data-version:") : mapKvStore(opts.sharedDataVersionMap));
     const log = opts.log ?? ((s) => console.log(s));
     const reportError = opts.reportError ?? ((s) => console.error(s));
     // plinth:locale (core 1.13): `opts.locale` (the page's locale, from the
@@ -2521,6 +2628,9 @@ class PlinthApp {
       refused: opts.refused ?? new Set(),
       hub: opts.hub ?? null,
       kvStore,
+      appId,
+      appVersion,
+      dataVersionStore,
       // `plinth:files`: the caller's space (the frame's bridge to the page),
       // else a space in memory for this app (Node, the stand-alone page).
       files: opts.files ?? new FileSpace(memoryFileBackend(opts.filesMap)),
@@ -2555,6 +2665,11 @@ class PlinthApp {
     this._call(() => {
       const ptr = this._writeBuf(bytes);
       this.core.instance.exports.init(ptr, bytes.length);
+      // `plinth:app-info` (core 1.13, PRODUCTION.md D4): store the data
+      // version now that `init` returned without a trap, unless the
+      // guest already claimed a pending upgrade and will store it itself
+      // (`Guest::finish_start` on the desktop host).
+      this.core.finishStart?.();
     });
   }
 
@@ -2634,7 +2749,7 @@ function plainReason(err, lastTrap) {
   }
   return msg;
 }
-  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, SRCMAP_SECTION, moduleBodies, decodeSrcMap, trapPlace, readPlnt, MAX_SQL_TEXT, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, defaultAskDialog, FALLBACK_LOCALE, normalizeLocale, isRtlLocale, pageLocale, formatNumberIntl, formatDateIntl, pluralCategoryIntl, formatListIntl, compareIntl, loadCore, linkApp, PlinthApp, stopReason };
+  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, SRCMAP_SECTION, moduleBodies, decodeSrcMap, trapPlace, readPlnt, MAX_SQL_TEXT, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, cmpVersions, shouldStoreDataVersion, defaultAskDialog, FALLBACK_LOCALE, normalizeLocale, isRtlLocale, pageLocale, formatNumberIntl, formatDateIntl, pluralCategoryIntl, formatListIntl, compareIntl, loadCore, linkApp, PlinthApp, stopReason };
   })();
 
   // ---- dom-renderer.js
