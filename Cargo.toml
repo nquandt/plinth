@@ -58,6 +58,9 @@ wit-bindgen = { version = "0.57.1", default-features = false, features = ["macro
 wit-component = "0.251"
 wasmparser = "0.251"
 wasm-encoder = "0.251"
+# Binaryen's optimizer, built into `plinth` for `plinth build --release`
+# (SPEC.md §5.1 step 10). No `dwarf` feature: app modules carry no DWARF.
+wasm-opt = { version = "0.116.1", default-features = false }
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 sha2 = "0.10.9"
@@ -92,6 +95,12 @@ opt-level = 3
 [profile.dev.package.wasmi_ir]
 opt-level = 3
 [profile.dev.package.wasmi_collections]
+opt-level = 3
+
+# Binaryen (C++, built by the `wasm-opt-sys` build script) follows the
+# opt-level of its crate. At opt-level 0, `plinth build --release` of a
+# debug `plinth` spends about 0.5 s in the optimizer for the Hub app.
+[profile.dev.package.wasm-opt-sys]
 opt-level = 3
 
 [profile.release]

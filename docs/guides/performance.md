@@ -99,6 +99,7 @@ Insets and sizes can be fractional spacing units (UI API 1.11), so a small step 
 ## 5. Measure a release build
 
 - `plinth dev` adds hot reload code to your app. `plinth build` does not. Measure the package that `plinth build` makes, with `plinth run dist/<name>.plnt`.
+- Measure the package that `plinth build --release` makes (§8): it has the app code that you ship.
 - Use a release build of the `plinth` CLI (`cargo build --release -p plinth-cli`, `docs/getting-started.md` §1). A debug build of the host is much slower: for example, five `Picker`s took 2.8 ms for one frame in a release build and about 16 ms in a debug build (`docs/GAPS.md` F1).
 - In a debug build of the host, `PLINTH_TRACE_RENDER=1` writes the render time of each frame to the console.
 
@@ -122,3 +123,30 @@ To stay inside the time limit:
 ## 7. App size
 
 The `.plnt` file holds only your app code. The counter example is about 2 KB. Size is a goal, not a limit. `async` code costs about 1.35 KB one time in an app, and about 320 B for each `await`. A callback costs about 80 B. In a small app where size is important, the callback form (for example `confirm(message, done)`) is smaller than `await`.
+
+## 8. Release builds
+
+`plinth build --release` makes the app code smaller. It runs the Binaryen optimizer (`wasm-opt -Oz`) on the app module before it writes the package. Binaryen is built into `plinth`: you do not install another tool. `--release` also works with `--target web` and with `plinth native <dir>`.
+
+```sh
+plinth build --release              # dist/<name>.plnt, optimized
+plinth build --release --target web # dist/web/, optimized
+```
+
+- Use `--release` for the package that you publish. Use `plinth build` (no flag) and `plinth dev` while you work: they are faster.
+- The same source gives the same bytes each time. A signature and a digest stay the same from one release build to the next.
+- The optimized app behaves the same. `plinth` checks the result: the same imports, the same `plinth-core` section, no exports, and a link into the core. If a check fails, `plinth` writes a warning and keeps the module that the compiler made.
+- The build prints the size before and after: `built dist/counter.plnt in 175 ms (app 1674 B, 1939 B before wasm-opt, package 2 KiB)`.
+
+Measurements over the 26 example apps (2026-10-07, Binaryen 116):
+
+| | Debug build | `--release` |
+|---|---|---|
+| All app modules | 160,745 B | 138,863 B (-13.6 %) |
+| All app modules, gzip | 69,821 B | 61,809 B (-11.5 %) |
+| `counter` | 1,939 B | 1,674 B |
+| `hub` (the largest) | 24,264 B | 21,070 B |
+
+The speed does not change in a measurable way: most of the work is in the core, not in the app code. `-O2` and `-O3` gave larger modules than `-Oz` (-12.8 % and -12.2 %), and Binaryen 133 gave the same sizes as Binaryen 116 to within 40 B in total.
+
+The core is not optimized by `--release`: the host supplies it, and a change of its bytes is a new core build. `-Oz` makes the 1.12 core 14 % smaller (131,188 B to 112,696 B; gzip 50,970 B to 48,452 B). Core 1.12 is shipped and frozen, so this step is planned for core 1.13 (`docs/PRODUCTION.md` T7).

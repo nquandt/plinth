@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime};
 
 mod dev_tools;
 mod feed_cmd;
+mod optimize;
 mod registry_cmd;
 mod web_export;
 
@@ -23,9 +24,10 @@ usage:
   plinth dev [dir]                 run the app; reload it when a file changes
   plinth check [dir] [--json] [--watch]
                                    type-check, with no build
-  plinth build [dir] [--out <file>] [--sign]
-                                   make dist/<name>.plnt (--sign adds signature.json)
-  plinth build [dir] --target web [--single-file] [--out <path>]
+  plinth build [dir] [--out <file>] [--sign] [--release]
+                                   make dist/<name>.plnt (--sign adds signature.json;
+                                   --release makes the app code smaller with wasm-opt)
+  plinth build [dir] --target web [--single-file] [--out <path>] [--release]
                                    make dist/web/ (index.html, plinth.js, the core,
                                    the package) for any static web host, or
                                    dist/<name>.html with everything inline
@@ -34,7 +36,7 @@ usage:
                                    create a publisher key pair (docs/HUB.md §6.1)
   plinth publisher show            print the publisher name and public key id
   plinth run <app.plnt | app.wasm> run a package
-  plinth native <app.plnt | dir> [-o <file>]
+  plinth native <app.plnt | dir> [-o <file>] [--release]
                                    make one executable: this host and the app
   plinth validate <app.plnt | app.wasm>
                                    check a package and its Wasm imports
@@ -137,8 +139,8 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
             let project = project.unwrap_or_else(|| PathBuf::from("."));
             let out = out.map(PathBuf::from);
             let ok = match target {
-                None => build(&project, out, flag("--sign"))?,
-                Some("web") => build_web(&project, out, flag("--single-file"), flag("--sign"))?,
+                None => build(&project, out, flag("--sign"), flag("--release"))?,
+                Some("web") => build_web(&project, out, flag("--single-file"), flag("--sign"), flag("--release"))?,
                 Some(t) => bail!("unknown target `{t}`; use `--target web`, or `plinth native` for an executable"),
             };
             Ok(if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE })
@@ -164,7 +166,7 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
             {
                 bail!("this plinth can make `{}` executables only; run `plinth native` on {t}", std::env::consts::OS);
             }
-            Ok(if native(Path::new(input), out)? { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+            Ok(if native(Path::new(input), out, flag("--release"))? { ExitCode::SUCCESS } else { ExitCode::FAILURE })
         }
         Some("core") => {
             use plinth_compiler::cores;
@@ -450,17 +452,30 @@ fn compile_ex(dir: &Path, dev: bool) -> Result<Option<Built>> {
     }
 }
 
-fn build(dir: &Path, out: Option<PathBuf>, sign: bool) -> Result<bool> {
-    Ok(build_package(dir, out, sign)?.is_some())
+fn build(dir: &Path, out: Option<PathBuf>, sign: bool, release: bool) -> Result<bool> {
+    Ok(build_package(dir, out, sign, release)?.is_some())
 }
 
 /// Builds the package and returns its path, or `None` when the app has
 /// errors. `sign`: adds `signature.json` with the loaded publisher
 /// identity (`docs/HUB.md` §6.1); the manifest's `publisher` must equal
-/// the identity's name.
-fn build_package(dir: &Path, out: Option<PathBuf>, sign: bool) -> Result<Option<PathBuf>> {
+/// the identity's name. `release`: optimizes the app module with
+/// `wasm-opt` (`optimize.rs`, SPEC.md §5.1 step 10).
+fn build_package(dir: &Path, out: Option<PathBuf>, sign: bool, release: bool) -> Result<Option<PathBuf>> {
     let started = std::time::Instant::now();
-    let Some(b) = compile(dir)? else { return Ok(None) };
+    let Some(mut b) = compile(dir)? else { return Ok(None) };
+    let mut note = String::new();
+    if release {
+        match optimize::optimize_app(&b.app) {
+            Ok(app) => {
+                note = format!(", {} B before wasm-opt", b.app.len());
+                b.app = app;
+            }
+            // A failed optimization never stops a build: the package keeps
+            // the module that the compiler made.
+            Err(e) => eprintln!("warning: the app module is not optimized: {e:#}"),
+        }
+    }
     // For `core = "pinned"`, the manifest records the digest of the core
     // build this compile used, so a host can find the exact match later
     // (SPEC.md §10.5).
@@ -488,7 +503,7 @@ fn build_package(dir: &Path, out: Option<PathBuf>, sign: bool) -> Result<Option<
     }
     std::fs::write(&out, &bytes).with_context(|| format!("write {}", out.display()))?;
     println!(
-        "built {} in {} ms (app {} B, package {} KiB)",
+        "built {} in {} ms (app {} B{note}, package {} KiB)",
         out.display(),
         started.elapsed().as_millis(),
         pkg.component.len(),
@@ -501,8 +516,8 @@ fn build_package(dir: &Path, out: Option<PathBuf>, sign: bool) -> Result<Option<
 
 /// Builds the package, then the web export: the folder `dist/web/` or, with
 /// `single_file`, `dist/<name>.html`. `out` replaces the default path.
-fn build_web(dir: &Path, out: Option<PathBuf>, single_file: bool, sign: bool) -> Result<bool> {
-    let Some(plnt_path) = build_package(dir, None, sign)? else { return Ok(false) };
+fn build_web(dir: &Path, out: Option<PathBuf>, single_file: bool, sign: bool, release: bool) -> Result<bool> {
+    let Some(plnt_path) = build_package(dir, None, sign, release)? else { return Ok(false) };
     let plnt = std::fs::read(&plnt_path).with_context(|| format!("read {}", plnt_path.display()))?;
     let app = plinth_host_desktop::HostApp::from_bytes(plnt.clone(), &plnt_path)?;
     let core = plinth_compiler::link::runtime();
@@ -531,9 +546,9 @@ fn build_web(dir: &Path, out: Option<PathBuf>, single_file: bool, sign: bool) ->
 
 /// Makes one executable from this host and a package. `input` is a `.plnt`
 /// or a project directory, which is built first.
-fn native(input: &Path, out: Option<PathBuf>) -> Result<bool> {
+fn native(input: &Path, out: Option<PathBuf>, release: bool) -> Result<bool> {
     let plnt_path = if input.is_dir() {
-        match build_package(input, None, false)? {
+        match build_package(input, None, false, release)? {
             Some(p) => p,
             None => return Ok(false),
         }

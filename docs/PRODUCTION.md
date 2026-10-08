@@ -150,7 +150,7 @@ Production apps run code from many publishers. This area must be complete before
 | T4 | A debugger or an inspector: the UI tree, signals, host calls | Beta | Open | |
 | T5 | A profiler view: frame times, GC, memory (`PLINTH_TRACE_RENDER` as a start) | 1.0 | Open | |
 | T6 | `plinth publish` to a registry | Beta | Partial | SPEC §12, `plinth hub` |
-| T7 | `plinth build --release` optimizes the app module with Binaryen `wasm-opt` (and the release core) | Beta | Open | SPEC §5.1 step 10. Measure size and speed before and after; keep the result deterministic. |
+| T7 | `plinth build --release` optimizes the app module with Binaryen `wasm-opt` (and the release core) | Beta | Partial | App module done (2026-10-07): `plinth build --release` runs Binaryen `-Oz` (the `wasm-opt` crate, Binaryen 116, built into `plinth`; `crates/plinth-cli/src/optimize.rs`). Over the 26 example apps: 160,745 B to 138,863 B (-13.6 %), gzip -11.5 %; counter 1,939 B to 1,674 B. No measurable speed change (`tests/perf.rs`, the core does the work). The tool checks the result (imports, custom sections, no exports, a link into the core) and keeps the compiler's module if a check fails. Tests: `crates/plinth-cli/tests/release_build.rs` (smaller, the same op stream as the debug module for 6 examples, deterministic bytes). All compiler suites (lang 193, errors, async, monkey, e2e, apps, 7GUIs) and 9 web Node tests passed with optimized modules. Next: the core. `-Oz` makes the 1.12 core 131,188 B to 112,696 B (-14.1 %, gzip -4.9 %) and all suites pass with it, but 1.12 is shipped and frozen; do it in `plinth-link/build.rs` for 1.13 (`docs/guides/performance.md` §8). |
 
 ## 11. Documentation
 
@@ -221,7 +221,7 @@ Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh`
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
 | Preview | 26 | 0 | 0 |
-| Beta | 14 | 16 | 22 |
+| Beta | 14 | 17 | 21 |
 | 1.0 | 1 | 2 | 20 |
 | Later (after 1.0) | 0 | 0 | 1 |
 
@@ -229,7 +229,7 @@ Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh`
 
 **The next level is Beta.** Start with the items that the owner and the code do not block:
 
-1. T7: `wasm-opt` for release builds.
+1. T7, the core part: optimize the 1.13 core with `wasm-opt -Oz` when it is built.
 2. R6: performance budgets in the gate.
 3. L9: source locations in runtime errors.
 4. R4, Q4: wasmi in all suites and in CI.

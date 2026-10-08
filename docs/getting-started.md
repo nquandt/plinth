@@ -86,6 +86,7 @@ plinth check                # type-check and run the closed-world rules, no buil
 plinth check --json          # the same, as machine-readable output
 plinth check --watch          # type-check again on every save
 plinth build                 # writes dist/<name>.plnt
+plinth build --release        # the same, with smaller app code (wasm-opt); use it to publish
 plinth run dist/<name>.plnt    # run the built package in the local host
 plinth native dist/<name>.plnt -o MyApp.exe
                               # one executable: this host, a runtime core, and your app

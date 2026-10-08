@@ -49,6 +49,8 @@ Rules:
 
 A binary that contains Apache-2.0 code (for example the desktop host, which contains gpui-ce and wasmtime) must give the license text and any NOTICE files of those crates to the user. A generated third-party notice file for the release binaries is not done yet (§4, L1).
 
+`plinth-cli` uses the `wasm-opt` crate (MIT OR Apache-2.0) for `plinth build --release`. Its `wasm-opt-sys` part contains the C++ source of Binaryen (Apache-2.0) and compiles it into the `plinth` binary with the `cc` and `cxx` crates. Thus a build of `plinth-cli` needs a C++17 compiler (MSVC on Windows, `g++` or `clang++` on Linux and macOS). The default feature `dwarf` (LLVM DWARF code) is off. The notice file (L1) must include Binaryen.
+
 ## 3. Exceptions
 
 Each exception is in `deny.toml` with a comment.
@@ -116,14 +118,14 @@ node scripts/gen-license-list.mjs --write
 The script reads `cargo deny list` (the same graph and targets as `deny.toml`) and `cargo metadata`.
 
 <!-- license-list:begin -->
-Third-party crates in the checked graph: **744**.
+Third-party crates in the checked graph: **758**.
 
 Crates whose license expression names each license (a crate that names two licenses counts once for each):
 
 | License | Crates |
 |---|---|
-| MIT | 647 |
-| Apache-2.0 | 501 |
+| MIT | 661 |
+| Apache-2.0 | 513 |
 | Apache-2.0 WITH LLVM-exception | 52 |
 | Zlib | 26 |
 | Unicode-3.0 | 24 |
@@ -142,8 +144,8 @@ Crates by license set (all licenses that the license expression of one crate nam
 
 | Licenses in the expression of one crate | Crates |
 |---|---|
-| Apache-2.0 / MIT | 431 |
-| MIT | 152 |
+| Apache-2.0 / MIT | 443 |
+| MIT | 154 |
 | Apache-2.0 WITH LLVM-exception | 28 |
 | Apache-2.0 / Apache-2.0 WITH LLVM-exception / MIT | 23 |
 | Apache-2.0 / MIT / Zlib | 22 |
