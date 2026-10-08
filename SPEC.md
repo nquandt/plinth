@@ -188,6 +188,7 @@ The compiler rejects these features, and each one has a clear error message and 
 - **Strings:** the runtime stores strings as UTF-8. `length`, indexing, and `slice` use UTF-16 code units, for compatibility with TS. They have an ASCII fast path. *(Open question Q5.)*
 - **`null` and `undefined`** are one value at run time.
 - **Object identity:** `===` on objects compares references, as in JS. There is no `==`.
+- **Equality of primitives:** `===` compares strings by content, and a `T | null` primitive (`string`, `number`, `int`, `boolean`, an enum) by value: both are `null`, or both are not `null` and the values are equal (`NaN !== NaN`, `0 === -0`), as in JS. `includes`, `indexOf` and `switch` use the same rule. Known gap: a union of `string` and an object type (`string | Shape`) still compares references (`docs/GAPS.md`).
 - **Property order:** object literal fields have the declared order. Iteration over objects is not supported. Use `Map`.
 - **Errors:** see §5.6.
 - **`for (let i = …)`:** the loop variable is one binding for all iterations. Closures in the loop body see its last value. `for…of` variables and variables declared in a loop body get a new binding for each iteration, as in JS.
@@ -454,6 +455,7 @@ effect(() => console.log(count()));  // dev-only logging example
 
 - Reads inside a tracking scope (a template slot, `computed`, or `effect`) record dependencies.
 - Writes mark dependents dirty. The scheduler flushes all updates **once per event**, after the handler returns.
+- A `set` or `update` with a value equal to the current value does nothing. Strings and `T | null` primitives compare by value; objects and arrays compare by reference.
 - A flush writes the minimal set of ops (`set-prop`, `insert`, `remove`) to the op buffer, then calls `commit` one time.
 
 ### 7.2 JSX lowering
