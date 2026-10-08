@@ -242,6 +242,14 @@ struct FnCx {
     ret: Option<Type>,
     /// The inferred return type so far.
     inferred: Option<Type>,
+    /// A bare `return;` was checked while the return type is being
+    /// inferred (`ret` is `None`). If `inferred` ends up non-`void`,
+    /// `finish_ret` must make the real return type nullable and rewrite
+    /// every bare `return;` in the body to return `null` of it: otherwise
+    /// a function whose branches mix `return;` and `return <value>;`
+    /// lowers to an invalid module (HANDOFF.md, "a callback that mixes
+    /// `return;` and `return <promise>`").
+    saw_void_return: bool,
     reactive: ReactiveCtx,
     /// The function is `async`: `await` is allowed, and `ret` is the `T`
     /// of its `Promise<T>` (SPEC.md §4.5).
@@ -433,7 +441,7 @@ pub fn check_full(
         defaults: vec![None; modules.len()],
         module_scopes: vec![HashMap::new(); modules.len()],
         module: 0,
-        fx: FnCx { func: 0, scopes: Vec::new(), loops: Vec::new(), switches: 0, ret: None, inferred: None, reactive: ReactiveCtx::Plain, is_async: false },
+        fx: FnCx { func: 0, scopes: Vec::new(), loops: Vec::new(), switches: 0, ret: None, inferred: None, saw_void_return: false, reactive: ReactiveCtx::Plain, is_async: false },
         pending: HashMap::new(),
         in_progress: HashSet::new(),
         aliases: vec![Vec::new(); modules.len()],
@@ -625,7 +633,7 @@ impl Checker<'_> {
         });
         self.prog.module_inits.push(init);
         self.fx =
-            FnCx { func: init, scopes: Vec::new(), loops: Vec::new(), switches: 0, ret: Some(Type::Void), inferred: None, reactive: ReactiveCtx::Plain, is_async: false };
+            FnCx { func: init, scopes: Vec::new(), loops: Vec::new(), switches: 0, ret: Some(Type::Void), inferred: None, saw_void_return: false, reactive: ReactiveCtx::Plain, is_async: false };
 
         // 1. Imports.
         let mut import_index = 0;
@@ -1882,7 +1890,7 @@ impl Checker<'_> {
 
         let saved_fx = std::mem::replace(
             &mut self.fx,
-            FnCx { func: fid, scopes: vec![Scope::default()], loops: Vec::new(), switches: 0, ret: Some(Type::Struct(sid)), inferred: None, reactive: ReactiveCtx::Callback, is_async: false },
+            FnCx { func: fid, scopes: vec![Scope::default()], loops: Vec::new(), switches: 0, ret: Some(Type::Struct(sid)), inferred: None, saw_void_return: false, reactive: ReactiveCtx::Callback, is_async: false },
         );
         let mut prologue = Vec::new();
         for (p, v) in ctor_ast.params.iter().zip(&param_vars) {
@@ -2105,6 +2113,7 @@ impl Checker<'_> {
                 switches: 0,
                 ret: declared.clone(),
                 inferred: None,
+                saw_void_return: false,
                 reactive: if is_component { ReactiveCtx::Plain } else { ReactiveCtx::Callback },
                 is_async,
             },
@@ -2116,7 +2125,7 @@ impl Checker<'_> {
         }
         let mut body = prologue;
         body.extend(self.func_body(&p.decl.body));
-        let mut ret = self.finish_ret(declared, p.decl.span, &body);
+        let mut ret = self.finish_ret(declared, p.decl.span, &mut body);
         if is_async {
             body = self.async_body(fid, body, &ret, false, p.decl.span);
             ret = self.promise_type(&ret);
@@ -2177,8 +2186,26 @@ impl Checker<'_> {
     }
 
     /// The final return type, and a check that a non-void function returns.
-    fn finish_ret(&mut self, declared: Option<Type>, span: Span, body: &[TStmt]) -> Type {
-        let ret = declared.or(self.fx.inferred.take()).unwrap_or(Type::Void);
+    fn finish_ret(&mut self, declared: Option<Type>, span: Span, body: &mut [TStmt]) -> Type {
+        let void_seen = std::mem::take(&mut self.fx.saw_void_return);
+        let was_declared = declared.is_some();
+        let ret = match declared {
+            Some(d) => d,
+            None => match self.fx.inferred.take() {
+                None => Type::Void,
+                Some(t) if t == Type::Void => Type::Void,
+                // A bare `return;` was also checked, and the other
+                // branches returned `t` (for example `Promise<void>`): the
+                // real return type is `t | null`, and every bare `return;`
+                // must become `return null;` of it, or the module is
+                // invalid (nothing pushed where the function's signature
+                // expects a value). `self.nullable` gives a clear
+                // diagnostic for a `t` that cannot be boxed (a signal or a
+                // computed), instead of a silent invalid module.
+                Some(t) if void_seen => self.nullable(t, span),
+                Some(t) => t,
+            },
+        };
         if ret != Type::Void && !ret.is_error() && !always_exits(body) {
             self.err_help(
                 code::MISSING_RETURN,
@@ -2187,7 +2214,60 @@ impl Checker<'_> {
                 "add a `return` at the end",
             );
         }
+        if !was_declared && void_seen && ret != Type::Void && !ret.is_error() {
+            // Every `return <value>;` was checked (and its value coerced)
+            // before `ret` widened to `t | null`, so a value branch's
+            // `TExpr` still has the narrower type `t` (for example a plain
+            // `number`, not the boxed `number | null`): coerce it now, or
+            // a type whose nullable form needs boxing (anything but a
+            // reference type, where `null` is already just `0`) lowers to
+            // a module that pushes the wrong Wasm value kind. Every bare
+            // `return;` becomes `return null;` of `ret` at the same time.
+            self.patch_returns(body, &ret, span);
+        }
         ret
+    }
+
+    /// Rewrites every `return` in a statement list (and nested
+    /// `if`/block/loop/`switch`/`try` bodies — never into a nested
+    /// closure's own body, which is a separate function already finished)
+    /// to return a value of `ty`: a bare `return;` becomes `return null;`
+    /// of it, and a `return <value>;` whose value does not already have
+    /// type `ty` is coerced into it. See `finish_ret`.
+    fn patch_returns(&mut self, stmts: &mut [TStmt], ty: &Type, span: Span) {
+        for s in stmts {
+            match s {
+                TStmt::Return(opt) => {
+                    let te = match opt.take() {
+                        None => TExpr::new(TExprKind::Null, ty.clone(), span),
+                        Some(e) if e.ty == *ty => e,
+                        Some(e) => self.coerce(e, ty),
+                    };
+                    *opt = Some(te);
+                }
+                TStmt::If(_, a, b) => {
+                    self.patch_returns(a, ty, span);
+                    self.patch_returns(b, ty, span);
+                }
+                TStmt::Block(b) => self.patch_returns(b, ty, span),
+                TStmt::Loop { body, .. } | TStmt::ForOf { body, .. } => self.patch_returns(body, ty, span),
+                TStmt::Switch { cases, .. } => {
+                    for (_, b) in cases {
+                        self.patch_returns(b, ty, span);
+                    }
+                }
+                TStmt::Try { body, catch, finally } => {
+                    self.patch_returns(body, ty, span);
+                    if let Some((_, c)) = catch {
+                        self.patch_returns(c, ty, span);
+                    }
+                    if let Some(f) = finally {
+                        self.patch_returns(f, ty, span);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Checks an arrow function or function expression. `expected` gives
@@ -2259,7 +2339,7 @@ impl Checker<'_> {
         // captured `let`, and it runs while the body below is checked.
         self.prog.funcs[fid as usize].params = param_vars.clone();
         let mut saved =
-            std::mem::replace(&mut self.fx, FnCx { func: fid, scopes: Vec::new(), loops: Vec::new(), switches: 0, ret: declared.clone(), inferred: None, reactive, is_async: f.is_async });
+            std::mem::replace(&mut self.fx, FnCx { func: fid, scopes: Vec::new(), loops: Vec::new(), switches: 0, ret: declared.clone(), inferred: None, saw_void_return: false, reactive, is_async: f.is_async });
         // A closure sees the scopes of the enclosing function: move them in
         // for the body, then give them back.
         self.fx.scopes = std::mem::take(&mut saved.scopes);
@@ -2270,7 +2350,7 @@ impl Checker<'_> {
         }
         let mut body = prologue;
         body.extend(self.func_body(&f.body));
-        let mut ret = self.finish_ret(declared, f.span, &body);
+        let mut ret = self.finish_ret(declared, f.span, &mut body);
         self.fx.scopes.pop();
         saved.scopes = std::mem::take(&mut self.fx.scopes);
         self.fx = saved;

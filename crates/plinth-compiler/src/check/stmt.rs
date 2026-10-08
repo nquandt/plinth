@@ -200,7 +200,31 @@ impl Checker<'_> {
             }
             StmtKind::Return(value) => {
                 let te = match value {
-                    None => None,
+                    None => match self.fx.ret.clone() {
+                        // The function's declared return type already
+                        // allows `null` (or is `null` itself): a bare
+                        // `return;` returns that null value directly, so
+                        // codegen never has to push "nothing" where the
+                        // function's signature expects a value.
+                        Some(r) if matches!(r, Type::Nullable(_) | Type::Null) => Some(TExpr::new(TExprKind::Null, r, s.span)),
+                        Some(r) if r != Type::Void && !r.is_error() => {
+                            self.err(code::MISSING_RETURN, s.span, "this function must return a value");
+                            None
+                        }
+                        Some(_) => None,
+                        // No declared return type: the type is inferred
+                        // from the branches that do return a value. Record
+                        // that a bare `return;` was seen; `finish_ret`
+                        // (check/mod.rs) decides, once every branch is
+                        // known, whether that makes the inferred type
+                        // nullable (and rewrites this bare `return;` to
+                        // `return null;` of it) or the function stays
+                        // `void`.
+                        None => {
+                            self.fx.saw_void_return = true;
+                            None
+                        }
+                    },
                     Some(e) => {
                         let expected = self.fx.ret.clone();
                         let te = self.expr(e, expected.as_ref());
@@ -214,12 +238,6 @@ impl Checker<'_> {
                         })
                     }
                 };
-                if te.is_none() && self.fx.ret.as_ref().is_some_and(|r| *r != Type::Void && !r.is_error()) {
-                    self.err(code::MISSING_RETURN, s.span, "this function must return a value");
-                }
-                if te.is_none() && self.fx.ret.is_none() && self.fx.inferred.is_none() {
-                    self.fx.inferred = Some(Type::Void);
-                }
                 vec![TStmt::Return(te)]
             }
             StmtKind::Break | StmtKind::Continue => {

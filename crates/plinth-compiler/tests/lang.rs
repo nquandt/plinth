@@ -3822,3 +3822,120 @@ function Home() {
     assert_eq!(seen, want);
 }
 
+// -- A callback that mixes `return;` and `return <value>;`, with no return
+// type annotation (GAPS.md, "a callback that mixes `return;` and `return
+// <promise>`"): the inferred type must become `<value type> | null`, with
+// every bare `return;` returning `null` of it, not an invalid module. --
+
+#[test]
+fn mixed_return_void_and_promise_value_branch_first_runs_both_branches() {
+    // The branch that returns a value is checked first (the order that
+    // used to crash at Wasm validation: "expected i32 but nothing on
+    // stack").
+    let main = with_app(
+        r#"
+let log = "";
+function f(flag: boolean) {
+  if (flag) { log = log + "P"; return new Promise<void>((resolve) => { resolve(); }); }
+  else { log = log + "B"; return; }
+}
+f(true);
+f(false);
+"#,
+    );
+    let main = main.replace("<Screen title=\"Home\" />", "<Screen title=\"Home\"><Text>{log}</Text></Screen>");
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "PB");
+}
+
+#[test]
+fn mixed_return_void_and_promise_bare_branch_first_runs_both_branches() {
+    // Same as above with the branches in the opposite source order: the
+    // bare `return;` is checked before the branch that returns a value.
+    let main = with_app(
+        r#"
+let log = "";
+function f(flag: boolean) {
+  if (flag) { log = log + "B"; return; }
+  else { log = log + "P"; return new Promise<void>((resolve) => { resolve(); }); }
+}
+f(true);
+f(false);
+"#,
+    );
+    let main = main.replace("<Screen title=\"Home\" />", "<Screen title=\"Home\"><Text>{log}</Text></Screen>");
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "BP");
+}
+
+#[test]
+fn mixed_return_void_and_number_becomes_nullable() {
+    // The inferred type is not `Promise`-specific: any value type that
+    // supports `T | null` boxing (SPEC.md §4.2; every type except a
+    // signal/computed) widens the same way.
+    let main = with_app(
+        r#"
+function pick(flag: boolean) {
+  if (flag) { return 7; }
+  else { return; }
+}
+"#,
+    );
+    let main = main.replace(
+        "<Screen title=\"Home\" />",
+        "<Screen title=\"Home\"><Text>{pick(true) ?? -1}</Text><Text>{pick(false) ?? -1}</Text></Screen>",
+    );
+    let tree = run(&main);
+    let mut texts = texts_in(&tree);
+    texts.sort();
+    assert_eq!(texts, vec!["-1".to_string(), "7".to_string()]);
+}
+
+#[test]
+fn mixed_return_used_as_a_void_callback_is_not_a_type_error() {
+    // A function whose inferred return type widens to `Promise<void> |
+    // null` must still satisfy a plain `() => void` callback slot (an
+    // event handler, assigned directly to `onPress`): `callback_value`
+    // (check/expr.rs) already skips the return-type check when the
+    // expected type is `void`.
+    let main = r#"import { app, Screen, Button, Text, signal } from "plinth:ui";
+const log = signal("");
+function onPress() {
+  if (log() === "") { log.set("P"); return new Promise<void>((resolve) => { resolve(); }); }
+  else { log.set(log() + "B"); return; }
+}
+function Home() {
+  return <Screen title="Home"><Text>{log()}</Text><Button label="go" onPress={onPress} /></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    assert!(front.diags.is_empty(), "unexpected diagnostics: {}", render(&front));
+    let artifact = artifact.expect("compile succeeds");
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        assert!(tree.apply(&commit).unwrap().is_empty());
+    }
+    let button = {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        loop {
+            let id = stack.pop().expect("no Button found");
+            let node = tree.get(id).unwrap();
+            if node.kind == Some(ControlKind::Button) {
+                break id;
+            }
+            stack.extend(node.children.iter());
+        }
+    };
+    let handler = tree.get(button).unwrap().handler(event::PRESS).expect("button has a handler");
+    let mut w = Writer::new();
+    w.event(&Event::Ui { handler, event: event::PRESS, value: Value::Null });
+    for commit in guest.on_event(w.as_bytes()).unwrap() {
+        assert!(tree.apply(&commit).unwrap().is_empty());
+    }
+    assert_eq!(text_of(&tree, ControlKind::Text), "P");
+}
