@@ -1217,6 +1217,8 @@ async function checkHub(cdpPort) {
         i.value = v; i.dispatchEvent(new Event("input", { bubbles: true })); };
       set("Title", "Isolated note"); set("Body", "From the a11y test");
     })()`);
+    // The app runs in a Worker: the commit that enables "Add note" comes after the input events.
+    await frame.waitFor(`${button("Add note")} && !${button("Add note")}.disabled ? true : null`, 5000);
     await frame.eval(`${button("Add note")}.click()`);
     await frame.waitFor(`document.getElementById("app").innerText.includes("Isolated note") ? true : null`, 5000);
     const keysOf = (id) => `Object.keys(localStorage).filter((k) => k.startsWith("plinth-hub:kv:${id}:"))`;
