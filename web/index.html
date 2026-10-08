@@ -58,6 +58,10 @@
           log: (s) => console.log("[app]", s),
           manifestText,
           kvStore: localStorageKvStore(window.localStorage, `plinth:${parseManifest(manifestText).id}:`),
+          // plinth:app-info (core 1.13, PRODUCTION.md D4): the data version,
+          // in the same localStorage origin, under a reserved prefix that
+          // cannot collide with an app's own kv keys ("plinth:<id>:").
+          dataVersionStore: localStorageKvStore(window.localStorage, "plinth-data-version:"),
           // store.sql: SQLite in a Worker of this page (OPFS of this origin).
           sql: new SqlWorkerHost(new URL("./sql-worker.js", import.meta.url)).space(parseManifest(manifestText).id),
         });

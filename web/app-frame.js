@@ -10,7 +10,7 @@
 
 import { readPlnt, parseManifest, normalizeLocale, pageLocale } from "./plinth-web.js";
 import { Tree, DomRenderer } from "./dom-renderer.js";
-import { CHANNEL, frameKvStore } from "./hub-storage.js";
+import { CHANNEL, frameKvStore, frameDataVersionStore } from "./hub-storage.js";
 import { WorkerApp, startAppWorker } from "./app-worker.js";
 
 const container = document.getElementById("app");
@@ -46,6 +46,9 @@ function showError(text) {
 async function start(msg) {
   const { appWasm, manifestText, assets } = await readPlnt(new Uint8Array(msg.pkg));
   const kvStore = frameKvStore(msg.kv, msg.quota, (m) => send(m));
+  // plinth:app-info (core 1.13, PRODUCTION.md D4): the data version the
+  // hub page sent in `start`, carried the same way as the kv snapshot.
+  const dataVersionStore = frameDataVersionStore(msg.dataVersion, (m) => send(m));
   // For tests: which app this frame runs.
   document.body.dataset.appId = parseManifest(manifestText).id;
   // The core and the app run in a dedicated Worker (`app-worker.js`). In the
@@ -63,6 +66,7 @@ async function start(msg) {
     log: (s) => console.log("[app]", s),
     manifestText,
     kvStore,
+    dataVersionStore,
     kvQuota: msg.quota,
     refused: new Set(Array.isArray(msg.refused) ? msg.refused : []),
     askDialog: (kind, message) => ask("dialog", { kind, message: String(message) }),

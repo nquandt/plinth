@@ -239,6 +239,9 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("locale_plural", &[F64, I32], &[I32]),
     ("locale_format_list", &[I32, I32], &[I32]),
     ("locale_compare", &[I32, I32], &[F64]),
+    // -- plinth:app-info (core 1.13, PRODUCTION.md D4, onUpgrade) -------------
+    ("app_data_version", &[], &[I32]),
+    ("app_mark_data_version", &[], &[]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -370,6 +373,9 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("locale_plural", 13),
     ("locale_format_list", 13),
     ("locale_compare", 13),
+    // plinth:app-info (PRODUCTION.md D4): `onUpgrade(fromVersion)`.
+    ("app_data_version", 13),
+    ("app_mark_data_version", 13),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).

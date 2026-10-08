@@ -97,6 +97,9 @@ pub enum StdFn {
     /// `onMount(fn)` (core 1.12): runs `fn` once, after the elements the
     /// current render created are in the host tree.
     OnMount,
+    /// `onUpgrade(fn)` (core 1.13, `PRODUCTION.md` D4): runs `fn` with the
+    /// previous data version when an upgrade is pending.
+    OnUpgrade,
     App,
     Navigate,
     ParseNumber,

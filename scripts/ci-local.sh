@@ -54,7 +54,7 @@ deny_check() {
 # 12 min), `sevenguis` (about 6 min), `monkey`, `budgets` (the 10,000-row
 # example) and `perf` (a bench). Run them by hand with the same command.
 wasmi_suites=(files sql locale locale_format hub_api hub_ui net notify async async_await apps e2e errors hostapi
-  capabilities collections grid hotreload regions robustness list_diff link_spike split gc_stress clipboard)
+  capabilities collections grid hotreload regions robustness list_diff link_spike split gc_stress clipboard upgrade)
 
 wasmi_check() {
   step "cargo test -p plinth-runner-wasmtime --features wasmi"

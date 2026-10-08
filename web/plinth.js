@@ -1572,7 +1572,7 @@ function localStorageKvStore(storage, prefix) {
   };
 }
 
-/** Parses just enough of a `.plnt` manifest to get the app id and declared capability names. */
+/** Parses just enough of a `.plnt` manifest to get the app id, version and declared capability names. */
 function parseManifest(manifestText) {
   const idMatch = manifestText.match(/^id\s*=\s*"([^"]*)"/m);
   const capabilities = new Set();
@@ -1581,7 +1581,61 @@ function parseManifest(manifestText) {
   while ((m = capRe.exec(manifestText))) capabilities.add(m[1]);
   const nameMatch = manifestText.match(/^name\s*=\s*"([^"]*)"/m);
   const runtimeMatch = manifestText.match(/^runtime\s*=\s*"([^"]*)"/m);
-  return { id: idMatch ? idMatch[1] : "", name: nameMatch ? nameMatch[1] : "", runtime: runtimeMatch ? runtimeMatch[1] : "", capabilities };
+  const versionMatch = manifestText.match(/^version\s*=\s*"([^"]*)"/m);
+  return {
+    id: idMatch ? idMatch[1] : "",
+    name: nameMatch ? nameMatch[1] : "",
+    runtime: runtimeMatch ? runtimeMatch[1] : "",
+    version: versionMatch ? versionMatch[1] : "",
+    capabilities,
+  };
+}
+
+// `plinth:app-info` (core 1.13, `PRODUCTION.md` D4, `onUpgrade`): the same
+// numeric `MAJOR.MINOR.PATCH` compare and "should store" rule as the
+// desktop host (`plinth-runner-wasmtime::app_info`). Keep these in sync
+// with that module.
+
+/**
+ * Numeric `MAJOR.MINOR.PATCH` compare, matching
+ * `plinth-runner-wasmtime::app_info::cmp_versions` exactly: a pre-release
+ * tag (`-rc.1`) is lower than the same release with none; two pre-releases
+ * of the same release compare equal. A missing or non-numeric component
+ * reads as 0.
+ */
+function cmpVersions(a, b) {
+  const [aCore, aPre] = splitVersion(a);
+  const [bCore, bPre] = splitVersion(b);
+  for (let i = 0; i < 3; i++) {
+    if (aCore[i] !== bCore[i]) return aCore[i] < bCore[i] ? -1 : 1;
+  }
+  if (aPre === bPre) return 0;
+  return aPre ? -1 : 1;
+}
+
+function splitVersion(version) {
+  const s = String(version ?? "");
+  const dash = s.indexOf("-");
+  const pre = dash !== -1;
+  const core = pre ? s.slice(0, dash) : s;
+  const parts = core
+    .split(".")
+    .slice(0, 3)
+    .map((p) => (/^[0-9]+$/.test(p) ? parseInt(p, 10) : 0));
+  while (parts.length < 3) parts.push(0);
+  return [parts, pre];
+}
+
+/**
+ * Whether the data version should be stored as `version` given the one
+ * currently `stored` (`null`/`undefined` on first install), matching
+ * `plinth-runner-wasmtime::app_info::should_store` exactly: true unless
+ * the stored one is higher than `version` (a downgrade keeps the higher,
+ * already-stored version).
+ */
+function shouldStoreDataVersion(stored, version) {
+  if (stored === null || stored === undefined) return true;
+  return cmpVersions(version, stored) !== -1;
 }
 
 /**
@@ -1781,6 +1835,9 @@ function hostImports(
     onCommitBytes = null,
     notify = null,
     getLocale = () => FALLBACK_LOCALE,
+    appId = "",
+    appVersion = null,
+    dataVersionStore = null,
   } = {},
 ) {
   // A capability is usable when the manifest declares it and the user did
@@ -1947,6 +2004,19 @@ function hostImports(
     v.setUint32(retptr + 8, ptr, true);
     v.setUint32(retptr + 12, len, true);
   }
+  // A plain `option<string>` (not wrapped in a `result`, `plinth:app-info`):
+  // option-tag@0 (0=none,1=some), string ptr@4/len@8 if some.
+  function writeOptionString(retptr, value) {
+    const v = mem();
+    if (value === null || value === undefined) {
+      v.setUint8(retptr, 0);
+      return;
+    }
+    const { ptr, len } = writeString(value);
+    v.setUint8(retptr, 1);
+    v.setUint32(retptr + 4, ptr, true);
+    v.setUint32(retptr + 8, len, true);
+  }
   // Ok(string): tag@0=0, string ptr@4/len@8 (same layout as option<string>'s
   // "some" case minus the option tag: a plain string's natural alignment is
   // already 4, so there is no extra tag byte to skip).
@@ -2034,6 +2104,22 @@ function hostImports(
     else if (frameTimers.size === 0) lastFrame = null;
   }
   const storeReason = kvStore ? capReason("store.kv") : DeniedReason.undeclared;
+  // `plinth:app-info` (core 1.13, PRODUCTION.md D4, onUpgrade): the data
+  // version lives in `dataVersionStore` (PlinthApp.load builds it with a
+  // reserved key prefix, "plinth-data-version:", that can never collide
+  // with an app's own `store.kv` keys, which live under "plinth:<id>:"),
+  // keyed by `appId`. `upgradeClaimed` mirrors the desktop host's
+  // `HostState.upgrade_claimed`: once `data-version()` answers a pending
+  // upgrade, `finishStart` (called after a successful `init`, exposed
+  // below as `__finishStart`) leaves storing to the guest's own
+  // `mark-data-version()` call.
+  let upgradeClaimed = false;
+  function currentDataVersion() {
+    return dataVersionStore ? dataVersionStore.get(appId) : null;
+  }
+  function storeDataVersion(version) {
+    dataVersionStore?.set(appId, version);
+  }
   let clipboardCache = null;
   // The clipboard: `navigator.clipboard` by default; the web App Hub's
   // sandboxed frame gives its own (`{ writeText(text), readText() }`, both
@@ -2146,6 +2232,25 @@ function hostImports(
       },
       compare(aPtr, aLen, bPtr, bLen) {
         return compareIntl(getLocale(), readString(aPtr, aLen), readString(bPtr, bLen));
+      },
+    },
+    // `plinth:app-info` (core 1.13, PRODUCTION.md D4, onUpgrade): the
+    // same rule as the desktop host (`HostState::data_version`/
+    // `mark_data_version`). `data-version` answers a version only when an
+    // upgrade is pending (a stored version exists and is lower than
+    // `appVersion`).
+    "plinth:app/app-info@1.0.0": {
+      "data-version"(retptr) {
+        if (!appVersion) return writeOptionString(retptr, null);
+        const stored = currentDataVersion();
+        if (stored !== null && cmpVersions(stored, appVersion) === -1) {
+          upgradeClaimed = true;
+          return writeOptionString(retptr, stored);
+        }
+        writeOptionString(retptr, null);
+      },
+      "mark-data-version"() {
+        if (appVersion) storeDataVersion(appVersion);
       },
     },
     "plinth:app/store@1.0.0": {
@@ -2352,6 +2457,17 @@ function hostImports(
         return hubAsync("text", () => hub.update(app), () => null, (e) => e);
       },
     },
+    // Not a WIT import: `loadCore` reads this off the imports object and
+    // hands it to `PlinthApp` as `core.finishStart` (core 1.13,
+    // PRODUCTION.md D4). Mirrors the desktop host's `Guest::finish_start`:
+    // called once after a successful `init`, it stores the current app
+    // version as the data version unless the guest already claimed a
+    // pending upgrade (then storing is `mark-data-version`'s job).
+    __finishStart() {
+      if (upgradeClaimed || !appVersion) return;
+      const stored = currentDataVersion();
+      if (shouldStoreDataVersion(stored, appVersion)) storeDataVersion(appVersion);
+    },
   };
 }
 
@@ -2374,7 +2490,14 @@ async function loadCore(coreWasmBytes, opts = {}) {
   );
   if (!tableExportName) throw new Error("the core does not export its function table (needs --export-table)");
   // The bytes that run, for `trapPlace` (a frame in a core body is not an app frame).
-  return { instance, tableExportName, bytes: bytes instanceof WebAssembly.Module ? null : bytes };
+  return {
+    instance,
+    tableExportName,
+    bytes: bytes instanceof WebAssembly.Module ? null : bytes,
+    // `plinth:app-info` (core 1.13, PRODUCTION.md D4): `PlinthApp.init`
+    // calls this right after a successful `init`.
+    finishStart: imports.__finishStart,
+  };
 }
 
 /**
@@ -2470,9 +2593,18 @@ class PlinthApp {
     const scheduleTimerEvent = opts.scheduleTimerEvent ?? ((id) => this.onEvent({ kind: "timer", timer: id }));
     const scheduleFrameEvent = opts.scheduleFrameEvent ?? ((id, dt) => this.onEvent({ kind: "frame", timer: id, dt }));
     const completeRequest = (id, result) => this.onEvent({ kind: "completion", request: id, result });
-    const { id: appId, capabilities } = opts.manifestText ? parseManifest(opts.manifestText) : { id: "", capabilities: new Set() };
+    const { id: appId, capabilities, version: manifestVersion } = opts.manifestText
+      ? parseManifest(opts.manifestText)
+      : { id: "", capabilities: new Set(), version: "" };
+    const appVersion = opts.appVersion ?? (manifestVersion || null);
     const kvStore =
       opts.kvStore ?? (opts.storage ? localStorageKvStore(opts.storage, `plinth:${appId}:`) : mapKvStore(opts.sharedMap));
+    // `plinth:app-info` (core 1.13, PRODUCTION.md D4): a store kept apart
+    // from `kvStore`, under the reserved prefix "plinth-data-version:" (an
+    // app's own `store.kv` keys live at "plinth:<id>:", so the two can
+    // never collide), keyed by `appId`.
+    const dataVersionStore =
+      opts.dataVersionStore ?? (opts.storage ? localStorageKvStore(opts.storage, "plinth-data-version:") : mapKvStore(opts.sharedDataVersionMap));
     const log = opts.log ?? ((s) => console.log(s));
     const reportError = opts.reportError ?? ((s) => console.error(s));
     // plinth:locale (core 1.13): `opts.locale` (the page's locale, from the
@@ -2496,6 +2628,9 @@ class PlinthApp {
       refused: opts.refused ?? new Set(),
       hub: opts.hub ?? null,
       kvStore,
+      appId,
+      appVersion,
+      dataVersionStore,
       // `plinth:files`: the caller's space (the frame's bridge to the page),
       // else a space in memory for this app (Node, the stand-alone page).
       files: opts.files ?? new FileSpace(memoryFileBackend(opts.filesMap)),
@@ -2530,6 +2665,11 @@ class PlinthApp {
     this._call(() => {
       const ptr = this._writeBuf(bytes);
       this.core.instance.exports.init(ptr, bytes.length);
+      // `plinth:app-info` (core 1.13, PRODUCTION.md D4): store the data
+      // version now that `init` returned without a trap, unless the
+      // guest already claimed a pending upgrade and will store it itself
+      // (`Guest::finish_start` on the desktop host).
+      this.core.finishStart?.();
     });
   }
 
@@ -2609,7 +2749,7 @@ function plainReason(err, lastTrap) {
   }
   return msg;
 }
-  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, SRCMAP_SECTION, moduleBodies, decodeSrcMap, trapPlace, readPlnt, MAX_SQL_TEXT, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, defaultAskDialog, FALLBACK_LOCALE, normalizeLocale, isRtlLocale, pageLocale, formatNumberIntl, formatDateIntl, pluralCategoryIntl, formatListIntl, compareIntl, loadCore, linkApp, PlinthApp, stopReason };
+  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, SRCMAP_SECTION, moduleBodies, decodeSrcMap, trapPlace, readPlnt, MAX_SQL_TEXT, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, cmpVersions, shouldStoreDataVersion, defaultAskDialog, FALLBACK_LOCALE, normalizeLocale, isRtlLocale, pageLocale, formatNumberIntl, formatDateIntl, pluralCategoryIntl, formatListIntl, compareIntl, loadCore, linkApp, PlinthApp, stopReason };
   })();
 
   // ---- dom-renderer.js
@@ -5084,6 +5224,13 @@ function grantsKey(id) {
   return `${PREFIX}grants:${norm(id)}`;
 }
 
+// `plinth:app-info` (core 1.13, PRODUCTION.md D4, onUpgrade): the data
+// version of each app, next to its kv data but under its own key (never
+// "kv:<id>:", so it can never collide with an app's own kv keys).
+function dataVersionKey(id) {
+  return `${PREFIX}dv:${norm(id)}`;
+}
+
 /** The size that counts against the quota for one entry. */
 function entrySize(key, value) {
   return key.length + value.length;
@@ -5167,6 +5314,17 @@ class HubStore {
   kvClear(id) {
     const prefix = kvPrefix(id);
     for (const k of storageKeys(this.storage)) if (k.startsWith(prefix)) this.storage.removeItem(k);
+    this.storage.removeItem(dataVersionKey(id));
+  }
+
+  /** `plinth:app-info` (core 1.13, PRODUCTION.md D4): the stored data version of `id`, or null. */
+  dataVersion(id) {
+    return this.storage.getItem(dataVersionKey(id));
+  }
+
+  /** Stores `version` as the data version of `id`. */
+  setDataVersion(id, version) {
+    this.storage.setItem(dataVersionKey(id), version);
   }
 
   /** The stored grant record of `id`, or null. */
@@ -5267,6 +5425,26 @@ function frameKvStore(snapshot, quota, send) {
   };
 }
 
+/**
+ * The data version store of an app in its frame (the `dataVersionStore`
+ * that `plinth-web.js`'s `PlinthApp.load` and `app-worker.js`'s
+ * `WorkerApp.load` expect: `{get(key), set(key, value)}`, core 1.13,
+ * PRODUCTION.md D4): answers `initial` (the value `startMessage` sent) at
+ * once, and calls `send(message)` for a write, same idea as `frameKvStore`.
+ */
+function frameDataVersionStore(initial, send) {
+  let version = initial ?? null;
+  return {
+    get() {
+      return version;
+    },
+    set(_key, value) {
+      version = value;
+      send({ channel: CHANNEL, type: "data-version-set", version: value });
+    },
+  };
+}
+
 // -- Messages ----------------------------------------------------------------
 
 const FRAME_TYPES = {
@@ -5275,6 +5453,8 @@ const FRAME_TYPES = {
   failed: { message: "string" },
   "kv-set": { key: "string", value: "string" },
   "kv-delete": { key: "string" },
+  // plinth:app-info (core 1.13): the frame's own data version changed.
+  "data-version-set": { version: "string" },
   "clipboard-write": { text: "string" },
   "clipboard-read": { id: "number" },
   dialog: { id: "number", kind: "string", message: "string" },
@@ -5369,9 +5549,21 @@ function applyKvMessage(store, id, msg, quota = KV_QUOTA) {
  * `plinth:hub` snapshot (`HubHost.snapshot()`), else null.
  */
 function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA, hub = null }) {
-  return { channel: CHANNEL, type: "start", pkg, core, kv: store.kvSnapshot(id), quota, refused: [...refused], hub };
+  return {
+    channel: CHANNEL,
+    type: "start",
+    pkg,
+    core,
+    kv: store.kvSnapshot(id),
+    quota,
+    refused: [...refused],
+    hub,
+    // plinth:app-info (core 1.13, PRODUCTION.md D4): no capability gate, as
+    // for plinth:locale, so this goes out even when store.kv is refused.
+    dataVersion: store.dataVersion(id),
+  };
 }
-  return { KV_QUOTA, MAX_KEY, MAX_NOTIFY_TEXT, CHANNEL, entrySize, memoryStorage, HubStore, frameKvStore, checkFrameMessage, applyKvMessage, startMessage };
+  return { KV_QUOTA, MAX_KEY, MAX_NOTIFY_TEXT, CHANNEL, entrySize, memoryStorage, HubStore, frameKvStore, frameDataVersionStore, checkFrameMessage, applyKvMessage, startMessage };
   })();
 
   // ---- app-worker.js
@@ -5412,7 +5604,7 @@ function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA, hub = n
 // No DOM code: `test/run-worker.mjs` runs both sides in Node over a
 // `MessageChannel`.
 
-const { PlinthApp, httpFetch, defaultAskDialog, browserNotify, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON } = __plinth_web;
+const { PlinthApp, httpFetch, defaultAskDialog, browserNotify, parseManifest, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON } = __plinth_web;
 const { decodeOps } = __protocol;
 const { frameKvStore } = __hub_storage;
 const { FileSpace, memoryFileBackend } = __files;
@@ -5471,6 +5663,23 @@ function cachedKvStore(snapshot, send) {
 }
 
 /**
+ * `plinth:app-info` (core 1.13, PRODUCTION.md D4): the data version on a
+ * single stored value (`initial`, from the document's `load` message),
+ * sending each write to the document (`cachedKvStore`'s idea, but for one
+ * value, since every app in a Worker has exactly one data version).
+ */
+function cachedDataVersionStore(initial, send) {
+  let version = initial ?? null;
+  return {
+    get: () => version,
+    set(_key, value) {
+      version = value;
+      send({ type: "data-version-set", version: value });
+    },
+  };
+}
+
+/**
  * The Worker side. `scope` is the global scope of the Worker (or one end
  * of a `MessageChannel` in a test): anything with `postMessage` and
  * `onmessage`.
@@ -5507,6 +5716,9 @@ function runWorker(scope) {
     await app.load(m.core, m.app, {
       manifestText: m.manifestText,
       kvStore: typeof m.kvQuota === "number" ? frameKvStore(m.kv, m.kvQuota, send) : cachedKvStore(m.kv, send),
+      // plinth:app-info (core 1.13, PRODUCTION.md D4): the document sent the
+      // stored data version in `load` (`WorkerApp.load`); each write goes back.
+      dataVersionStore: cachedDataVersionStore(m.dataVersion, send),
       refused: new Set(m.refused ?? []),
       memoryLimitPages: m.memoryLimitPages,
       // plinth:locale (core 1.13): the page's locale; else the Worker's own.
@@ -5627,7 +5839,11 @@ class WorkerApp {
    * `manifestText`; `kvStore` ({get,set,delete,keys}, the document's store:
    * the Worker gets a snapshot, and each write comes back to this store);
    * `kvQuota` (characters; the Worker refuses a write over it, as
-   * `frameKvStore`); `refused`; `log`; `reportError`; `askDialog`;
+   * `frameKvStore`); `dataVersionStore` ({get(key), set(key, value)}, core
+   * 1.13, PRODUCTION.md D4, `onUpgrade`: the document's store for the data
+   * version, the same shape as `plinth-web.js`'s default; the Worker gets
+   * the stored value at the start and sends back each write); `refused`;
+   * `log`; `reportError`; `askDialog`;
    * `clipboard`; `netFetch`; `files` (a `FileSpace`); `sql` (`{ call(kind,
    * statement, params) }`, the page's `store.sql` engine; none: an allowed
    * call answers "denied:unsupported"); `notify` (`{ show,
@@ -5649,6 +5865,12 @@ class WorkerApp {
         : null);
     const kv = {};
     if (opts.kvStore) for (const k of opts.kvStore.keys()) kv[k] = opts.kvStore.get(k);
+    // `plinth:app-info` (core 1.13, PRODUCTION.md D4): the app id, so a
+    // write of the data version from the Worker (`data-version-set`) goes
+    // back to `opts.dataVersionStore` under the same key the store expects
+    // (the same id `PlinthApp.load` uses inside the Worker).
+    this._appId = opts.manifestText ? parseManifest(opts.manifestText).id : "";
+    const dataVersion = opts.dataVersionStore ? opts.dataVersionStore.get(this._appId) : null;
     return new Promise((resolve, reject) => {
       this._loading = { resolve: () => resolve(this), reject };
       this._post({
@@ -5662,6 +5884,7 @@ class WorkerApp {
         hub: opts.hubSnapshot ?? null,
         memoryLimitPages: opts.memoryLimitPages,
         locale: opts.locale ?? null,
+        dataVersion,
       });
     });
   }
@@ -5814,6 +6037,9 @@ class WorkerApp {
         break;
       case "kv-delete":
         o.kvStore?.delete(msg.key);
+        break;
+      case "data-version-set":
+        o.dataVersionStore?.set(this._appId, msg.version);
         break;
       case "clipboard-write":
         if (this.clip) Promise.resolve().then(() => this.clip.writeText(msg.text)).catch(() => {});
@@ -6028,6 +6254,11 @@ class AppFrame {
     const { appId, store } = this.opts;
     if (msg.type === "kv-set" || msg.type === "kv-delete") {
       if (this.allowed("store.kv")) applyKvMessage(store, appId, msg, this.opts.quota);
+      return;
+    }
+    // plinth:app-info (core 1.13, PRODUCTION.md D4): no capability gate.
+    if (msg.type === "data-version-set") {
+      store.setDataVersion(appId, msg.version);
       return;
     }
     switch (msg.type) {
@@ -6399,7 +6630,7 @@ function defineElement({ frameDocument, baseUrl, styleCss }) {
 
 const { readPlnt, parseManifest, normalizeLocale, pageLocale } = __plinth_web;
 const { Tree, DomRenderer } = __dom_renderer;
-const { CHANNEL, frameKvStore } = __hub_storage;
+const { CHANNEL, frameKvStore, frameDataVersionStore } = __hub_storage;
 const { WorkerApp, startAppWorker } = __app_worker;
 
 const container = document.getElementById("app");
@@ -6435,6 +6666,9 @@ function showError(text) {
 async function start(msg) {
   const { appWasm, manifestText, assets } = await readPlnt(new Uint8Array(msg.pkg));
   const kvStore = frameKvStore(msg.kv, msg.quota, (m) => send(m));
+  // plinth:app-info (core 1.13, PRODUCTION.md D4): the data version the
+  // hub page sent in `start`, carried the same way as the kv snapshot.
+  const dataVersionStore = frameDataVersionStore(msg.dataVersion, (m) => send(m));
   // For tests: which app this frame runs.
   document.body.dataset.appId = parseManifest(manifestText).id;
   // The core and the app run in a dedicated Worker (`app-worker.js`). In the
@@ -6452,6 +6686,7 @@ async function start(msg) {
     log: (s) => console.log("[app]", s),
     manifestText,
     kvStore,
+    dataVersionStore,
     kvQuota: msg.quota,
     refused: new Set(Array.isArray(msg.refused) ? msg.refused : []),
     askDialog: (kind, message) => ask("dialog", { kind, message: String(message) }),

@@ -148,6 +148,7 @@ fn launcher() -> PreparedApp {
             title: "Launcher".into(),
             accent: "blue".into(),
             app_id: "dev.plinth.test-launcher".into(),
+            version: "0.0.0".into(),
             capabilities: vec!["hub.manage".into()],
             assets: Default::default(),
             owner: plinth_host_desktop::Owner::Dev,

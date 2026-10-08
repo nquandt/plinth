@@ -690,6 +690,7 @@ fn dev(dir: &Path) -> Result<ExitCode> {
         title: first.config.name.clone(),
         accent: first.accent.unwrap_or_else(|| "teal".into()),
         app_id: first.config.id.clone(),
+        version: first.config.version.clone(),
         capabilities: first.config.capabilities.iter().map(|c| c.name.clone()).collect(),
         assets: read_assets(dir),
         // `plinth dev` runs a project from source: its private space is

@@ -32,6 +32,10 @@ pub struct HostApp {
     /// §11). A bare `app.wasm` with no manifest gets a `dev.`-prefixed id
     /// derived from the title.
     pub app_id: String,
+    /// The manifest version (`plinth:app-info`, core 1.13, `PRODUCTION.md`
+    /// D4): `MAJOR.MINOR.PATCH`. `"0.0.0"` for a bare app module or
+    /// component with no manifest.
+    pub version: String,
     /// The capability names the manifest (or `plinth.toml`) declares
     /// (SPEC.md §11). A bare `app.wasm` with no manifest gets none.
     pub capabilities: Vec<String>,
@@ -86,6 +90,7 @@ impl HostApp {
                 title: pkg.manifest.name,
                 accent: pkg.manifest.accent.unwrap_or_else(|| "teal".into()),
                 app_id: pkg.manifest.id,
+                version: pkg.manifest.version,
                 capabilities,
                 assets,
                 owner,
@@ -99,6 +104,7 @@ impl HostApp {
                 title: title.clone(),
                 accent: "teal".into(),
                 app_id: format!("dev.{title}"),
+                version: "0.0.0".into(),
                 capabilities: Vec::new(),
                 assets: std::collections::HashMap::new(),
                 owner,
@@ -311,11 +317,12 @@ pub fn start_with_policy(
     runner: Arc<Runner>,
     component: &[u8],
     app_id: &str,
+    version: &str,
     owner: &Owner,
     policy: Policy,
     args: &[u8],
 ) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
-    start_with_policy_and_hub(runner, component, app_id, owner, policy, None, args)
+    start_with_policy_and_hub(runner, component, app_id, version, owner, policy, None, args)
 }
 
 /// Like `start_with_policy`, with a `plinth:hub` backend (`docs/HUB.md`
@@ -325,6 +332,7 @@ pub fn start_with_policy_and_hub(
     runner: Arc<Runner>,
     component: &[u8],
     app_id: &str,
+    version: &str,
     owner: &Owner,
     policy: Policy,
     hub: Option<Box<dyn plinth_runner_wasmtime::hub::HubBackend>>,
@@ -340,6 +348,9 @@ pub fn start_with_policy_and_hub(
         Ok(mut guest) => {
             guest.set_files(private_files(owner, app_id));
             guest.set_notify(notify::system_notify(app_id));
+            // `plinth:app-info` (core 1.13, `PRODUCTION.md` D4): the
+            // manifest version, for `onUpgrade(fromVersion)`.
+            guest.set_app_version(version);
             // Hot reload (SPEC.md §13): `args` is the previous instance's
             // signal snapshot, or empty on the first start. A release
             // build of the app ignores it (it never registered anything).
@@ -351,6 +362,12 @@ pub fn start_with_policy_and_hub(
             // The banner shows the plain reason (the top message); the runner logs
             // the wasm detail.
             let init = guest.init(&init_args).map_err(|e| format!("{e}"));
+            if init.is_ok() {
+                // `plinth:app-info` (core 1.13, `PRODUCTION.md` D4): store
+                // the data version now, unless the guest claimed a
+                // pending upgrade and will store it itself.
+                guest.finish_start();
+            }
             print_logs(&mut guest);
             (Box::new(WasmGuest { guest, _runner: runner }), init)
         }
@@ -413,8 +430,8 @@ pub fn open_app_reporting_init(
     hub: Option<Box<dyn plinth_runner_wasmtime::hub::HubBackend>>,
     on_init: impl FnOnce(bool),
 ) -> gpui::WindowHandle<PlinthRoot> {
-    let HostApp { component, title, accent, app_id, assets, owner, .. } = app;
-    let (port, init) = start_with_policy_and_hub(runner, &component, &app_id, &owner, policy, hub, &[]);
+    let HostApp { component, title, accent, app_id, version, assets, owner, .. } = app;
+    let (port, init) = start_with_policy_and_hub(runner, &component, &app_id, &version, &owner, policy, hub, &[]);
     on_init(init.is_ok());
     let assets = Arc::new(assets);
 
@@ -492,6 +509,7 @@ fn run_session(
 ) -> Result<bool> {
     let runner = Arc::new(Runner::new()?);
     let app_id = app.app_id.clone();
+    let app_version = app.version.clone();
     let owner = app.owner.clone();
     let capabilities = app.capabilities.clone();
     let restart = Rc::new(Cell::new(false));
@@ -538,6 +556,7 @@ fn run_session(
         if let Some(rx) = reloads {
             let runner = runner.clone();
             let app_id = app_id.clone();
+            let app_version = app_version.clone();
             let owner = owner.clone();
             let capabilities = capabilities.clone();
             cx.spawn(async move |cx| {
@@ -554,6 +573,7 @@ fn run_session(
                     if let Some(bytes) = latest {
                         let runner = runner.clone();
                         let app_id = app_id.clone();
+                        let app_version = app_version.clone();
                         let owner = owner.clone();
                         let capabilities = capabilities.clone();
                         let ok = window
@@ -561,7 +581,7 @@ fn run_session(
                                 root.reload(
                                     |args| {
                                         let policy = Policy::new(capabilities.iter().cloned());
-                                        start_with_policy(runner, &bytes, &app_id, &owner, policy, args)
+                                        start_with_policy(runner, &bytes, &app_id, &app_version, &owner, policy, args)
                                     },
                                     cx,
                                 )
@@ -691,7 +711,8 @@ fn prepare(hub: &plinth_hub::Hub, app_id: &str, pkg: plinth_package::Package, by
     let component = with_runtime_policy(pkg.component, &declared, &core_policy, core_digest.as_deref(), core_built.as_deref())?;
     let assets: std::collections::HashMap<String, Vec<u8>> =
         pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
-    let app = HostApp { component, title, accent, app_id: app_id.to_owned(), capabilities: declared, assets, owner };
+    let version = pkg.manifest.version.clone();
+    let app = HostApp { component, title, accent, app_id: app_id.to_owned(), version, capabilities: declared, assets, owner };
     Ok(PreparedApp { app, policy, hub_manage })
 }
 

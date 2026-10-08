@@ -36,6 +36,7 @@ use crate::bindings::plinth::app::error::{DeniedReason as WitDeniedReason, Host 
 use crate::bindings::plinth::app::files::Host as FilesHost;
 use crate::bindings::plinth::app::sql::Host as SqlHost;
 use crate::bindings::plinth::app::hub::Host as HubHost;
+use crate::bindings::plinth::app::app_info::Host as AppInfoHost;
 use crate::bindings::plinth::app::locale::Host as LocaleHost;
 use crate::bindings::plinth::app::net::Host as NetHost;
 use crate::bindings::plinth::app::notify::Host as NotifyHost;
@@ -137,6 +138,10 @@ pub fn load(
         locale: None,
         locale_fixed: false,
         test_clock: None,
+        app_version: None,
+        data_version: None,
+        data_version_loaded: false,
+        upgrade_claimed: false,
     };
     let mut store = Store::new(engine, state);
     store.limiter(|s| &mut s.limits);
@@ -279,6 +284,19 @@ fn write_ok_option_string(caller: &mut Caller<'_, HostState>, retptr: i32, value
             let (ptr, len) = write_string(caller, s)?;
             write_bytes(caller, retptr + 8, &ptr.to_le_bytes())?;
             write_bytes(caller, retptr + 12, &len.to_le_bytes())
+        }
+    }
+}
+/// A plain `option<string>` (not wrapped in a `result`, `plinth:app-info`,
+/// core 1.13): option-tag@0 (0=none,1=some), string ptr@4/len@8 if some.
+fn write_option_string(caller: &mut Caller<'_, HostState>, retptr: i32, value: Option<&str>) -> Result<(), WasmiError> {
+    match value {
+        None => write_bytes(caller, retptr, &[0]),
+        Some(s) => {
+            write_bytes(caller, retptr, &[1])?;
+            let (ptr, len) = write_string(caller, s)?;
+            write_bytes(caller, retptr + 4, &ptr.to_le_bytes())?;
+            write_bytes(caller, retptr + 8, &len.to_le_bytes())
         }
     }
 }
@@ -431,6 +449,17 @@ fn register_imports(linker: &mut Linker<HostState>) -> Result<()> {
             Ok(LocaleHost::compare(caller.data_mut(), a, b))
         },
     )?;
+
+    // `plinth:app-info` (core 1.13, `PRODUCTION.md` D4): `data-version`
+    // returns a plain `option<string>` through `retptr` (tag@0, ptr@4,
+    // len@8); `mark-data-version` takes and returns nothing.
+    linker.func_wrap("plinth:app/app-info@1.0.0", "data-version", |mut caller: Caller<HostState>, retptr: i32| {
+        let version = AppInfoHost::data_version(caller.data_mut());
+        write_option_string(&mut caller, retptr, version.as_deref())
+    })?;
+    linker.func_wrap("plinth:app/app-info@1.0.0", "mark-data-version", |mut caller: Caller<HostState>| {
+        AppInfoHost::mark_data_version(caller.data_mut());
+    })?;
 
     linker.func_wrap(
         "plinth:app/store@1.0.0",

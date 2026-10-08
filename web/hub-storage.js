@@ -45,6 +45,13 @@ function grantsKey(id) {
   return `${PREFIX}grants:${norm(id)}`;
 }
 
+// `plinth:app-info` (core 1.13, PRODUCTION.md D4, onUpgrade): the data
+// version of each app, next to its kv data but under its own key (never
+// "kv:<id>:", so it can never collide with an app's own kv keys).
+function dataVersionKey(id) {
+  return `${PREFIX}dv:${norm(id)}`;
+}
+
 /** The size that counts against the quota for one entry. */
 export function entrySize(key, value) {
   return key.length + value.length;
@@ -128,6 +135,17 @@ export class HubStore {
   kvClear(id) {
     const prefix = kvPrefix(id);
     for (const k of storageKeys(this.storage)) if (k.startsWith(prefix)) this.storage.removeItem(k);
+    this.storage.removeItem(dataVersionKey(id));
+  }
+
+  /** `plinth:app-info` (core 1.13, PRODUCTION.md D4): the stored data version of `id`, or null. */
+  dataVersion(id) {
+    return this.storage.getItem(dataVersionKey(id));
+  }
+
+  /** Stores `version` as the data version of `id`. */
+  setDataVersion(id, version) {
+    this.storage.setItem(dataVersionKey(id), version);
   }
 
   /** The stored grant record of `id`, or null. */
@@ -228,6 +246,26 @@ export function frameKvStore(snapshot, quota, send) {
   };
 }
 
+/**
+ * The data version store of an app in its frame (the `dataVersionStore`
+ * that `plinth-web.js`'s `PlinthApp.load` and `app-worker.js`'s
+ * `WorkerApp.load` expect: `{get(key), set(key, value)}`, core 1.13,
+ * PRODUCTION.md D4): answers `initial` (the value `startMessage` sent) at
+ * once, and calls `send(message)` for a write, same idea as `frameKvStore`.
+ */
+export function frameDataVersionStore(initial, send) {
+  let version = initial ?? null;
+  return {
+    get() {
+      return version;
+    },
+    set(_key, value) {
+      version = value;
+      send({ channel: CHANNEL, type: "data-version-set", version: value });
+    },
+  };
+}
+
 // -- Messages ----------------------------------------------------------------
 
 const FRAME_TYPES = {
@@ -236,6 +274,8 @@ const FRAME_TYPES = {
   failed: { message: "string" },
   "kv-set": { key: "string", value: "string" },
   "kv-delete": { key: "string" },
+  // plinth:app-info (core 1.13): the frame's own data version changed.
+  "data-version-set": { version: "string" },
   "clipboard-write": { text: "string" },
   "clipboard-read": { id: "number" },
   dialog: { id: "number", kind: "string", message: "string" },
@@ -330,5 +370,17 @@ export function applyKvMessage(store, id, msg, quota = KV_QUOTA) {
  * `plinth:hub` snapshot (`HubHost.snapshot()`), else null.
  */
 export function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA, hub = null }) {
-  return { channel: CHANNEL, type: "start", pkg, core, kv: store.kvSnapshot(id), quota, refused: [...refused], hub };
+  return {
+    channel: CHANNEL,
+    type: "start",
+    pkg,
+    core,
+    kv: store.kvSnapshot(id),
+    quota,
+    refused: [...refused],
+    hub,
+    // plinth:app-info (core 1.13, PRODUCTION.md D4): no capability gate, as
+    // for plinth:locale, so this goes out even when store.kv is refused.
+    dataVersion: store.dataVersion(id),
+  };
 }
