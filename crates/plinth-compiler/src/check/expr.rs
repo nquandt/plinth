@@ -3710,7 +3710,17 @@ impl Checker<'_> {
         self.json_funcs.insert((stringify, sid, int_bools), fid);
         let saved = std::mem::replace(
             &mut self.fx,
-            FnCx { func: fid, scopes: vec![Scope::default()], loops: Vec::new(), switches: 0, ret: Some(ret), inferred: None, reactive: ReactiveCtx::Callback, is_async: false },
+            FnCx {
+                func: fid,
+                scopes: vec![Scope::default()],
+                loops: Vec::new(),
+                switches: 0,
+                ret: Some(ret),
+                inferred: None,
+                saw_void_return: false,
+                reactive: ReactiveCtx::Callback,
+                is_async: false,
+            },
         );
         let body = if stringify {
             let v = self.var_in(fid, "$v", ty.clone(), None);
