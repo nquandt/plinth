@@ -605,9 +605,15 @@ mod tests {
         }
     }
 
-    fn rand_suffix() -> u64 {
+    /// A suffix that is unique in this process: the clock alone is not,
+    /// because Windows gives it in 100 ns steps and tests start in
+    /// parallel, so two fixtures could share a folder.
+    fn rand_suffix() -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
         use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
+        format!("{nanos}-{}", NEXT.fetch_add(1, Ordering::Relaxed))
     }
 
     #[test]
