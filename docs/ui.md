@@ -374,8 +374,12 @@ import { Canvas, rect, circle, line, canvasText } from "plinth:ui";
   text child), which the compiler enforces at the type level — most
   controls simply have no variant without one.
 - The runtime maps every node to an AccessKit role, name, and state.
-- Interactive controls take keyboard focus (Tab) and activation (Enter
-  or Space; arrow keys move a `Slider`).
+- Interactive controls take keyboard focus (Tab and Shift+Tab, in
+  screen order) and activation (Enter or Space), and show a focus ring.
+  Arrow keys choose in a `Picker` and a `Tabs` and move a `Slider`, a
+  `NumberField` and the open `DatePicker`. A `Sheet` or a `Dialog` keeps
+  the focus while it is open and closes on Escape.
+  `docs/guides/accessibility.md` lists all the keys.
 - `Menu` and the toolbar overflow use AccessKit roles `menu` and
   `menu item`; they close on an outside click, Escape, or after an
   action runs.

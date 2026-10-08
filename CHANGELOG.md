@@ -16,6 +16,9 @@ No public release yet. The first release is a Preview for Windows and the web. `
 - `docs/PRIVACY.md`, `CODE_OF_CONDUCT.md`, and a pull request guide in `CONTRIBUTING.md`.
 - `docs/host-apis.md` "Support on each host": how each host API works on the desktop (wasmtime and wasmi) and the web, and the test that covers it on each host.
 - `docs/guides/`: guides for app authors (storage, network, updates, publishing, accessibility, performance), each with a checked example.
+- Desktop keyboard (PRODUCTION U4): Tab and Shift+Tab move the focus (before, they did nothing), with a focus ring in the accent color on every control. Arrow keys choose in a `Picker` and a `Tabs`, step a `NumberField`, and move in an open `Menu` and `DatePicker`; Home and End move a `Slider`. A `Sheet` and a `Dialog` keep the focus while they are open and close on Escape. Menus and popovers give the focus back to their trigger.
+- Desktop accessibility (PRODUCTION U3): the navigation, the back button, the toolbar overflow, the step buttons, the `Badge`, the `Empty` texts and the dialog buttons are in the AccessKit tree with a role and a name; headings have a level; a `Slider`, a `NumberField` and a `Progress` have their range; a short `Picker` is a radio group, a long one a list box; text fields have a named group.
+- Web: a `Toggle` has the role `switch`, as on the desktop.
 - Desktop self-update: an update that adds a Medium or High capability shows the consent window for the new capabilities before it runs. If the user cancels, the previous version keeps running, and the host does not ask again for that version.
 - Desktop self-update: `apply = "prompt"` shows "An update is ready. Restart now?" with "Restart" and "Later" in the app window when an update is ready.
 - The `plinth-host` executable now checks for updates when it runs an exported app, the same as the `plinth` executable.

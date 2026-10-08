@@ -3116,7 +3116,8 @@ class DomRenderer {
       case "button": return this.buttonView();
       case "textField": return this.textFieldView();
       case "textArea": return this.textAreaView();
-      case "toggle": return this.checkView("pl-toggle", "pl-toggle-label");
+      // A Toggle is a switch, as on the desktop (AccessKit `Switch`).
+      case "toggle": return this.checkView("pl-toggle", "pl-toggle-label", "switch");
       case "checkbox": return this.checkView("pl-checkbox-field", "pl-checkbox-label");
       case "list": return this.containerView(el("div", "pl-list", { role: "list" }));
       case "row": return this.rowView();
@@ -3490,10 +3491,11 @@ class DomRenderer {
     };
   }
 
-  /** Toggle and Checkbox: a native checkbox in a label. */
-  checkView(wrapClass, labelClass) {
+  /** Toggle and Checkbox: a native checkbox in a label (a Toggle has the
+   * role `switch`). */
+  checkView(wrapClass, labelClass, role = null) {
     const wrap = el("label", wrapClass);
-    const input = wrap.appendChild(el("input", "pl-checkbox", { type: "checkbox" }));
+    const input = wrap.appendChild(el("input", "pl-checkbox", role ? { type: "checkbox", role } : { type: "checkbox" }));
     const label = wrap.appendChild(el("span", labelClass));
     let id = 0;
     input.addEventListener("change", () => this.sendChange(id, input.checked));

@@ -5,7 +5,7 @@
 use crate::theme::{Tokens, WidthClass, icon_glyph, with_alpha};
 use crate::tree::{Node, Tree};
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FocusHandle, FontWeight, Image, ImageFormat,
+    AnyElement, App, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FocusHandle, Focusable, FontWeight, Hsla, Image, ImageFormat,
     DispatchPhase, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
     Point, Render, SharedString, Stateful, Subscription, Window, anchored, canvas, deferred, div, img, prelude::*, px,
 };
@@ -13,7 +13,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use gpui::accesskit;
-use gpui_elements::editable_text::actions::Enter;
+use gpui_elements::editable_text::actions::{Enter, Escape as InputEscape, NavDown, NavUp, Tab as InputTab};
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_area, text_input};
 use crate::calendar;
 use crate::primitives;
@@ -155,7 +155,36 @@ struct Field {
     last_synced: String,
     /// `NumberField` holds its value as text but the prop is a number.
     numeric: bool,
+    /// The focus handle of the text input: a tab stop (PRODUCTION U4).
+    focus: FocusHandle,
     _subscription: Subscription,
+}
+
+/// The modal layer on top, for the focus trap (PRODUCTION U4): Tab and
+/// Shift+Tab stay in it, it takes the focus when it opens, and the focus
+/// goes back when it closes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Modal {
+    HostDialog(u32),
+    Confirm,
+    Overlay(NodeId),
+}
+
+/// The width of the focus ring, in pixels. The web host draws a 2 px
+/// outline in the accent color (`web/style.css`, `:focus-visible`).
+const FOCUS_RING: f32 = 2.0;
+
+/// Adds the runtime's focus ring to an element that takes the keyboard
+/// focus: a ring in the accent color, shown when the focus came from the
+/// keyboard. A ring is a shadow, so it does not change the layout.
+fn focus_ring<E: InteractiveElement>(d: E, accent: Hsla) -> E {
+    d.focus_visible(move |s| s.ring(px(FOCUS_RING)).ring_color(accent))
+}
+
+/// The focus ring inside the bounds, for rows that touch the next row
+/// (a ring outside would be under the next row).
+fn inset_focus_ring<E: InteractiveElement>(d: E, accent: Hsla) -> E {
+    d.focus_visible(move |s| s.inset_ring(px(FOCUS_RING)).inset_ring_color(accent))
 }
 
 /// Formats a `Value::Number` the way a `NumberField` shows it: no trailing
@@ -291,6 +320,19 @@ pub struct PlinthRoot {
     /// The host-owned update prompt (`docs/UPDATES.md` §5, `apply =
     /// "prompt"`): `Some` while it shows. It holds what "Restart" does.
     update_prompt: Option<OnRestart>,
+    /// Focus handles that the renderer keeps for parts of controls that it
+    /// focuses itself (PRODUCTION U4): roving options of a `Picker` and
+    /// `Tabs`, menu items, popover triggers. By node id and a part number.
+    focus_handles: std::cell::RefCell<HashMap<(NodeId, u32), FocusHandle>>,
+    /// A handle to focus at the start of the next frame (a menu that opened,
+    /// the next option after an arrow key).
+    pending_focus: Option<FocusHandle>,
+    /// The panel of the modal layer on top (not a tab stop itself).
+    modal_focus: FocusHandle,
+    /// The modal layer on top in the last frame, and the focus before it
+    /// opened (given back when it closes).
+    last_modal: Option<Modal>,
+    focus_before_modal: Option<FocusHandle>,
 }
 
 impl PlinthRoot {
@@ -334,6 +376,11 @@ impl PlinthRoot {
             scroll_handles: std::cell::RefCell::new(HashMap::new()),
             cull_x: Cell::new(None),
             update_prompt: None,
+            focus_handles: std::cell::RefCell::new(HashMap::new()),
+            pending_focus: None,
+            modal_focus: cx.focus_handle(),
+            last_modal: None,
+            focus_before_modal: None,
         };
         root.apply_commits(initial_commits);
         root.sync_dialog(cx);
@@ -364,6 +411,11 @@ impl PlinthRoot {
             scroll_handles: std::cell::RefCell::new(HashMap::new()),
             cull_x: Cell::new(None),
             update_prompt: None,
+            focus_handles: std::cell::RefCell::new(HashMap::new()),
+            pending_focus: None,
+            modal_focus: cx.focus_handle(),
+            last_modal: None,
+            focus_before_modal: None,
         }
     }
 
@@ -451,6 +503,7 @@ impl PlinthRoot {
             self.fields.remove(&id);
             self.list_states.borrow_mut().remove(&id);
             self.scroll_handles.borrow_mut().remove(&id);
+            self.focus_handles.borrow_mut().retain(|(node, _), _| *node != id);
         }
         self.app_errors.extend(self.guest.take_errors());
     }
@@ -652,7 +705,8 @@ impl PlinthRoot {
             let state = cx.new(|cx| EditableTextState::new(StringStorage::from(initial), cx));
             let subscription =
                 cx.subscribe(&state, move |this, state, _: &TextChanged, cx| this.on_text_changed(id, state, cx));
-            self.fields.insert(id, Field { state, last_synced: value, numeric, _subscription: subscription });
+            let focus = state.read(cx).focus_handle(cx);
+            self.fields.insert(id, Field { state, last_synced: value, numeric, focus, _subscription: subscription });
         }
     }
 
@@ -684,80 +738,201 @@ impl PlinthRoot {
         cx.notify();
     }
 
+    /// A focus handle that the renderer keeps for `(node, part)` (see
+    /// [`part`]), so that it can move the focus there itself.
+    fn kept_focus(&self, node: NodeId, part: u32, cx: &mut gpui::App) -> FocusHandle {
+        self.focus_handles.borrow_mut().entry((node, part)).or_insert_with(|| cx.focus_handle()).clone()
+    }
+
+    /// Moves the focus to the next (or the previous) tab stop. While a
+    /// modal layer is open, the focus stays in it (PRODUCTION U4).
+    fn move_focus(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let trapped = self.last_modal.is_some();
+        // At most one full turn through the tab stops.
+        for _ in 0..512 {
+            if forward {
+                window.focus_next(cx);
+            } else {
+                window.focus_prev(cx);
+            }
+            if !trapped || self.modal_focus.contains_focused(window, cx) {
+                break;
+            }
+        }
+        cx.notify();
+    }
+
+    /// The modal layer on top, if any: a `plinth:dialog` request, then the
+    /// destructive-action confirmation, then the last open `Sheet` or
+    /// `Dialog`.
+    fn top_modal(&self) -> Option<Modal> {
+        if let Some(d) = &self.dialog {
+            return Some(Modal::HostDialog(d.id));
+        }
+        if self.confirm.is_some() {
+            return Some(Modal::Confirm);
+        }
+        self.top_overlay().map(Modal::Overlay)
+    }
+
+    fn top_overlay(&self) -> Option<NodeId> {
+        let root = self.tree.current_root()?;
+        self.overlay_ids(root.id).last().copied()
+    }
+
+    /// When a modal layer opens, it takes the focus (a prompt: its text
+    /// field); when the last one closes, the focus goes back to where it was.
+    fn sync_modal_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let top = self.top_modal();
+        if top == self.last_modal {
+            return;
+        }
+        match top {
+            Some(_) => {
+                if self.last_modal.is_none() {
+                    self.focus_before_modal = window.focused(cx);
+                }
+                let input = self.dialog.as_ref().and_then(|d| d.input.as_ref()).map(|s| s.read(cx).focus_handle(cx));
+                match input {
+                    Some(h) => window.focus(&h, cx),
+                    None => window.focus(&self.modal_focus, cx),
+                }
+            }
+            None => match self.focus_before_modal.take() {
+                Some(h) => window.focus(&h, cx),
+                None => window.focus(&self.focus, cx),
+            },
+        }
+        self.last_modal = top;
+    }
+
+    /// Escape: closes the layer on top (a dialog, a menu or popover, the
+    /// confirmation, a `Sheet` or `Dialog`). `false` if nothing was open.
+    fn dismiss(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.dialog.is_some() {
+            self.cancel_host_dialog(cx);
+            return true;
+        }
+        if !self.open_menus.is_empty() {
+            for id in std::mem::take(&mut self.open_menus) {
+                self.date_cursor.remove(&id);
+                // The focus goes back to the trigger.
+                if let Some(h) = self.focus_handles.borrow().get(&(id, part::TRIGGER)) {
+                    self.pending_focus = Some(h.clone());
+                }
+            }
+            cx.notify();
+            return true;
+        }
+        if self.confirm.is_some() {
+            self.confirm = None;
+            cx.notify();
+            return true;
+        }
+        if let Some(id) = self.top_overlay() {
+            self.close_overlay(id, cx);
+            return true;
+        }
+        false
+    }
+
     /// The standard modal for a `plinth:dialog` request (SPEC.md §8.4,
     /// §8.5), styled like `render_confirm_overlay`.
+    /// Cancels the `plinth:dialog` request shown now (Escape or "Cancel").
+    fn cancel_host_dialog(&mut self, cx: &mut Context<Self>) {
+        let cancel = match self.dialog.as_ref().map(|d| d.kind) {
+            Some(DialogKind::Confirm) => Value::Bool(false),
+            _ => Value::Null,
+        };
+        self.answer_dialog(cancel, cx);
+    }
+
+    /// Accepts the `plinth:dialog` request shown now (Enter or "OK").
+    fn accept_host_dialog(&mut self, cx: &mut Context<Self>) {
+        let value = match self.dialog.as_ref() {
+            Some(d) if d.kind == DialogKind::Confirm => Value::Bool(true),
+            Some(d) if d.kind == DialogKind::Prompt => {
+                let text = d.input.as_ref().map(|s| s.read(cx).as_str().to_owned()).unwrap_or_default();
+                Value::Str(text)
+            }
+            _ => Value::Null,
+        };
+        self.answer_dialog(value, cx);
+    }
+
+    /// A button of a host-owned modal (a dialog, the confirmation): a
+    /// button for AccessKit, a tab stop, Enter and Space press it.
+    fn modal_button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        style: impl FnOnce(Stateful<gpui::Div>) -> Stateful<gpui::Div>,
+        t: &Tokens,
+        cx: &mut Context<Self>,
+        on_press: impl Fn(&mut Self, &mut Context<Self>) + Clone + 'static,
+    ) -> AnyElement {
+        let click = on_press.clone();
+        let d = div()
+            .id(id)
+            .role(accesskit::Role::Button)
+            .aria_label(label)
+            .cursor_pointer()
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .text_sm()
+            .child(label)
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| click(this, cx)));
+        keyboard_activatable(style(d), t, cx, on_press).into_any_element()
+    }
+
     fn render_host_dialog_overlay(&self, t: &Tokens, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dialog = self.dialog.as_ref()?;
         let message = dialog.message.clone();
         let kind = dialog.kind;
         let input_field = dialog.input.clone();
+        let accent = t.accent;
         let input_row = input_field.clone().map(|state| {
-            text_input(eid("dlg", dialog.id))
-                .state(state.downgrade())
-                .accepts_input(true)
-                .caret_color(t.text)
-                .selection_color(t.selection)
-                .caret_blink_interval_500ms()
-                .w_full()
-                .px_3()
-                .py_2()
-                .rounded_lg()
-                .border_1()
-                .border_color(t.border)
-                .bg(t.background)
-                .text_color(t.text)
-                .text_sm()
-                .min_h_auto()
+            let focus = state.read(cx).focus_handle(cx).tab_stop(true);
+            // AccessKit takes no name on the text input itself (gpui-ce), so
+            // a group around it has the message as its name.
+            div().id(eid("dlg-wrap", dialog.id)).role(accesskit::Role::Group).aria_label(message.clone()).child(
+                text_input(eid("dlg", dialog.id))
+                    .state(state.downgrade())
+                    .track_focus(&focus)
+                    .focus(move |s| s.ring(px(FOCUS_RING)).ring_color(accent))
+                    .accepts_input(true)
+                    .caret_color(t.text)
+                    .selection_color(t.selection)
+                    .caret_blink_interval_500ms()
+                    .w_full()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(t.border)
+                    .bg(t.background)
+                    .text_color(t.text)
+                    .text_sm()
+                    .min_h_auto(),
+            )
         });
 
         let mut buttons = div().flex().justify_end().gap_2();
         if kind != DialogKind::Alert {
-            buttons = buttons.child(
-                div()
-                    .id("dialog-cancel")
-                    .cursor_pointer()
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .text_sm()
-                    .child("Cancel")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        let cancel = match this.dialog.as_ref().map(|d| d.kind) {
-                            Some(DialogKind::Confirm) => Value::Bool(false),
-                            _ => Value::Null,
-                        };
-                        this.answer_dialog(cancel, cx);
-                    })),
-            );
+            buttons = buttons.child(self.modal_button("dialog-cancel", "Cancel", |d| d, t, cx, |this, cx| this.cancel_host_dialog(cx)));
         }
-        buttons = buttons.child(
-            div()
-                .id("dialog-ok")
-                .cursor_pointer()
-                .px_3()
-                .py_2()
-                .rounded_md()
-                .bg(t.accent)
-                .text_color(t.on_accent)
-                .text_sm()
-                .child("OK")
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    let value = match this.dialog.as_ref() {
-                        Some(d) if d.kind == DialogKind::Confirm => Value::Bool(true),
-                        Some(d) if d.kind == DialogKind::Prompt => {
-                            let text = d.input.as_ref().map(|s| s.read(cx).as_str().to_owned()).unwrap_or_default();
-                            Value::Str(text)
-                        }
-                        _ => Value::Null,
-                    };
-                    this.answer_dialog(value, cx);
-                })),
-        );
+        let (bg, fg) = (t.accent, t.on_accent);
+        buttons = buttons.child(self.modal_button("dialog-ok", "OK", move |d| d.bg(bg).text_color(fg), t, cx, |this, cx| {
+            this.accept_host_dialog(cx)
+        }));
 
         let panel = div()
             .id("dialog-panel")
+            .track_focus(&self.modal_focus)
             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
             .role(accesskit::Role::Dialog)
+            .aria_modal(true)
             .aria_label(message.clone())
             .w(px(320.))
             .p_5()
@@ -884,11 +1059,13 @@ fn warn_if_unlabeled(control: &'static str, id: NodeId, label: &str) {
     }
 }
 
-/// Adds keyboard reachability (Tab order) and activation (Enter/Space) to a
-/// stateful element that already has an `on_click` handler, so pointer and
-/// keyboard input drive the same code path (SPEC.md §6.1 item 3, §9.3).
+/// Adds keyboard reachability (Tab order), activation (Enter/Space) and the
+/// focus ring to a stateful element that already has an `on_click` handler,
+/// so pointer and keyboard input drive the same code path (SPEC.md §6.1
+/// item 3, §9.3).
 fn keyboard_activatable<E>(
     d: Stateful<E>,
+    t: &Tokens,
     cx: &mut Context<PlinthRoot>,
     on_activate: impl Fn(&mut PlinthRoot, &mut Context<PlinthRoot>) + 'static,
 ) -> Stateful<E>
@@ -896,9 +1073,20 @@ where
     E: IntoElement + 'static,
     Stateful<E>: InteractiveElement,
 {
+    activation_keys(focus_ring(d.tab_index(0), t.accent), cx, on_activate)
+}
+
+/// Enter and Space run `on_activate` (the element is focusable already).
+fn activation_keys<E: InteractiveElement>(
+    d: E,
+    cx: &mut Context<PlinthRoot>,
+    on_activate: impl Fn(&mut PlinthRoot, &mut Context<PlinthRoot>) + 'static,
+) -> E {
     let entity = cx.entity();
-    d.tab_index(0).on_key_down(move |ev: &KeyDownEvent, _window, cx| {
-        if ev.keystroke.key == "enter" || ev.keystroke.key == "space" {
+    d.on_key_down(move |ev: &KeyDownEvent, _window, cx| {
+        let k = &ev.keystroke;
+        if (k.key == "enter" || k.key == "space") && !k.modifiers.modified() {
+            cx.stop_propagation();
             let entity = entity.clone();
             entity.update(cx, |this, cx| {
                 on_activate(this, cx);
@@ -906,6 +1094,24 @@ where
             });
         }
     })
+}
+
+/// The arrow keys that move between the options of a control.
+#[derive(Clone, Copy)]
+enum ArrowKeys {
+    Both,
+    Horizontal,
+    Vertical,
+}
+
+/// The part numbers of [`PlinthRoot::kept_focus`] handles.
+mod part {
+    /// The trigger of a `Menu`, a `DatePicker` or the toolbar overflow.
+    pub const TRIGGER: u32 = 0;
+    /// The open popover of a `DatePicker`.
+    pub const POPOVER: u32 = 1;
+    /// An option of a `Picker` or a `Tabs`, or a menu item: `ITEM + index`.
+    pub const ITEM: u32 = 16;
 }
 
 impl Render for PlinthRoot {
@@ -928,6 +1134,10 @@ impl Render for PlinthRoot {
             self.focused_once = true;
             window.focus(&self.focus, cx);
         }
+        if let Some(h) = self.pending_focus.take() {
+            window.focus(&h, cx);
+        }
+        self.sync_modal_focus(window, cx);
         let t = Tokens::new(window.appearance(), &self.accent);
 
         let content = div()
@@ -968,25 +1178,36 @@ impl Render for PlinthRoot {
                     cx.notify();
                 }
             }))
+            // In a text field, Tab is an action of the field (it would type a
+            // tab character) and Escape blurs it: take both first, so Tab
+            // moves the focus and Escape closes the layer on top (U4).
+            .capture_action(cx.listener(|this, _: &InputTab, window, cx| {
+                cx.stop_propagation();
+                this.move_focus(true, window, cx);
+            }))
+            .capture_action(cx.listener(|this, _: &Enter, _, cx| {
+                // Enter in the text field of a prompt accepts it.
+                if this.dialog.is_some() {
+                    cx.stop_propagation();
+                    this.accept_host_dialog(cx);
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &InputEscape, _, cx| {
+                if this.dismiss(cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .on_key_down({
                 let entity = cx.entity();
-                move |ev: &gpui::KeyDownEvent, _, cx| {
+                move |ev: &gpui::KeyDownEvent, window, cx| {
                     let key = ev.keystroke.key.as_str();
-                    if key == "escape" {
+                    if key == "tab" && !ev.keystroke.modifiers.control && !ev.keystroke.modifiers.alt {
+                        cx.stop_propagation();
+                        let forward = !ev.keystroke.modifiers.shift;
+                        entity.update(cx, |this, cx| this.move_focus(forward, window, cx));
+                    } else if key == "escape" {
                         entity.update(cx, |this, cx| {
-                            if this.dialog.is_some() {
-                                let cancel = match this.dialog.as_ref().map(|d| d.kind) {
-                                    Some(DialogKind::Confirm) => Value::Bool(false),
-                                    _ => Value::Null,
-                                };
-                                this.answer_dialog(cancel, cx);
-                            } else if !this.open_menus.is_empty() {
-                                this.open_menus.clear();
-                                cx.notify();
-                            } else if this.confirm.is_some() {
-                                this.confirm = None;
-                                cx.notify();
-                            } else {
+                            if !this.dismiss(cx) {
                                 this.tree.go_back();
                                 cx.notify();
                             }
@@ -1001,16 +1222,7 @@ impl Render for PlinthRoot {
                     } else if key == "enter" {
                         entity.update(cx, |this, cx| {
                             if this.dialog.is_some() {
-                                let value = match this.dialog.as_ref() {
-                                    Some(d) if d.kind == DialogKind::Confirm => Value::Bool(true),
-                                    Some(d) if d.kind == DialogKind::Prompt => {
-                                        let text =
-                                            d.input.as_ref().map(|s| s.read(cx).as_str().to_owned()).unwrap_or_default();
-                                        Value::Str(text)
-                                    }
-                                    _ => Value::Null,
-                                };
-                                this.answer_dialog(value, cx);
+                                this.accept_host_dialog(cx);
                             }
                         });
                     }
@@ -1077,6 +1289,7 @@ impl PlinthRoot {
                 this.app_errors.clear();
                 cx.notify();
             }));
+        let dismiss = keyboard_activatable(dismiss, t, cx, |this, _| this.app_errors.clear());
         Some(
             div()
                 .id("plinth-error-banner")
@@ -1136,16 +1349,21 @@ impl PlinthRoot {
                 .cursor_pointer()
                 .child(label)
         };
-        let restart = button("plinth-update-restart", "Restart").on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+        fn do_restart(this: &mut PlinthRoot, cx: &mut Context<PlinthRoot>) {
             if let Some(on_restart) = this.update_prompt.take() {
                 cx.notify();
                 cx.defer(move |cx| on_restart(cx));
             }
-        }));
-        let later = button("plinth-update-later", "Later").on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+        }
+        fn do_later(this: &mut PlinthRoot, cx: &mut Context<PlinthRoot>) {
             this.update_prompt = None;
             cx.notify();
-        }));
+        }
+        // Tab stops, and Enter and Space press them (PRODUCTION U4).
+        let restart = button("plinth-update-restart", "Restart").on_click(cx.listener(|this, _: &ClickEvent, _, cx| do_restart(this, cx)));
+        let restart = keyboard_activatable(restart, t, cx, do_restart);
+        let later = button("plinth-update-later", "Later").on_click(cx.listener(|this, _: &ClickEvent, _, cx| do_later(this, cx)));
+        let later = keyboard_activatable(later, t, cx, do_later);
         Some(
             div()
                 .id("plinth-update-prompt")
@@ -1184,12 +1402,15 @@ impl PlinthRoot {
             let fg = if selected { t.accent } else { t.text_muted };
             let item = div()
                 .id(eid("nav", screen))
+                .role(accesskit::Role::Button)
+                .aria_label(title.clone())
                 .cursor_pointer()
                 .text_color(fg)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.tree.current_screen = screen;
                     cx.notify();
                 }));
+            let item = keyboard_activatable(item, t, cx, move |this, _| this.tree.current_screen = screen);
             match self.class {
                 WidthClass::Compact | WidthClass::Regular => item
                     .flex()
@@ -1216,7 +1437,7 @@ impl PlinthRoot {
             }
         });
 
-        let bar = div().flex().bg(t.surface).border_color(t.border);
+        let bar = div().id("nav").role(accesskit::Role::Navigation).aria_label("Screens").flex().bg(t.surface).border_color(t.border);
         match self.class {
             WidthClass::Compact => bar.flex_row().h(px(60.)).border_t_1().children(items).into_any_element(),
             WidthClass::Regular => bar.flex_col().w(px(84.)).pt_4().gap_2().border_r_1().children(items).into_any_element(),
@@ -1239,20 +1460,29 @@ impl PlinthRoot {
             .items_center()
             .gap_3()
             .child(
-                div()
-                    .id(eid("back", screen.id))
-                    .text_lg()
-                    .when(can_go_back, |d| {
-                        d.cursor_pointer().text_color(t.accent).child("‹").on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                div().id(eid("back", screen.id)).text_lg().map(|d| {
+                    if !can_go_back {
+                        return d;
+                    }
+                    let d = d
+                        .role(accesskit::Role::Button)
+                        .aria_label("Back")
+                        .rounded_md()
+                        .cursor_pointer()
+                        .text_color(t.accent)
+                        .child("‹")
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.tree.go_back();
                             cx.notify();
-                        }))
-                    }),
+                        }));
+                    keyboard_activatable(d, t, cx, |this, _| this.tree.go_back())
+                }),
             )
             .child(
                 div()
                     .id(eid("screen-title", screen.id))
                     .role(accesskit::Role::Heading)
+                    .aria_level(1)
                     .aria_label(title.clone())
                     .flex_1()
                     .text_2xl()
@@ -1284,25 +1514,28 @@ impl PlinthRoot {
             .flex()
             .items_center()
             .gap_2()
-            .children(visible.iter().filter_map(|&id| self.tree.get(id)).map(|n| self.render_action_item(n, t, false, cx)));
+            .children(visible.iter().filter_map(|&id| self.tree.get(id)).map(|n| self.render_action_item(n, t, None, cx)));
         if overflow.is_empty() {
             return bar.into_any_element();
         }
         let open = self.open_menus.contains(&owner);
+        let first = overflow.first().copied();
         let more = div()
             .id(eid("more", owner))
             .role(accesskit::Role::Button)
+            .aria_label("More actions")
             .aria_expanded(open)
             .cursor_pointer()
+            .rounded_md()
             .px_2()
             .text_sm()
             .text_color(t.text_muted)
             .child("\u{22EF}")
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                this.toggle_menu(owner);
-                cx.notify();
+                this.toggle_menu_focus(owner, first, cx);
             }));
+        let more = self.menu_trigger(more, owner, first, t, cx);
         div()
             .flex()
             .flex_col()
@@ -1334,17 +1567,51 @@ impl PlinthRoot {
             .border_1()
             .border_color(t.border)
             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
-            .children(actions.iter().filter_map(|&id| self.tree.get(id)).map(|n| self.render_action_item(n, t, true, cx)))
+            .children(actions.iter().enumerate().filter_map(|(i, &id)| {
+                // Up and Down move to the item before and after (around the ends).
+                let n = actions.len();
+                let around = (actions[(i + n - 1) % n], actions[(i + 1) % n]);
+                self.tree.get(id).map(|node| self.render_action_item(node, t, Some(around), cx))
+            }))
             .into_any_element()
     }
 
-    /// One `<Action>`: a toolbar button, or a menu row when `in_menu`.
-    fn render_action_item(&self, node: &Node, t: &Tokens, in_menu: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// A trigger of a popover (a `Menu`, the toolbar overflow): a tab stop
+    /// with a kept focus handle, so the focus can come back to it. Enter and
+    /// Space open it and move the focus to its first item.
+    fn menu_trigger(
+        &self,
+        d: Stateful<gpui::Div>,
+        owner: NodeId,
+        first: Option<NodeId>,
+        t: &Tokens,
+        cx: &mut Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        let focus = self.kept_focus(owner, part::TRIGGER, cx).tab_stop(true);
+        activation_keys(focus_ring(d.track_focus(&focus), t.accent), cx, move |this, cx| this.toggle_menu_focus(owner, first, cx))
+    }
+
+    /// Opens or closes the menu of `owner`. An open menu takes the focus
+    /// to its first item; a closed one gives it back to the trigger.
+    fn toggle_menu_focus(&mut self, owner: NodeId, first: Option<NodeId>, cx: &mut Context<Self>) {
+        self.toggle_menu(owner);
+        self.pending_focus = if self.open_menus.contains(&owner) {
+            first.map(|item| self.kept_focus(item, part::ITEM, cx))
+        } else {
+            Some(self.kept_focus(owner, part::TRIGGER, cx))
+        };
+        cx.notify();
+    }
+
+    /// One `<Action>`: a toolbar button, or a menu row when `menu` gives
+    /// the items before and after it.
+    fn render_action_item(&self, node: &Node, t: &Tokens, menu: Option<(NodeId, NodeId)>, cx: &mut Context<Self>) -> AnyElement {
+        let in_menu = menu.is_some();
         let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
         let glyph = node.str_prop(prop::ICON).map(icon_glyph);
         let destructive = node.enum_prop(prop::ROLE) == button_role::DESTRUCTIVE;
         let id = node.id;
-        div()
+        let d = div()
             .id(eid("action", id))
             .role(if in_menu { accesskit::Role::MenuItem } else { accesskit::Role::Button })
             .aria_label(label.clone())
@@ -1363,8 +1630,23 @@ impl PlinthRoot {
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 this.press_action(id, cx);
-            }))
-            .into_any_element()
+            }));
+        let Some((before, after)) = menu else {
+            return keyboard_activatable(d, t, cx, move |this, cx| this.press_action(id, cx)).into_any_element();
+        };
+        let focus = self.kept_focus(id, part::ITEM, cx).tab_stop(true);
+        let d = activation_keys(focus_ring(d.track_focus(&focus), t.accent), cx, move |this, cx| this.press_action(id, cx));
+        d.on_key_down(cx.listener(move |this, ev: &KeyDownEvent, _, cx| {
+            let to = match ev.keystroke.key.as_str() {
+                "up" => before,
+                "down" => after,
+                _ => return,
+            };
+            cx.stop_propagation();
+            this.pending_focus = Some(this.kept_focus(to, part::ITEM, cx));
+            cx.notify();
+        }))
+        .into_any_element()
     }
 
     fn render_children(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -1410,7 +1692,7 @@ impl PlinthRoot {
             ControlKind::Tabs => self.render_tabs(node, t, cx),
             ControlKind::Menu => self.render_menu(node, t, cx),
             ControlKind::Grid => self.render_grid(node, t, cx),
-            ControlKind::Action => self.render_action_item(node, t, false, cx),
+            ControlKind::Action => self.render_action_item(node, t, None, cx),
             ControlKind::Image => self.render_image(node, t),
             ControlKind::Icon => self.render_icon(node, t),
             ControlKind::DatePicker => self.render_date_picker(node, t, cx),
@@ -1555,20 +1837,23 @@ impl PlinthRoot {
 
     /// `onKeyDown`/`onKeyUp` of a Level 2 box (UI API 1.9): the element is a
     /// tab stop and sends the key name; a held key sends no repeats.
-    fn key_handlers<E: StatefulInteractiveElement + Styled>(&self, d: E, node: &Node, cx: &mut Context<Self>) -> E {
+    fn key_handlers<E: StatefulInteractiveElement + Styled>(&self, d: E, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> E {
         let down = node.handler(event::KEY_DOWN).filter(|_| self.stopped.is_none());
         let up = node.handler(event::KEY_UP).filter(|_| self.stopped.is_none());
         if down.is_none() && up.is_none() {
             return d;
         }
-        let mut d = d.tab_index(0);
+        let mut d = self.focus_style(d.tab_index(0), node, t);
         if let Some(h) = down {
             d = d.on_key_down(cx.listener(move |this, ev: &KeyDownEvent, _, cx| {
                 if ev.is_held {
                     return;
                 }
                 if let Some(name) = primitives::key_name(&ev.keystroke.key) {
-                    cx.stop_propagation();
+                    // Tab goes on to the shell, which moves the focus.
+                    if name != "Tab" {
+                        cx.stop_propagation();
+                    }
                     this.fire(h, event::KEY_DOWN, Value::Str(name), cx);
                 }
             }));
@@ -1576,12 +1861,24 @@ impl PlinthRoot {
         if let Some(h) = up {
             d = d.on_key_up(cx.listener(move |this, ev: &KeyUpEvent, _, cx| {
                 if let Some(name) = primitives::key_name(&ev.keystroke.key) {
-                    cx.stop_propagation();
+                    if name != "Tab" {
+                        cx.stop_propagation();
+                    }
                     this.fire(h, event::KEY_UP, Value::Str(name), cx);
                 }
             }));
         }
         d
+    }
+
+    /// The look of a focused Level 2 element: the runtime's focus ring
+    /// (as the web host's outline), with the app's `focus` style over it.
+    fn focus_style<E: InteractiveElement>(&self, d: E, node: &Node, t: &Tokens) -> E {
+        let tokens = *t;
+        match primitives::partial(node, prop::FOCUS) {
+            Some(f) => d.focus_visible(move |r| primitives::box_style(r.ring(px(FOCUS_RING)).ring_color(tokens.accent), &f, &tokens, true)),
+            None => focus_ring(d, t.accent),
+        }
     }
 
     /// The pointer events of `node` (UI API 1.12) as a full-size layer that
@@ -1666,7 +1963,7 @@ impl PlinthRoot {
         let label = node.str_prop(prop::LABEL).map(str::to_owned);
         let style = self.primitive_style(node);
         let d = primitives::box_style(div().id(eid("box", node.id)), &style, t, false);
-        let d = self.key_handlers(d, node, cx);
+        let d = self.key_handlers(d, node, t, cx);
         self.state_styles(d, node, t)
             .when_some(label, |d, l| d.role(accesskit::Role::Group).aria_label(l))
             .children(self.pointer_layer(node, None, cx))
@@ -1719,13 +2016,9 @@ impl PlinthRoot {
                     None => d,
                 }
             };
-            if let Some(f) = primitives::partial(node, prop::FOCUS) {
-                let tokens = *t;
-                d = d.focus_visible(move |r| primitives::box_style(r, &f, &tokens, true));
-            }
         }
         if !disabled {
-            d = self.key_handlers(d, node, cx);
+            d = self.key_handlers(d, node, t, cx);
         }
         if let Some(h) = node.handler(event::PRESS).filter(|_| !disabled) {
             d = d
@@ -1734,7 +2027,7 @@ impl PlinthRoot {
                     let entity = cx.entity();
                     move |_, _, cx| entity.update(cx, |this, cx| this.fire(h, event::PRESS, Value::Null, cx))
                 });
-            d = keyboard_activatable(d, cx, move |this, cx| this.fire(h, event::PRESS, Value::Null, cx));
+            d = activation_keys(self.focus_style(d.tab_index(0), node, t), cx, move |this, cx| this.fire(h, event::PRESS, Value::Null, cx));
         }
         d.into_any_element()
     }
@@ -1747,7 +2040,7 @@ impl PlinthRoot {
         let d = div().id(eid("scroll", node.id)).role(accesskit::Role::ScrollView).track_scroll(&handle);
         let d = primitives::box_style(d, &style, t, false);
         let d = if primitives::is_row(&style) { d.overflow_x_scroll() } else { d.overflow_y_scroll() };
-        let d = self.key_handlers(d, node, cx);
+        let d = self.key_handlers(d, node, t, cx);
         // A row scroll shows the x range from its offset: its content builds
         // only what is in it (with overscan). A column scroll keeps the range
         // that it got and builds only the rows near its viewport.
@@ -1918,7 +2211,12 @@ impl PlinthRoot {
         let level = node.prop(prop::LEVEL).and_then(Value::as_int).unwrap_or(2);
         let text = node.text.clone().unwrap_or_default();
         let d = aligned(
-            div().id(eid("heading", node.id)).role(accesskit::Role::Heading).aria_label(text.clone()).font_weight(FontWeight::SEMIBOLD),
+            div()
+                .id(eid("heading", node.id))
+                .role(accesskit::Role::Heading)
+                .aria_level(level.clamp(1, 6) as usize)
+                .aria_label(text.clone())
+                .font_weight(FontWeight::SEMIBOLD),
             node,
         );
         match level {
@@ -1966,7 +2264,7 @@ impl PlinthRoot {
                     let entity = cx.entity();
                     move |_, _, cx| entity.update(cx, |this, cx| this.fire(h, event::PRESS, Value::Null, cx))
                 });
-            d = keyboard_activatable(d, cx, move |this, cx| this.fire(h, event::PRESS, Value::Null, cx));
+            d = keyboard_activatable(d, t, cx, move |this, cx| this.fire(h, event::PRESS, Value::Null, cx));
         }
         d.into_any_element()
     }
@@ -1998,8 +2296,13 @@ impl PlinthRoot {
         let Some(field) = self.fields.get(&node.id) else { return div().into_any_element() };
         let id = node.id;
         let disabled = node.bool_prop(prop::DISABLED);
+        let accent = t.accent;
         let input = div()
             .id(eid("tf-wrap", id))
+            .role(accesskit::Role::Group)
+            .aria_label(label.clone())
+            .when_some(error.clone(), |d, e| d.aria_description(e))
+            .aria_disabled(disabled)
             .w_full()
             .when(disabled, |d| d.opacity(0.5))
             .capture_action(cx.listener(move |this, _: &Enter, _, cx| {
@@ -2012,6 +2315,8 @@ impl PlinthRoot {
             .child(
                 text_input(eid("tf", id))
                     .state(field.state.downgrade())
+                    .track_focus(&field.focus.clone().tab_stop(!disabled && self.stopped.is_none()))
+                    .focus(move |s| s.ring(px(FOCUS_RING)).ring_color(accent))
                     .accepts_input(self.stopped.is_none() && !disabled)
                     .placeholder(placeholder)
                     .placeholder_color(t.text_muted)
@@ -2074,7 +2379,7 @@ impl PlinthRoot {
                     move |_, _, cx| entity.update(cx, |this, cx| flip(this, cx))
                 },
             );
-            switch = keyboard_activatable(switch, cx, flip);
+            switch = keyboard_activatable(switch, t, cx, flip);
         }
         div()
             .flex()
@@ -2214,14 +2519,16 @@ impl PlinthRoot {
             )
             .when_some(trailing, |d, tr| d.child(div().flex_none().text_sm().text_color(t.text_muted).child(tr)))
             .child(div().flex().flex_none().items_center().gap_2().children(self.render_children(node, t, cx)));
+        let accent = t.accent;
         let row_el = match handler {
-            Some(h) => keyboard_activatable(
+            Some(h) => inset_focus_ring(keyboard_activatable(
                 row_el.cursor_pointer().hover(move |s| s.bg(hover)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.fire(h, event::PRESS, Value::Null, cx)
                 })),
+                t,
                 cx,
                 move |this, cx| this.fire(h, event::PRESS, Value::Null, cx),
-            ),
+            ), accent),
             None => row_el,
         };
         row_el.into_any_element()
@@ -2258,8 +2565,12 @@ impl PlinthRoot {
             .items_center()
             .gap_1()
             .py_6()
-            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(title))
-            .when_some(message, |d, m| d.child(div().text_xs().text_color(t.text_muted).child(m)))
+            .child(
+                div().id(eid("empty-title", node.id)).role(accesskit::Role::Label).aria_label(title.clone()).text_sm().font_weight(FontWeight::SEMIBOLD).child(title),
+            )
+            .when_some(message, |d, m| {
+                d.child(div().id(eid("empty-message", node.id)).role(accesskit::Role::Label).aria_label(m.clone()).text_xs().text_color(t.text_muted).child(m))
+            })
             .into_any_element()
     }
 
@@ -2306,7 +2617,7 @@ impl PlinthRoot {
                     move |_, _, cx| entity.update(cx, |this, cx| flip(this, cx))
                 },
             );
-            box_el = keyboard_activatable(box_el, cx, flip);
+            box_el = keyboard_activatable(box_el, t, cx, flip);
         }
         div().flex().items_center().gap_2().child(box_el).child(div().text_sm().text_color(t.text).child(label)).into_any_element()
     }
@@ -2317,9 +2628,19 @@ impl PlinthRoot {
         let Some(field) = self.fields.get(&node.id) else { return div().into_any_element() };
         let id = node.id;
         let disabled = node.bool_prop(prop::DISABLED);
-        let input = div().id(eid("ta-wrap", id)).w_full().when(disabled, |d| d.opacity(0.5)).child(
+        let accent = t.accent;
+        let input = div()
+            .id(eid("ta-wrap", id))
+            .role(accesskit::Role::Group)
+            .aria_label(label.clone())
+            .aria_disabled(disabled)
+            .w_full()
+            .when(disabled, |d| d.opacity(0.5))
+            .child(
             text_area(eid("ta", id))
                 .state(field.state.downgrade())
+                .track_focus(&field.focus.clone().tab_stop(!disabled && self.stopped.is_none()))
+                .focus(move |s| s.ring(px(FOCUS_RING)).ring_color(accent))
                 .accepts_input(self.stopped.is_none() && !disabled)
                 .placeholder(placeholder)
                 .placeholder_color(t.text_muted)
@@ -2379,8 +2700,12 @@ impl PlinthRoot {
     }
 
     fn step_button(&self, id: NodeId, label: &'static str, delta: f64, disabled: bool, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let of = self.tree.get(id).and_then(|n| n.str_prop(prop::LABEL)).unwrap_or("");
         div()
             .id(eid(if delta < 0.0 { "step-down" } else { "step-up" }, id))
+            .role(accesskit::Role::Button)
+            .aria_label(format!("{} {of}", if delta < 0.0 { "Decrease" } else { "Increase" }))
+            .aria_disabled(disabled)
             .flex_none()
             .size(px(28.))
             .rounded_md()
@@ -2414,8 +2739,11 @@ impl PlinthRoot {
             .role(accesskit::Role::Slider)
             .aria_label(label.clone())
             .aria_numeric_value(value)
+            .aria_min_numeric_value(min)
+            .aria_max_numeric_value(max)
             .aria_numeric_value_step(step)
             .aria_disabled(disabled)
+            .rounded_full()
             .relative()
             .flex_1()
             .h(px(8.))
@@ -2438,16 +2766,20 @@ impl PlinthRoot {
                     move |_, _, cx| entity.update(cx, |this, cx| dec(this, cx))
                 });
             let entity = cx.entity();
-            let track = track.tab_index(0).on_key_down(move |ev: &KeyDownEvent, _window, cx| {
+            let page = ((max - min) / 10.0).max(step);
+            let track = focus_ring(track.tab_index(0), t.accent).on_key_down(move |ev: &KeyDownEvent, _window, cx| {
                 let delta = match ev.keystroke.key.as_str() {
-                    "right" | "up" => Some(step),
-                    "left" | "down" => Some(-step),
-                    _ => None,
+                    "right" | "up" => step,
+                    "left" | "down" => -step,
+                    "pageup" => page,
+                    "pagedown" => -page,
+                    "home" => f64::MIN,
+                    "end" => f64::MAX,
+                    _ => return,
                 };
-                if let Some(d) = delta {
-                    let entity = entity.clone();
-                    entity.update(cx, |this, cx| this.step_value(id, d, cx));
-                }
+                cx.stop_propagation();
+                let entity = entity.clone();
+                entity.update(cx, |this, cx| this.step_value(id, delta, cx));
             });
             // Pointer drag on the track (SPEC.md §8.4): a click or drag at
             // position `x` maps to a value by `x`'s fraction across the
@@ -2497,13 +2829,26 @@ impl PlinthRoot {
         let id = node.id;
         let Some(field) = self.fields.get(&id) else { return div().into_any_element() };
         warn_if_unlabeled("NumberField", id, &label);
+        let accent = t.accent;
         let input = div()
             .id(eid("nf-wrap", id))
             .role(accesskit::Role::SpinButton)
             .aria_label(label.clone())
             .aria_numeric_value(node.num_prop(prop::VALUE).unwrap_or(0.0))
             .aria_numeric_value_step(step)
+            .when_some(node.num_prop(prop::MIN), |d, v| d.aria_min_numeric_value(v))
+            .when_some(node.num_prop(prop::MAX), |d, v| d.aria_max_numeric_value(v))
             .aria_disabled(disabled)
+            .when(!disabled, |d| {
+                d.capture_action(cx.listener(move |this, _: &NavUp, _, cx| {
+                    cx.stop_propagation();
+                    this.step_value(id, step, cx);
+                }))
+                .capture_action(cx.listener(move |this, _: &NavDown, _, cx| {
+                    cx.stop_propagation();
+                    this.step_value(id, -step, cx);
+                }))
+            })
             .flex()
             .items_center()
             .gap_1()
@@ -2511,7 +2856,9 @@ impl PlinthRoot {
             .child(
             text_input(eid("nf", id))
                 .state(field.state.downgrade())
-                .accepts_input(self.stopped.is_none())
+                .track_focus(&field.focus.clone().tab_stop(!disabled))
+                .focus(move |s| s.ring(px(FOCUS_RING)).ring_color(accent))
+                .accepts_input(!disabled)
                 .caret_color(t.text)
                 .selection_color(t.selection)
                 .caret_blink_interval_500ms()
@@ -2530,76 +2877,164 @@ impl PlinthRoot {
         self.labelled(label, input, None, t)
     }
 
-    /// A `Picker` (SPEC.md §6.3): a segmented control for up to 4 options,
-    /// or a stacked list of rows for more.
+    /// Sets the `value` of a `Picker` or a `Tabs` and fires `change`.
+    fn choose(&mut self, id: NodeId, value: String, cx: &mut Context<Self>) {
+        let handler = self.tree.get(id).and_then(|n| n.handler(event::CHANGE));
+        self.tree.set_local_prop(id, prop::VALUE, Value::Str(value.clone()));
+        match handler {
+            Some(h) => self.fire(h, event::CHANGE, Value::Str(value), cx),
+            None => cx.notify(),
+        }
+    }
+
+    /// One option of a `Picker` or a `Tabs` with a roving focus (PRODUCTION
+    /// U4, as the web host's radio group and tab list): only the chosen
+    /// option (or the first) is a tab stop. Enter and Space choose it; the
+    /// arrow keys of `keys`, Home and End choose another and move the focus
+    /// to it (around the ends if `wrap`).
+    #[allow(clippy::too_many_arguments)]
+    fn roving_option(
+        &self,
+        d: Stateful<gpui::Div>,
+        owner: NodeId,
+        i: usize,
+        options: &Rc<Vec<String>>,
+        chosen: Option<usize>,
+        keys: ArrowKeys,
+        wrap: bool,
+        t: &Tokens,
+        cx: &mut Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        let n = options.len();
+        let focus = self.kept_focus(owner, part::ITEM + i as u32, cx).tab_stop(chosen.unwrap_or(0) == i);
+        let value = options[i].clone();
+        let d = activation_keys(focus_ring(d.track_focus(&focus), t.accent), cx, move |this, cx| this.choose(owner, value.clone(), cx));
+        let options = options.clone();
+        d.on_key_down(cx.listener(move |this, ev: &KeyDownEvent, _, cx| {
+            let key = ev.keystroke.key.as_str();
+            let (back, fwd) = match keys {
+                ArrowKeys::Both => (key == "left" || key == "up", key == "right" || key == "down"),
+                ArrowKeys::Horizontal => (key == "left", key == "right"),
+                ArrowKeys::Vertical => (key == "up", key == "down"),
+            };
+            let j = if back {
+                if i > 0 { i - 1 } else if wrap { n - 1 } else { i }
+            } else if fwd {
+                if i + 1 < n { i + 1 } else if wrap { 0 } else { i }
+            } else if key == "home" {
+                0
+            } else if key == "end" {
+                n - 1
+            } else {
+                return;
+            };
+            cx.stop_propagation();
+            this.choose(owner, options[j].clone(), cx);
+            this.pending_focus = Some(this.kept_focus(owner, part::ITEM + j as u32, cx));
+            cx.notify();
+        }))
+    }
+
+    /// A `Picker` (SPEC.md §6.3): a segmented control (a radio group) for
+    /// up to 4 options, or a stacked list (a list box) for more.
     fn render_picker(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let label = node.str_prop(prop::LABEL).unwrap_or("").to_owned();
         let current = node.str_prop(prop::VALUE).unwrap_or("").to_owned();
         let disabled = node.bool_prop(prop::DISABLED) || self.stopped.is_some();
         let id = node.id;
         warn_if_unlabeled("Picker", id, &label);
-        let options: Vec<String> = node.str_prop(prop::OPTIONS).unwrap_or("").split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_owned).collect();
-        let select = move |this: &mut Self, opt: String, cx: &mut Context<Self>| {
-            let handler = this.tree.get(id).and_then(|n| n.handler(event::CHANGE));
-            this.tree.set_local_prop(id, prop::VALUE, Value::Str(opt.clone()));
-            match handler {
-                Some(h) => this.fire(h, event::CHANGE, Value::Str(opt), cx),
-                None => cx.notify(),
-            }
-        };
-        let body = if options.len() <= 4 {
-            let items = options.into_iter().enumerate().map(|(i, opt)| {
-                let selected = opt == current;
-                let opt_for_click = opt.clone();
-                div()
-                    .id(eid("picker-opt", (id as u64) * 100 + i as u64))
-                    .role(accesskit::Role::RadioButton)
-                    .aria_label(opt.clone())
-                    .aria_selected(selected)
-                    .aria_disabled(disabled)
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .py_1()
-                    .rounded_md()
-                    .text_xs()
-                    .when(selected, |d| d.bg(t.accent).text_color(t.on_accent))
-                    .when(!selected, |d| d.text_color(t.text))
-                    .when(disabled, |d| d.opacity(0.5))
-                    .when(!disabled, |d| {
-                        d.cursor_pointer().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| select(this, opt_for_click.clone(), cx)))
-                    })
-                    .child(opt)
-            });
-            div().flex().gap_1().p_1().rounded_lg().bg(t.surface_alt).children(items).into_any_element()
+        let options: Rc<Vec<String>> =
+            Rc::new(node.str_prop(prop::OPTIONS).unwrap_or("").split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_owned).collect());
+        let chosen = options.iter().position(|o| *o == current);
+        let n = options.len();
+        let body = if n <= 4 {
+            let items: Vec<AnyElement> = (0..n)
+                .map(|i| {
+                    let opt = options[i].clone();
+                    let selected = chosen == Some(i);
+                    let d = div()
+                        .id(eid("picker-opt", (id as u64) * 1000 + i as u64))
+                        .role(accesskit::Role::RadioButton)
+                        .aria_label(opt.clone())
+                        .aria_toggled(if selected { accesskit::Toggled::True } else { accesskit::Toggled::False })
+                        .aria_position_in_set(i + 1)
+                        .aria_size_of_set(n)
+                        .aria_disabled(disabled)
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .py_1()
+                        .rounded_md()
+                        .text_xs()
+                        .when(selected, |d| d.bg(t.accent).text_color(t.on_accent))
+                        .when(!selected, |d| d.text_color(t.text))
+                        .when(disabled, |d| d.opacity(0.5))
+                        .child(opt.clone());
+                    if disabled {
+                        return d.into_any_element();
+                    }
+                    let d = d.cursor_pointer().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(id, opt.clone(), cx)));
+                    self.roving_option(d, id, i, &options, chosen, ArrowKeys::Both, true, t, cx).into_any_element()
+                })
+                .collect();
+            div()
+                .id(eid("picker", id))
+                .role(accesskit::Role::RadioGroup)
+                .aria_label(label.clone())
+                .aria_disabled(disabled)
+                .flex()
+                .gap_1()
+                .p_1()
+                .rounded_lg()
+                .bg(t.surface_alt)
+                .children(items)
+                .into_any_element()
         } else {
             let hover = t.hover;
-            let rows = options.into_iter().map(|opt| {
-                let selected = opt == current;
-                let opt_for_click = opt.clone();
-                div()
-                    .id(eid("picker-row", {
-                        use std::hash::{Hash, Hasher};
-                        let mut h = std::collections::hash_map::DefaultHasher::new();
-                        opt.hash(&mut h);
-                        h.finish()
-                    }))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px_3()
-                    .py_2()
-                    .when(disabled, |d| d.opacity(0.5))
-                    .when(!disabled, |d| {
-                        d.cursor_pointer()
-                            .hover(move |s| s.bg(hover))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| select(this, opt_for_click.clone(), cx)))
-                    })
-                    .child(div().text_sm().child(opt))
-                    .when(selected, |d| d.child(div().text_color(t.accent).child("✓")))
-            });
-            div().flex().flex_col().rounded_lg().border_1().border_color(t.border).children(rows).into_any_element()
+            let rows: Vec<AnyElement> = (0..n)
+                .map(|i| {
+                    let opt = options[i].clone();
+                    let selected = chosen == Some(i);
+                    let d = div()
+                        .id(eid("picker-row", (id as u64) * 1000 + i as u64))
+                        .role(accesskit::Role::ListBoxOption)
+                        .aria_label(opt.clone())
+                        .aria_selected(selected)
+                        .aria_position_in_set(i + 1)
+                        .aria_size_of_set(n)
+                        .aria_disabled(disabled)
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .when(disabled, |d| d.opacity(0.5))
+                        .child(div().text_sm().child(opt.clone()))
+                        .when(selected, |d| d.child(div().text_color(t.accent).child("✓")));
+                    if disabled {
+                        return d.into_any_element();
+                    }
+                    let d = d
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(hover))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(id, opt.clone(), cx)));
+                    inset_focus_ring(self.roving_option(d, id, i, &options, chosen, ArrowKeys::Vertical, false, t, cx), t.accent).into_any_element()
+                })
+                .collect();
+            div()
+                .id(eid("picker", id))
+                .role(accesskit::Role::ListBox)
+                .aria_label(label.clone())
+                .aria_disabled(disabled)
+                .flex()
+                .flex_col()
+                .rounded_lg()
+                .border_1()
+                .border_color(t.border)
+                .children(rows)
+                .into_any_element()
         };
         self.labelled(label, body, None, t)
     }
@@ -2612,7 +3047,7 @@ impl PlinthRoot {
             bar = bar.aria_label(l.clone());
         }
         if let Some(v) = value {
-            bar = bar.aria_numeric_value(v as f64);
+            bar = bar.aria_numeric_value(v as f64).aria_min_numeric_value(0.0).aria_max_numeric_value(1.0);
         }
         let bar = bar.w_full().h(px(6.)).rounded_full().bg(t.track).child(match value {
             Some(frac) => div().h_full().rounded_full().bg(t.accent).w(gpui::relative(frac)).into_any_element(),
@@ -2637,6 +3072,9 @@ impl PlinthRoot {
             _ => (with_alpha(t.accent, 0.16), t.accent),
         };
         div()
+            .id(eid("badge", node.id))
+            .role(accesskit::Role::Label)
+            .aria_label(label.clone())
             .flex_none()
             .px_2()
             .py_0p5()
@@ -2854,13 +3292,10 @@ impl PlinthRoot {
         } else {
             let trigger = trigger.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                this.toggle_date_picker(id);
-                cx.notify();
+                this.toggle_date_picker_focus(id, cx);
             }));
-            keyboard_activatable(trigger, cx, move |this, cx| {
-                this.toggle_date_picker(id);
-                cx.notify();
-            })
+            let focus = self.kept_focus(id, part::TRIGGER, cx).tab_stop(true);
+            activation_keys(focus_ring(trigger.track_focus(&focus), t.accent), cx, move |this, cx| this.toggle_date_picker_focus(id, cx))
         };
         let mut wrap = div().flex().flex_col().gap_1().child(trigger);
         if open {
@@ -2871,9 +3306,14 @@ impl PlinthRoot {
                         .child(
                             div()
                                 .id(eid("dp-popover", id))
+                                .role(accesskit::Role::Dialog)
+                                .aria_label(label.clone())
+                                .track_focus(&self.kept_focus(id, part::POPOVER, cx))
                                 .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
                                 .on_key_down(cx.listener(move |this, ev: &KeyDownEvent, _, cx| {
-                                    this.date_picker_key(id, mode, &ev.keystroke.key, cx);
+                                    if this.date_picker_key(id, mode, &ev.keystroke.key, cx) {
+                                        cx.stop_propagation();
+                                    }
                                 }))
                                 .child(self.render_date_picker_panel(id, mode, date, time, t, cx)),
                         ),
@@ -2882,6 +3322,24 @@ impl PlinthRoot {
             );
         }
         self.labelled(label, wrap, None, t)
+    }
+
+    /// Opens or closes a `DatePicker`. The open popover takes the focus
+    /// (so that its arrow keys work); a closed one gives it to the trigger.
+    fn toggle_date_picker_focus(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        self.toggle_date_picker(id);
+        let part = if self.open_menus.contains(&id) { part::POPOVER } else { part::TRIGGER };
+        self.pending_focus = Some(self.kept_focus(id, part, cx));
+        cx.notify();
+    }
+
+    /// Closes the popover of a `DatePicker` and gives the focus back to its
+    /// trigger.
+    fn close_date_picker(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        self.open_menus.remove(&id);
+        self.date_cursor.remove(&id);
+        self.pending_focus = Some(self.kept_focus(id, part::TRIGGER, cx));
+        cx.notify();
     }
 
     fn toggle_date_picker(&mut self, id: NodeId) {
@@ -2918,16 +3376,16 @@ impl PlinthRoot {
     /// Keyboard handling inside an open `DatePicker` popover (SPEC.md §6.3):
     /// arrows move the focused day, PageUp/PageDown change month, Enter
     /// picks, Escape closes.
-    fn date_picker_key(&mut self, id: NodeId, mode: &str, key: &str, cx: &mut Context<Self>) {
+    /// `true` if the key was used.
+    fn date_picker_key(&mut self, id: NodeId, mode: &str, key: &str, cx: &mut Context<Self>) -> bool {
         if mode == "time" {
             if key == "escape" {
-                self.open_menus.remove(&id);
-                self.date_cursor.remove(&id);
-                cx.notify();
+                self.close_date_picker(id, cx);
+                return true;
             }
-            return;
+            return false;
         }
-        let Some(&(mut y, mut m, mut focus_day)) = self.date_cursor.get(&id) else { return };
+        let Some(&(mut y, mut m, mut focus_day)) = self.date_cursor.get(&id) else { return false };
         match key {
             "left" => focus_day = focus_day.saturating_sub(1).max(1),
             "right" => focus_day += 1,
@@ -2949,18 +3407,14 @@ impl PlinthRoot {
                 let value = self.tree.get(id).and_then(|n| n.str_prop(prop::VALUE)).unwrap_or("").to_owned();
                 let (_, time) = calendar::parse_value(mode, &value);
                 self.commit_date_picker(id, mode, Some((y, m, focus_day)), time, cx);
-                self.open_menus.remove(&id);
-                self.date_cursor.remove(&id);
-                cx.notify();
-                return;
+                self.close_date_picker(id, cx);
+                return true;
             }
             "escape" => {
-                self.open_menus.remove(&id);
-                self.date_cursor.remove(&id);
-                cx.notify();
-                return;
+                self.close_date_picker(id, cx);
+                return true;
             }
-            _ => return,
+            _ => return false,
         }
         // Rolling past the end/start of the visible month moves to the
         // next/previous one, keeping the focused day in range.
@@ -2973,6 +3427,7 @@ impl PlinthRoot {
         }
         self.date_cursor.insert(id, (y, m, focus_day));
         cx.notify();
+        true
     }
 
     /// The popover body: a month grid for `date`/`datetime`, hour/minute
@@ -3030,7 +3485,8 @@ impl PlinthRoot {
                     .px_2()
                     .text_color(t.text)
                     .child("\u{2039}")
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| prev(this, cx))),
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| prev(this, cx)))
+                    .map(|d| keyboard_activatable(d, t, cx, prev)),
             )
             .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(format!("{} {year}", calendar::month_name(month))))
             .child(
@@ -3042,7 +3498,8 @@ impl PlinthRoot {
                     .px_2()
                     .text_color(t.text)
                     .child("\u{203A}")
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| next(this, cx))),
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| next(this, cx)))
+                    .map(|d| keyboard_activatable(d, t, cx, next)),
             );
         let weekday_header = div()
             .flex()
@@ -3064,6 +3521,7 @@ impl PlinthRoot {
                 .id(eid("dp-day", (id as u64) * 1000 + day as u64))
                 .role(accesskit::Role::GridCell)
                 .aria_selected(is_selected)
+                .when(is_focused, |d| d.aria_active_descendant())
                 .aria_label(calendar::format_date_readable(year, month, day))
                 .flex_1()
                 .flex()
@@ -3153,7 +3611,9 @@ impl PlinthRoot {
         let min_up = move |this: &mut Self, cx: &mut Context<Self>| step_m_up(this, 0, 1, cx);
         let step_m_down = step.clone();
         let min_down = move |this: &mut Self, cx: &mut Context<Self>| step_m_down(this, 0, -1, cx);
-        let stepper = |value: String, up: Box<dyn Fn(&mut Self, &mut Context<Self>)>, down: Box<dyn Fn(&mut Self, &mut Context<Self>)>, label: &'static str, cx: &mut Context<Self>| {
+        type Step = Rc<dyn Fn(&mut PlinthRoot, &mut Context<PlinthRoot>)>;
+        let stepper = |value: String, up: Step, down: Step, label: &'static str, cx: &mut Context<Self>| {
+            let (up2, down2) = (up.clone(), down.clone());
             div()
                 .flex()
                 .flex_col()
@@ -3168,7 +3628,8 @@ impl PlinthRoot {
                         .px_2()
                         .text_color(t.text)
                         .child("+")
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| up(this, cx))),
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| up(this, cx)))
+                        .map(|d| keyboard_activatable(d, t, cx, move |this, cx| up2(this, cx))),
                 )
                 .child(div().w(px(36.)).text_center().text_sm().child(value))
                 .child(
@@ -3180,7 +3641,8 @@ impl PlinthRoot {
                         .px_2()
                         .text_color(t.text)
                         .child("\u{2212}")
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| down(this, cx))),
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| down(this, cx)))
+                        .map(|d| keyboard_activatable(d, t, cx, move |this, cx| down2(this, cx))),
                 )
                 .into_any_element()
         };
@@ -3190,9 +3652,9 @@ impl PlinthRoot {
             .items_center()
             .justify_center()
             .gap_3()
-            .child(stepper(format!("{hour:02}"), Box::new(hour_up), Box::new(hour_down), "hour", cx))
+            .child(stepper(format!("{hour:02}"), Rc::new(hour_up), Rc::new(hour_down), "hour", cx))
             .child(div().text_sm().child(":"))
-            .child(stepper(format!("{minute:02}"), Box::new(min_up), Box::new(min_down), "minute", cx))
+            .child(stepper(format!("{minute:02}"), Rc::new(min_up), Rc::new(min_down), "minute", cx))
             .into_any_element()
     }
 
@@ -3213,7 +3675,11 @@ impl PlinthRoot {
         let handler = node.handler(event::PRESS);
         let destructive = node.enum_prop(prop::ROLE) == button_role::DESTRUCTIVE;
         let needs_confirm = destructive && node.prop(prop::CONFIRM).and_then(Value::as_bool).unwrap_or(true);
-        self.open_menus.clear();
+        for owner in std::mem::take(&mut self.open_menus) {
+            if let Some(h) = self.focus_handles.borrow().get(&(owner, part::TRIGGER)) {
+                self.pending_focus = Some(h.clone());
+            }
+        }
         if needs_confirm {
             self.confirm = Some(PendingConfirm { label, handler });
         } else if let Some(h) = handler {
@@ -3228,8 +3694,26 @@ impl PlinthRoot {
         let pending = self.confirm.as_ref()?;
         let message = format!("Are you sure you want to {}? This cannot be undone.", pending.label.to_lowercase());
         let handler = pending.handler;
+        let top = self.top_modal() == Some(Modal::Confirm);
+        let (danger, on_accent) = (t.danger, t.on_accent);
+        let cancel = self.modal_button("confirm-cancel", "Cancel", |d| d, t, cx, |this, cx| {
+            this.confirm = None;
+            cx.notify();
+        });
+        let ok = self.modal_button("confirm-ok", "Delete", move |d| d.bg(danger).text_color(on_accent), t, cx, move |this, cx| {
+            this.confirm = None;
+            if let Some(h) = handler {
+                this.fire(h, event::PRESS, Value::Null, cx);
+            }
+            cx.notify();
+        });
         let panel = div()
             .id("confirm-panel")
+            .when(top, |d| d.track_focus(&self.modal_focus))
+            .role(accesskit::Role::AlertDialog)
+            .aria_modal(true)
+            .aria_label(pending.label.clone())
+            .aria_description(message.clone())
             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
             .w(px(320.))
             .p_5()
@@ -3242,45 +3726,7 @@ impl PlinthRoot {
             .border_color(t.border)
             .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(pending.label.clone()))
             .child(div().text_sm().text_color(t.text_muted).child(message))
-            .child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .gap_2()
-                    .child(
-                        div()
-                            .id("confirm-cancel")
-                            .cursor_pointer()
-                            .px_3()
-                            .py_2()
-                            .rounded_md()
-                            .text_sm()
-                            .child("Cancel")
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.confirm = None;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("confirm-ok")
-                            .cursor_pointer()
-                            .px_3()
-                            .py_2()
-                            .rounded_md()
-                            .bg(t.danger)
-                            .text_color(t.on_accent)
-                            .text_sm()
-                            .child("Delete")
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.confirm = None;
-                                if let Some(h) = handler {
-                                    this.fire(h, event::PRESS, Value::Null, cx);
-                                }
-                                cx.notify();
-                            })),
-                    ),
-            );
+            .child(div().flex().justify_end().gap_2().child(cancel).child(ok));
         Some(
             div()
                 .id("confirm-backdrop")
@@ -3343,11 +3789,14 @@ impl PlinthRoot {
         let title = node.str_prop(prop::TITLE).unwrap_or("").to_owned();
         let message = node.str_prop(prop::MESSAGE).map(str::to_owned);
         let actions: Vec<&Node> = node.children.iter().filter_map(|&c| self.tree.get(c)).collect();
+        let top = self.top_modal() == Some(Modal::Overlay(id));
         let panel = div()
             .id(eid("dialog", id))
+            .when(top, |d| d.track_focus(&self.modal_focus))
             .role(accesskit::Role::Dialog)
             .aria_modal(true)
             .aria_label(title.clone())
+            .when_some(message.clone(), |d, m| d.aria_description(m))
             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.stop_propagation()))
             .w(px(360.))
             .p_5()
@@ -3360,7 +3809,7 @@ impl PlinthRoot {
             .border_color(t.border)
             .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(title))
             .when_some(message, |d, m| d.child(div().text_sm().text_color(t.text_muted).child(m)))
-            .child(div().flex().justify_end().gap_2().children(actions.into_iter().map(|a| self.render_action_item(a, t, false, cx))));
+            .child(div().flex().justify_end().gap_2().children(actions.into_iter().map(|a| self.render_action_item(a, t, None, cx))));
         div()
             .id(eid("dialog-backdrop", id))
             .absolute()
@@ -3382,12 +3831,19 @@ impl PlinthRoot {
         let children: Vec<AnyElement> = node.children.iter().map(|&c| self.render_node(c, t, cx)).collect();
         let close_btn = div()
             .id(eid("sheet-close", id))
+            .role(accesskit::Role::Button)
+            .aria_label("Close")
             .cursor_pointer()
+            .rounded_md()
+            .px_1()
             .text_color(t.text_muted)
             .child("\u{2715}")
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.close_overlay(id, cx)));
+        let close_btn = keyboard_activatable(close_btn, t, cx, move |this, cx| this.close_overlay(id, cx));
+        let top = self.top_modal() == Some(Modal::Overlay(id));
         let panel = div()
             .id(eid("sheet", id))
+            .when(top, |d| d.track_focus(&self.modal_focus))
             .role(accesskit::Role::Dialog)
             .aria_modal(true)
             .aria_label(title.clone())
@@ -3416,28 +3872,27 @@ impl PlinthRoot {
     }
 
     /// In-screen segmented tabs (SPEC.md §6.3). `items` is joined with
-    /// U+001F (see `controls.rs::PropTy::StrList`).
+    /// U+001F (see `controls.rs::PropTy::StrList`). Left and Right choose
+    /// the tab before or after, as on the web.
     fn render_tabs(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
-        let items: Vec<&str> = node.str_prop(prop::ITEMS).map(|s| s.split('\u{1f}').collect()).unwrap_or_default();
+        let items: Rc<Vec<String>> =
+            Rc::new(node.str_prop(prop::ITEMS).map(|s| s.split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_owned).collect()).unwrap_or_default());
         let current = node.str_prop(prop::VALUE).unwrap_or("").to_owned();
         let id = node.id;
-        div()
-            .id(eid("tablist", id))
-            .role(accesskit::Role::TabList)
-            .flex()
-            .p_1()
-            .gap_1()
-            .rounded_lg()
-            .bg(t.surface_alt)
-            .children(items.into_iter().enumerate().map(|(i, item)| {
-                let item = item.to_owned();
-                let selected = item == current;
+        let chosen = items.iter().position(|i| *i == current);
+        let n = items.len();
+        let tabs: Vec<AnyElement> = (0..n)
+            .map(|i| {
+                let item = items[i].clone();
+                let selected = chosen == Some(i);
                 let value = item.clone();
-                div()
+                let d = div()
                     .id(eid("tab", id as u64 * 1000 + i as u64))
                     .role(accesskit::Role::Tab)
                     .aria_label(item.clone())
                     .aria_selected(selected)
+                    .aria_position_in_set(i + 1)
+                    .aria_size_of_set(n)
                     .flex_1()
                     .cursor_pointer()
                     .text_center()
@@ -3446,16 +3901,11 @@ impl PlinthRoot {
                     .rounded_md()
                     .when(selected, |d| d.bg(t.surface).font_weight(FontWeight::SEMIBOLD))
                     .child(item)
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        let handler = this.tree.get(id).and_then(|n| n.handler(event::CHANGE));
-                        this.tree.set_local_prop(id, prop::VALUE, Value::Str(value.clone()));
-                        match handler {
-                            Some(h) => this.fire(h, event::CHANGE, Value::Str(value.clone()), cx),
-                            None => cx.notify(),
-                        }
-                    }))
-            }))
-            .into_any_element()
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(id, value.clone(), cx)));
+                self.roving_option(d, id, i, &items, chosen, ArrowKeys::Horizontal, true, t, cx).into_any_element()
+            })
+            .collect();
+        div().id(eid("tablist", id)).role(accesskit::Role::TabList).flex().p_1().gap_1().rounded_lg().bg(t.surface_alt).children(tabs).into_any_element()
     }
 
     /// `<Menu>`: a label that discloses its actions (SPEC.md §6.3).
@@ -3464,6 +3914,7 @@ impl PlinthRoot {
         let id = node.id;
         let open = self.open_menus.contains(&id);
         let actions: Vec<NodeId> = node.children.clone();
+        let first = actions.first().copied();
         div()
             .flex()
             .flex_col()
@@ -3484,9 +3935,9 @@ impl PlinthRoot {
                     .child(label)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        this.toggle_menu(id);
-                        cx.notify();
-                    })),
+                        this.toggle_menu_focus(id, first, cx);
+                    }))
+                    .map(|d| self.menu_trigger(d, id, first, t, cx)),
             )
             .when(open, |d| {
                 d.child(deferred(anchored().snap_to_window().child(self.render_menu_panel(&actions, t, cx))).priority(1))
@@ -3503,8 +3954,12 @@ impl PlinthRoot {
             WidthClass::Regular => 3,
             WidthClass::Wide => 4,
         };
+        let rows = !node.children.is_empty()
+            && node.children.iter().all(|&c| self.tree.get(c).is_some_and(|n| n.kind == Some(ControlKind::Row)));
         let cells = self.render_children(node, t, cx);
         div()
+            .id(eid("grid", node.id))
+            .when(rows, |d| d.role(accesskit::Role::List))
             .grid()
             .grid_cols(columns as u16)
             .gap_3()

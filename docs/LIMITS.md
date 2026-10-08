@@ -32,6 +32,7 @@ Plinth is not ready for production apps. The current level is "before Preview".
 | No context menu (secondary button), no drag and drop between controls, and no modal overlay that blocks the pointer on the desktop. | U6 |
 | IME composition (for example Chinese or Japanese input) is not tested on the desktop host. The web host uses the browser's input fields. | U5 |
 | The app does not follow all system settings yet: high contrast, text scale and reduced motion. | U7 |
+| The desktop accessibility tree is not checked with a screen reader yet (Narrator, VoiceOver, Orca). On the desktop, a text field has its name on the group around it, not on the text input itself. | U3 |
 | No animated transitions and no sound. | U10, U11 |
 | Each nested flex box about doubles the layout work of its subtree on the desktop. Keep layouts flat. | R7 |
 

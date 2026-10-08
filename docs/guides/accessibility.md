@@ -8,7 +8,14 @@ Level 1 controls (`Button`, `TextField`, `Toggle`, `List`, `Row`, `Dialog` and t
 
 - **A label is required.** Each interactive control has a required `label` (or `title`). If you leave it out, the compiler gives the error `PL4003` ("`<Pressable>` needs the prop `label`", for example).
 - **Roles, names and states.** On the desktop, the runtime gives each node an AccessKit role, name and state. On the web, the renderer writes semantic HTML: `<button>`, `<input>`, `<dialog>`, headings and lists.
-- **Keyboard.** Each interactive control takes the focus with Tab. Enter or Space activates it. Arrow keys move a `Slider`. `Menu` and the toolbar overflow close on Escape.
+- **Keyboard.** These are guaranteed on the desktop and the web, and the desktop is tested headless (`crates/plinth-shoot/tests/a11y_controls.rs`):
+  - Tab and Shift+Tab go through each interactive control in screen order: the navigation, the toolbar, then the screen from the top. A disabled control is not a tab stop. A `Picker`, a `Tabs` and the options of a long `Picker` are one tab stop each (the chosen option).
+  - Enter or Space presses a `Button`, an `Action`, a `Row` with `onPress`, a `Pressable` and a `Menu` item. Space flips a `Toggle` and a `Checkbox`.
+  - Text fields take typing. Tab leaves a `TextArea`; it does not type a tab character.
+  - The arrow keys choose the option before or after in a `Picker` and a `Tabs` (the focus follows), and Home and End choose the first and the last. Arrow keys, Home, End, PageUp and PageDown move a `Slider`. Up and Down step a `NumberField`. In the open `DatePicker`, the arrow keys move the day, PageUp and PageDown the month, and Enter picks the day. Up and Down move in an open `Menu`.
+  - An open `Menu` or `DatePicker` has the focus; Escape closes it and gives the focus back to its trigger.
+  - A `Sheet`, a `Dialog` and the host dialogs take the focus when they open and keep it: Tab and Shift+Tab stay in them. Escape closes them (also from a text field in them), and the focus goes back to the control that had it before.
+- **Visible focus.** The control with the keyboard focus has a ring in the accent color (2 px). On the web, it is the `:focus-visible` outline.
 - **Images.** `Image` needs an `alt` text that is not empty (`PL4009`).
 - **Icons.** An `Icon` is decorative by default (hidden from assistive technology). Give it a `label` when it carries meaning.
 - **Errors.** `TextField.error` shows a message under the field and marks the field as invalid (`aria-invalid` on the web).
@@ -30,7 +37,7 @@ Level 1 controls (`Button`, `TextField`, `Toggle`, `List`, `Row`, `Dialog` and t
 More rules:
 
 - **Empty labels.** The compiler checks that a required label is present. It does not check that the text is useful: `label=""` compiles. Write real words.
-- **Visible focus.** Add a `focus` style to each element that takes the focus, for example `focus={{ border: "accent" }}` (as `examples/pong` does). Whether the runtime draws a focus ring of its own on a Level 2 element is not checked.
+- **Visible focus.** The runtime draws its focus ring on each element that takes the focus (a `Pressable`, a box with a key handler). A `focus` style, for example `focus={{ border: "accent" }}` (as `examples/pong` does), adds to the ring.
 - **Keyboard and pointer.** Each action that you give to a pointer (`onPointerDown`, a drag) must also have a keyboard way: a `Pressable`, or a key handler. `examples/pong` moves the paddle with a drag, with the arrow keys, and with buttons.
 - **Colors.** Use theme tokens only (`"text"`, `"surface"`, `"accent"`, ...). There are no raw colors, so your app follows the light and dark theme.
 
@@ -104,4 +111,6 @@ These are not done yet (`docs/LIMITS.md`, `docs/PRODUCTION.md` U3–U7):
 
 - The app does not follow the system settings for high contrast, text scale and reduced motion.
 - IME input (for example Chinese or Japanese) is not tested on the desktop.
-- There is no test that compares the web HTML with the desktop AccessKit tree.
+- There is no test that compares the web HTML with the desktop AccessKit tree, and the desktop tree is not checked with a screen reader yet (Narrator, VoiceOver, Orca).
+- On the desktop, a text field has its name on the group around it, not on the text input node itself (a gpui-ce limit). A screen reader can read the field without its label.
+- The roles differ on some controls between the hosts: see the table in `docs/PRODUCTION.md` U3.
