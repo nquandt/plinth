@@ -850,6 +850,17 @@ impl Guest {
         self.data().limits.memory
     }
 
+    /// The fuel that the last `init`/`on-event` call used on the wasmi
+    /// engine (its time limit, `docs/GAPS.md` "wasmi engine"), for the
+    /// calibration of the fuel budget. `None` on wasmtime (no fuel).
+    pub fn last_call_fuel(&self) -> Option<u64> {
+        match self {
+            Guest::Wasmtime(_) => None,
+            #[cfg(feature = "wasmi")]
+            Guest::Wasmi(g) => Some(g.last_fuel_used),
+        }
+    }
+
     /// Returns the uncaught errors that the guest reported (`error.report`,
     /// SPEC.md §5.6) since the last call. The guest is still running.
     pub fn take_errors(&mut self) -> Vec<String> {

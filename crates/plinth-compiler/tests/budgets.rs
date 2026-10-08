@@ -181,6 +181,13 @@ fn check(section: &str, unit: &str, values: &BTreeMap<String, u64>, budget_of: i
         eprintln!("note: {section}: not checked on a GitHub-hosted runner");
         return;
     }
+    // The timing budgets are wasmtime times. The wasmi interpreter
+    // (`PLINTH_ENGINE=wasmi`) is about 10 times slower (docs/GAPS.md "wasmi
+    // engine"), so they do not apply to it. The values are printed above.
+    if section == "start_ms" && std::env::var("PLINTH_ENGINE").is_ok_and(|v| v == "wasmi") {
+        eprintln!("note: {section}: not checked on the wasmi engine");
+        return;
+    }
     let mut failures = Vec::new();
     for (k, v) in values {
         match budgets.get(k) {

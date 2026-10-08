@@ -61,7 +61,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | R1 | GC and allocator have no known leaks; memory stays level under random use | Preview | Done | `tests/monkey.rs`, GAPS "Robustness" |
 | R2 | Desktop limits: time limit, memory cap, stack limit stop only the app, with a plain reason | Preview | Done | `tests/errors.rs` "Limits" |
 | R3 | Web limits: a time limit (Worker and watchdog) and a memory cap | Beta | Done | Memory cap: `capCoreMemory` (`web/test/run-stop.mjs`). Time limit: each app runs in its own Worker, and a watchdog ends it after 2 s in one call (`web/app-worker.js`; `web/test/run-worker.mjs`, `checkStopBanner` in `run-a11y.mjs`). |
-| R4 | wasmi engine passes all suites (monkey, async, files, hub, net) and runs in CI | Beta | Partial | HANDOFF §10 item 1 (a)–(d) |
+| R4 | wasmi engine passes all suites (monkey, async, files, hub, net) and runs in CI | Beta | Done | 2026-10-08: every compiler suite that runs apps passes with `PLINTH_ENGINE=wasmi` (`files`, `hub_api`, `net` for the first time; `monkey` in a release build); three engine-aware tests (trap place, round-trip bound, start-time budgets). `FUEL_PER_MS` is now 2,000,000 from release measurements of ten workloads (`tests/perf.rs` `engines_speed`). Speed: wasmi is 7 to 11 times slower than wasmtime in a release build. GAPS "wasmi engine" step 3. |
 | R5 | Engine-free host state crate (no wasmtime dependency for iOS) | 1.0 | Open | HANDOFF §10 item 1 (e). Needed for iOS (PR-Q1). |
 | R6 | Performance budgets in the gate: start time, frame cost, memory per app, `.plnt` size | Beta | Done | `crates/plinth-compiler/tests/budgets.rs` with `tests/budgets.toml` (in `ci-local.sh full` and `nogui`): `app.wasm` size of each example, memory after `init` and after 300 UI events, start time (load and init) for five examples; the core size is recorded, not limited (SPEC.md §5.5). Frame cost of each example: `crates/plinth-shoot/tests/frame_cost.rs` with `tests/frame_budgets.toml` (`--shoot`). Bless with `PLINTH_BLESS=1`. Budgets and measurements: `docs/guides/performance.md` §9. |
 | R7 | Nested flex layout is linear (gpui-ce fix) | Beta | Open | GAPS F1; HANDOFF §10 item 3 |
@@ -92,7 +92,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | H4 | Structured storage (`store.sql`) | Beta | Open | Owner decision 2026-10-07: a SQL store for each app (SQLite on the desktop and mobile, SQLite in Wasm on the web). Design it in `docs/STORAGE.md` (ST-Q1 answered). |
 | H5 | Storage: `vault` space, a folder as a space, `watch` | 1.0 | Open | `docs/STORAGE.md` §6 |
 | H6 | Sync between devices of one user | Later | Open | STORAGE §6. Not in 1.0 (PR-Q5). |
-| H7 | Each host API has a documented behavior on each host, with the same test on each host | Beta | Partial | `docs/host-apis.md` "Support on each host" (behavior and tests: desktop wasmtime, desktop wasmi, web). Next: tests for the "no test" cells: `clipboard` on all three hosts; `dialog`, `net`, `files` and `hub` on wasmi (with Q4); `dialog` on the web. |
+| H7 | Each host API has a documented behavior on each host, with the same test on each host | Beta | Partial | `docs/host-apis.md` "Support on each host" (behavior and tests: desktop wasmtime, desktop wasmi, web). The wasmi cells for `dialog`, `net`, `files` and `hub` have tests in the wasmi gate (2026-10-08, Q4). Next: tests for the "no test" cells: `clipboard` on all three hosts; `dialog` on the web. |
 
 ## 7. Security
 
@@ -171,7 +171,7 @@ Production apps run code from many publishers. This area must be complete before
 | Q1 | Local gate: `scripts/ci-local.sh full --shoot`, `run-a11y.mjs` | Preview | Done | HANDOFF §3 |
 | Q2 | CI runs on each push (self-hosted Windows and Linux runners online) | Beta | Partial | HANDOFF §0.2 item 1 (owner steps open) |
 | Q3 | CI on macOS for each release, not only weekly | Beta | Open | |
-| Q4 | A wasmi job in CI | Beta | Open | HANDOFF §10 item 1 (d) |
+| Q4 | A wasmi job in CI | Beta | Done | `bash scripts/ci-local.sh wasmi` (the runner tests and 21 app suites on wasmi, about 4 min warm) and the CI job "Windows (wasmi engine)" (self-hosted Windows runner, on a push to `master` and by hand). `lang`, `sevenguis`, `monkey` and `budgets` are too slow in a debug wasmi build for the gate; run them by hand (GAPS "wasmi engine"). |
 | Q5 | A release is blocked when the gate fails on any platform | Beta | Open | `release.yml` |
 
 ## 13. Validation with real apps
@@ -232,6 +232,6 @@ Count on 2026-10-08, by gate and status. Run `bash scripts/production-status.sh`
 1. T7, the core part: optimize the 1.13 core with `wasm-opt -Oz` when it is built.
 2. R6: performance budgets in the gate (done).
 3. L9: source locations in runtime errors (done; release builds have no trap place).
-4. R4, Q4: wasmi in all suites and in CI.
+4. R4, Q4: wasmi in all suites and in CI (done).
 5. H4: the `store.sql` design and the first slice.
 6. U5, U6, U7: IME on the desktop, pointer gaps, system settings.

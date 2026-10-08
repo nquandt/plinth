@@ -960,7 +960,8 @@ large on CPU-heavy work and small on ordinary UI event handling.
   fields, no longer wrapped around wasmtime's own `StoreLimits` type) through
   `wasmi_core::ResourceLimiter`, the same trait `wasmi::ResourceLimiter`
   re-exports; `Guest::memory_bytes` now works on both engines.
-- `FUEL_PER_MS` is **not** a wall-clock-accurate conversion: real fuel
+- (Replaced on 2026-10-08 by step 3 below: `FUEL_PER_MS` is now 2,000,000,
+  from release-build numbers.) `FUEL_PER_MS` is **not** a wall-clock-accurate conversion: real fuel
   consumption per millisecond varied about 15x between workloads measured
   here (roughly 11,000 fuel/ms for a tight add-and-branch TS `while` loop
   running through `plinth-rt`'s own interpreter, versus roughly 172,000
@@ -998,29 +999,120 @@ of it), `--test apps` (7/7, 1.6 s, includes `pong_plays_a_point`).
 two `wasmi_core::extract_core_module` unit tests) and the default-engine
 `cargo test -p plinth-runner-wasmtime` (29/29) both pass.
 
-**Left for the next agent:**
+Steps 1 and 2 left items (a) to (d) open; step 3 below closes them.
 
-- `--test monkey`, `--test async_await`, `--test files`, `--test hub_api`,
-  and `--test net` have not been run yet under `PLINTH_ENGINE=wasmi`
-  (`monkey` was still running, over 10 minutes in, when this pass was cut
-  short to hand off; it is long even on wasmtime). `files` and `hub_api`
-  and `net` exercise the interfaces this pass just wired for the first
-  time, so they are the most likely to need a fix.
-- No speed comparison numbers (wasmtime vs wasmi, release build: one Pong
-  tick, one Cells formula change, `init` of the 10,000-row List example)
-  were produced. `crates/plinth-compiler/tests/apps.rs`'s
-  `pong_plays_a_point` and `tests/sevenguis.rs`'s
-  `cells_formulas_propagate_and_find_cycles` already print a timing line
-  each (`eprintln!`); `tests/perf.rs`'s `#[ignore]`d `list_10k_perf` prints
-  one for `init`. Running each once per engine in `--release` (`Runner::new`
-  already reads `PLINTH_ENGINE`, so no new code is needed) would answer
-  this without a new bench file.
-- `FUEL_PER_MS` is calibrated from exactly two data points (see above); a
-  third workload (e.g. one of the still-unrun suites) could easily fall
-  outside the 15x spread already seen and need either a higher constant
-  or another test-specific `call_timeout` override.
-- `scripts/ci-local.sh full` was run once at the end of this pass with the
-  default engine (wasmtime); see the commit log for the result.
+### Step 3: all suites, speed, fuel and CI (2026-10-08)
+
+**All app suites pass on wasmi.** `PLINTH_ENGINE=wasmi cargo test -p
+plinth-compiler --features plinth-runner-wasmtime/wasmi --test <name>`,
+debug build unless the row says release:
+
+| Suite | Result on wasmi | Time |
+|---|---|---|
+| `files`, `hub_api`, `net` (host imports that never ran on wasmi before) | 5/5, 7/7, 9/9 | 1 s, 0.3 s, 3 s |
+| `notify`, `hub_ui`, `async`, `async_await` | 7/7, 2/2, 4/4, 42/42 | under 10 s each |
+| `apps`, `e2e`, `hostapi`, `errors` | 8/8, 11/11, 4/4, 31/31 | `errors` 69 s, others under 2 s |
+| `capabilities`, `collections`, `grid`, `hotreload`, `regions`, `robustness`, `list_diff`, `link_spike`, `split`, `gc_stress` | all pass | `robustness` 28 s, others under 8 s |
+| `sevenguis` | 7/7 | 337 s |
+| `budgets` | 4/4 (the start-time budgets are not checked on wasmi) | 1,825 s |
+| `monkey` (release build) | 1/1, memory level on every example | 58 s (the debug build did not end in 35 min) |
+| `lang` | 193/193 | 686 s |
+| `cargo test -p plinth-runner-wasmtime --features wasmi` | 36/36 | |
+
+The import shims had no defect: `files`, `hub` and `net` worked at the first
+run. Three failures were test assumptions, not engine differences in
+behavior:
+
+- `hostapi.rs` `timer_and_kv_round_trip`: the test checked "not due yet" with
+  the clock, 10 ms after `setTimeout`. A debug `init` on wasmi takes more
+  than 10 ms, so the timer was already due. The test now uses the timer
+  deadline (`next_timer_deadline`), on both engines.
+- `e2e.rs` `counter_behaves_like_m0`: the 1 ms round-trip bound is a
+  wasmtime bound. A debug wasmi build needs about 2.5 ms. The bound is 10 ms
+  on wasmi (engine-aware, with a comment).
+- `budgets.rs`: the 10,000-row `big-list` `init` stopped at the time limit,
+  because `FUEL_PER_MS` was too low (see "Fuel" below). With the new value it
+  passes. The start-time budgets are wasmtime times, so `check` skips
+  `start_ms` on wasmi (engine-aware, with a comment). The memory budgets
+  apply and pass: the memory is the same on both engines.
+
+Engine-aware tests (a difference that cannot be removed):
+
+- `errors.rs`: a trap reason has no source place on wasmi (wasmi gives no
+  frame offsets; `with_place`). The limit tests use a 20 ms time limit on
+  wasmi, not 300 ms (`short()`): fuel counts guest work, and a debug build
+  of wasmi is about 100 times slower, so 300 ms of work runs for about 50 s.
+- `e2e.rs`: the round-trip bound (above).
+- `budgets.rs`: the start-time budgets (above).
+
+**Speed, wasmtime against wasmi** (release build, `tests/perf.rs`
+`engines_speed`, the owner's PC, 2026-10-08). The bench runs each workload
+on both engines in one process, in turns, so that other load affects both
+engines the same. The time is the guest call only (no tree apply); the
+median of 5 rounds (Pong: of 300 frames).
+
+| Workload | wasmtime | wasmi | wasmi / wasmtime | wasmi fuel | Fuel per ms |
+|---|---|---|---|---|---|
+| List, `init` of 10,000 rows | 28.4 ms | 276 ms | 9.7x | 296 M | 1.07 M |
+| Pong, one frame | 0.01 ms | 0.08 ms | 10.5x | 80,105 | 1.02 M |
+| Cells, one edit (type and Set) | 0.02 ms | 0.18 ms | 8.1x | 208,633 | 1.16 M |
+| Tight arithmetic loop (2 M iterations) | 56 ms | 402 ms | 7.1x | 1,372 M | 3.41 M |
+| Strings (20,000 templates, `toUpperCase`, `indexOf`, `join`) | 20 ms | 217 ms | 10.8x | 256 M | 1.18 M |
+| Allocations (30,000 objects with arrays) | 5.4 ms | 40 ms | 7.5x | 63 M | 1.57 M |
+| Calls (recursive `fib(22)`) | 0.14 ms | 1.0 ms | 7.1x | 0.99 M | 0.98 M |
+| Sort of 10,000 numbers | 559 ms | 3,996 ms | 7.2x | 3,708 M | 0.93 M |
+| `Map`: 10,000 `set` and `has` with string keys | 1,552 ms | 12,174 ms | 7.8x | 16,209 M | 1.33 M |
+| Garbage and a collection (50,000 live objects) | 4.9 ms | 33 ms | 6.7x | 76 M | 2.33 M |
+
+Thus wasmi is 7 to 11 times slower than wasmtime in a release build. A Pong
+frame (0.08 ms) and a Cells edit (0.18 ms) are far below a 16 ms frame on
+wasmi too. The debug build is a different case: there, wasmi is 100 to
+2,000 times slower than wasmtime (the `wasmi` crate is at opt-level 0, see
+"Build note"), for example 28.9 s for the List `init` and 6.9 ms for a Pong
+frame.
+
+Two findings for later: a `Map` with 10,000 string keys takes 1.5 s on
+wasmtime (the work grows about as the square of the number of keys: 500
+keys used 45 M fuel, 10,000 keys 16,209 M), and a sort of
+10,000 numbers takes 0.56 s on wasmtime. Both are runtime work, not engine
+work.
+
+**Fuel.** The release build uses 0.93 to 3.41 million fuel per ms (a 3.7x
+spread). The old `FUEL_PER_MS` (150,000) came from debug-build numbers, so
+in a release build the 2 s limit stopped a call after about 0.1 to 0.3 s
+of work. The `big-list` `init` (296 M fuel) was just below the old budget
+(300 M), and slower apps stopped early. `FUEL_PER_MS` is now **2,000,000**
+(budget 4,000 M fuel for 2 s). With it, the limit stops a call after 1.2 s
+(the tight loop) to 4.3 s (the sort), and after 2.5 s or more for usual UI
+work (List, Pong, Cells, strings, allocations, calls: 0.93 to 1.6 M per
+ms). Each workload is in a 2x band of 2 s, and usual app work does not stop
+early. The debug build uses 5,600 to 12,800 fuel per ms (2.3x spread);
+there, the same budget lets a call run for about 5 to 12 minutes. That is
+acceptable for tests: only the limit tests hit the limit on purpose, and
+they use a short limit on wasmi.
+
+**Gate and CI.** `bash scripts/ci-local.sh wasmi` runs
+`cargo test -p plinth-runner-wasmtime --features wasmi` and the app suites
+of `plinth-compiler` with `PLINTH_ENGINE=wasmi`: `files hub_api hub_ui net
+notify async async_await apps e2e errors hostapi capabilities collections
+grid hotreload regions robustness list_diff link_spike split gc_stress`. It
+takes about 4 minutes with a warm build (233 s on 2026-10-08). It does not
+run `lang`, `sevenguis`, `monkey`, `budgets` and `perf`, because a debug
+build of wasmi makes them take 6 to 30 minutes or more; run them by hand.
+The CI job "Windows (wasmi engine)" in `.github/workflows/ci.yml` runs this
+mode on the self-hosted Windows runner, after the Windows job, only on a
+push to `master` and by hand (not on each pull request: the runner is the
+owner's PC).
+
+**Left (next):**
+
+- Step 3 of the engine: move the engine-free host state into its own
+  crate, so that an iOS build does not depend on wasmtime (PRODUCTION R5).
+- Find out why opt-level 3 on the `wasmi` crate crashes a Windows debug
+  build ("Build note"); report it upstream if it is a wasmi bug. A fix
+  can make the debug wasmi build much faster, and then `lang`,
+  `sevenguis`, `monkey` and `budgets` can go into the `wasmi` gate mode.
+- The two runtime findings above (`Map` and sort speed).
 
 ## Core policy `patch` (found 2026-10-07, fixed 2026-10-07)
 

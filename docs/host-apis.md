@@ -442,27 +442,28 @@ covers it. There are three hosts:
 
 ### Tests
 
-"By hand" means `PLINTH_ENGINE=wasmi cargo test -p plinth-compiler --test
-<name>`. The gate (`scripts/ci-local.sh`) does not run the wasmi engine
-(`docs/PRODUCTION.md` Q4). The results of the last run by hand are in
-`docs/GAPS.md` "wasmi engine". Compiler tests are in
+"wasmi gate" means `bash scripts/ci-local.sh wasmi`, which runs the test
+with `PLINTH_ENGINE=wasmi` (also the CI job "Windows (wasmi engine)",
+`docs/PRODUCTION.md` Q4). "By hand" means `PLINTH_ENGINE=wasmi cargo test
+-p plinth-compiler --test <name>`, for a suite that is too slow for the
+gate in a debug build. The results are in `docs/GAPS.md` "wasmi engine". Compiler tests are in
 `crates/plinth-compiler/tests/`; web tests are in `web/test/`. The gate
 runs every web test except `run-a11y.mjs` (by hand).
 
 | API | Desktop (wasmtime) | Desktop (wasmi) | Web |
 |---|---|---|---|
-| `time`: timers | `hostapi.rs` (`timer_and_kv_round_trip`), `sevenguis.rs` (`timer_elapses_to_the_duration_and_resets`), unit tests in `plinth-runner-wasmtime/src/timers.rs` | `sevenguis.rs`, by hand | `run-timer.mjs`, `run-7guis.mjs` |
-| `time`: dates | `hostapi.rs` (`date_time_round_trip_with_a_fake_offset`), `sevenguis.rs` (`flight_booker_constraints`) | `sevenguis.rs`, by hand | `run-7guis.mjs` (flight booker) |
-| `time`: `onFrame` | `apps.rs` (`on_frame_gets_the_frame_time`, `pong_plays_a_point`), `timers.rs` (`frame_timers_fire_only_by_frames`) | `apps.rs` (`pong_plays_a_point`), by hand | `run-pong.mjs` |
-| `store` (kv) | `hostapi.rs` (`timer_and_kv_round_trip`, `kv_denied_by_policy_does_not_trap`), `capabilities.rs`, unit tests in `kv.rs` | `apps.rs` (`budget_add_filter_edit_delete_and_stats`), by hand | `run-notes.mjs`, `run-hub-storage.mjs` (namespaces, quota), `run-a11y.mjs` (kv isolation in the frame) |
+| `time`: timers | `hostapi.rs` (`timer_and_kv_round_trip`), `sevenguis.rs` (`timer_elapses_to_the_duration_and_resets`), unit tests in `plinth-runner-wasmtime/src/timers.rs` | `hostapi.rs`, wasmi gate; `sevenguis.rs`, by hand | `run-timer.mjs`, `run-7guis.mjs` |
+| `time`: dates | `hostapi.rs` (`date_time_round_trip_with_a_fake_offset`), `sevenguis.rs` (`flight_booker_constraints`) | `hostapi.rs`, wasmi gate; `sevenguis.rs`, by hand | `run-7guis.mjs` (flight booker) |
+| `time`: `onFrame` | `apps.rs` (`on_frame_gets_the_frame_time`, `pong_plays_a_point`), `timers.rs` (`frame_timers_fire_only_by_frames`) | `apps.rs` (`pong_plays_a_point`), wasmi gate | `run-pong.mjs` |
+| `store` (kv) | `hostapi.rs` (`timer_and_kv_round_trip`, `kv_denied_by_policy_does_not_trap`), `capabilities.rs`, unit tests in `kv.rs` | `hostapi.rs`, `capabilities.rs`, `apps.rs` (`budget_add_filter_edit_delete_and_stats`), wasmi gate | `run-notes.mjs`, `run-hub-storage.mjs` (namespaces, quota), `run-a11y.mjs` (kv isolation in the frame) |
 | `clipboard`: write | **no test** | **no test** | **no test** (`run-hub-storage.mjs` checks only the shape of the bridge message) |
 | `clipboard`: read | **no test** | **no test** | **no test** |
-| `dialog` | `async_await.rs` (`the_dialogs_example_greets_with_three_awaits` and other tests) | **no test** | **no test** (`run-hub-storage.mjs` checks only the shape of the bridge message) |
-| `net` | `net.rs` (local server: GET, POST, status, denied, private addresses, DNS), unit tests in `net.rs` and `policy.rs` | **no test** | `run-net.mjs`, `run-net-private.mjs`, `run-hub-storage.mjs` (the check of the page) |
-| `files` | `files.rs`, unit tests in `plinth-runner-wasmtime/src/files.rs` | **no test** | `run-files.mjs`, `run-a11y.mjs` (files isolation in the frame) |
-| `notify` | `notify.rs` (a hand-written core caller and compiled apps, with `MemoryNotify`), unit tests in `plinth-runner-wasmtime/src/notify.rs` and `plinth-host-desktop/src/notify.rs` (the real toast only by hand: `--ignored`) | `notify.rs`, by hand | `run-notify.mjs` (a fake `Notification`, `notify-demo`), `run-a11y.mjs` (`notify-demo` export in Edge, without and with the permission) |
-| `hub` | `hub_api.rs`, `hub_ui.rs`, `plinth-host-desktop/tests/hub_host.rs` | **no test** | `run-hub-host.mjs`, `run-a11y.mjs` (the Hub app in the browser) |
-| `error.report` | `errors.rs`, `async_await.rs` (uncaught rejections) | `errors.rs`, by hand | `run-stop.mjs` |
+| `dialog` | `async_await.rs` (`the_dialogs_example_greets_with_three_awaits` and other tests) | `async_await.rs`, wasmi gate | **no test** (`run-hub-storage.mjs` checks only the shape of the bridge message) |
+| `net` | `net.rs` (local server: GET, POST, status, denied, private addresses, DNS), unit tests in `net.rs` and `policy.rs` | `net.rs`, wasmi gate | `run-net.mjs`, `run-net-private.mjs`, `run-hub-storage.mjs` (the check of the page) |
+| `files` | `files.rs`, unit tests in `plinth-runner-wasmtime/src/files.rs` | `files.rs`, wasmi gate | `run-files.mjs`, `run-a11y.mjs` (files isolation in the frame) |
+| `notify` | `notify.rs` (a hand-written core caller and compiled apps, with `MemoryNotify`), unit tests in `plinth-runner-wasmtime/src/notify.rs` and `plinth-host-desktop/src/notify.rs` (the real toast only by hand: `--ignored`) | `notify.rs`, wasmi gate | `run-notify.mjs` (a fake `Notification`, `notify-demo`), `run-a11y.mjs` (`notify-demo` export in Edge, without and with the permission) |
+| `hub` | `hub_api.rs`, `hub_ui.rs`, `plinth-host-desktop/tests/hub_host.rs` | `hub_api.rs`, `hub_ui.rs`, wasmi gate | `run-hub-host.mjs`, `run-a11y.mjs` (the Hub app in the browser) |
+| `error.report` | `errors.rs`, `async_await.rs` (uncaught rejections) | `errors.rs`, `async_await.rs`, wasmi gate | `run-stop.mjs` |
 
 `monkey.rs` sends random events to every example, also `utility`, which
 calls `plinth:clipboard`. It does not check the clipboard, so this table
