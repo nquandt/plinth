@@ -333,6 +333,14 @@ pub fn added_in(name: &str) -> u32 {
 }
 pub const CORE_MINOR: u32 = 12;
 
+/// The highest minor version that is shipped (frozen). A shipped minor gets
+/// no new function: the next function goes into `SHIPPED_MINOR + 1` and
+/// bumps `CORE_MINOR`. `tests/core_abi_frozen.rs` checks this against
+/// `core-abi.snapshot`. Raise it only when a new minor is shipped, then
+/// bless the snapshot (`PLINTH_BLESS=1`). Core 1.12 shipped on 2026-10-07
+/// (PRODUCTION C3).
+pub const SHIPPED_MINOR: u32 = 12;
+
 /// The patch version of this core build (SPEC.md §10.5). A fix that adds
 /// no function (same imports, same behavior for every existing import)
 /// bumps only this constant; a fix that adds a function bumps `CORE_MINOR`

@@ -31,14 +31,14 @@ A production app needs contracts that do not break. Each contract needs a writte
 |---|---|---|---|---|
 | C1 | UI API ids are append-only and versioned | Preview | Done | `wit/plinth/ui-api.toml`, version assert in `plinth-protocol` |
 | C2 | Core ABI is append-only (`ADDED_IN`, `CORE_MINOR`, `CORE_PATCH`) | Preview | Done | `crates/plinth-link/src/rt_abi.rs`, SPEC §10.5 |
-| C3 | Ship core 1.12 and freeze it (no more additions to a shipped minor) | Beta | Open | HANDOFF §6: 1.12 is not shipped. Ship it with the first Beta release. |
+| C3 | Ship core 1.12 and freeze it (no more additions to a shipped minor) | Beta | Done | `rt_abi::SHIPPED_MINOR` = 12; `crates/plinth-link/tests/core_abi_frozen.rs` with `core-abi.snapshot` (a new function in a shipped minor, or a changed one, fails); the shipped file in `cores/shipped/1.12.0.wasm` with its digest. |
 | C4 | `.plnt` container and manifest have a format version and a compatibility rule | Beta | Done | `docs/COMPATIBILITY.md` §4: a newer `plinth-profile` gives "This app needs a newer version of Plinth"; unknown entries are kept (signed, never run, never served); the manifest tolerates unknown fields and enum values at every level; `plinth.toml` stays strict. Tests in `plinth-package`, `plinth-hub` and `web/test/run-hub-integrity.mjs`. Frozen old packages: C8. |
 | C5 | Host interfaces (`wit/plinth/app.wit`) have a version and an append-only rule | Beta | Done | `docs/COMPATIBILITY.md` §3; `plinth-link/tests/wit_append_only.rs` with `wit/plinth/app.wit.snapshot` |
 | C6 | Plinth TS language version: a list of the accepted syntax and the deviations from ECMAScript | Beta | Partial | `docs/COMPATIBILITY.md` §5 (rule: a source that compiles stays compiling). Next: freeze the 1.0 subset in `docs/language.md` at Beta. |
 | C7 | Deprecation policy: how a feature is marked, how long it stays, what diagnostic the compiler gives | Beta | Done | `docs/COMPATIBILITY.md` §6. The first deprecation adds its `PLW` golden test. |
 | C8 | Compatibility test suite: `.plnt` files built by each released version run on the newest host | 1.0 | Open | Keep the released packages of `examples/` in the repo and run them in the gate. |
 | C9 | Support policy: rolling support, no guaranteed window; every released runtime core stays available | 1.0 | Done | §15 PR-Q3 (owner, 2026-10-07) |
-| C10 | Every released core and host stays available for download, so an old app always finds its core | 1.0 | Open | A permanent core archive (registry or release assets) and a test that installs an old core from it. |
+| C10 | Every released core and host stays available for download, so an old app always finds its core | 1.0 | Partial | Shipped cores are kept in `cores/shipped/` (digest table). Next: a download location for hosts (release assets or a registry) and a test that installs an old core from it. |
 
 ## 3. Language and compiler
 
@@ -221,16 +221,17 @@ Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh`
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
 | Preview | 26 | 0 | 0 |
-| Beta | 13 | 16 | 23 |
-| 1.0 | 1 | 1 | 21 |
+| Beta | 14 | 16 | 22 |
+| 1.0 | 1 | 2 | 20 |
 | Later (after 1.0) | 0 | 0 | 1 |
 
 **The Preview level is complete** for the documented platforms (Windows and the web, `docs/LIMITS.md`). Preview is only an internal mark until the repository is public (G6).
 
 **The next level is Beta.** Start with the items that the owner and the code do not block:
 
-1. H3: notifications step 2 (the `plinth:notify` module, the desktop toast, then the web).
-2. C3: ship core 1.12 and freeze it, after H3 (L4 is done).
-3. T7, R6, L9: `wasm-opt`, performance budgets, source locations in errors.
+1. T7: `wasm-opt` for release builds.
+2. R6: performance budgets in the gate.
+3. L9: source locations in runtime errors.
 4. R4, Q4: wasmi in all suites and in CI.
-5. The owner decisions H4, S6 and D7.
+5. H4: the `store.sql` design and the first slice.
+6. U5, U6, U7: IME on the desktop, pointer gaps, system settings.

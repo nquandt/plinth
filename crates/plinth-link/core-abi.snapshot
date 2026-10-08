@@ -1,0 +1,191 @@
+# shipped minor 12
+# The frozen core ABI (tests/core_abi_frozen.rs). Append only.
+fn set_main [I32] -> [] @0
+fn arg_f64 [] -> [F64] @0
+fn arg_i32 [] -> [I32] @0
+fn ret_f64 [F64] -> [] @0
+fn ret_i32 [I32] -> [] @0
+fn ret_ref [I32] -> [] @0
+fn log [I32] -> [] @0
+fn throw [I32] -> [] @0
+fn alloc [I32] -> [I32] @0
+fn scratch [I32] -> [I32] @0
+fn types [I32, I32] -> [] @0
+fn root [I32] -> [] @0
+fn closure [I32, I32] -> [I32] @0
+fn box_f64 [F64] -> [I32] @0
+fn unbox_f64 [I32] -> [F64] @0
+fn str_new [I32] -> [I32] @0
+fn str_concat [I32, I32] -> [I32] @0
+fn str_eq [I32, I32] -> [I32] @0
+fn str_cmp [I32, I32] -> [I32] @0
+fn str_len [I32] -> [F64] @0
+fn str_bytes [I32] -> [I32] @0
+fn str_from_f64 [F64] -> [I32] @0
+fn str_from_bool [I32] -> [I32] @0
+fn str_trim [I32] -> [I32] @0
+fn str_upper [I32] -> [I32] @0
+fn str_lower [I32] -> [I32] @0
+fn str_includes [I32, I32] -> [I32] @0
+fn str_starts [I32, I32] -> [I32] @0
+fn str_ends [I32, I32] -> [I32] @0
+fn str_slice [I32, F64, F64] -> [I32] @0
+fn str_index_of [I32, I32] -> [F64] @0
+fn str_repeat [I32, F64] -> [I32] @0
+fn str_to_f64 [I32] -> [F64] @0
+fn f64_to_fixed [F64, F64] -> [I32] @0
+fn arr_new [I32, I32] -> [I32] @0
+fn arr_len [I32] -> [I32] @0
+fn arr_get_f64 [I32, I32] -> [F64] @0
+fn arr_get_i32 [I32, I32] -> [I32] @0
+fn arr_set_f64 [I32, I32, F64] -> [] @0
+fn arr_set_i32 [I32, I32, I32] -> [] @0
+fn arr_push_f64 [I32, F64] -> [I32] @0
+fn arr_push_i32 [I32, I32] -> [I32] @0
+fn arr_pop_f64 [I32] -> [F64] @0
+fn arr_pop_i32 [I32] -> [I32] @0
+fn arr_slice [I32, I32, I32] -> [I32] @0
+fn arr_extend [I32, I32] -> [] @0
+fn arr_reverse [I32] -> [] @0
+fn arr_join [I32, I32] -> [I32] @0
+fn f64_rem [F64, F64] -> [F64] @0
+fn f64_pow [F64, F64] -> [F64] @0
+fn f64_round [F64] -> [F64] @0
+fn sig_new_f64 [F64] -> [I32] @0
+fn sig_new_i32 [I32] -> [I32] @0
+fn sig_new_ref [I32] -> [I32] @0
+fn sig_get_f64 [I32] -> [F64] @0
+fn sig_get_i32 [I32] -> [I32] @0
+fn sig_peek_f64 [I32] -> [F64] @0
+fn sig_peek_i32 [I32] -> [I32] @0
+fn sig_set_f64 [I32, F64] -> [] @0
+fn sig_set_i32 [I32, I32] -> [] @0
+fn sig_set_ref [I32, I32] -> [] @0
+fn comp_new [I32, I32] -> [I32] @0
+fn comp_get_f64 [I32] -> [F64] @0
+fn comp_get_i32 [I32] -> [I32] @0
+fn effect [I32, I32] -> [] @0
+fn node [I32] -> [I32] @0
+fn prop_str [I32, I32, I32] -> [] @0
+fn prop_f64 [I32, I32, F64] -> [] @0
+fn prop_int [I32, I32, I32] -> [] @0
+fn prop_bool [I32, I32, I32] -> [] @0
+fn prop_enum [I32, I32, I32] -> [] @0
+fn text [I32, I32] -> [] @0
+fn append [I32, I32] -> [] @0
+fn region [I32, I32, I32] -> [] @0
+fn listen [I32, I32, I32, I32] -> [] @0
+fn bind [I32, I32, I32] -> [] @0
+fn list [I32, I32, I32, I32, I32, I32, I32, I32, I32] -> [] @0
+fn set_root [I32, I32] -> [] @0
+fn navigate [I32] -> [] @0
+fn mark_primary [I32] -> [] @0
+fn navigate_push [I32] -> [] @0
+fn navigate_back [] -> [] @0
+fn time_now [] -> [F64] @0
+fn time_monotonic_now [] -> [F64] @0
+fn set_timer [I32, I32, F64, I32] -> [F64] @0
+fn clear_timer [F64] -> [] @0
+fn kv_get [I32] -> [I32] @0
+fn kv_set [I32, I32] -> [] @0
+fn kv_delete [I32] -> [] @0
+fn kv_keys [] -> [I32] @0
+fn clipboard_write_text [I32] -> [] @0
+fn clipboard_read_text [] -> [I32] @0
+fn kv_last_error [] -> [I32] @0
+fn clipboard_last_error [] -> [I32] @0
+fn json_num_str [F64] -> [I32] @1
+fn json_quote_str [I32] -> [I32] @1
+fn json_begin [I32] -> [] @2
+fn json_ok [] -> [I32] @2
+fn json_finish [] -> [I32] @2
+fn json_fail [] -> [] @2
+fn json_peek_kind [] -> [I32] @2
+fn json_read_null [] -> [] @2
+fn json_read_bool [] -> [I32] @2
+fn json_read_num [] -> [F64] @2
+fn json_read_int [] -> [I32] @2
+fn json_read_str [] -> [I32] @2
+fn json_skip_value [] -> [] @2
+fn json_arr_begin [] -> [] @2
+fn json_arr_next [] -> [I32] @2
+fn json_obj_begin [] -> [] @2
+fn json_obj_next_key [] -> [I32] @2
+fn dialog_alert [I32, I32, I32] -> [] @3
+fn dialog_confirm [I32, I32, I32] -> [] @3
+fn dialog_prompt [I32, I32, I32] -> [] @3
+fn str_last_index_of [I32, I32] -> [F64] @4
+fn str_replace [I32, I32, I32] -> [I32] @4
+fn str_replace_all [I32, I32, I32] -> [I32] @4
+fn str_pad_start [I32, F64, I32] -> [I32] @4
+fn str_pad_end [I32, F64, I32] -> [I32] @4
+fn str_split [I32, I32] -> [I32] @4
+fn net_fetch [I32, I32, I32, I32, I32, I32] -> [] @5
+fn net_result_ok [] -> [I32] @5
+fn net_result_status [] -> [F64] @5
+fn net_result_text [] -> [I32] @5
+fn net_result_error [] -> [I32] @5
+fn tz_offset_minutes [F64] -> [F64] @6
+fn date_field [F64, I32, I32] -> [F64] @6
+fn make_date [F64, F64, F64, F64, F64, F64] -> [F64] @6
+fn format_date [F64, I32, I32] -> [I32] @6
+fn parse_date [I32] -> [I32] @6
+fn hub_list_apps [] -> [I32] @7
+fn hub_launch [I32] -> [] @7
+fn hub_set_grant [I32, I32, I32] -> [] @7
+fn hub_block [I32] -> [] @7
+fn hub_unblock [I32] -> [] @7
+fn hub_last_error [] -> [I32] @7
+fn hub_list_groups [] -> [I32] @8
+fn hub_create_group [I32] -> [] @8
+fn hub_set_group [I32, I32, I32] -> [] @8
+fn hub_remove [I32] -> [] @8
+fn hub_search [I32, I32, I32] -> [] @8
+fn hub_install [I32, I32, I32] -> [] @8
+fn hub_app_info [I32] -> [I32] @9
+fn hub_pin [I32, I32] -> [] @9
+fn hub_block_publisher [I32] -> [] @9
+fn hub_unblock_publisher [I32] -> [] @9
+fn hub_check_updates [I32, I32, I32] -> [] @9
+fn hub_update [I32, I32, I32] -> [] @9
+fn uncaught [I32, I32] -> [] @10
+fn set_drain [I32, I32] -> [] @10
+fn report [I32] -> [] @10
+fn files_call [I32, I32, I32, I32, I32] -> [] @11
+fn set_frame [I32, I32] -> [F64] @12
+fn arg_at_f64 [I32] -> [F64] @12
+fn arg_at_i32 [I32] -> [I32] @12
+fn math_random [] -> [F64] @12
+fn math_seed [F64] -> [] @12
+fn on_cleanup [I32, I32] -> [] @12
+fn app_active [] -> [I32] @12
+fn on_mount [I32, I32] -> [] @12
+fn regex_compile [I32, I32] -> [I32] @12
+fn regex_last_error [] -> [I32] @12
+fn regex_source [I32] -> [I32] @12
+fn regex_flags [I32] -> [I32] @12
+fn regex_global [I32] -> [I32] @12
+fn regex_get_last_index [I32] -> [F64] @12
+fn regex_set_last_index [I32, F64] -> [] @12
+fn regex_test [I32, I32] -> [I32] @12
+fn regex_exec [I32, I32] -> [I32] @12
+fn regex_last_match_index [] -> [F64] @12
+fn regex_search [I32, I32] -> [F64] @12
+fn regex_match [I32, I32] -> [I32] @12
+fn regex_replace [I32, I32, I32, I32] -> [I32] @12
+fn regex_split [I32, I32, F64] -> [I32] @12
+fn regex_scan [I32, I32, I32] -> [I32] @12
+fn regex_scan_indices [] -> [I32] @12
+fn regex_splice [I32, I32, I32, I32] -> [I32] @12
+fn notify_show [I32, I32, I32, I32, I32] -> [] @12
+fn notify_cancel [I32] -> [] @12
+fn notify_last_error [] -> [I32] @12
+const CORE_MAJOR = 1
+const ARR_F64 = 1
+const ARR_I32 = 2
+const ARR_REF = 3
+const T_STRING = 0
+const FIRST_USER_TYPE = 16
+const HEADER = 8
+const STR_BYTES = 12
+const PREFIX = __plinth_rt_

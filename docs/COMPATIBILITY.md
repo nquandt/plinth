@@ -76,7 +76,7 @@ A deprecation tells authors that an item goes away in the next major version. It
 | Rule | Check | Status |
 |---|---|---|
 | UI API ids are append-only | Version assert in `plinth-protocol`; generated id files | Done |
-| Core functions are append-only | The linker checks names and types; `ADDED_IN` | Done |
+| Core functions are append-only | The linker checks names and types; `ADDED_IN`; a shipped minor is frozen (`plinth-link/tests/core_abi_frozen.rs`, `core-abi.snapshot`) | Done |
 | Old apps link with the newest core | `tests/e2e.rs` and the app tests link the examples with the newest core | Partial: no frozen old packages yet (C8) |
 | `app.wit` is append-only | `wit/plinth/app.wit.snapshot` and `plinth-link/tests/wit_append_only.rs`: a changed or removed item fails; a new item fails until it is blessed (`PLINTH_BLESS=1`) | Done |
 | Hosts read old packages | Frozen `.plnt` files of each released version, read and run in the gate | Open (C8) |

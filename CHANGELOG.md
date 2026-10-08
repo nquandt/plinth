@@ -29,6 +29,8 @@ No public release yet. The first release is a Preview for Windows and the web. `
 
 ### Changed
 
+- Core 1.12.0 is shipped and frozen. New core functions go into 1.13. The shipped file is in `cores/shipped/`.
+
 - Web host: each app runs in its own Worker (a step to the web time limit). A page that embeds Plinth with a Content-Security-Policy must also allow `worker-src blob:`.
 
 - Package format compatibility (`docs/COMPATIBILITY.md` §4): a package with a newer `plinth-profile` (`plinth/2` or higher) gives "This app needs a newer version of Plinth (package format plinth/N)" on desktop and on the web, not an "invalid package" error. A package entry that the host does not know is kept and signed, but never run and never served as an asset (before, the package was refused). `manifest.toml` can have unknown fields at every level, also in `[[capabilities]]` and `[updates]`, and an unknown `[updates]` `channel`, `check` or `apply` value maps to the default. `plinth.toml` stays strict: an unknown field or value there is still an error.
