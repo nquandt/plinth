@@ -59,7 +59,7 @@ Status of this file: first version, 2026-10-07.
 - **A source that compiles stays compiling** inside one major version, with the same behavior. A new feature turns an error into a working program; it never turns a working program into an error.
 - A program that was accepted by mistake (a compiler defect) can get an error in a minor version only if it was unsafe (for example, a wrong type at run time). Otherwise it gets a warning first (§6).
 - `plinth:*` modules follow the same rule as the core ABI: a new export is a new function; an existing export keeps its signature.
-- The 1.0 language is the set of features in `docs/language.md` at the 1.0 release.
+- The 1.0 language is the frozen subset in `docs/language.md` "Language version 1.0" (frozen at Beta, 2026-10-08). A 1.x compiler only adds features to it.
 
 ## 6. Deprecation (C7)
 

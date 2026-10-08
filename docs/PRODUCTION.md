@@ -34,7 +34,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | C3 | Ship core 1.12 and freeze it (no more additions to a shipped minor) | Beta | Done | `rt_abi::SHIPPED_MINOR` = 12; `crates/plinth-link/tests/core_abi_frozen.rs` with `core-abi.snapshot` (a new function in a shipped minor, or a changed one, fails); the shipped file in `cores/shipped/1.12.0.wasm` with its digest. |
 | C4 | `.plnt` container and manifest have a format version and a compatibility rule | Beta | Done | `docs/COMPATIBILITY.md` §4: a newer `plinth-profile` gives "This app needs a newer version of Plinth"; unknown entries are kept (signed, never run, never served); the manifest tolerates unknown fields and enum values at every level; `plinth.toml` stays strict. Tests in `plinth-package`, `plinth-hub` and `web/test/run-hub-integrity.mjs`. Frozen old packages: C8. |
 | C5 | Host interfaces (`wit/plinth/app.wit`) have a version and an append-only rule | Beta | Done | `docs/COMPATIBILITY.md` §3; `plinth-link/tests/wit_append_only.rs` with `wit/plinth/app.wit.snapshot` |
-| C6 | Plinth TS language version: a list of the accepted syntax and the deviations from ECMAScript | Beta | Partial | `docs/COMPATIBILITY.md` §5 (rule: a source that compiles stays compiling). Next: freeze the 1.0 subset in `docs/language.md` at Beta. |
+| C6 | Plinth TS language version: a list of the accepted syntax and the deviations from ECMAScript | Beta | Done | `docs/COMPATIBILITY.md` §5 (rule: a source that compiles stays compiling); `docs/language.md` "Language version 1.0" (the frozen subset, 2026-10-08). |
 | C7 | Deprecation policy: how a feature is marked, how long it stays, what diagnostic the compiler gives | Beta | Done | `docs/COMPATIBILITY.md` §6. The first deprecation adds its `PLW` golden test. |
 | C8 | Compatibility test suite: `.plnt` files built by each released version run on the newest host | 1.0 | Open | Keep the released packages of `examples/` in the repo and run them in the gate. |
 | C9 | Support policy: rolling support, no guaranteed window; every released runtime core stays available | 1.0 | Done | §15 PR-Q3 (owner, 2026-10-07) |
@@ -223,7 +223,7 @@ Count on 2026-10-08, by gate and status. Run `bash scripts/production-status.sh`
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
 | Preview | 26 | 0 | 0 |
-| Beta | 25 | 14 | 13 |
+| Beta | 26 | 13 | 13 |
 | 1.0 | 1 | 2 | 20 |
 | Later (after 1.0) | 0 | 0 | 1 |
 

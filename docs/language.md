@@ -458,6 +458,40 @@ for (const m of "x=1 y=2".matchAll(/(\w)=(\d)/g)) { /* m.groups[1], m.index */ }
   - In `split`, an unmatched group gives `""`. JavaScript gives `undefined`.
   - `matchAll` and `replaceAll` without `g` throw an `Error`, not a `TypeError`.
 
+## Language version 1.0
+
+The Plinth TS 1.0 language is frozen at the Beta gate (2026-10-08,
+PRODUCTION C6). The list below is the 1.0 subset. Inside major version 1,
+a source that compiles stays compiling, with the same behavior
+(COMPATIBILITY.md §5). A later 1.x compiler can only add: a feature that
+gives an error today can become a working program. A working program never
+becomes an error, except for a compiler defect that makes unsafe code
+(COMPATIBILITY.md §5).
+
+| Area | In the 1.0 subset | Reference |
+|---|---|---|
+| Types | `number`, `int`, `boolean`, `string`, arrays, `Map`, `Set`, tuples (optional and rest elements), `T \| null`, interfaces and object types, string literal unions, `enum`, tagged unions, generic functions, interfaces and type aliases, `Promise<T>` | "Types" |
+| Classes | Single inheritance, fields, one constructor, methods, `async` methods, `super`, overriding, `instanceof` | "Types" |
+| Statements | `let`, `const`, `function`, `if`, `switch`, `for`, `for…of`, `while`, `break`, `continue`, `return`, `throw`, `try`/`catch`/`finally` | "Supported syntax", "Errors and exceptions" |
+| Expressions | Arithmetic, `===`/`!==`, logical operators, `??`, `?.`, `?:`, template literals, object and array literals, spread, destructuring with defaults and rest, arrow functions and closures, checked `as` casts | "Supported syntax" |
+| Narrowing | `typeof`, a discriminant field, `instanceof`, `=== null`, on variables and on `const` member paths | "Supported syntax" |
+| Async | `async`/`await`, `new Promise`, `then`/`catch`/`finally`, `Promise.all`, `race`, `any`, `allSettled`, `resolve`, `reject` | "Async functions and `await`", "The `Promise` API" |
+| Text | The string methods in `std/lib.d.ts`, the regular expression subset | "Regular expressions" |
+| Modules | Relative imports and `plinth:*` modules only | "The closed world" |
+| UI | JSX with Plinth controls, fragments in a child position, `arr.map(x => <El/>)` as a child, signals, `computed`, `effect` | "Supported syntax", "Reactivity", [ui.md](ui.md) |
+| Deviations | All items in "Deviations from JavaScript/TypeScript" | "Deviations" |
+
+These features are not in 1.0. A 1.x compiler can add them, because each
+one is an error today: static class members, `#private` fields, optional
+class fields and parameter properties (`PL2003`), getters and setters
+(`PL2016`), generic classes, generic arrow functions and type parameters
+with a constraint or a default (`PL2015`), labels (`PL2017`), generators
+(`PL2009`), `BigInt` (`PL2019`), and a fragment in a dynamic expression.
+
+The features in "Rejected features, and why" stay errors in every 1.x
+version. The diagnostic codes are stable: a code never changes its
+meaning, and a removed check keeps its code reserved.
+
 ## Rejected features, and why
 
 The compiler rejects these, each with a clear error and a suggested fix:
@@ -652,6 +686,6 @@ Codes are grouped by range:
 |---|---|
 | `PL1000`–`PL1008` | Modules and the closed world (SPEC.md §4.1): parse errors, the import graph (bare imports, missing modules, cycles), unknown std modules, a missing `app/main.tsx`, undeclared capabilities (SPEC.md §11), and code that nests more than 1000 levels deep (`PL1008`, see "Limits"). |
 | `PL2000`–`PL2026` | Rejected language features (SPEC.md §4.4): TypeScript/JavaScript syntax Plinth does not support yet or ever — `any`, classes (restricted subset), `this`, non-null assertions, type assertions, `for…in`, `delete`, generators and `await` in a `case` value, a typed or destructured `catch` variable, computed member access, advanced types, namespaces, `var`, user generics, getters/setters, labels, invalid or unsupported regular expressions (`PL2018`), `BigInt`, non-reactive signal reads, unbound methods, the class `extends`/`super`/`override` rules, and two warnings: `sort()` of numbers with no comparator (`PL2025`) and a `store.sql` statement that is not a string literal or a `const` (`PL2026`). |
-| `PL3000`–`PL3013` | Types (SPEC.md §4, §4.3): the structural type checker — mismatches, unknown names/types, missing properties or fields, uncallable values, wrong argument counts, uninferable types, assigning to `const`, nullability, duplicate definitions, and missing `return`s. (`PL3011`, struct layout, is reserved but not emitted by any check today.) |
-| `PL4000`–`PL4009` | JSX and the UI API (SPEC.md §6, §7.2): unknown controls, props, and children; missing required props; bad two-way bindings; the `app({...})` config; `navigate` targets; and image assets (missing, or an empty `alt`). |
+| `PL3001`–`PL3013` | Types (SPEC.md §4, §4.3): the structural type checker — mismatches, unknown names/types, missing properties or fields, uncallable values, wrong argument counts, uninferable types, assigning to `const`, nullability, duplicate definitions, and missing `return`s. (`PL3011`, struct layout, is reserved but not emitted by any check today.) |
+| `PL4001`–`PL4009` | JSX and the UI API (SPEC.md §6, §7.2): unknown controls, props, and children; missing required props; bad two-way bindings; the `app({...})` config; `navigate` targets; and image assets (missing, or an empty `alt`). |
 
