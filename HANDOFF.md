@@ -14,7 +14,7 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 
 ## 0. Read this first
 
-**State (2026-10-07, late):** `master` is the only active branch (agent branches `wt/*` are merged or reset; old ones can be deleted). The production checklist `docs/PRODUCTION.md` is the plan to 1.0; `bash scripts/production-status.sh` counts it. The gate passes on it: `bash scripts/ci-local.sh full --shoot` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; the commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
+**State (2026-10-08, pause point):** `master` is the active branch. One agent branch is open: `wt/upgrade` (worktree `U:\plinth-wt\upgrade`), D4 `onUpgrade` steps A and B; step C is the first next step (§10). The production checklist `docs/PRODUCTION.md` is the plan to 1.0; `bash scripts/production-status.sh` counts it (Preview 26/26 Done; Beta 25 Done, 14 Partial, 13 Open). The gate passes on `master`: `bash scripts/ci-local.sh full` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; more than 115 commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
 
 ### 0.1 Owner decisions (keep them)
 
@@ -30,19 +30,18 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 10. **Updates without a reinstall (2026-10-07):** three layers: native host, core, app. A native update only when the native interop (a host interface) changes. App authors choose when their app takes a new core. Design: `docs/UPDATES.md`.
 11. **iOS runs Wasm with the `wasmi` interpreter (2026-10-07),** no JIT (SPEC §9.2). Pulley (wasmtime's interpreter) and WasmKit were the other candidates; wasmi 2 is about two times faster than Pulley.
 12. **Production readiness (2026-10-07, `docs/PRODUCTION.md` §15):** 1.0 covers all platforms, mobile too (assume gpui mobile backends exist). 1.0 needs localization and sound. Support is rolling with no guaranteed window; every released runtime stays available. License: MIT OR Apache-2.0. Name, public repo, Linux and macOS windows: at the end. CI runners and npm: near Beta. Keep `docs/LIMITS.md` and `CHANGELOG.md` current.
+13. **App tests are written in Plinth TS (2026-10-08, T3):** `*.test.tsx` files with `plinth:test`, run by `plinth test` and `npm test`. Not a JavaScript package. Design: `docs/TESTING.md`.
+14. **Linux and macOS work waits for agents on those machines (2026-10-08).** Until then, track each item in `docs/PLATFORM-TODO.md`, and do not mark such an item Done from Windows.
+15. **Orchestrate subagents (2026-10-08):** this session plans, reviews, merges and runs the gate. Clear implementation work goes to Sonnet agents (`model: "sonnet"`), mechanical test work to Haiku (`model: "haiku"`, Haiku 5.5). Split each task small: one layer for each agent (for example WIT + core + desktop; then compiler + tests; then web + docs), each step buildable and testable alone. A Sonnet agent refused a full end-to-end feature as too big for one pass.
+16. **The web Hub server and the Cloudflare tunnel are stopped (2026-10-08).** Do not start them again unless the owner asks.
 
 ### 0.2 Open items for the owner (remind them)
 
 1. **Finish the self-hosted CI runners** (`infra/self-hosted-runner/README.md`). Done: both agents downloaded, `ci.yml` moved to them (commit `4aff175`), the WSL packages installed, the WSL service `plinth-runner` installed and enabled (not started). Left for the owner: (a) `gh auth token | wsl -d Ubuntu -- bash -c 'umask 077; cat > ~/.plinth-runner-token'`; (b) in an elevated PowerShell, `infra\self-hosted-runner\install-windows-service.ps1`. Then the agent: `sudo systemctl start plinth-runner` in WSL (the owner gave the WSL sudo password in the session of 2026-10-07; ask again if needed), check that both runners are online (`gh api repos/nquandt/plinth/actions/runners`), push when the owner asks, and watch the first CI run. **Until the runners are online, a push queues CI jobs that nothing runs** (the hosted Actions minutes ran out on 2026-10-06).
-2. **Delete the 8 old, merged worktrees** `C:\repos\plinth-wt-{a11y,ci,files,hostapi,inputs,lang,rtfix,structure}` (all clean, all commits in `master`). The safety check of the agent session blocks the delete; the owner runs it:
-   ```powershell
-   cd C:\repos\plinth
-   'a11y','ci','files','hostapi','inputs','lang','rtfix','structure' | ForEach-Object { git worktree remove --force "C:\repos\plinth-wt-$_" }
-   git branch -D wt/dx wt/ci wt-files wt/dates wt/golden wt/lang6 wt/web-sandbox wt/web-dom
-   git worktree prune
-   ```
+2. **Remove a scratch folder:** an agent left `U:\plinth-wt\icutry-target` (ICU4X experiments). The safety check of the agent session blocks a recursive delete; the owner runs `rm -rf U:/plinth-wt/icutry-target`. (The old worktrees of 2026-10-07 are already removed.)
 3. **Decisions:** UP-Q1..Q6 in `docs/UPDATES.md` (the core policy default is `follow` for now); the project key that signs cores (also the Hub key, HANDOFF of 2026-10-06); `docs/HUB.md` H-Q4; the open questions in the design drafts (ST-Q*, UA-Q*, UX-Q*).
 4. **Play Pong again** (`plinth dev examples/pong`, a release build is better) and say if the motion is smooth now (§10 item 4).
+5. **Manual checks that only the owner can do:** a screen reader pass (Narrator on Windows; U3, U4) and Japanese or Chinese IME input in a text field (U5).
 
 ## 1. What Plinth is
 
@@ -52,19 +51,20 @@ Plinth is a framework for cross-platform apps. Authors write a strict subset of 
 
 | Area | State |
 |---|---|
-| Cores (SPEC §10.4, §10.5) | Core **1.12.0, shipped and frozen on 2026-10-07** (`rt_abi::SHIPPED_MINOR`, `crates/plinth-link/core-abi.snapshot`, the file in `cores/shipped/`). It has RegExp and `notify`. Versions are `MAJOR.MINOR.PATCH` (`rt_abi::CORE_PATCH`, bumped by hand for a fix that adds no function) plus a SHA-256 digest; an app still declares only `MAJOR.MINOR`. Author policy in `plinth.toml`: `core = "follow" \| "patch" \| "pinned"` (`cores::link_app_with_policy`; the web host supports only `follow`). 1.12 has `onFrame`, `Math.random`/`seedRandom`, `onCleanup`, `isActive`, `onMount`. The runtime skips unchanged prop and text ops (G8). |
+| Cores (SPEC §10.4, §10.5) | Core **1.12.0, shipped and frozen on 2026-10-07** (`rt_abi::SHIPPED_MINOR`, `crates/plinth-link/core-abi.snapshot`, the file in `cores/shipped/`). **Core 1.13 is open** (not shipped): `sql_call`, the `kv_*` hash table for `Map`/`Set`, the `locale_*` functions (and, on `wt/upgrade`, `app_data_version`/`app_mark_data_version`). Every 1.13 item is in `docs/migrations/core-1.13.md`; a test requires a guide for each new minor. An app that uses `Map`, `Set`, `sql`, `plinth:locale` or `onUpgrade` declares 1.13; others keep their old minor. Versions are `MAJOR.MINOR.PATCH` plus a SHA-256 digest; author policy `core = "follow" \| "patch" \| "pinned"`. |
 | Memory (2026-10-07) | The allocator uses best fit and keeps the rest of a split block; array buffers count toward the next collection. Before, three leaks grew memory without a limit (GAPS "Robustness", monkey test). |
-| UI API (`ui-api.toml`, `docs/ui.md`) | **1.13**: Level 1 controls, Level 2 primitives with partial styles, absolute positions, keys, pointer events, Canvas with stroke shapes. An optional prop of any kind takes `T \| null` (`icon={c ? "check" : undefined}`): `null` removes the prop on both host trees. |
-| Host APIs (`docs/host-apis.md`) | `time` (with `onFrame`), `store` (kv), `clipboard`, `dialog`, `net`, `files` (private space), `hub` (privileged), `error.report`. Async calls return a `Promise` or take a `done` callback. Denied calls never trap. |
+| UI API (`ui-api.toml`, `docs/ui.md`) | **1.13** (not shipped): Level 1 controls, Level 2 primitives, pointer events, `onContextMenu`, a `Menu` that opens at a point, drag and drop (`dragValue`, `onDrop`, `List.onReorder` with Alt+Up/Down), `Dialog` children. A modal layer blocks pointer input on both hosts. The theme follows the OS dark mode, high contrast, text size and reduced motion (U7, Windows and web). |
+| Host APIs (`docs/host-apis.md`) | `time` (with `onFrame`), `store` (kv and `sql`), `clipboard`, `dialog`, `notify`, `net`, `files` (private space), `hub` (privileged), `locale` (tag, direction, formatting), `error.report`. Every cell of the "Support on each host" test table has a test (H7). Async calls return a `Promise` or take a `done` callback. Denied calls never trap. |
 | Limits and stop reasons | Desktop runner: 2 s per call (epochs), 64 MiB memory (`Limits`); a trap gives a plain one-line reason in "This app stopped" ("array index out of bounds", "out of memory", "too many nested calls (stack overflow)", "the app is not responding (time limit reached)"). The web host has the same limits, banners and reasons: each app runs in a Worker with a 2 s watchdog (`CALL_TIME_LIMIT_MS`) and a 64 MiB memory cap (`MEMORY_LIMIT_PAGES`) (GAPS R1, R2). |
-| Engines | wasmtime (default). **wasmi** (`PLINTH_ENGINE=wasmi`, cargo feature `wasmi` on `plinth-runner-wasmtime`; `wasmi_core.rs`, `wasmi_engine.rs`): steps 1–2 merged. The core module is taken out of the component; all 41 host imports call the same `HostState` methods as wasmtime; the time limit is fuel (`FUEL_PER_MS` = 150,000, set before each call); the memory cap is the same `Limiter`. On wasmi: errors and limits 28/28, language 171/171, 7GUIs 7/7, apps 7/7 (debug build; language takes about 12 min because the inner wasmi crates are optimized but `wasmi` itself is not — opt-level 3 on `wasmi` crashes a Windows debug build, GAPS "wasmi engine"). What is left: §10 item 1. |
-| Compiler (SPEC §4) | Unions and narrowing, generics, classes, `int`, `Map`/`Set`, tuples, rest patterns in array and object destructuring, default values in patterns, JSON (also recursive types), fragments, `.map()` children, checked casts, string and array methods, `try`/`catch`/`finally`, `async`/`await`, the Promise API. A nesting limit of 1000 levels (`PL1000`); each compile runs on a 256 MiB stack (`stacker`). Golden tests for every diagnostic. |
-| Updates (`docs/UPDATES.md`) | Steps 1–3 done: core patch versions and the `core` policy; a signed feed (`feed.json` + detached Ed25519 `feed.json.sig`, `plinth-package::feed`), `plinth feed add`, `[updates]` in `plinth.toml`; the desktop updater for `plinth native` (`plinth-host-desktop::updater`: a background check, key continuity with the embedded package, no downgrade, digests, rollback to the embedded set after two failed starts; per-user folder `%LOCALAPPDATA%\plinth\updates\<app id>`, `PLINTH_UPDATES_DIR` in tests). Open: the `prompt` dialog (acts as `next-start`), re-consent for new capabilities, `onUpgrade`, the project core key, web and mobile (UPDATES §9.1). |
+| Engines | wasmtime (default). **wasmi** (`PLINTH_ENGINE=wasmi`, cargo feature `wasmi`): every compiler suite that runs apps passes on it; `bash scripts/ci-local.sh wasmi` and a CI job run it (not the slow `lang`, `sevenguis`, `monkey`, `budgets`). Fuel time limit, `FUEL_PER_MS` = 2,000,000 (release numbers). A release build of wasmi is 7 to 11 times slower than wasmtime; a debug build is 100 to 2,000 times slower (opt-level 3 on `wasmi` crashes a Windows debug build). Open: R5 (a host state crate without wasmtime, for iOS). |
+| Compiler (SPEC §4) | Unions and narrowing, generics, classes, `int`, `Map`/`Set` (hash tables), tuples, patterns, JSON, fragments, checked casts, string and array methods (stable merge sort), RegExp, `try`/`catch`/`finally`, `async`/`await`. Long chains (100,000 terms) compile without recursion (L6); real nesting over 1000 levels is `PL1008`. `===` on strings and `T \| null` primitives compares values. Golden tests for every diagnostic. `plinth test` builds a test build (`docs/TESTING.md`). |
+| Updates (`docs/UPDATES.md`) | Steps 1–3 done (core patch versions and policy, signed feeds, the desktop updater with rollback), the restart prompt and re-consent. `onUpgrade(fromVersion)`: steps A and B on `wt/upgrade`, step C open (§10). Open: the web service worker cache (D5), the project core key (S6), mobile. |
 | Desktop Hub (`docs/HUB.md`) | H0, H1 (Ed25519 signing), H3 steps 1–3. |
 | Web Hub (`docs/web-hub.md`) | The same Hub app in a sandboxed frame with a `plinth:hub` bridge; browse mode; consent; digest and Ed25519 checks. |
 | Web export (SPEC §10.3) | `plinth build <dir> --target web [--single-file]`; `web/plinth.js` is GENERATED (`node scripts/gen-plinth-js.mjs`; commit it). |
-| Validation apps | 7GUIs 1–7, Pong, primitives, files-demo, and 20 other examples. |
-| Platforms | Windows: everything. Linux and macOS: compiler, cores, runner, hub and registry tests pass; no GUI window yet. Mobile: not started (decided: gpui + wasmi on iOS). |
+| Storage | `kv`, `files` (private space) and `store.sql` (SQLite on every host; `docs/SQL.md`). `examples/notes` keeps its notes in SQL with FTS5 search. |
+| Validation apps | 7GUIs 1–7, Pong, primitives, files-demo, notes, and 20 other examples. `examples/todo` and `examples/counter` have `plinth test` tests. |
+| Platforms | Windows: everything. Linux and macOS: compiler, cores, runner, hub and registry tests pass; no GUI window yet; all their work is listed in `docs/PLATFORM-TODO.md`. Mobile: not started (decided: gpui + wasmi on iOS). |
 | CI | `ci.yml` runs Windows and Linux on self-hosted runners (not online yet, §0.2), macOS weekly on GitHub. |
 
 ## 3. Build, run, test
@@ -78,6 +78,9 @@ node web/test/run-a11y.mjs               # headless Edge: axe, renderer checks, 
 node web/test/run-a11y.mjs --typing-only # renderer checks only; --hub-only; --export-only
 node scripts/gen-plinth-js.mjs           # regenerate web/plinth.js after a change to a bundled web file
 node scripts/gen-web-ids.mjs             # regenerate web/ui-api.js after a change to ui-api.toml
+bash scripts/ci-local.sh wasmi           # the app suites on the wasmi engine
+plinth test examples/todo                # app tests (docs/TESTING.md)
+bash scripts/production-status.sh [--open Beta]   # checklist counts and open items
 
 plinth dev examples/pong ; plinth build <dir> [--target web] ; plinth run <app.plnt> ; plinth native <app> -o app.exe
 plinth core list|install|export ; plinth hub … ; plinth registry build|serve …
@@ -106,7 +109,9 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 
 | Path | What |
 |---|---|
-| `wit/plinth/app.wit` | Guest/host interfaces: `ui`, `dev`, `error`, `time`, `store`, `clipboard`, `dialog`, `net`, `hub`, `files`. |
+| `wit/plinth/app.wit` | Guest/host interfaces: `ui`, `dev`, `error`, `time`, `store`, `clipboard`, `dialog`, `notify`, `net`, `hub`, `files`, `sql`, `locale`. Append only (`app.wit.snapshot`). |
+| `docs/migrations/` | One guide for each core minor (`core-1.13.md`). |
+| `docs/PLATFORM-TODO.md` | The work for Linux and macOS machines. |
 | `wit/plinth/ui-api.toml` | Control, prop, event and enum ids (UI API 1.13). **Append only.** |
 | `std/*.d.ts` | Typings of the `plinth:*` modules; `std_typings_match` keeps them equal to the compiler (`check/stdlib.rs`). |
 | `crates/plinth-rt` | The core (Rust → wasm32, `no_std`): GC (`gc.rs`), allocator (`allocator.rs`), reactivity, UI ops, JSON, strings. |
@@ -159,7 +164,7 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 
 - Commit after each tested step. No GPG signing; no attribution lines.
 - The owner may edit `SPEC.md`; diff it before you change it.
-- **Parallel agents** (the owner allows Sonnet subagents): worktrees `U:\plinth-wt\<name>` (`git worktree add U:/plinth-wt/<name> -b wt/<name> master`; `U:\plinth-wt\gpui-ce` is a junction, so `../gpui-ce` resolves). Brief each agent to `cd` into its worktree in every command, to commit on its branch, never to push, to pass `ci-local.sh full` before it reports, and not to edit `HANDOFF.md`. Give a large task in steps with a clear end point: an agent that sees a multi-day task can stop at once without work. Review the diff, merge locally, run the gate (and `run-a11y.mjs` for UI or web changes) on `master`, then remove the worktree.
+- **Subagents** (§0.1 decision 15): worktrees `U:\plinth-wt\<name>` (`git worktree add U:/plinth-wt/<name> -b wt/<name> master`; `U:\plinth-wt\gpui-ce` is a junction, so `../gpui-ce` resolves). Run one build agent at a time. Brief each agent with the design, the files to read and the exact test commands; tell it to work only in its worktree, to run only the targeted tests of the crates it changes (never `ci-local.sh`), to commit on its branch, never to push, and not to edit `HANDOFF.md` or `SPEC.md` (it reports what SPEC needs; the orchestrator edits SPEC). Then review the diff, merge into `master`, run `ci-local.sh full` (and `run-a11y.mjs` for UI or web changes), update SPEC, and remove the worktree. If the gate stops early, the example packages can be stale: fix the gate, then run `run-a11y.mjs` again.
 - Write all prose in ASD-STE100 Simplified Technical English.
 
 ## 9. Session log 2026-10-07 (what changed and why)
@@ -179,29 +184,32 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 - **Flaky tests fixed:** six test files named temp folders from the clock only (100 ns steps on Windows); they now add an atomic counter.
 - **Lesson (agents):** seven parallel agents with cold worktree builds overloaded the PC for hours. Run at most one or two build agents; tell an agent to run only the tests of the crates it changes, then merge into `master` and run the full gate there (the cache of `master` is warm). Give an agent one bounded step; a large task makes it stop with no code.
 
-## 9b. Session log 2026-10-08 (store.sql, speed, locale)
+## 9b. Session log 2026-10-08 (store.sql, core 1.13, UI, test kit)
 
-- **Core 1.13 is open** (`CORE_MINOR = 13`, not shipped; 1.12 is frozen). It adds `sql_call`, the `kv_*` hash table functions for `Map` and `Set`, and `locale_tag`/`locale_direction`. Each new core minor needs a guide in `docs/migrations/` (a test checks it); `docs/migrations/core-1.13.md` lists every 1.13 item. An app that uses `Map`, `Set`, `sql` or `plinth:locale` now declares core 1.13.
-- **`store.sql` is done (PRODUCTION H4):** SQLite on the desktop (`rusqlite`, `crates/plinth-runner-wasmtime/src/sql.rs`) and on the web (the official SQLite Wasm build, vendored in `web/vendor/sqlite-wasm/`, in a Worker of the page with OPFS), the same authorizer, limits and error texts, shared cases in `crates/plinth-compiler/tests/sql_cases.txt`, folder web exports, `examples/notes` with FTS5 search. Design and differences: `docs/SQL.md`. The desktop database is in `<app id>+sql/`, next to the files space, so `plinth:files` cannot reach it.
-- **wasmi (R4, Q4):** every app suite passes on wasmi; `FUEL_PER_MS` is 2,000,000 (from release numbers); `bash scripts/ci-local.sh wasmi` and a CI job. The slow suites (`lang`, `sevenguis`, `monkey`, `budgets`) are not in that mode.
-- **Speed and memory fixes:** `Map`/`Set` are hash tables (were linear searches), `sort` is a stable merge sort (was an insertion sort), `JSON.stringify` and `join` build text with one join (string concatenation in a loop grows memory with the square, because the GC does not run during a call). A loop over a map does not compact it (`kv_iter`).
-- **Locale (L5 step 1):** `plinth:locale` `locale()` and `direction()`, reactive; the host sends lifecycle kind 4 when the locale changes. Step 2 (formatting with ICU4X and `Intl`) is in progress.
-- **Docs:** `docs/migrations/` (X5), the `sql` part of `docs/guides/storage.md`.
-- **Worktrees:** all old worktrees were removed after a check that their branches are on `master`.
+- **Core 1.13 is open** (1.12 is frozen). `docs/migrations/` (X5) lists every item; `plinth-link/tests/migration_guides.rs` requires a guide for each new minor.
+- **`store.sql` (H4, Done):** SQLite on the desktop (`rusqlite`, `plinth-runner-wasmtime/src/sql.rs`) and the web (the official SQLite Wasm build, vendored in `web/vendor/sqlite-wasm/`, in a Worker of the page with OPFS); the same authorizer, limits and error texts on both (`tests/sql_cases.txt`); folder web exports; `examples/notes` with FTS5. The desktop database is in `<app id>+sql/`, out of reach of `plinth:files`.
+- **wasmi (R4, Q4, Done):** all app suites pass; `FUEL_PER_MS` from release numbers; a gate mode and a CI job.
+- **Speed and memory:** `Map`/`Set` hash tables (about 120 times faster), merge sort (about 110 times faster), `JSON.stringify` and `join` without quadratic memory.
+- **Locale (L5, Done):** `locale()`, `direction()`, `formatNumber`, `formatDate`, `pluralCategory`, `formatList`, `compare` (ICU4X on the desktop, `Intl` on the web); lifecycle kind 4 on a locale change. 8 of 448 cases differ between the hosts, each with a reason (`docs/I18N.md` §3.7).
+- **Compiler:** long chains without recursion and `PL1008` (L6, Done); `===` on strings and nullable primitives compares values, and a signal set with an equal value does nothing.
+- **UI:** `onContextMenu`, `Menu` at a point, a modal layer blocks the pointer, drag and drop, `Dialog` children (U6, Done); OS dark mode, high contrast, text size and reduced motion (U7, Done on Windows and the web).
+- **Test kit (T3 step 1):** `plinth:test` and `plinth test`; no core or WIT change (a private protocol over `dev.log`).
+- **Host API tests (H7, Done):** `clipboard` on three hosts, `dialog` on the web.
+- **Docs:** `docs/PLATFORM-TODO.md`, `docs/TESTING.md`, `docs/migrations/`; SPEC §4.6, §4.7, §5.1, §6.3, §6.5, §7.1, §8.1, §8.4, §8.5, §9, §10.5, §13 updated.
+- **Lessons:** a stopped gate leaves stale example packages, so `run-a11y.mjs` then fails for the wrong reason; a Sonnet agent needs a task of one layer; `run-a11y.mjs` checks must wait until a control is enabled, because each app runs in a Worker.
 
 ## 10. Next steps (in order)
 
-`docs/PRODUCTION.md` §16 lists the Beta items to do first; they come before the items below. Done since this list was written: C3, the `core = "patch"` defect, wasmi (a) to (d), the notes app storage and search. Next: notify step 2 (the `plinth:notify` module, a desktop toast, the web), RegExp step 3 (`String.match/replace/split/search`), the gpui-ce one-line fix for text input names (`EditableTextElement::write_a11y_info`, PRODUCTION U3).
+`bash scripts/production-status.sh --open Beta` lists the open Beta items. Work that needs Linux or macOS is in `docs/PLATFORM-TODO.md`.
 
-1. **wasmi, the rest** (steps 1–2 merged; details in GAPS "wasmi engine (2026-10-07)"): (a) run `--test monkey`, `async_await`, `files`, `hub_api` and `net` with `PLINTH_ENGINE=wasmi` — `files`, `hub_api` and `net` exercise imports that never ran on wasmi; (b) release speed numbers, wasmtime against wasmi (`apps::pong_plays_a_point`, `sevenguis::cells_formulas_propagate_and_find_cycles`, `perf.rs` `list_10k_perf` with `--release --ignored`); (c) check `FUEL_PER_MS` with more workloads (calibrated from two, with a 15x spread); (d) a wasmi job in CI (for example `PLINTH_ENGINE=wasmi` for the errors and language suites); (e) step 3: move the engine-free host state into its own crate, so an iOS build does not depend on wasmtime; (f) find out why opt-level 3 on the `wasmi` crate crashes a Windows debug build, and report it upstream if it is a wasmi bug.
-2. **Updates, the rest** (UPDATES §9.1; the prompt and re-consent are done): `onUpgrade(fromVersion)`, then the web service worker cache, `apply = "live"`, mobile.
-3. **gpui-ce layout fix (GAPS F1):** make nested flex layout linear in the owner's fork (when no agent builds), then remove other needless flex boxes in `render.rs`; check with `frame_cost.rs` and the screenshots.
-4. **Smooth motion, the rest:** host-side transitions (UI-ADVANCED U2 motion), a release build for play (say it in `docs/getting-started.md`). Ask the owner to play Pong first.
-5. **Web robustness:** done (the Worker, the watchdog, the memory cap).
-6. **Pointer, the rest (GAPS G4, 7G-6, 7G-7):** a secondary button or `onContextMenu`; children in `Dialog`; a modal overlay that blocks pointer events on the desktop; `onDrag` and drop targets.
-7. **Game gaps:** sound (G7), scale to the window (G9), transitions and springs.
-8. **Storage (`docs/STORAGE.md` §6):** a `vault` space and the Hub UI for spaces; a folder as a space; `watch`; sync. Then the notes app (VALIDATION V2).
-9. **Experience (`docs/EXPERIENCE.md` §7):** Try and Keep, the Privacy page.
-10. **Compiler:** smaller async code (move the promise machinery into the core, GAPS "Async code size"); R3 (chains longer than 1000 terms).
-11. **Platforms:** a GUI window on Linux (WSLg is available) and macOS; then mobile with gpui and wasmi. The owner will run agents on Linux and macOS machines for this: every item that needs another OS goes into `docs/PLATFORM-TODO.md`.
-12. **Distribution:** publish the npm packages and a first registry; Hub H2 (signed indexes); key rotation and the project key.
+1. **D4 `onUpgrade`, step C** (branch `wt/upgrade`, steps A and B committed there): the web host (store the data version with the web kv keys; `data-version` returns a version only when an upgrade is pending; store the version after start unless the app claimed the upgrade), a Node test, the docs (`docs/UPDATES.md` §6, §9.1 and the UP-Q5 interim rule, `docs/migrations/core-1.13.md`, `docs/host-apis.md`, PRODUCTION D4, CHANGELOG), then SPEC (§4.7 `onUpgrade`, §8.5). Merge, run the gate and `run-a11y.mjs`.
+2. **T3 step 2:** the same app tests on wasmi and on the web host; the missing steps (dialogs, network answers, pointer and key steps, Slider, DatePicker, back navigation); `beforeEach`, `describe`, `only`, `skip` (`docs/TESTING.md` §12).
+3. **Small compiler gaps:** `===` on a union of `string` and an object type (GAPS); a `??`/`?.` chain of about 50,000 links needs too many Wasm locals (GAPS R3).
+4. **C6:** freeze the 1.0 language subset in `docs/language.md`.
+5. **D5:** web updates with a service worker cache (UPDATES §9 step 4).
+6. **T4:** an inspector for the UI tree, signals and host calls. **T6:** `plinth publish` to a registry.
+7. **V2 and V3:** the flagship notes app (rich text is the largest design question, VALIDATION §3) and an app suite in one host.
+8. **R7 / GAPS F1:** make nested flex layout linear in gpui-ce (only when no agent builds), then the gpui-ce one-line fix for text input names (`EditableTextElement::write_a11y_info`, U3), and pass `WM_SETTINGCHANGE` to the app (U7; then the one-second poll can go).
+9. **H3:** notifications, the rest (Linux and macOS are in PLATFORM-TODO).
+10. **Owner items:** the CI runners (§0.2), signing (P5), the release key (S6), npm publishing (D1), manual screen reader and IME checks (U3, U4, U5).
+11. **Later (1.0):** platforms (PLATFORM-TODO), mobile with gpui and wasmi (R5, P7, P8), sound (G7), the docs website (X3).
