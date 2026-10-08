@@ -13,8 +13,13 @@ fn temp_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn rand_suffix() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64
+/// A suffix that is unique in this process: the clock alone is not,
+/// because Windows gives it in 100 ns steps and tests run in parallel.
+fn rand_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;
+    format!("{nanos}-{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
 fn compile_counter(id: &str, version: &str) -> Vec<u8> {
