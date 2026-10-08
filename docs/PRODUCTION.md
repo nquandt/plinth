@@ -89,7 +89,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | H1 | `time`, `store` (kv), `clipboard`, `dialog`, `net`, `files`, `error.report` on all hosts | Preview | Done | `docs/host-apis.md` |
 | H2 | Denied calls never trap; distinct denial reasons | Preview | Done | SPEC §11 |
 | H3 | Notifications (`notify`) | Beta | Partial | Step 1 done: WIT `notify` (`show`, `cancel`), core 1.12 functions, the `notify` capability and policy, a `NotifyBackend` with a test backend on wasmtime and wasmi (`tests/notify.rs`). Next: the `plinth:notify` module in the compiler, a native toast on the desktop, the web host through the parent page. |
-| H4 | Structured storage (`store.sql` or a documented pattern on files) | Beta | Decide | STORAGE ST-Q1, VALIDATION V2 |
+| H4 | Structured storage (`store.sql`) | Beta | Open | Owner decision 2026-10-07: a SQL store for each app (SQLite on the desktop and mobile, SQLite in Wasm on the web). Design it in `docs/STORAGE.md` (ST-Q1 answered). |
 | H5 | Storage: `vault` space, a folder as a space, `watch` | 1.0 | Open | `docs/STORAGE.md` §6 |
 | H6 | Sync between devices of one user | Later | Open | STORAGE §6. Not in 1.0 (PR-Q5). |
 | H7 | Each host API has a documented behavior on each host, with the same test on each host | Beta | Partial | `docs/host-apis.md` "Support on each host" (behavior and tests: desktop wasmtime, desktop wasmi, web). Next: tests for the "no test" cells: `clipboard` on all three hosts; `dialog`, `net`, `files` and `hub` on wasmi (with Q4); `dialog` on the web. |
@@ -105,7 +105,7 @@ Production apps run code from many publishers. This area must be complete before
 | S3 | `net` blocks private network ranges unless `net.local` | Preview | Done | All non-public IPv4/IPv6 ranges and embedded IPv4 on both hosts (`policy.rs` `is_private_ip`, `plinth-web.js` `isPrivateNetHost`, `web/test/run-net-private.mjs`); the desktop also checks the address after DNS resolution (`net.rs` `PublicOnlyResolver`, `tests/net.rs`). The web cannot check DNS results (THREAT-MODEL §6 item 1). |
 | S4 | Packages and update feeds are signed (Ed25519); no downgrade | Preview | Done | `plinth-package::feed`, desktop updater |
 | S5 | Re-consent when an update asks for new capabilities | Beta | Done | `plinth-host-desktop::updater` (`update_consent`, `prepare_start`), the Hub (`docs/HUB.md` §7.3 step 3); UPDATES §6 |
-| S6 | Project key that signs cores and the Hub; key rotation and revocation | Beta | Decide | HANDOFF §0.2 item 3; HANDOFF §10 item 12 |
+| S6 | Project key that signs cores and the Hub; key rotation and revocation | Beta | Open | Owner decision 2026-10-07: an offline root key that the owner holds signs a release key for CI; the root key rotates or revokes the release key. |
 | S7 | `SECURITY.md`: how to report a vulnerability, response time | Beta | Done | `SECURITY.md`. Turn on GitHub private vulnerability reporting when the repo is public (G6). |
 | S8 | Dependency audit in CI (`cargo deny` or `cargo audit`, `npm audit`) | Beta | Done | `deny.toml`; `bash scripts/ci-local.sh deny` (also in `full`; Linux CI); `docs/DEPENDENCIES.md`. Two wasmtime advisories are ignored with a reason until the wasmtime update (DEPENDENCIES §4 A1). |
 | S9 | Fuzz tests run in CI on a schedule with more iterations | Beta | Partial | `robustness.rs`, `hostile_ops.rs`, `hostile_render.rs` run in the gate with few iterations. |
@@ -138,7 +138,7 @@ Production apps run code from many publishers. This area must be complete before
 | D4 | Update `prompt` dialog and `onUpgrade(fromVersion)` | Beta | Partial | The desktop restart prompt is done (UPDATES §5). Next: `onUpgrade(fromVersion)` (needs a core change; UPDATES §9.1). |
 | D5 | Web updates (service worker cache) | Beta | Open | UPDATES §9.1 |
 | D6 | A public registry and the Hub app on desktop and web | Beta | Partial | `docs/HUB.md`, `docs/REGISTRY.md`, `docs/web-hub.md`. Next: host a first registry. |
-| D7 | Update policy decisions (UP-Q1..Q6) | Beta | Decide | `docs/UPDATES.md` |
+| D7 | Update policy decisions (UP-Q1..Q6) | Beta | Partial | Decided 2026-10-07: UP-Q2 `apply = "live"` after 1.0; UP-Q3 feeds at the author's URL and in registries that the user adds, no Plinth-run service; UP-Q4 the key model of S6. Open: UP-Q1 (default policy stays `follow`), UP-Q5, UP-Q6. |
 
 ## 10. Developer tools
 
@@ -208,6 +208,10 @@ Decisions of 2026-10-07:
 | — | Name (G2), public repo (G6), Linux and macOS window (P2, P3) | At the end, before 1.0. |
 | — | CI runners online (Q2), npm packages and release tests (D1, D2) | Near Beta. |
 | — | VS Code Marketplace (T2) | At 1.0. |
+| — | Structured storage (H4) | `store.sql`: a SQL store for each app. |
+| — | Project key (S6, UP-Q4) | An offline root key held by the owner, and a release key for CI that the root key signs and can revoke. |
+| — | `apply = "live"` (UP-Q2) | After 1.0. |
+| — | Update feeds (UP-Q3) | The author's URL and the registries that the user adds. No Plinth-run service. |
 | PR-Q5 | Does 1.0 need sync (H6)? | **No.** Sync comes after 1.0. Sync means: one user has the same app on two devices (for example a phone and a desktop), and the app data is the same on both. A change on one device goes to the other. Owner decision 7 says the data stays on the user's device or the user's storage, so sync goes through storage that the user owns (a folder that a sync service like OneDrive or iCloud copies, or a user-owned server), never a Plinth server. `docs/STORAGE.md` §6 has the design draft. |
 
 ## 16. Summary

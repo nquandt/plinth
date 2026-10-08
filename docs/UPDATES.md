@@ -153,8 +153,8 @@ apply = "next-start"   # "prompt" | "next-start" | "live"
 | # | Question |
 |---|---|
 | UP-Q1 | **Still open in part.** The default core policy is implemented as `follow` (SPEC.md §10.5, 2026-10-07): users get core fixes with no action from the author. Open: whether `patch` should be the default instead, for more author control, once real-world fixes show how often `follow` matters. |
-| UP-Q2 | `apply = "live"` in the first version, or later? |
-| UP-Q3 | Feeds only at the author's own URL, or also a Plinth-hosted registry service? |
-| UP-Q4 | The project key that signs cores, and its rotation. |
+| UP-Q2 | **Decided (owner, 2026-10-07): after 1.0.** `next-start` and `prompt` come first. |
+| UP-Q3 | **Decided (owner, 2026-10-07):** feeds at the author's own URL and in the registries that the user adds. No Plinth-run service. |
+| UP-Q4 | **Decided (owner, 2026-10-07):** an offline root key that the owner holds signs a release key for CI. The root key rotates or revokes the release key. |
 | UP-Q5 | What a rollback does with data that the newer version wrote. |
 | UP-Q6 | App Store policy for an app that updates its own `.plnt` (most defensible) and for the Hub on iOS (hard; an alternative marketplace in the EU). |

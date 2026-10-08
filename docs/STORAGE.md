@@ -155,7 +155,7 @@ The safest default is: **no lasting access between apps.** Data moves only throu
 
 ## 5. Open questions
 
-- ST-Q1: Does the file API also give a key-value or database view (`store.sql`), or does an app build that on files?
+- ST-Q1: **Decided (owner, 2026-10-07): yes, `store.sql`,** a SQL store for each app (SQLite on the desktop and mobile, SQLite in Wasm on the web). The design is still to write.
 - ST-Q2: How does the web host reach S3 or Azure? The bucket needs CORS, or the hub server must act as a proxy. Where does the web host keep the credentials?
 - ST-Q3: Conflict policy: keep both versions and tell the app (the draft), or let the app merge (CRDTs, later)?
 - ST-Q4: Can a provider be a privileged Plinth package (like the Hub app), or only native host code?
