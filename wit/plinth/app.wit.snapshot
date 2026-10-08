@@ -57,3 +57,7 @@ world app: import hub
 world app: import files
 world app: export init: func(args: list<u8>)
 world app: export on-event: func(ev: list<u8>)
+interface notify: use error.{host-error}
+interface notify: show: func(title: string, body: option<string>, tag: option<string>) -> u32
+interface notify: cancel: func(tag: string) -> result<_, host-error>
+world app: import notify

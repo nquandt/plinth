@@ -469,6 +469,17 @@ function hostImports(
     run.then((result) => completeRequest?.(id, result));
     return id;
   }
+  // plinth:notify (core 1.12, docs/PRODUCTION.md H3): the same request id
+  // and `[ok, 0, text, error]` completion as `net.fetch`. This host has no
+  // notification area yet, so an allowed call answers "unsupported". A
+  // denied call answers "denied:<reason>"; it never traps.
+  function openNotify() {
+    const id = nextRequest++;
+    const reason = capReason("notify");
+    const result = reason !== null ? [false, 0, "", deniedText(reason)] : [true, 0, "unsupported", null];
+    Promise.resolve().then(() => completeRequest?.(id, result));
+    return id;
+  }
   function mem() {
     return new DataView(getExports().memory.buffer);
   }
@@ -715,6 +726,19 @@ function hostImports(
       },
       prompt(ptr, len) {
         return openDialog("prompt", readString(ptr, len));
+      },
+    },
+    // Lowered core ABI: title(ptr,len), body(tag,ptr,len), tag(tag,ptr,len)
+    // (each `option<string>` as for `net.fetch`'s body). `show` returns the
+    // request id directly; `cancel` writes a `result<_, host-error>`.
+    "plinth:app/notify@1.0.0": {
+      show(_titlePtr, _titleLen, _bodyTag, _bodyPtr, _bodyLen, _tagTag, _tagPtr, _tagLen) {
+        return openNotify();
+      },
+      cancel(_ptr, _len, retptr) {
+        const reason = capReason("notify");
+        if (reason !== null) return writeDeniedUnit(retptr, reason);
+        writeOkUnit(retptr);
       },
     },
     "plinth:app/net@1.0.0": {

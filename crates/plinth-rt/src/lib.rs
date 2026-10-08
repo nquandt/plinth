@@ -662,6 +662,12 @@ abi! {
     fn __plinth_rt_on_mount(thunk: i32, env: i32) {
         reactive::add_mount(Callable { thunk: thunk as u32, env: env as u32 })
     }
+    // -- plinth:notify (core 1.12, docs/PRODUCTION.md H3) ----------------------
+    fn __plinth_rt_notify_show(thunk: i32, env: i32, title: i32, body: i32, tag: i32) {
+        host::notify_show(Callable { thunk: thunk as u32, env: env as u32 }, title, body, tag)
+    }
+    fn __plinth_rt_notify_cancel(tag: i32) { host::notify_cancel(tag) }
+    fn __plinth_rt_notify_last_error() -> i32 { host::notify_last_error() }
 
     // -- plinth:time date/time additions (SPEC.md §8.5, docs/GAPS.md gap #5) --
     fn __plinth_rt_tz_offset_minutes(ms: f64) -> f64 { host::timezone_offset(ms as i64) as f64 }

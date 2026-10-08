@@ -204,6 +204,10 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("regex_test", &[I32, I32], &[I32]),
     ("regex_exec", &[I32, I32], &[I32]),
     ("regex_last_match_index", &[], &[F64]),
+    // -- plinth:notify (core 1.12, docs/PRODUCTION.md H3) ----------------------
+    ("notify_show", &[I32, I32, I32, I32, I32], &[]),
+    ("notify_cancel", &[I32], &[]),
+    ("notify_last_error", &[], &[I32]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -302,6 +306,10 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("regex_test", 12),
     ("regex_exec", 12),
     ("regex_last_match_index", 12),
+    // plinth:notify (docs/PRODUCTION.md H3), also in the unshipped 1.12.
+    ("notify_show", 12),
+    ("notify_cancel", 12),
+    ("notify_last_error", 12),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).

@@ -88,7 +88,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 |---|---|---|---|---|
 | H1 | `time`, `store` (kv), `clipboard`, `dialog`, `net`, `files`, `error.report` on all hosts | Preview | Done | `docs/host-apis.md` |
 | H2 | Denied calls never trap; distinct denial reasons | Preview | Done | SPEC §11 |
-| H3 | Notifications (`notify`) | Beta | Open | SPEC §11 names it. Most production apps need it. |
+| H3 | Notifications (`notify`) | Beta | Partial | Step 1 done: WIT `notify` (`show`, `cancel`), core 1.12 functions, the `notify` capability and policy, a `NotifyBackend` with a test backend on wasmtime and wasmi (`tests/notify.rs`). Next: the `plinth:notify` module in the compiler, a native toast on the desktop, the web host through the parent page. |
 | H4 | Structured storage (`store.sql` or a documented pattern on files) | Beta | Decide | STORAGE ST-Q1, VALIDATION V2 |
 | H5 | Storage: `vault` space, a folder as a space, `watch` | 1.0 | Open | `docs/STORAGE.md` §6 |
 | H6 | Sync between devices of one user | Later | Open | STORAGE §6. Not in 1.0 (PR-Q5). |

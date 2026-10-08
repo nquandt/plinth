@@ -33,6 +33,11 @@ pub const NET_LOCAL: &str = "net.local";
 /// item 3, §3). Low risk: the space belongs to this app only, like the kv
 /// store, so it is granted with no question.
 pub const FILES_PRIVATE: &str = "files.private";
+/// `plinth:notify` (core 1.12, `docs/PRODUCTION.md` H3): system
+/// notifications outside the app window. Medium risk: a notification can
+/// show at any time, also while the user works in another app, so it is
+/// asked one time.
+pub const NOTIFY: &str = "notify";
 /// Privileged Hub management (`docs/HUB.md` §4.1, §12.2): `list-apps`,
 /// `launch`, `set-grant`, `block`, `unblock`. The host grants this only to
 /// a package signed by a trusted Hub key (`docs/HUB.md` §4.1); it is not
@@ -71,6 +76,7 @@ pub const CAPABILITIES: &[CapabilityInfo] = &[
     CapabilityInfo { name: FILES_PRIVATE, risk: Risk::Low, description: "save files on this device" },
     CapabilityInfo { name: CLIPBOARD_WRITE, risk: Risk::Low, description: "write to the clipboard" },
     CapabilityInfo { name: CLIPBOARD_READ, risk: Risk::Medium, description: "read the clipboard" },
+    CapabilityInfo { name: NOTIFY, risk: Risk::Medium, description: "show notifications" },
     CapabilityInfo { name: NET_LOCAL, risk: Risk::Medium, description: "connect to devices on your local network" },
     CapabilityInfo {
         name: HUB_MANAGE,
@@ -100,6 +106,9 @@ pub const FUNCTION_CAPABILITIES: &[(&str, &str)] = &[
     // `net_fetch` needs a `net:<host>` or `net.local` capability (see
     // `NET` above); this generic marker only drives reachability.
     ("net_fetch", NET),
+    ("notify_show", NOTIFY),
+    ("notify_cancel", NOTIFY),
+    // `notify_last_error` needs no capability, like `kv_last_error` above.
     ("hub_list_apps", HUB_MANAGE),
     ("hub_launch", HUB_MANAGE),
     ("hub_set_grant", HUB_MANAGE),

@@ -11,7 +11,8 @@
 //! lives once, in `lib.rs`.
 //!
 //! Every interface is wired: `ui`, `dev`, `error`, `time`, `store`,
-//! `clipboard`, `dialog`, `net`, `files` and `hub` (SPEC.md §9.2 step 2).
+//! `clipboard`, `dialog`, `notify`, `net`, `files` and `hub` (SPEC.md §9.2
+//! step 2).
 //!
 //! wasmi 2 is a register-machine interpreter (it compiles Wasm to its own
 //! register-based bytecode ahead of a call, not a tree-walking
@@ -35,6 +36,7 @@ use crate::bindings::plinth::app::error::{DeniedReason as WitDeniedReason, Host 
 use crate::bindings::plinth::app::files::Host as FilesHost;
 use crate::bindings::plinth::app::hub::Host as HubHost;
 use crate::bindings::plinth::app::net::Host as NetHost;
+use crate::bindings::plinth::app::notify::Host as NotifyHost;
 use crate::bindings::plinth::app::store::Host as StoreHost;
 use crate::bindings::plinth::app::time::Host as TimeHost;
 use crate::bindings::plinth::app::ui::Host as UiHost;
@@ -120,6 +122,7 @@ pub fn load(
         fake_timezone_offset_minutes: None,
         hub,
         files: crate::files::Files::unavailable(),
+        notify: Box::new(crate::notify::MemoryNotify::default()),
     };
     let mut store = Store::new(engine, state);
     store.limiter(|s| &mut s.limits);
@@ -419,6 +422,40 @@ fn register_imports(linker: &mut Linker<HostState>) -> Result<()> {
         let message = read_string(&mut caller, ptr, len)?;
         Ok(DialogHost::prompt(caller.data_mut(), message) as i32)
     })?;
+
+    // `notify.show` (core 1.12): title(ptr,len), body(tag,ptr,len),
+    // tag(tag,ptr,len) -- each `option<string>` lowers like `net.fetch`'s
+    // `body` (tag 0 = none). Returns the request id directly.
+    linker.func_wrap(
+        "plinth:app/notify@1.0.0",
+        "show",
+        |mut caller: Caller<HostState>,
+         title_ptr: i32,
+         title_len: i32,
+         body_tag: i32,
+         body_ptr: i32,
+         body_len: i32,
+         tag_tag: i32,
+         tag_ptr: i32,
+         tag_len: i32|
+         -> Result<i32, WasmiError> {
+            let title = read_string(&mut caller, title_ptr, title_len)?;
+            let body = if body_tag == 0 { None } else { Some(read_string(&mut caller, body_ptr, body_len)?) };
+            let tag = if tag_tag == 0 { None } else { Some(read_string(&mut caller, tag_ptr, tag_len)?) };
+            Ok(NotifyHost::show(caller.data_mut(), title, body, tag) as i32)
+        },
+    )?;
+    linker.func_wrap(
+        "plinth:app/notify@1.0.0",
+        "cancel",
+        |mut caller: Caller<HostState>, ptr: i32, len: i32, retptr: i32| {
+            let tag = read_string(&mut caller, ptr, len)?;
+            match NotifyHost::cancel(caller.data_mut(), tag) {
+                Ok(()) => write_ok_unit(&mut caller, retptr),
+                Err(e) => write_denied_unit(&mut caller, retptr, reason_byte(e)),
+            }
+        },
+    )?;
 
     // `net.fetch` (SPEC.md §8.5, §11): url(ptr,len), method(ptr,len),
     // headers(ptr,count) -- each element a 16-byte (ptr,len,ptr,len)

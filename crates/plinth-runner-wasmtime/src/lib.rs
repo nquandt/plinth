@@ -15,6 +15,7 @@ pub mod files;
 pub mod hub;
 pub mod kv;
 pub mod net;
+pub mod notify;
 pub mod policy;
 pub mod requests;
 pub mod timers;
@@ -25,6 +26,7 @@ mod wasmi_engine;
 
 use hub::HubBackend;
 use kv::Kv;
+use notify::NotifyBackend;
 use policy::{DeniedReason, Policy};
 use requests::RequestQueue;
 use timers::TimerQueue;
@@ -42,7 +44,7 @@ use bindings::plinth::app::error::{DeniedReason as WitDeniedReason, HostError};
 /// Capability names (SPEC.md §11), from the shared map in `plinth-link`
 /// (`docs/HUB.md` §12.3) rather than a duplicated list here.
 pub mod capability {
-    pub use plinth_link::capabilities::{CLIPBOARD_READ, CLIPBOARD_WRITE, HUB_MANAGE, STORE_KV};
+    pub use plinth_link::capabilities::{CLIPBOARD_READ, CLIPBOARD_WRITE, HUB_MANAGE, NOTIFY, STORE_KV};
 }
 
 impl From<DeniedReason> for WitDeniedReason {
@@ -240,6 +242,9 @@ struct HostState {
     /// The app's private space for `plinth:files` (core 1.11). Unavailable
     /// until the host gives one with `Guest::set_files`.
     files: files::Files,
+    /// The `plinth:notify` backend (core 1.12). A `MemoryNotify` until the
+    /// host gives its own with `Guest::set_notify`.
+    notify: Box<dyn NotifyBackend>,
 }
 
 /// 64 bits of entropy for `Math.random`: the standard library's random
@@ -575,6 +580,19 @@ impl bindings::plinth::app::dialog::Host for HostState {
     }
 }
 
+impl bindings::plinth::app::notify::Host for HostState {
+    fn show(&mut self, title: String, body: Option<String>, tag: Option<String>) -> u32 {
+        let id = self.requests.open();
+        let result = notify::show(&self.policy, self.notify.as_mut(), &title, body.as_deref(), tag.as_deref());
+        self.net_results.lock().unwrap().push((id, result));
+        id
+    }
+
+    fn cancel(&mut self, tag: String) -> Result<(), HostError> {
+        notify::cancel(&self.policy, self.notify.as_mut(), &tag).map_err(|r| HostError::Denied(r.into()))
+    }
+}
+
 impl bindings::plinth::app::net::Host for HostState {
     fn fetch(&mut self, url: String, method: String, headers: Vec<(String, String)>, body: Option<String>) -> u32 {
         let id = self.requests.open();
@@ -734,6 +752,7 @@ impl Runner {
                     fake_timezone_offset_minutes: None,
                     hub,
                     files: files::Files::unavailable(),
+                    notify: Box::new(notify::MemoryNotify::default()),
                 };
                 let mut store = Store::new(engine, state);
                 store.limiter(|s| &mut s.limits);
@@ -868,6 +887,13 @@ impl Guest {
     /// `denied:unsupported`. Call it before `init`.
     pub fn set_files(&mut self, files: files::Files) {
         self.data_mut().files = files;
+    }
+
+    /// Gives the guest the host's notification area for `plinth:notify`
+    /// (core 1.12, `docs/PRODUCTION.md` H3). Without it, the guest has a
+    /// `MemoryNotify`, which only records the calls. Call it before `init`.
+    pub fn set_notify(&mut self, notify: Box<dyn NotifyBackend>) {
+        self.data_mut().notify = notify;
     }
 
     /// The soonest time a timer is due, if any is pending. The desktop

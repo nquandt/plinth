@@ -495,6 +495,52 @@ pub fn files_call(callable: Callable, op: i32, path: i32, text: i32) {
     }
 }
 
+/// The last denial reason for `plinth:notify`'s `cancel`, as the string
+/// `notify.lastError()` returns, or `None` if the last `cancel` was not
+/// denied. A denied `show` reports its reason in its completion instead.
+static NOTIFY_LAST_ERROR: Global<Option<&'static str>> = Global::new(None);
+
+/// `plinth:notify` `show` (core 1.12, `docs/PRODUCTION.md` H3): shows a
+/// system notification. `body` and `tag` are nullable string pointers (`0`
+/// is none). The completion is the same 4-element list as `net.fetch`
+/// (`text` is `"shown"` or `"unsupported"`; `error` is `"denied:<reason>"`
+/// when denied), so the compiler's wrapper closure reads it with
+/// `net_result_*`. The host checks the capability.
+pub fn notify_show(callable: Callable, title: i32, body: i32, tag: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let title = strings::as_str(title as u32);
+        let body = if body == 0 { None } else { Some(strings::as_str(body as u32)) };
+        let tag = if tag == 0 { None } else { Some(strings::as_str(tag as u32)) };
+        let id = host::notify::show(title, body, tag);
+        register_request(id, callable);
+    }
+}
+
+/// `plinth:notify` `cancel(tag)`: removes the notification with `tag`. A
+/// no-op when denied; `notify_last_error` then gives the reason.
+pub fn notify_cancel(tag: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let tag = strings::as_str(tag as u32);
+        match host::notify::cancel(tag) {
+            Ok(_) => NOTIFY_LAST_ERROR.with(|e| *e = None),
+            Err(e) => NOTIFY_LAST_ERROR.with(|slot| *slot = Some(denied_reason(e))),
+        }
+    }
+}
+
+/// `notify.lastError()`: the reason the last `cancel` was denied, or `null`.
+pub fn notify_last_error() -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    return NOTIFY_LAST_ERROR.with(|e| match e {
+        Some(s) => strings::from_str(s) as i32,
+        None => 0,
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    0
+}
+
 /// The last denial reason for `plinth:hub` calls (`docs/HUB.md` §4.1,
 /// §12.2), as the string `hub.lastError()` returns, or `None` if the last
 /// call was not denied.

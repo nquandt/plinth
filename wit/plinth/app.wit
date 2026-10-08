@@ -126,6 +126,28 @@ interface dialog {
   prompt: func(message: string) -> u32;
 }
 
+/// System notifications (core 1.12, `docs/PRODUCTION.md` H3; capability:
+/// `notify`, Medium risk). The host shows the notification in the system
+/// notification area, outside the app window. A denied call never traps.
+interface notify {
+  use error.{host-error};
+
+  /// Shows a notification with `title` and an optional `body`. A `tag`
+  /// names the notification: a new notification with the same tag replaces
+  /// the old one, and `cancel` removes it. Returns a request id at once; the
+  /// result arrives later through a `completion` event (SPEC.md §8.4) as a
+  /// 4-element list, the same shape as `net.fetch`: `ok` (bool), `0` (s32,
+  /// unused), `text` (string) and `error` (string, or null when `ok`).
+  /// `text` is `"shown"` when the host showed the notification, or
+  /// `"unsupported"` when this host has no notification area (`ok` is true
+  /// in both cases). A denied call completes with `ok` false and `error` =
+  /// `"denied:<reason>"`.
+  show: func(title: string, body: option<string>, tag: option<string>) -> u32;
+  /// Removes the notification with `tag`, if the host still shows it.
+  /// Removing a tag that the host does not show is not an error.
+  cancel: func(tag: string) -> result<_, host-error>;
+}
+
 /// HTTP fetch (SPEC.md §8.5, §11; capability: `net:<host>`, dynamic per
 /// declared host, plus `net.local` for private network ranges). Every
 /// call returns at once with a request id; the result arrives later
@@ -253,6 +275,7 @@ world app {
   import store;
   import clipboard;
   import dialog;
+  import notify;
   import net;
   import hub;
   import files;
