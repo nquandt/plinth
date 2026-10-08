@@ -405,7 +405,7 @@ fn crud_filter_create_update_delete() {
 }
 
 /// 7GUIs task 6: a click on empty canvas adds a circle, the circle under
-/// the pointer is selected (filled), the diameter sheet changes it at once
+/// the pointer is selected (filled), the diameter dialog changes it at once
 /// and is one undo step, and undo and redo go back and forward. Pointer
 /// events carry `[x, y]` in view units (UI API 1.12).
 #[test]
@@ -455,7 +455,8 @@ fn circle_drawer_draws_adjusts_and_undoes() {
     h.fire(slider, event::CHANGE, Value::Number(60.0));
     h.fire(slider, event::CHANGE, Value::Number(80.0));
     assert_eq!(outlines(&h)[0].2, 40.0, "the radius is half of 80");
-    h.press("Done");
+    let done = h.labeled(ControlKind::Action, "Done");
+    h.fire(done, event::PRESS, Value::Null);
     assert_eq!(status(&h), "Selected: diameter 80");
 
     // Undo: the diameter goes back to 30 in one step, then the circles go one by one.
@@ -479,7 +480,7 @@ fn circle_drawer_draws_adjusts_and_undoes() {
     assert_eq!(outlines(&h).len(), 3);
 
     // UI API 1.13: a right-click on a circle selects it and opens the menu
-    // (an app menu: `open` is the `value` prop); its action opens the sheet.
+    // (an app menu: `open` is the `value` prop); its action opens the dialog.
     let menu = h.labeled(ControlKind::Menu, "Circle");
     assert_eq!(h.node(menu).prop(prop::VALUE), Some(&Value::Bool(false)), "the menu has `open` and is closed");
     h.fire(canvas, event::POINTER_MOVE, at(10.0, 10.0));
@@ -504,8 +505,11 @@ fn circle_drawer_draws_adjusts_and_undoes() {
     assert!(h.node(menu).bool_prop(prop::VALUE));
     let adjust = h.labeled(ControlKind::Action, "Adjust diameter...");
     h.fire(adjust, event::PRESS, Value::Null);
-    let sheet = h.one(ControlKind::Sheet, |_| true);
-    assert!(h.node(sheet).bool_prop(prop::VALUE), "the action opens the diameter sheet");
+    // UI API 1.13: the slider is in a Dialog (GAPS 7G-7).
+    let dialog = h.one(ControlKind::Dialog, |_| true);
+    assert!(h.node(dialog).bool_prop(prop::VALUE), "the action opens the diameter dialog");
+    let slider = h.labeled(ControlKind::Slider, "Diameter");
+    assert_eq!(h.node(slider).parent, dialog, "the slider is a child of the dialog");
 }
 
 /// 7GUIs task 7: formulas, references and ranges, change propagation that

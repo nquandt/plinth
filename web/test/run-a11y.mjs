@@ -265,11 +265,13 @@ async function main() {
   const hubOnly = process.argv.includes("--hub-only");
   const typingOnly = process.argv.includes("--typing-only");
   const exportOnly = process.argv.includes("--export-only");
+  // `--only=<text>`: only the named checks whose name has <text> (no axe run, no export, no Hub).
+  const only = process.argv.find((a) => a.startsWith("--only="))?.slice("--only=".length) ?? null;
 
   try {
     await waitForCdp(cdpPort);
 
-    for (const app of hubOnly || typingOnly || exportOnly ? [] : APPS) {
+    for (const app of hubOnly || typingOnly || exportOnly || only ? [] : APPS) {
       const appUrl = `${base}/examples/${app}/dist/${app.split("/").pop()}.plnt`;
       const coreUrl = `${base}/target/core.wasm`;
       const testUrl = `${base}/web/test/a11y.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(coreUrl)}`;
@@ -318,16 +320,16 @@ async function main() {
 
     // Typing: each key re-renders the page, and the TextField must keep the
     // focus and the caret (a regression: the first key moved the focus away).
-    if (!exportOnly) console.log("== typing in todo ==");
-    if (!exportOnly) try {
+    if (!exportOnly && !only) console.log("== typing in todo ==");
+    if (!exportOnly && !only) try {
       await checkTyping(cdpPort, base);
       console.log("  focus and caret kept after each key: ok");
     } catch (err) {
       console.error(`  FAILED: ${err.stack ?? err}`);
       failed = true;
     }
-    if (!exportOnly) console.log("== one click stops the stopwatch ==");
-    if (!exportOnly) try {
+    if (!exportOnly && !only) console.log("== one click stops the stopwatch ==");
+    if (!exportOnly && !only) try {
       await checkStopwatch(cdpPort, base);
       console.log("  ok");
     } catch (err) {
@@ -345,8 +347,10 @@ async function main() {
       ["absolute boxes and held keys (pong)", checkPong],
       ["canvas pointer positions (7GUIs circle drawer)", checkCircleDrawer],
       ["context menu at the pointer, Shift+F10, a modal blocks the pointer (circle drawer)", checkContextMenu],
+      ["drag and drop, Alt+Up/Down, a form in a Dialog (dnd-fixture)", checkDragDrop],
+      ["drag and drop in the sandboxed app frame (dnd-fixture as a web export)", checkDragDropFrame],
       ["host banners: an uncaught error, then a stopped app (stop-fixture)", checkStopBanner],
-    ]) {
+    ].filter(([name]) => !only || name.includes(only))) {
       console.log(`== ${name} ==`);
       try {
         const note = await check(cdpPort, base);
@@ -357,7 +361,7 @@ async function main() {
       }
     }
     // The web export (SPEC.md §10.3): `plinth build --target web`.
-    if (!typingOnly && !hubOnly) {
+    if (!typingOnly && !hubOnly && !only) {
       console.log("== web export (plinth build --target web) ==");
       try {
         const r = await checkWebExport(cdpPort);
@@ -372,7 +376,7 @@ async function main() {
       }
     }
     // plinth:notify through the frame and the page (export of notify-demo).
-    if (!typingOnly && !hubOnly) {
+    if (!typingOnly && !hubOnly && !only) {
       console.log("== notifications through the page (notify-demo export) ==");
       try {
         console.log(`  ok: ${await checkNotify(cdpPort)}`);
@@ -382,8 +386,8 @@ async function main() {
       }
     }
     // The web App Hub (docs/web-hub.md): served by `plinth registry serve --web`.
-    if (!typingOnly && !exportOnly) console.log("== web App Hub ==");
-    if (!typingOnly && !exportOnly) try {
+    if (!typingOnly && !exportOnly && !only) console.log("== web App Hub ==");
+    if (!typingOnly && !exportOnly && !only) try {
       const hub = await checkHub(cdpPort);
       for (const r of hub) {
         const serious = r.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
@@ -844,7 +848,7 @@ async function checkCircleDrawer(cdpPort, base) {
  * drawer fires `onContextMenu`; the browser's menu is prevented only where
  * the app handles the event; the app's `Menu` opens at the pointer with the
  * focus on its first item, and Escape closes it. Shift+F10 on the focused
- * canvas opens it at the center. While the modal `Sheet` is open, a click
+ * canvas opens it at the center. While the modal `Dialog` (with the slider) is open, a click
  * and a right-click on the canvas do nothing (GAPS G4).
  */
 async function checkContextMenu(cdpPort, base) {
@@ -909,24 +913,162 @@ async function checkContextMenu(cdpPort, base) {
       throw new Error(`Shift+F10 put the menu at ${JSON.stringify(center)}, not at the center of the canvas ${JSON.stringify(now)}`);
     }
     await page.waitFor(`document.activeElement?.textContent === "Adjust diameter..." ? true : null`, 3000);
-    // Enter on the item opens the modal sheet.
+    // Enter on the item opens the modal dialog.
     await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: String.fromCharCode(13) });
     await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
     await page.waitFor(`document.querySelector('#app dialog[open]') ? true : null`, 3000).catch(() => {
-      throw new Error("the menu item did not open the sheet");
+      throw new Error("the menu item did not open the dialog");
     });
     if (!(await page.eval(`${popover}.hidden`))) throw new Error("the menu did not close after its action");
 
-    // The modal sheet blocks the pointer to the canvas under it.
+    // The modal dialog blocks the pointer to the canvas under it.
     Object.assign(box, await page.eval(`(() => { const r = ${svg}.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`));
     await mouse("left", 20, 20);
     await mouse("right", box.w / 2, box.h / 2);
     await sleep(300);
-    if ((await page.eval(outlines)) !== 1) throw new Error("a click under the modal sheet drew a circle");
-    if (!(await page.eval(`${popover}.hidden`))) throw new Error("a right-click under the modal sheet opened the menu");
-    return "a right-click and Shift+F10 open the menu at the point; the browser menu stays where there is no handler; the modal sheet blocks the pointer";
+    if ((await page.eval(outlines)) !== 1) throw new Error("a click under the modal dialog drew a circle");
+    if (!(await page.eval(`${popover}.hidden`))) throw new Error("a right-click under the modal dialog opened the menu");
+    return "a right-click and Shift+F10 open the menu at the point; the browser menu stays where there is no handler; the modal dialog blocks the pointer";
   } finally {
     await page.close();
+  }
+}
+
+/**
+ * UI API 1.13 (PRODUCTION U6 part 2) with real pointer events: a drag of a
+ * row onto another row of a `List` with `onReorder` moves it, and the drop
+ * line shows; a drag of an element with `dragValue` onto an element with
+ * `onDrop` gives the value, and the target shows the drop; Alt+Up on the
+ * focused row moves it and keeps the focus; a finger drags after a long
+ * press; a `Dialog` holds a form (the first field has the focus, Enter in a
+ * field does not close it) and blocks a drag under it. `surface` is the
+ * page or the sandboxed app frame. The same facts as
+ * `crates/plinth-shoot/tests/drag_drop.rs`.
+ */
+async function dragDropChecks(page, surface) {
+  const text = (prefix) => `[...document.querySelectorAll("#app .pl-text")].map((e) => e.textContent).find((t) => t.startsWith(${JSON.stringify(prefix)})) ?? ""`;
+  const row = (title) => `[...document.querySelectorAll("#app .pl-row")].find((r) => r.querySelector(".pl-row-title")?.textContent === ${JSON.stringify(title)})`;
+  const labeled = (label) => `document.querySelector('#app [aria-label=${JSON.stringify(label)}]')`;
+  const live = `document.querySelector('#app [role=status]')?.textContent ?? ""`;
+  const wait = (expr, want, ms = 3000) =>
+    surface.waitFor(`(${expr}) === ${JSON.stringify(want)} ? true : null`, ms).catch(async () => {
+      throw new Error(`waited for ${JSON.stringify(want)}, got ${JSON.stringify(await surface.eval(expr))}`);
+    });
+  await surface.waitFor(`${row("Apple")} ? true : null`, 20000);
+  const point = async (find, dx = 0.5, dy = 0.5) => {
+    const o = await surface.offset();
+    const r = await surface.eval(`(() => { const r = ${find}.getBoundingClientRect(); return { x: r.x + r.width * ${dx}, y: r.y + r.height * ${dy} }; })()`);
+    return { x: r.x + o.x, y: r.y + o.y };
+  };
+  const mouse = (type, p, buttons) => page.send("Input.dispatchMouseEvent", { type, x: p.x, y: p.y, button: "left", buttons, clickCount: 1 });
+  /** Presses at `a`, moves to `b` in steps; `during` runs before the release. */
+  const drag = async (a, b, during = async () => {}) => {
+    await mouse("mouseMoved", a, 0);
+    await mouse("mousePressed", a, 1);
+    for (let i = 1; i <= 5; i++) await mouse("mouseMoved", { x: a.x + ((b.x - a.x) * i) / 5, y: a.y + ((b.y - a.y) * i) / 5 }, 1);
+    await sleep(50);
+    await during();
+    await mouse("mouseReleased", b, 0);
+  };
+
+  // A row onto the last row: the line shows under it; the app gets [0, 2].
+  await drag(await point(row("Apple")), await point(row("Cherry")), async () => {
+    if (!(await surface.eval(`${row("Cherry")}.classList.contains("pl-drop-after")`))) throw new Error("no drop line under the target row");
+    if ((await surface.eval(live)) !== "Dragging Apple") throw new Error(`the live region says ${JSON.stringify(await surface.eval(live))}`);
+  });
+  await wait(text("order: "), "order: Banana,Cherry,Apple");
+  await wait(text("log: "), "log: reorder 0 2");
+  await wait(live, "Moved Apple to position 3 of 3");
+  if (await surface.eval(`!!document.querySelector("#app .pl-drop-after, #app .pl-drag-ghost")`)) throw new Error("the drop line or the drag card stays after the drop");
+
+  // An element with dragValue onto a drop target: [value, x, y]; the target shows the drop.
+  await drag(await point(labeled("Card"), 0.2, 0.3), await point(labeled("Basket")), async () => {
+    if (!(await surface.eval(`${labeled("Basket")}.classList.contains("pl-drop-over")`))) throw new Error("the drop target does not show the drag over it");
+  });
+  await wait(text("log: "), "log: drop card true true");
+  await wait(live, "Dropped Card");
+
+  // The keyboard: Alt+Up on the focused row moves it; the focus stays on it.
+  await surface.eval(`${row("Cherry")}.focus()`);
+  const altKey = async (key, code) => {
+    await page.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key, code, windowsVirtualKeyCode: code === "ArrowUp" ? 38 : 40, modifiers: 1 });
+    await page.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: code === "ArrowUp" ? 38 : 40, modifiers: 1 });
+  };
+  await altKey("ArrowUp", "ArrowUp");
+  await wait(text("order: "), "order: Cherry,Banana,Apple");
+  await wait(`document.activeElement?.querySelector(".pl-row-title")?.textContent ?? ""`, "Cherry");
+  await wait(live, "Moved Cherry to position 1 of 3");
+  if ((await surface.eval(`${row("Cherry")}.getAttribute("aria-keyshortcuts")`)) !== "Alt+ArrowUp Alt+ArrowDown") throw new Error("the row does not tell its keys");
+  await altKey("ArrowDown", "ArrowDown");
+  await wait(text("order: "), "order: Banana,Cherry,Apple");
+
+  // A finger: a long press, then a move, drags the row (Apple, the last row, onto Banana, the first).
+  const touch = async (type, p) => page.send("Input.dispatchTouchEvent", { type, touchPoints: p ? [{ x: p.x, y: p.y, id: 1 }] : [] });
+  const from = await point(row("Apple"));
+  const to = await point(row("Banana"));
+  await touch("touchStart", from);
+  await sleep(600);
+  for (let i = 1; i <= 5; i++) await touch("touchMove", { x: from.x + ((to.x - from.x) * i) / 5, y: from.y + ((to.y - from.y) * i) / 5 });
+  await touch("touchEnd");
+  await wait(text("order: "), "order: Apple,Banana,Cherry");
+  await wait(text("log: "), "log: reorder 2 0");
+  // A finger that moves at once scrolls: no drag.
+  const quick = await point(row("Cherry"));
+  await touch("touchStart", quick);
+  for (let i = 1; i <= 5; i++) await touch("touchMove", { x: quick.x, y: quick.y - (from.y - to.y) * (i / 5) - 10 * i });
+  await touch("touchEnd");
+  await sleep(300);
+  if ((await surface.eval(text("order: "))) !== "order: Apple,Banana,Cherry") throw new Error("a finger that moved at once dragged a row");
+
+  // A Dialog with a form: the first field has the focus; Enter in the text field does not close it.
+  await surface.eval(`[...document.querySelectorAll("#app button")].find((b) => b.textContent === "Open dialog").click()`);
+  await surface.waitFor(`document.querySelector("#app dialog[open]") ? true : null`, 3000);
+  await wait(`document.activeElement?.type ?? ""`, "range");
+  const order = `[...document.querySelector("#app dialog[open]").querySelectorAll(".pl-dialog-message, input, .pl-action")].map((e) => e.className.includes("message") ? "message" : e.type === "range" ? "slider" : e.type === "text" ? "field" : "action").join()`;
+  if ((await surface.eval(order)) !== "message,slider,field,action") throw new Error(`the dialog shows ${await surface.eval(order)}`);
+  await surface.eval(`document.querySelector("#app dialog[open] input[type=text]").focus()`);
+  await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+  await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+  await sleep(200);
+  if (!(await surface.eval(`!!document.querySelector("#app dialog[open]")`))) throw new Error("Enter in a field of the dialog closed it");
+  // The modal dialog blocks a drag under it.
+  const before = await surface.eval(text("log: "));
+  await drag(await point(labeled("Card"), 0.2, 0.3), await point(labeled("Basket")));
+  await sleep(300);
+  if ((await surface.eval(text("log: "))) !== before) throw new Error(`a drag under the dialog did something: ${await surface.eval(text("log: "))}`);
+  await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await wait(text("log: "), "log: closed");
+  return "a drag reorders and drops (mouse and finger), Alt+Up/Down, the drop line and target, a form in a Dialog, a modal blocks a drag";
+}
+
+async function checkDragDrop(cdpPort, base) {
+  const appUrl = `${base}/web/test/fixtures/dnd-fixture/dist/dnd-fixture.plnt`;
+  const page = await openPage(cdpPort);
+  try {
+    await page.navigate(`${base}/web/index.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(`${base}/target/core.wasm`)}`);
+    return await dragDropChecks(page, pageSurface(page));
+  } finally {
+    await page.close();
+  }
+}
+
+/** The same checks in the sandboxed app frame of a web export (`<iframe sandbox="allow-scripts">`). */
+async function checkDragDropFrame(cdpPort) {
+  const exe = path.join(root, "target/debug", process.platform === "win32" ? "plinth.exe" : "plinth");
+  const dir = await mkdtemp(path.join(tmpdir(), "plinth-a11y-dnd-"));
+  const folder = path.join(dir, "dnd-web");
+  execFileSync(exe, ["build", path.join(root, "web/test/fixtures/dnd-fixture"), "--target", "web", "--out", folder], { stdio: "ignore" });
+  const server = await startServer(folder);
+  const page = await openPage(cdpPort);
+  try {
+    await page.navigate(`http://127.0.0.1:${server.address().port}/`);
+    await page.waitFor(`document.querySelector("plinth-app")?.dataset.state === "running" ? true : null`, 20000);
+    return await dragDropChecks(page, frameSurface(page, undefined, "plinth-app > iframe"));
+  } finally {
+    await page.close();
+    server.close();
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

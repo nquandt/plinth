@@ -9,7 +9,7 @@
 
 function plinthBundle(mode, baseUrl) {
   "use strict";
-  const STYLE_CSS = "/* Minimal, runtime-owned look for the web host spike (SPEC.md §3: apps\n   declare intent, the runtime owns layout, spacing and color). */\n\n/* The renderer hides optional parts (an empty label, the back button) with\n   the `hidden` attribute; a class's `display` must not show them again. */\n[hidden] {\n  display: none !important;\n}\n\n:root {\n  --pl-bg: #0b0c0f;\n  --pl-surface: #15171c;\n  --pl-text: #e7e9ec;\n  --pl-muted: #9aa0a8;\n  --pl-accent: #3b63d1;\n  --pl-accent-text: #ffffff;\n  --pl-danger: #e5484d;\n  --pl-border: #262a31;\n  /* Level 2 tokens (UI API 1.6). */\n  --pl-surface-alt: #1f2229;\n  --pl-accent-fg: #8fa8ff;\n  --pl-success: #4cc38a;\n  --pl-hover: #22262e;\n  --pl-selected: rgb(59 99 209 / 0.2);\n  color-scheme: dark;\n  font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif;\n}\n\n/* Light mode: the desktop host's light theme tokens (SPEC.md §3). Only\n   applied when the OS/browser prefers light AND the page has not been\n   forced dark some other way, matching how the desktop theme follows the\n   system setting. */\n@media (prefers-color-scheme: light) {\n  :root {\n    --pl-bg: #f5f6f8;\n    --pl-surface: #ffffff;\n    --pl-text: #1b1d21;\n    --pl-muted: #5b6168;\n    --pl-accent: #2f54c7;\n    --pl-accent-text: #ffffff;\n    --pl-danger: #c62828;\n    --pl-border: #d8dbe0;\n    --pl-surface-alt: #eceef2;\n    --pl-accent-fg: #2f54c7;\n    --pl-success: #2e7d32;\n    --pl-hover: #e6e8ec;\n    --pl-selected: rgb(47 84 199 / 0.12);\n    color-scheme: light;\n  }\n}\n\nbody {\n  margin: 0;\n  background: var(--pl-bg);\n  color: var(--pl-text);\n}\n\n#app {\n  display: flex;\n  min-height: 100vh;\n}\n\n.pl-nav {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  padding: 12px;\n  border-right: 1px solid var(--pl-border);\n  min-width: 160px;\n}\n\n.pl-nav-item {\n  text-align: left;\n  background: transparent;\n  color: var(--pl-text);\n  border: none;\n  border-radius: 6px;\n  padding: 8px 10px;\n  cursor: pointer;\n}\n.pl-nav-item:disabled {\n  background: var(--pl-surface);\n  color: var(--pl-accent);\n  cursor: default;\n}\n\n*, *::before, *::after {\n  box-sizing: border-box;\n}\n\n/* Visible keyboard focus on every interactive element (SPEC.md §6: keyboard\n   parity with the desktop host). */\n:focus-visible {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n\n.pl-row-pressable {\n  cursor: pointer;\n}\n\n.pl-screen {\n  flex: 1;\n  min-width: 0;\n  padding: 24px;\n  max-width: 640px;\n}\n\n.pl-title {\n  font-size: 1.5rem;\n  margin: 0 0 16px;\n}\n\n.pl-section {\n  /* A fieldset is min-content wide by default; let it shrink on compact. */\n  min-width: 0;\n  border: 1px solid var(--pl-border);\n  border-radius: 10px;\n  padding: 12px 16px 16px;\n  margin: 0 0 16px;\n}\n\n.pl-section-title {\n  color: var(--pl-muted);\n  font-size: 0.8rem;\n  text-transform: uppercase;\n  letter-spacing: 0.04em;\n  padding: 0 4px;\n}\n\n.pl-text {\n  margin: 4px 0;\n}\n\n.pl-heading {\n  margin: 8px 0;\n}\n\n.pl-button {\n  background: var(--pl-accent);\n  color: #fff;\n  border: none;\n  border-radius: 6px;\n  padding: 8px 14px;\n  cursor: pointer;\n  margin: 4px 4px 4px 0;\n}\n.pl-button:disabled {\n  opacity: 0.5;\n  cursor: default;\n}\n\n.pl-field {\n  display: block;\n  margin: 8px 0;\n}\n.pl-field-label {\n  display: block;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n  margin-bottom: 4px;\n}\n/* A text field's input and its error message, one under the other. */\n.pl-input-col {\n  display: flex;\n  flex-direction: column;\n  flex: 1;\n  min-width: 0;\n}\n.pl-field-error {\n  color: var(--pl-danger);\n  font-size: 0.8rem;\n  margin-top: 4px;\n}\n.pl-field .pl-input-col .pl-input {\n  flex: none;\n}\n.pl-input[aria-invalid=\"true\"] {\n  border-color: var(--pl-danger);\n}\n.pl-input,\n.pl-select,\n.pl-textarea {\n  width: 100%;\n  box-sizing: border-box;\n  background: var(--pl-surface);\n  color: var(--pl-text);\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  padding: 8px 10px;\n  font: inherit;\n  color-scheme: inherit;\n}\n\n.pl-checkbox,\n.pl-slider {\n  accent-color: var(--pl-accent);\n  color-scheme: inherit;\n}\n\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin: 8px 0;\n}\n\n.pl-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.pl-row {\n  display: flex;\n  justify-content: space-between;\n  align-items: center;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  padding: 10px 12px;\n}\n.pl-row-header {\n  display: flex;\n  flex-direction: column;\n}\n.pl-row-title {\n  font-weight: 600;\n}\n.pl-row-subtitle {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-row-trailing {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n  flex: none;\n  white-space: nowrap;\n}\n.pl-row-actions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.pl-empty {\n  color: var(--pl-muted);\n  text-align: center;\n  padding: 24px;\n}\n\n/* UI API 1.2 controls (SPEC.md §6.3) */\n.pl-screen-header {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n}\n.pl-back {\n  border: none;\n  background: transparent;\n  color: var(--pl-accent, #3b7);\n  cursor: pointer;\n  font-size: 0.95rem;\n}\n.pl-toolbar {\n  display: flex;\n  gap: 8px;\n  margin-bottom: 12px;\n}\n.pl-action {\n  border: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n  border-radius: 6px;\n  padding: 6px 10px;\n  cursor: pointer;\n}\n.pl-action-destructive {\n  color: var(--pl-danger);\n  border-color: var(--pl-danger);\n}\n.pl-checkbox-field,\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.pl-textarea {\n  min-height: 72px;\n}\n.pl-slider-field,\n.pl-progress-field {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.pl-slider {\n  width: 100%;\n}\n.pl-segmented {\n  display: flex;\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  overflow: hidden;\n}\n.pl-segment {\n  flex: 1;\n  text-align: center;\n  padding: 6px 8px;\n  cursor: pointer;\n  color: var(--pl-text);\n}\n.pl-segment-input {\n  position: absolute;\n  opacity: 0;\n}\n/* Selected segment: accent background with contrasting text, as the\n   desktop host shows the selected Picker option (SPEC.md §6.3). Updates\n   live because the renderer rebuilds the segment markup on every op-stream\n   commit, including the `value` change the app sends back after `change`. */\n.pl-segment:has(.pl-segment-input:checked) {\n  background: var(--pl-accent);\n  color: var(--pl-accent-text);\n}\n.pl-segment-input:focus-visible ~ .pl-segment-label {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n.pl-badge {\n  display: inline-block;\n  background: var(--pl-accent, #3b7);\n  color: white;\n  border-radius: 999px;\n  padding: 2px 8px;\n  font-size: 0.8rem;\n}\n.pl-image {\n  width: 100%;\n  overflow: hidden;\n  border-radius: 8px;\n}\n.pl-image-img {\n  width: 100%;\n  height: 100%;\n  object-fit: cover;\n  display: block;\n}\n/* Regular/wide: cap the image height and center it horizontally, keeping\n   the aspect ratio (SPEC.md §6.3). Compact keeps the full-width default. */\n@media (min-width: 600px) {\n  .pl-image-square,\n  .pl-image-tall {\n    width: auto;\n    max-width: 100%;\n    max-height: 360px;\n    margin: 0 auto;\n  }\n  .pl-image-wide {\n    width: auto;\n    max-width: 100%;\n    max-height: 280px;\n    margin: 0 auto;\n  }\n}\n.pl-image-placeholder {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: var(--pl-surface-alt, #eee);\n  border: 1px solid var(--pl-border, #ccc);\n  color: var(--pl-text-muted, #666);\n  font-size: 0.8rem;\n  text-align: center;\n  padding: 8px;\n}\n\n/* <Chart> (SPEC.md §6.3, UI API 1.5): the app never picks these colors.\n   The chart palette is derived from the accent, hue-rotated with the CSS\n   relative color syntax, so it stays distinguishable in light and dark\n   without the app or this file naming a single fixed hex value. */\n.pl-chart {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.pl-chart-empty {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  height: 120px;\n  border-radius: 8px;\n  background: var(--pl-surface-alt, #eee);\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-chart-svg {\n  width: 100%;\n  height: 160px;\n}\n.pl-chart-axis-label {\n  font-size: 7px;\n  fill: var(--pl-muted);\n}\n/* `fill: none` here, not as an SVG attribute: the palette class below sets\n   `fill`, and CSS wins over presentation attributes. */\n.pl-chart-line {\n  stroke-width: 2;\n  stroke: currentColor;\n  fill: none !important;\n}\n.pl-chart-c0 { fill: var(--pl-accent); color: var(--pl-accent); stroke: var(--pl-accent); }\n.pl-chart-c1 { fill: hsl(from var(--pl-accent) calc(h + 180) s l); color: hsl(from var(--pl-accent) calc(h + 180) s l); }\n.pl-chart-c2 { fill: hsl(from var(--pl-accent) calc(h + 45) s l); color: hsl(from var(--pl-accent) calc(h + 45) s l); }\n.pl-chart-c3 { fill: hsl(from var(--pl-accent) calc(h + 223) s l); color: hsl(from var(--pl-accent) calc(h + 223) s l); }\n.pl-chart-c4 { fill: hsl(from var(--pl-accent) calc(h + 108) s l); color: hsl(from var(--pl-accent) calc(h + 108) s l); }\n.pl-chart-c5 { fill: var(--pl-muted); color: var(--pl-muted); }\n.pl-chart-legend {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 4px 12px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n}\n.pl-chart-legend-item {\n  display: flex;\n  align-items: center;\n  gap: 4px;\n}\n.pl-chart-legend-swatch {\n  width: 10px;\n  height: 10px;\n  border-radius: 2px;\n  background: currentColor;\n}\n.pl-chart-legend-label {\n  color: var(--pl-text);\n}\n.pl-chart-legend-value {\n  color: var(--pl-muted);\n}\n/* The zero line of bar and line charts: negative values go below it. */\n.pl-chart-zero {\n  stroke: var(--pl-muted);\n  stroke-width: 1;\n}\n/* An all-zero pie: a neutral disc, as on the desktop. */\n.pl-chart-track {\n  fill: var(--pl-border);\n}\n/* Visually hidden but still reachable by a screen reader: the Chart's\n   exact-value data table (SPEC.md §6.3). */\n.pl-sr-only {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n.pl-icon {\n  display: inline-block;\n  color: var(--pl-text);\n}\n.pl-icon.pl-tone-muted {\n  color: var(--pl-muted);\n}\n.pl-icon.pl-tone-danger {\n  color: var(--pl-danger);\n}\n.pl-icon.pl-tone-success {\n  color: #2e7d32;\n}\n.pl-tabs {\n  display: flex;\n  gap: 4px;\n  border-bottom: 1px solid var(--pl-border);\n  margin-bottom: 8px;\n}\n.pl-tab {\n  border: none;\n  background: transparent;\n  padding: 8px 12px;\n  cursor: pointer;\n  color: var(--pl-muted);\n  font: inherit;\n}\n.pl-tab-selected {\n  border-bottom: 2px solid var(--pl-accent, #3b7);\n  font-weight: 600;\n}\n.pl-sheet,\n.pl-dialog {\n  border: none;\n  border-radius: 10px;\n  padding: 20px;\n  max-width: 480px;\n}\n.pl-menu {\n  position: relative;\n  display: inline-block;\n}\n.pl-menu-popover {\n  position: absolute;\n  top: 100%;\n  left: 0;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);\n  display: flex;\n  flex-direction: column;\n  padding: 4px;\n  z-index: 10;\n}\n.pl-menu-item {\n  text-align: left;\n  border: none;\n  background: transparent;\n}\n.pl-grid {\n  display: grid;\n  grid-template-columns: repeat(2, 1fr);\n  gap: 12px;\n}\n@media (min-width: 640px) {\n  .pl-grid {\n    grid-template-columns: repeat(3, 1fr);\n  }\n}\n@media (min-width: 1024px) {\n  .pl-grid {\n    grid-template-columns: repeat(4, 1fr);\n  }\n}\n\n/* Width classes (SPEC.md §6.1): compact < 600px <= regular < 1200px <= wide.\n   Compact: a bottom tab bar. Regular: a narrow icon/label rail. Wide: a\n   full sidebar (the default styles above already give this). */\n@media (max-width: 599.98px) {\n  #app {\n    flex-direction: column;\n  }\n  .pl-nav {\n    position: fixed;\n    left: 0;\n    right: 0;\n    bottom: 0;\n    flex-direction: row;\n    justify-content: space-around;\n    align-items: stretch;\n    gap: 0;\n    padding: 4px;\n    min-width: 0;\n    width: 100%;\n    box-sizing: border-box;\n    border-right: none;\n    border-top: 1px solid var(--pl-border);\n    background: var(--pl-bg);\n    order: 2;\n  }\n  .pl-nav-item {\n    flex: 1;\n    text-align: center;\n    font-size: 0.8rem;\n  }\n  .pl-screen {\n    order: 1;\n    padding: 16px;\n    /* Leave room above the fixed bottom tab bar. */\n    padding-bottom: 72px;\n  }\n}\n\n@media (min-width: 600px) and (max-width: 1199.98px) {\n  .pl-nav {\n    min-width: 72px;\n    padding: 12px 6px;\n  }\n  .pl-nav-item {\n    text-align: center;\n    font-size: 0.78rem;\n    padding: 8px 4px;\n  }\n}\n\n/* Fields (SPEC.md §6.4): label above the input on compact, beside it on\n   regular/wide. */\n@media (min-width: 600px) {\n  .pl-field:not(.pl-slider-field) {\n    display: flex;\n    align-items: baseline;\n    gap: 12px;\n  }\n  .pl-field:not(.pl-slider-field) .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n  .pl-field .pl-input,\n  .pl-field .pl-select,\n  .pl-field .pl-textarea,\n  .pl-field .pl-segmented {\n    flex: 1;\n  }\n  .pl-picker-field .pl-segmented {\n    flex: 1;\n  }\n  /* The slider field has its own column layout (label above the track) so\n     the value stays readable; put its label beside the track instead,\n     matching every other field (SPEC.md §6.4). */\n  .pl-slider-field {\n    flex-direction: row;\n    align-items: center;\n    gap: 12px;\n  }\n  .pl-slider-field .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n}\n\n/* The bar above an app that the web App Hub opened (docs/web-hub.md). */\n.pl-host-bar {\n  padding: 8px 16px;\n  border-bottom: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n}\n.pl-host-bar a {\n  color: var(--pl-text);\n}\n\n/* Level 2 styled primitives (UI API 1.6, docs/UI-ADVANCED.md). The layout,\n   the space and the colors come from inline styles (dom-renderer.js\n   primitiveStyle); these rules give only what every primitive has. */\n.pl-box,\n.pl-scroll,\n.pl-pressable {\n  box-sizing: border-box;\n  min-width: 0;\n  /* An absolute child is placed in its parent primitive, as in gpui. */\n  position: relative;\n}\n.pl-span {\n  overflow-wrap: anywhere;\n}\n/* The items of a List child (also the node of .map() children) take part\n   in the layout of the box, as on the desktop. */\n.pl-box > .pl-list,\n.pl-scroll > .pl-list,\n.pl-pressable > .pl-list {\n  display: contents;\n}\n.pl-pressable {\n  cursor: pointer;\n}\n.pl-pressable[aria-disabled=\"true\"] {\n  cursor: default;\n  opacity: 0.5;\n}\n.pl-pressable-plain:not([aria-disabled=\"true\"]):hover {\n  background: var(--pl-hover);\n}\n.pl-pressable:not(.pl-pressable-plain):not(.pl-pressable-own-hover):not([aria-disabled=\"true\"]):hover {\n  opacity: 0.88;\n}\n.pl-pressable:focus-visible,\n.pl-scroll:focus-visible {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n\n/* Canvas (UI API 1.10): the drawing scales to the width. */\n.pl-canvas {\n  display: block;\n  height: auto;\n  font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif;\n}\n\n/* The selected row of a list (UI API 1.8). */\n.pl-row-selected {\n  background: var(--pl-selected);\n}\n\n/* Host-owned banners above the screen (dom-renderer.js renderBanner), as\n   on the desktop: \"This app stopped\" and the last uncaught app error. */\n.pl-host-banner {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 4px 12px;\n  margin: 0 0 16px;\n  padding: 12px 16px;\n  border-radius: 8px;\n  background: var(--pl-danger);\n  color: var(--pl-accent-text);\n}\n.pl-host-banner-title {\n  font-weight: 600;\n}\n.pl-host-banner-detail {\n  flex: 1 1 100%;\n  font-size: 0.85rem;\n  overflow-wrap: anywhere;\n}\n.pl-host-banner-error .pl-host-banner-detail {\n  flex: 1 1 0;\n}\n.pl-host-banner-dismiss {\n  border: 1px solid var(--pl-accent-text);\n  background: transparent;\n  color: var(--pl-accent-text);\n  border-radius: 6px;\n  padding: 4px 12px;\n  cursor: pointer;\n  font: inherit;\n}\n\n/* The app frame of a web export. Height \"content\": the frame takes the\n   height of the app, so the app must not take the height of the frame. */\n.pl-frame-content #app { min-height: 0; }\n.pl-frame-error { padding: 24px; color: var(--pl-danger); white-space: pre-wrap; }\n";
+  const STYLE_CSS = "/* Minimal, runtime-owned look for the web host spike (SPEC.md §3: apps\n   declare intent, the runtime owns layout, spacing and color). */\n\n/* The renderer hides optional parts (an empty label, the back button) with\n   the `hidden` attribute; a class's `display` must not show them again. */\n[hidden] {\n  display: none !important;\n}\n\n:root {\n  --pl-bg: #0b0c0f;\n  --pl-surface: #15171c;\n  --pl-text: #e7e9ec;\n  --pl-muted: #9aa0a8;\n  --pl-accent: #3b63d1;\n  --pl-accent-text: #ffffff;\n  --pl-danger: #e5484d;\n  --pl-border: #262a31;\n  /* Level 2 tokens (UI API 1.6). */\n  --pl-surface-alt: #1f2229;\n  --pl-accent-fg: #8fa8ff;\n  --pl-success: #4cc38a;\n  --pl-hover: #22262e;\n  --pl-selected: rgb(59 99 209 / 0.2);\n  color-scheme: dark;\n  font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif;\n}\n\n/* Light mode: the desktop host's light theme tokens (SPEC.md §3). Only\n   applied when the OS/browser prefers light AND the page has not been\n   forced dark some other way, matching how the desktop theme follows the\n   system setting. */\n@media (prefers-color-scheme: light) {\n  :root {\n    --pl-bg: #f5f6f8;\n    --pl-surface: #ffffff;\n    --pl-text: #1b1d21;\n    --pl-muted: #5b6168;\n    --pl-accent: #2f54c7;\n    --pl-accent-text: #ffffff;\n    --pl-danger: #c62828;\n    --pl-border: #d8dbe0;\n    --pl-surface-alt: #eceef2;\n    --pl-accent-fg: #2f54c7;\n    --pl-success: #2e7d32;\n    --pl-hover: #e6e8ec;\n    --pl-selected: rgb(47 84 199 / 0.12);\n    color-scheme: light;\n  }\n}\n\nbody {\n  margin: 0;\n  background: var(--pl-bg);\n  color: var(--pl-text);\n}\n\n#app {\n  display: flex;\n  min-height: 100vh;\n}\n\n.pl-nav {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  padding: 12px;\n  border-right: 1px solid var(--pl-border);\n  min-width: 160px;\n}\n\n.pl-nav-item {\n  text-align: left;\n  background: transparent;\n  color: var(--pl-text);\n  border: none;\n  border-radius: 6px;\n  padding: 8px 10px;\n  cursor: pointer;\n}\n.pl-nav-item:disabled {\n  background: var(--pl-surface);\n  color: var(--pl-accent);\n  cursor: default;\n}\n\n*, *::before, *::after {\n  box-sizing: border-box;\n}\n\n/* Visible keyboard focus on every interactive element (SPEC.md §6: keyboard\n   parity with the desktop host). */\n:focus-visible {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n\n.pl-row-pressable {\n  cursor: pointer;\n}\n\n.pl-screen {\n  flex: 1;\n  min-width: 0;\n  padding: 24px;\n  max-width: 640px;\n}\n\n.pl-title {\n  font-size: 1.5rem;\n  margin: 0 0 16px;\n}\n\n.pl-section {\n  /* A fieldset is min-content wide by default; let it shrink on compact. */\n  min-width: 0;\n  border: 1px solid var(--pl-border);\n  border-radius: 10px;\n  padding: 12px 16px 16px;\n  margin: 0 0 16px;\n}\n\n.pl-section-title {\n  color: var(--pl-muted);\n  font-size: 0.8rem;\n  text-transform: uppercase;\n  letter-spacing: 0.04em;\n  padding: 0 4px;\n}\n\n.pl-text {\n  margin: 4px 0;\n}\n\n.pl-heading {\n  margin: 8px 0;\n}\n\n.pl-button {\n  background: var(--pl-accent);\n  color: #fff;\n  border: none;\n  border-radius: 6px;\n  padding: 8px 14px;\n  cursor: pointer;\n  margin: 4px 4px 4px 0;\n}\n.pl-button:disabled {\n  opacity: 0.5;\n  cursor: default;\n}\n\n.pl-field {\n  display: block;\n  margin: 8px 0;\n}\n.pl-field-label {\n  display: block;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n  margin-bottom: 4px;\n}\n/* A text field's input and its error message, one under the other. */\n.pl-input-col {\n  display: flex;\n  flex-direction: column;\n  flex: 1;\n  min-width: 0;\n}\n.pl-field-error {\n  color: var(--pl-danger);\n  font-size: 0.8rem;\n  margin-top: 4px;\n}\n.pl-field .pl-input-col .pl-input {\n  flex: none;\n}\n.pl-input[aria-invalid=\"true\"] {\n  border-color: var(--pl-danger);\n}\n.pl-input,\n.pl-select,\n.pl-textarea {\n  width: 100%;\n  box-sizing: border-box;\n  background: var(--pl-surface);\n  color: var(--pl-text);\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  padding: 8px 10px;\n  font: inherit;\n  color-scheme: inherit;\n}\n\n.pl-checkbox,\n.pl-slider {\n  accent-color: var(--pl-accent);\n  color-scheme: inherit;\n}\n\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin: 8px 0;\n}\n\n.pl-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.pl-row {\n  display: flex;\n  justify-content: space-between;\n  align-items: center;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  padding: 10px 12px;\n}\n.pl-row-header {\n  display: flex;\n  flex-direction: column;\n}\n.pl-row-title {\n  font-weight: 600;\n}\n.pl-row-subtitle {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-row-trailing {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n  flex: none;\n  white-space: nowrap;\n}\n.pl-row-actions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.pl-empty {\n  color: var(--pl-muted);\n  text-align: center;\n  padding: 24px;\n}\n\n/* UI API 1.2 controls (SPEC.md §6.3) */\n.pl-screen-header {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n}\n.pl-back {\n  border: none;\n  background: transparent;\n  color: var(--pl-accent, #3b7);\n  cursor: pointer;\n  font-size: 0.95rem;\n}\n.pl-toolbar {\n  display: flex;\n  gap: 8px;\n  margin-bottom: 12px;\n}\n.pl-action {\n  border: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n  border-radius: 6px;\n  padding: 6px 10px;\n  cursor: pointer;\n}\n.pl-action-destructive {\n  color: var(--pl-danger);\n  border-color: var(--pl-danger);\n}\n.pl-checkbox-field,\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.pl-textarea {\n  min-height: 72px;\n}\n.pl-slider-field,\n.pl-progress-field {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.pl-slider {\n  width: 100%;\n}\n.pl-segmented {\n  display: flex;\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  overflow: hidden;\n}\n.pl-segment {\n  flex: 1;\n  text-align: center;\n  padding: 6px 8px;\n  cursor: pointer;\n  color: var(--pl-text);\n}\n.pl-segment-input {\n  position: absolute;\n  opacity: 0;\n}\n/* Selected segment: accent background with contrasting text, as the\n   desktop host shows the selected Picker option (SPEC.md §6.3). Updates\n   live because the renderer rebuilds the segment markup on every op-stream\n   commit, including the `value` change the app sends back after `change`. */\n.pl-segment:has(.pl-segment-input:checked) {\n  background: var(--pl-accent);\n  color: var(--pl-accent-text);\n}\n.pl-segment-input:focus-visible ~ .pl-segment-label {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n.pl-badge {\n  display: inline-block;\n  background: var(--pl-accent, #3b7);\n  color: white;\n  border-radius: 999px;\n  padding: 2px 8px;\n  font-size: 0.8rem;\n}\n.pl-image {\n  width: 100%;\n  overflow: hidden;\n  border-radius: 8px;\n}\n.pl-image-img {\n  width: 100%;\n  height: 100%;\n  object-fit: cover;\n  display: block;\n}\n/* Regular/wide: cap the image height and center it horizontally, keeping\n   the aspect ratio (SPEC.md §6.3). Compact keeps the full-width default. */\n@media (min-width: 600px) {\n  .pl-image-square,\n  .pl-image-tall {\n    width: auto;\n    max-width: 100%;\n    max-height: 360px;\n    margin: 0 auto;\n  }\n  .pl-image-wide {\n    width: auto;\n    max-width: 100%;\n    max-height: 280px;\n    margin: 0 auto;\n  }\n}\n.pl-image-placeholder {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: var(--pl-surface-alt, #eee);\n  border: 1px solid var(--pl-border, #ccc);\n  color: var(--pl-text-muted, #666);\n  font-size: 0.8rem;\n  text-align: center;\n  padding: 8px;\n}\n\n/* <Chart> (SPEC.md §6.3, UI API 1.5): the app never picks these colors.\n   The chart palette is derived from the accent, hue-rotated with the CSS\n   relative color syntax, so it stays distinguishable in light and dark\n   without the app or this file naming a single fixed hex value. */\n.pl-chart {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.pl-chart-empty {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  height: 120px;\n  border-radius: 8px;\n  background: var(--pl-surface-alt, #eee);\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-chart-svg {\n  width: 100%;\n  height: 160px;\n}\n.pl-chart-axis-label {\n  font-size: 7px;\n  fill: var(--pl-muted);\n}\n/* `fill: none` here, not as an SVG attribute: the palette class below sets\n   `fill`, and CSS wins over presentation attributes. */\n.pl-chart-line {\n  stroke-width: 2;\n  stroke: currentColor;\n  fill: none !important;\n}\n.pl-chart-c0 { fill: var(--pl-accent); color: var(--pl-accent); stroke: var(--pl-accent); }\n.pl-chart-c1 { fill: hsl(from var(--pl-accent) calc(h + 180) s l); color: hsl(from var(--pl-accent) calc(h + 180) s l); }\n.pl-chart-c2 { fill: hsl(from var(--pl-accent) calc(h + 45) s l); color: hsl(from var(--pl-accent) calc(h + 45) s l); }\n.pl-chart-c3 { fill: hsl(from var(--pl-accent) calc(h + 223) s l); color: hsl(from var(--pl-accent) calc(h + 223) s l); }\n.pl-chart-c4 { fill: hsl(from var(--pl-accent) calc(h + 108) s l); color: hsl(from var(--pl-accent) calc(h + 108) s l); }\n.pl-chart-c5 { fill: var(--pl-muted); color: var(--pl-muted); }\n.pl-chart-legend {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 4px 12px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n}\n.pl-chart-legend-item {\n  display: flex;\n  align-items: center;\n  gap: 4px;\n}\n.pl-chart-legend-swatch {\n  width: 10px;\n  height: 10px;\n  border-radius: 2px;\n  background: currentColor;\n}\n.pl-chart-legend-label {\n  color: var(--pl-text);\n}\n.pl-chart-legend-value {\n  color: var(--pl-muted);\n}\n/* The zero line of bar and line charts: negative values go below it. */\n.pl-chart-zero {\n  stroke: var(--pl-muted);\n  stroke-width: 1;\n}\n/* An all-zero pie: a neutral disc, as on the desktop. */\n.pl-chart-track {\n  fill: var(--pl-border);\n}\n/* Visually hidden but still reachable by a screen reader: the Chart's\n   exact-value data table (SPEC.md §6.3). */\n.pl-sr-only {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n.pl-icon {\n  display: inline-block;\n  color: var(--pl-text);\n}\n.pl-icon.pl-tone-muted {\n  color: var(--pl-muted);\n}\n.pl-icon.pl-tone-danger {\n  color: var(--pl-danger);\n}\n.pl-icon.pl-tone-success {\n  color: #2e7d32;\n}\n.pl-tabs {\n  display: flex;\n  gap: 4px;\n  border-bottom: 1px solid var(--pl-border);\n  margin-bottom: 8px;\n}\n.pl-tab {\n  border: none;\n  background: transparent;\n  padding: 8px 12px;\n  cursor: pointer;\n  color: var(--pl-muted);\n  font: inherit;\n}\n.pl-tab-selected {\n  border-bottom: 2px solid var(--pl-accent, #3b7);\n  font-weight: 600;\n}\n.pl-sheet,\n.pl-dialog {\n  border: none;\n  border-radius: 10px;\n  padding: 20px;\n  max-width: 480px;\n}\n/* A Dialog: the message, a small form (UI API 1.13), the actions. */\n.pl-dialog-message {\n  margin: 0 0 12px;\n  color: var(--pl-muted);\n}\n.pl-dialog-body {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  margin: 0 0 12px;\n}\n.pl-dialog-actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n/* Drag and drop in one app (UI API 1.13). The host draws the drop target\n   and the line where a row goes. */\n.pl-draggable {\n  -webkit-touch-callout: none;\n  -webkit-user-select: none;\n  user-select: none;\n}\n.pl-dragging {\n  opacity: 0.5;\n}\n.pl-drag-ghost {\n  position: fixed;\n  z-index: 1000;\n  pointer-events: none;\n  padding: 4px 12px;\n  border: 1px solid var(--pl-accent);\n  border-radius: 6px;\n  background: var(--pl-surface);\n  color: var(--pl-text);\n  font-size: 0.85rem;\n  opacity: 0.9;\n}\n.pl-drop-over {\n  background: var(--pl-selected) !important;\n  outline: 2px solid var(--pl-accent);\n  outline-offset: -2px;\n}\n.pl-drop-before {\n  box-shadow: inset 0 2px 0 var(--pl-accent);\n}\n.pl-drop-after {\n  box-shadow: inset 0 -2px 0 var(--pl-accent);\n}\n.pl-menu {\n  position: relative;\n  display: inline-block;\n}\n.pl-menu-popover {\n  position: absolute;\n  top: 100%;\n  left: 0;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);\n  display: flex;\n  flex-direction: column;\n  padding: 4px;\n  z-index: 10;\n}\n.pl-menu-item {\n  text-align: left;\n  border: none;\n  background: transparent;\n}\n.pl-grid {\n  display: grid;\n  grid-template-columns: repeat(2, 1fr);\n  gap: 12px;\n}\n@media (min-width: 640px) {\n  .pl-grid {\n    grid-template-columns: repeat(3, 1fr);\n  }\n}\n@media (min-width: 1024px) {\n  .pl-grid {\n    grid-template-columns: repeat(4, 1fr);\n  }\n}\n\n/* Width classes (SPEC.md §6.1): compact < 600px <= regular < 1200px <= wide.\n   Compact: a bottom tab bar. Regular: a narrow icon/label rail. Wide: a\n   full sidebar (the default styles above already give this). */\n@media (max-width: 599.98px) {\n  #app {\n    flex-direction: column;\n  }\n  .pl-nav {\n    position: fixed;\n    left: 0;\n    right: 0;\n    bottom: 0;\n    flex-direction: row;\n    justify-content: space-around;\n    align-items: stretch;\n    gap: 0;\n    padding: 4px;\n    min-width: 0;\n    width: 100%;\n    box-sizing: border-box;\n    border-right: none;\n    border-top: 1px solid var(--pl-border);\n    background: var(--pl-bg);\n    order: 2;\n  }\n  .pl-nav-item {\n    flex: 1;\n    text-align: center;\n    font-size: 0.8rem;\n  }\n  .pl-screen {\n    order: 1;\n    padding: 16px;\n    /* Leave room above the fixed bottom tab bar. */\n    padding-bottom: 72px;\n  }\n}\n\n@media (min-width: 600px) and (max-width: 1199.98px) {\n  .pl-nav {\n    min-width: 72px;\n    padding: 12px 6px;\n  }\n  .pl-nav-item {\n    text-align: center;\n    font-size: 0.78rem;\n    padding: 8px 4px;\n  }\n}\n\n/* Fields (SPEC.md §6.4): label above the input on compact, beside it on\n   regular/wide. */\n@media (min-width: 600px) {\n  .pl-field:not(.pl-slider-field) {\n    display: flex;\n    align-items: baseline;\n    gap: 12px;\n  }\n  .pl-field:not(.pl-slider-field) .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n  .pl-field .pl-input,\n  .pl-field .pl-select,\n  .pl-field .pl-textarea,\n  .pl-field .pl-segmented {\n    flex: 1;\n  }\n  .pl-picker-field .pl-segmented {\n    flex: 1;\n  }\n  /* The slider field has its own column layout (label above the track) so\n     the value stays readable; put its label beside the track instead,\n     matching every other field (SPEC.md §6.4). */\n  .pl-slider-field {\n    flex-direction: row;\n    align-items: center;\n    gap: 12px;\n  }\n  .pl-slider-field .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n}\n\n/* The bar above an app that the web App Hub opened (docs/web-hub.md). */\n.pl-host-bar {\n  padding: 8px 16px;\n  border-bottom: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n}\n.pl-host-bar a {\n  color: var(--pl-text);\n}\n\n/* Level 2 styled primitives (UI API 1.6, docs/UI-ADVANCED.md). The layout,\n   the space and the colors come from inline styles (dom-renderer.js\n   primitiveStyle); these rules give only what every primitive has. */\n.pl-box,\n.pl-scroll,\n.pl-pressable {\n  box-sizing: border-box;\n  min-width: 0;\n  /* An absolute child is placed in its parent primitive, as in gpui. */\n  position: relative;\n}\n.pl-span {\n  overflow-wrap: anywhere;\n}\n/* The items of a List child (also the node of .map() children) take part\n   in the layout of the box, as on the desktop. */\n.pl-box > .pl-list,\n.pl-scroll > .pl-list,\n.pl-pressable > .pl-list {\n  display: contents;\n}\n.pl-pressable {\n  cursor: pointer;\n}\n.pl-pressable[aria-disabled=\"true\"] {\n  cursor: default;\n  opacity: 0.5;\n}\n.pl-pressable-plain:not([aria-disabled=\"true\"]):hover {\n  background: var(--pl-hover);\n}\n.pl-pressable:not(.pl-pressable-plain):not(.pl-pressable-own-hover):not([aria-disabled=\"true\"]):hover {\n  opacity: 0.88;\n}\n.pl-pressable:focus-visible,\n.pl-scroll:focus-visible {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n\n/* Canvas (UI API 1.10): the drawing scales to the width. */\n.pl-canvas {\n  display: block;\n  height: auto;\n  font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif;\n}\n\n/* The selected row of a list (UI API 1.8). */\n.pl-row-selected {\n  background: var(--pl-selected);\n}\n\n/* Host-owned banners above the screen (dom-renderer.js renderBanner), as\n   on the desktop: \"This app stopped\" and the last uncaught app error. */\n.pl-host-banner {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 4px 12px;\n  margin: 0 0 16px;\n  padding: 12px 16px;\n  border-radius: 8px;\n  background: var(--pl-danger);\n  color: var(--pl-accent-text);\n}\n.pl-host-banner-title {\n  font-weight: 600;\n}\n.pl-host-banner-detail {\n  flex: 1 1 100%;\n  font-size: 0.85rem;\n  overflow-wrap: anywhere;\n}\n.pl-host-banner-error .pl-host-banner-detail {\n  flex: 1 1 0;\n}\n.pl-host-banner-dismiss {\n  border: 1px solid var(--pl-accent-text);\n  background: transparent;\n  color: var(--pl-accent-text);\n  border-radius: 6px;\n  padding: 4px 12px;\n  cursor: pointer;\n  font: inherit;\n}\n\n/* The app frame of a web export. Height \"content\": the frame takes the\n   height of the app, so the app must not take the height of the frame. */\n.pl-frame-content #app { min-height: 0; }\n.pl-frame-error { padding: 24px; color: var(--pl-danger); white-space: pre-wrap; }\n";
 
   // ---- zip.js
   const __zip = (() => {
@@ -544,6 +544,7 @@ const Prop = {
   "viewWidth": 77,
   "viewHeight": 78,
   "shapes": 79,
+  "dragValue": 80,
 };
 
 const Event = {
@@ -557,6 +558,8 @@ const Event = {
   "pointerMove": 10,
   "pointerUp": 11,
   "contextMenu": 12,
+  "drop": 13,
+  "reorder": 14,
 };
 
 const EnumButtonRole = {
@@ -3460,6 +3463,11 @@ class DomRenderer {
     container.addEventListener("keydown", (ev) => {
       if (!isMenuKey(ev) && !["Shift", "Control", "Alt", "Meta"].includes(ev.key)) this.contextAt = null;
     }, true);
+    // UI API 1.13: drag and drop in the app, and a polite live region that
+    // tells assistive technology what a drag did.
+    this.live = el("div", "pl-sr-only", { role: "status", "aria-live": "polite" });
+    this.refocus = null;
+    this.dragDrop(container);
     tree.onChange = () => this.render();
     app.onStop = (reason) => this.showStopped(reason);
     app.onError = (message) => this.showError(message);
@@ -3640,6 +3648,13 @@ class DomRenderer {
     }
     if (v.place) v.place(children);
     else reconcile(v.slot, children.map((c) => c.el));
+    // A reorder moves the focused row in the DOM, and a move takes the
+    // focus away: give it back (UI API 1.13, Alt+Up and Alt+Down).
+    const back = this.refocus;
+    if (back && v.el.contains(back) && back.ownerDocument.activeElement !== back) {
+      this.refocus = null;
+      back.focus();
+    }
     // A List with no rows (only an EmptyState, or nothing) is not a list
     // for assistive technology: role="list" needs listitem children.
     if (v.kind === ControlKind.list) {
@@ -3654,8 +3669,8 @@ class DomRenderer {
   /** The nav bar, the shown screen and the page title. */
   renderShell(navChanged) {
     const t = this.tree;
-    if (this.main.parentNode !== this.container) {
-      this.container.replaceChildren(this.nav, this.main);
+    if (this.main.parentNode !== this.container || this.live.parentNode !== this.container) {
+      this.container.replaceChildren(this.nav, this.main, this.live);
     }
     if (navChanged) {
       this.nav.hidden = t.primaryScreens.length === 0;
@@ -3716,7 +3731,7 @@ class DomRenderer {
       // A Toggle is a switch, as on the desktop (AccessKit `Switch`).
       case "toggle": return this.checkView("pl-toggle", "pl-toggle-label", "switch");
       case "checkbox": return this.checkView("pl-checkbox-field", "pl-checkbox-label");
-      case "list": return this.containerView(el("div", "pl-list", { role: "list" }));
+      case "list": return this.listView();
       case "row": return this.rowView();
       case "group": return this.containerView(el("div", "pl-group"));
       case "empty": return this.emptyView();
@@ -3773,6 +3788,8 @@ class DomRenderer {
    */
   pointerEvents(e, getId, pxPerUnit) {
     const has = (code) => this.node(getId())?.listeners.get(code) !== undefined;
+    // UI API 1.13: the element can take a drop (`dragDrop`) when it has `onDrop`.
+    e._plDrop = { getId, pxPerUnit };
     const send = (code, ev) => {
       if (!has(code)) return;
       const r = e.getBoundingClientRect();
@@ -3827,6 +3844,251 @@ class DomRenderer {
     for (const close of [...this.appMenus]) close(false);
   }
 
+  /** Tells assistive technology `text` (the polite live region, UI API 1.13). */
+  announce(text) {
+    this.live.textContent = text;
+  }
+
+  /** Whether node `n` is a row of a `List` with `onReorder` (UI API 1.13). */
+  inReorderList(n) {
+    const p = n ? this.node(n.parent) : null;
+    return !!p && p.kind === ControlKind.list && p.listeners.get(Event.reorder) !== undefined;
+  }
+
+  /**
+   * The drag source `e` (a view element) offers: `{ id, label, value }` for
+   * an element with `dragValue`, or null. `label` names it in messages.
+   */
+  static dragSource(e, getId, labelProp) {
+    e._plDrag = (r) => {
+      const n = r.node(getId());
+      const value = n?.props.get(Prop.dragValue);
+      if (typeof value !== "string" || r.inReorderList(n)) return null;
+      return { id: n.id, label: n.props.get(labelProp) ?? value, value };
+    };
+  }
+
+  /**
+   * UI API 1.13: drag and drop inside the app, with pointer events (not the
+   * HTML drag-and-drop API: it does not work with a finger, and it shows
+   * the browser's own drag image). One listener on the container finds the
+   * drag source: an element with `dragValue` (`_plDrag`), or a row of a
+   * `List` with `onReorder` (`_plList`). A mouse or a pen starts the drag
+   * with a move of 4 px or more after the press. A finger starts it with a
+   * move after a long press (400 ms); a move before that scrolls the page,
+   * and a long press with no move gives the context menu when the finger
+   * goes up. `document.elementFromPoint` finds the drop target: a
+   * modal `<dialog>` makes the rest of the page inert, so no element under
+   * it takes a drop. Escape stops the drag.
+   */
+  dragDrop(container) {
+    const doc = container.ownerDocument;
+    const win = doc.defaultView;
+    let pending = null; // { src, payload, x0, y0, pointerId, touch, armed, timer, ctx }
+    let drag = null; // { src, payload, ghost, target }
+    let replaying = false;
+    const clearTarget = () => {
+      const t = drag?.target;
+      if (t) t.el.classList.remove("pl-drop-over", "pl-drop-before", "pl-drop-after");
+      if (drag) drag.target = null;
+    };
+    const end = () => {
+      if (pending?.timer) win.clearTimeout(pending.timer);
+      pending = null;
+      if (!drag) return;
+      clearTarget();
+      drag.ghost.remove();
+      drag.src.classList.remove("pl-dragging");
+      drag = null;
+    };
+    /** The source of a press on `target`: the innermost draggable element. */
+    const sourceOf = (target) => {
+      for (let e = target; e && e !== container; e = e.parentElement) {
+        const own = e._plDrag?.(this);
+        if (own) return { src: e, payload: own };
+        const list = e.parentElement?._plList;
+        if (list) {
+          const ln = this.node(list());
+          if (ln && ln.listeners.get(Event.reorder) !== undefined) {
+            const from = [...e.parentElement.children].indexOf(e);
+            const n = this.node(Number(e.dataset.plId));
+            const value = n?.props.get(Prop.dragValue);
+            const label = n?.props.get(Prop.title) ?? n?.props.get(Prop.label) ?? (typeof value === "string" ? value : "item");
+            return { src: e, payload: { id: n?.id ?? 0, label, value: typeof value === "string" ? value : null, list: ln.id, listEl: e.parentElement, from } };
+          }
+        }
+      }
+      return null;
+    };
+    /** The drop target under the viewport point (x, y), or null. */
+    const targetAt = (x, y) => {
+      const p = drag.payload;
+      for (let e = doc.elementFromPoint(x, y); e && e !== container; e = e.parentElement) {
+        if (p.list && e.parentElement === p.listEl) {
+          const to = [...p.listEl.children].indexOf(e);
+          return to === p.from || to < 0 ? null : { kind: "reorder", el: e, to };
+        }
+        const d = e._plDrop;
+        if (d && p.value !== null) {
+          const n = this.node(d.getId());
+          if (n && n.listeners.get(Event.drop) !== undefined && n.id !== p.id) return { kind: "drop", el: e, ...d };
+        }
+      }
+      return null;
+    };
+    const start = (ev) => {
+      const { src, payload } = pending;
+      const ghost = el("div", "pl-drag-ghost", { "aria-hidden": "true" });
+      ghost.textContent = payload.label;
+      // A modal dialog is in the top layer: the ghost goes in it, else under it.
+      (src.closest("dialog[open]") ?? container).appendChild(ghost);
+      src.classList.add("pl-dragging");
+      if (pending.timer) win.clearTimeout(pending.timer);
+      pending = null;
+      drag = { src, payload, ghost, target: null, pointerId: ev.pointerId };
+      this.announce(`Dragging ${payload.label}`);
+      move(ev);
+    };
+    const move = (ev) => {
+      // The last point: the release of a finger can come with no position.
+      drag.at = { x: ev.clientX, y: ev.clientY };
+      drag.ghost.style.left = `${ev.clientX + 8}px`;
+      drag.ghost.style.top = `${ev.clientY + 8}px`;
+      const t = targetAt(ev.clientX, ev.clientY);
+      if (t?.el === drag.target?.el && t?.to === drag.target?.to) return;
+      clearTarget();
+      drag.target = t;
+      if (!t) return;
+      if (t.kind === "drop") t.el.classList.add("pl-drop-over");
+      else t.el.classList.add(t.to > drag.payload.from ? "pl-drop-after" : "pl-drop-before");
+    };
+    const drop = () => {
+      const { payload, at } = drag;
+      const t = targetAt(at.x, at.y);
+      if (t?.kind === "reorder") {
+        const count = payload.listEl.children.length;
+        this.announce(`Moved ${payload.label} to position ${t.to + 1} of ${count}`);
+        this.fire(payload.list, Event.reorder, [payload.from, t.to]);
+      } else if (t?.kind === "drop") {
+        const r = t.el.getBoundingClientRect();
+        const k = Math.max(t.pxPerUnit(r), Number.EPSILON);
+        this.announce(`Dropped ${payload.label}`);
+        this.fire(t.getId(), Event.drop, [payload.value, (at.x - r.left) / k, (at.y - r.top) / k]);
+      }
+      // The press and the release make a click on the source: not a press.
+      const stop = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+      };
+      win.addEventListener("click", stop, { capture: true, once: true });
+      win.setTimeout(() => win.removeEventListener("click", stop, { capture: true }), 0);
+      end();
+    };
+    container.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0 || !ev.isPrimary || drag) return;
+      end();
+      // A press in a field or a slider is the field's.
+      if (ev.target.closest?.("input, textarea, select, [contenteditable]")) return;
+      const found = sourceOf(ev.target);
+      if (!found) return;
+      const touch = ev.pointerType === "touch";
+      pending = { ...found, x0: ev.clientX, y0: ev.clientY, pointerId: ev.pointerId, touch, armed: !touch, timer: 0, ctx: null };
+      if (touch) {
+        pending.timer = win.setTimeout(() => {
+          if (pending) pending.armed = true;
+        }, 400);
+      }
+    }, true);
+    doc.addEventListener("pointermove", (ev) => {
+      if (drag) {
+        if (ev.pointerId === drag.pointerId) move(ev);
+        return;
+      }
+      if (!pending || ev.pointerId !== pending.pointerId) return;
+      const dist = Math.hypot(ev.clientX - pending.x0, ev.clientY - pending.y0);
+      if (!pending.armed) {
+        // A finger that moves before the long press scrolls the page.
+        if (dist > 8) end();
+        return;
+      }
+      if (dist >= 4) start(ev);
+    });
+    doc.addEventListener("pointerup", (ev) => {
+      if (drag) {
+        if (ev.pointerId === drag.pointerId) drop();
+        return;
+      }
+      if (pending && ev.pointerId !== pending.pointerId) return;
+      const ctx = pending?.ctx;
+      end();
+      // A long press with no move: the context menu that waited.
+      if (ctx) {
+        replaying = true;
+        try {
+          ctx.target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: ctx.x, clientY: ctx.y }));
+        } finally {
+          replaying = false;
+        }
+      }
+    });
+    doc.addEventListener("pointercancel", end);
+    // While a finger holds a drag source after a long press, the page does not scroll.
+    doc.addEventListener("touchmove", (ev) => {
+      if (drag || pending?.armed) ev.preventDefault();
+    }, { passive: false });
+    // A long press on a drag source (the browser's `contextmenu` on
+    // Android): the drag can start. The context menu waits for the release.
+    container.addEventListener("contextmenu", (ev) => {
+      if (replaying || !pending?.touch) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      pending.armed = true;
+      pending.ctx = { target: ev.target, x: ev.clientX, y: ev.clientY };
+    }, true);
+    doc.addEventListener("keydown", (ev) => {
+      if (drag && ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.announce("Drag canceled");
+        end();
+      }
+    }, true);
+  }
+
+  /**
+   * A `List`. With `onReorder` (UI API 1.13), Alt+Up and Alt+Down on a row
+   * (or on a control in it) move the row; a drag of a row onto another row
+   * moves it too (`dragDrop`).
+   */
+  listView() {
+    const e = el("div", "pl-list", { role: "list" });
+    let id = 0;
+    e._plList = () => id;
+    e.addEventListener("keydown", (ev) => {
+      if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey || (ev.key !== "ArrowUp" && ev.key !== "ArrowDown")) return;
+      if (this.node(id)?.listeners.get(Event.reorder) === undefined) return;
+      const rows = [...e.children];
+      const from = rows.findIndex((r) => r.contains(ev.target));
+      if (from < 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const to = ev.key === "ArrowUp" ? from - 1 : from + 1;
+      if (to < 0 || to >= rows.length) return;
+      this.refocus = ev.target;
+      const n = this.node(Number(rows[from].dataset.plId));
+      const label = n?.props.get(Prop.title) ?? n?.props.get(Prop.label) ?? "item";
+      this.announce(`Moved ${label} to position ${to + 1} of ${rows.length}`);
+      this.fire(id, Event.reorder, [from, to]);
+    });
+    return {
+      el: e,
+      slot: e,
+      update: (n) => {
+        id = n.id;
+      },
+    };
+  }
+
   /** A box with a pointer-move handler takes touch moves itself (no page scroll on a drag). */
   static touchAction(n) {
     return n.listeners.get(Event.pointerMove) !== undefined ? "none" : null;
@@ -3852,6 +4114,7 @@ class DomRenderer {
     e.addEventListener("keydown", key(Event.keyDown));
     e.addEventListener("keyup", key(Event.keyUp));
     this.pointerEvents(e, () => id, () => UNIT);
+    if (kname !== "scroll") DomRenderer.dragSource(e, () => id, Prop.label);
     if (kname === "pressable") {
       const press = () => {
         if (!disabled) this.fire(id, Event.press);
@@ -3893,6 +4156,7 @@ class DomRenderer {
           setAttr(e, "aria-label", label);
           setAttr(e, "tabindex", kname === "scroll" || keys ? "0" : null);
         }
+        e.classList.toggle("pl-draggable", kname !== "scroll" && typeof n.props.get(Prop.dragValue) === "string");
       },
     };
   }
@@ -4163,8 +4427,9 @@ class DomRenderer {
       e.preventDefault();
       this.fire(id, Event.press);
     });
-    // UI API 1.13: onContextMenu, in spacing units from the row's corner.
+    // UI API 1.13: onContextMenu and onDrop, in spacing units from the row's corner.
     this.pointerEvents(row, () => id, () => UNIT);
+    DomRenderer.dragSource(row, () => id, Prop.title);
     return {
       el: row,
       slot: actions,
@@ -4175,7 +4440,11 @@ class DomRenderer {
         setOptionalText(trailing, n.props.get(Prop.trailing));
         const canPress = n.listeners.get(Event.press) !== undefined;
         row.classList.toggle("pl-row-pressable", canPress);
-        setAttr(row, "tabindex", canPress || n.listeners.get(Event.contextMenu) !== undefined ? "0" : null);
+        // A row of a list that the user can reorder is a tab stop (Alt+Up and Alt+Down, UI API 1.13).
+        const reorder = this.inReorderList(n);
+        setAttr(row, "tabindex", canPress || reorder || n.listeners.get(Event.contextMenu) !== undefined ? "0" : null);
+        setAttr(row, "aria-keyshortcuts", reorder ? "Alt+ArrowUp Alt+ArrowDown" : null);
+        row.classList.toggle("pl-draggable", reorder || typeof n.props.get(Prop.dragValue) === "string");
         // The selected row of its list (UI API 1.8). `aria-selected` is not
         // allowed on a listitem; `aria-current` is.
         const selected = !!n.props.get(Prop.selected);
@@ -4600,6 +4869,11 @@ class DomRenderer {
   overlayView(kname) {
     const dialog = el("dialog", `pl-${kname}`);
     const title = dialog.appendChild(el("h2", "pl-title"));
+    // A Dialog: the message, then its children (a small form, UI API 1.13),
+    // then its actions in a row.
+    const message = kname === "dialog" ? dialog.appendChild(el("p", "pl-dialog-message")) : null;
+    const body = kname === "dialog" ? dialog.appendChild(el("div", "pl-dialog-body")) : null;
+    const actions = kname === "dialog" ? dialog.appendChild(el("div", "pl-dialog-actions")) : null;
     let id = 0;
     const closedByUser = () => {
       const n = this.node(id);
@@ -4612,7 +4886,11 @@ class DomRenderer {
     const sync = (dialog._plSync = () => {
       const open = !!this.node(id)?.props.get(Prop.value);
       if (!dialog.isConnected) return;
-      if (open && !dialog.open) dialog.showModal();
+      if (open && !dialog.open) {
+        dialog.showModal();
+        // A Dialog with a form: the focus goes to the first field.
+        body?.querySelector("input, textarea, select, button, [tabindex]")?.focus();
+      }
       if (!open && dialog.open) dialog.close();
     });
     return {
@@ -4621,9 +4899,18 @@ class DomRenderer {
       update: (n) => {
         id = n.id;
         setOptionalText(title, n.props.get(Prop.title));
+        if (message) setOptionalText(message, n.props.get(Prop.message));
         // After the element is in the document (showModal needs that).
         queueMicrotask(sync);
       },
+      place:
+        kname === "dialog"
+          ? (children) => {
+              reconcile(body, children.filter((c) => c.kind !== ControlKind.action).map((c) => c.el));
+              reconcile(actions, children.filter((c) => c.kind === ControlKind.action).map((c) => c.el));
+              body.hidden = body.children.length === 0;
+            }
+          : undefined,
     };
   }
 

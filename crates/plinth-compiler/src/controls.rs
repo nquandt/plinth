@@ -27,8 +27,11 @@ pub enum PropTy {
     CallbackNum,
     /// `(x: number, y: number) => void` (UI API 1.12 pointer events and
     /// the 1.13 `onContextMenu`; the event value is the list `[x, y]`, core
-    /// 1.12 spreads it).
+    /// 1.12 spreads it). Also `List.onReorder(from, to)` (UI API 1.13).
     CallbackPoint,
+    /// `(value: string, x: number, y: number) => void` (UI API 1.13
+    /// `onDrop`; the event value is the list `[value, x, y]`).
+    CallbackDrop,
     /// `Signal<string> | string`
     ValueStr,
     /// `Signal<boolean> | boolean`
@@ -323,6 +326,8 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("key", T::ListKey, true, Target::List),
             p("row", T::ListRow, true, Target::List),
             p("empty", T::Element, false, Target::List),
+            // UI API 1.13: the user moved a row (a drag, or Alt+Up/Down).
+            p("onReorder", T::CallbackPoint, false, Ev(event::REORDER)),
         ],
         children: ChildKind::None,
     },
@@ -338,6 +343,9 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("selected", T::Bool, false, P(prop::SELECTED)),
             // UI API 1.13: (x, y) in spacing units from the row's top-left corner.
             p("onContextMenu", T::CallbackPoint, false, Ev(event::CONTEXT_MENU)),
+            // UI API 1.13: drag and drop in one app.
+            p("dragValue", T::Str, false, P(prop::DRAG_VALUE)),
+            p("onDrop", T::CallbackDrop, false, Ev(event::DROP)),
         ],
         children: ChildKind::Nodes,
     },
@@ -459,6 +467,9 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("title", T::Str, true, P(prop::TITLE)),
             p("message", T::Str, false, P(prop::MESSAGE)),
             p("actions", T::ActionList, true, Target::List),
+            // UI API 1.13: the children (a small form) show between the
+            // message and the actions; the user closed the dialog.
+            p("onClose", T::Callback0, false, Ev(event::CLOSE)),
         ],
         children: ChildKind::Nodes,
     },
@@ -563,6 +574,8 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("onPointerMove", T::CallbackPoint, false, Ev(event::POINTER_MOVE)),
             p("onPointerUp", T::CallbackPoint, false, Ev(event::POINTER_UP)),
             p("onContextMenu", T::CallbackPoint, false, Ev(event::CONTEXT_MENU)),
+            p("dragValue", T::Str, false, P(prop::DRAG_VALUE)),
+            p("onDrop", T::CallbackDrop, false, Ev(event::DROP)),
         ],
         children: ChildKind::Nodes,
     },
@@ -599,6 +612,8 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("onPointerMove", T::CallbackPoint, false, Ev(event::POINTER_MOVE)),
             p("onPointerUp", T::CallbackPoint, false, Ev(event::POINTER_UP)),
             p("onContextMenu", T::CallbackPoint, false, Ev(event::CONTEXT_MENU)),
+            p("dragValue", T::Str, false, P(prop::DRAG_VALUE)),
+            p("onDrop", T::CallbackDrop, false, Ev(event::DROP)),
         ],
         children: ChildKind::Nodes,
     },
@@ -617,6 +632,7 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("onPointerMove", T::CallbackPoint, false, Ev(event::POINTER_MOVE)),
             p("onPointerUp", T::CallbackPoint, false, Ev(event::POINTER_UP)),
             p("onContextMenu", T::CallbackPoint, false, Ev(event::CONTEXT_MENU)),
+            p("onDrop", T::CallbackDrop, false, Ev(event::DROP)),
         ],
         children: ChildKind::None,
     },
@@ -631,6 +647,7 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("onPointerMove", T::CallbackPoint, false, Ev(event::POINTER_MOVE)),
             p("onPointerUp", T::CallbackPoint, false, Ev(event::POINTER_UP)),
             p("onContextMenu", T::CallbackPoint, false, Ev(event::CONTEXT_MENU)),
+            p("onDrop", T::CallbackDrop, false, Ev(event::DROP)),
         ],
         children: ChildKind::Nodes,
     },

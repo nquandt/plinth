@@ -50,3 +50,20 @@ export function deleteTask(id: number): void {
 export function clearCompleted(): void {
   tasks.set(tasks().filter((t) => !t.done));
 }
+
+/**
+ * Moves the shown task at index `from` to index `to` of the shown tasks (a
+ * drag in the list, or Alt+Up and Alt+Down on a task).
+ */
+export function moveTask(from: number, to: number): void {
+  const shown = visibleTasks();
+  if (from === to || from < 0 || to < 0 || from >= shown.length || to >= shown.length) {
+    return;
+  }
+  const moved = shown[from];
+  const rest = tasks().filter((t) => t.id !== moved.id);
+  const at = rest.findIndex((t) => t.id === shown[to].id);
+  // Down: after the task at `to`; up: before it.
+  const i = from < to ? at + 1 : at;
+  tasks.set([...rest.slice(0, i), moved, ...rest.slice(i)]);
+}

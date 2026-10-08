@@ -3,15 +3,13 @@
 // Click on an empty part of the canvas to draw a circle there. The circle
 // under the pointer is selected and filled. A right-click on a circle (or
 // the menu key or Shift+F10 on the focused canvas, for the selected circle)
-// opens a menu at the pointer with "Adjust diameter...". It opens a sheet
-// with a slider that changes the selected circle at once; closing the sheet
-// is one undo step. The "Adjust diameter" button does the same from the
-// keyboard. Undo and Redo go back and forward.
-//
-// A difference from the task (docs/GAPS.md "7GUIs task 6"): a Dialog cannot
-// hold a slider, so the slider is in a Sheet.
+// opens a menu at the pointer with "Adjust diameter...". It opens a dialog
+// with a slider (UI API 1.13: a Dialog holds a small form) that changes the
+// selected circle at once; closing the dialog is one undo step. The "Adjust
+// diameter" button does the same from the keyboard. Undo and Redo go back
+// and forward.
 import { Math } from "plinth:core";
-import { app, signal, Screen, Section, Group, Button, Canvas, Menu, Action, Sheet, Slider, Text, rect, circle, strokeCircle, Shape } from "plinth:ui";
+import { app, signal, Screen, Section, Group, Button, Canvas, Menu, Action, Dialog, Slider, Text, rect, circle, strokeCircle, Shape } from "plinth:ui";
 import {
   VIEW_W,
   VIEW_H,
@@ -105,7 +103,13 @@ function CircleDrawer() {
         <Menu label="Circle" open={menuOpen} actions={[<Action label="Adjust diameter..." onPress={openAdjust} />]} />
         <Text>{selected() === null ? "No circle selected" : `Selected: diameter ${Math.round(selected()?.d ?? 0)}`}</Text>
       </Section>
-      <Sheet open={adjusting} title="Adjust diameter" onClose={closeAdjust}>
+      <Dialog
+        open={adjusting}
+        title="Adjust diameter"
+        message={`The circle at (${Math.round(selected()?.x ?? 0)}, ${Math.round(selected()?.y ?? 0)}).`}
+        onClose={closeAdjust}
+        actions={[<Action label="Done" role="primary" onPress={closeAdjust} />]}
+      >
         <Slider
           label="Diameter"
           value={diameter()}
@@ -117,8 +121,7 @@ function CircleDrawer() {
             setDiameter(d);
           }}
         />
-        <Button label="Done" role="primary" onPress={closeAdjust} />
-      </Sheet>
+      </Dialog>
     </Screen>
   );
 }

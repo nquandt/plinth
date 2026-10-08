@@ -111,6 +111,7 @@ export const Prop = {
   "viewWidth": 77,
   "viewHeight": 78,
   "shapes": 79,
+  "dragValue": 80,
 };
 
 export const Event = {
@@ -124,6 +125,8 @@ export const Event = {
   "pointerMove": 10,
   "pointerUp": 11,
   "contextMenu": 12,
+  "drop": 13,
+  "reorder": 14,
 };
 
 export const EnumButtonRole = {

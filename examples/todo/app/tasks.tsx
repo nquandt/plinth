@@ -1,5 +1,5 @@
 import { signal, Screen, Section, TextField, Button, Text, List, Row, Toggle, Empty } from "plinth:ui";
-import { tasks, visibleTasks, remaining, addTask, setDone, deleteTask } from "./model";
+import { tasks, visibleTasks, remaining, addTask, setDone, deleteTask, moveTask } from "./model";
 
 export default function Tasks() {
   const draft = signal("");
@@ -28,6 +28,7 @@ export default function Tasks() {
             </Row>
           )}
           empty={<Empty title={tasks().length === 0 ? "No tasks yet" : "Nothing to show"} message="Add a task above." />}
+          onReorder={moveTask}
         />
       </Section>
     </Screen>

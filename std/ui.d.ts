@@ -137,6 +137,13 @@ export declare function List<T>(props: {
   row: (item: T) => Element;
   /** Shown when `items` is empty. */
   empty?: Element;
+  /**
+   * The user can move the rows (UI API 1.13): a drag of a row onto another
+   * row, or Alt+Up and Alt+Down on the focused row. `from` and `to` are
+   * indexes in `items`: the row at `from` goes to `to`. Move the item in
+   * `items`; the host does not change the order itself.
+   */
+  onReorder?: (from: number, to: number) => void;
 }): Element;
 
 export declare function Row(props: {
@@ -151,6 +158,10 @@ export declare function Row(props: {
   selected?: boolean;
   /** A secondary click, a long press, or the menu key on the focused row (UI API 1.13). `x` and `y` are spacing units from the row's top-left corner. */
   onContextMenu?: (x: number, y: number) => void;
+  /** The user can drag this row onto an element with `onDrop` (UI API 1.13); the drop gives it this string. */
+  dragValue?: string;
+  /** An element with `dragValue` was dropped on this row (UI API 1.13). `x` and `y` are spacing units from the row's top-left corner. */
+  onDrop?: (value: string, x: number, y: number) => void;
 }): Element;
 
 export declare function Empty(props: { title: string; message?: string }): Element;
@@ -246,12 +257,19 @@ export declare function Sheet(props: {
   children?: Children;
 }): Element;
 
-/** An alert or confirmation. */
+/**
+ * An alert or confirmation. The children (UI API 1.13) are a small form
+ * (a `Slider`, a `TextField`) between the message and the actions; the
+ * first field gets the focus. Enter in a field does not close the dialog.
+ * `onClose` runs when the user closes it with Escape or a click outside.
+ */
 export declare function Dialog(props: {
   open: Signal<boolean> | boolean;
   title: string;
   message?: string;
   actions: Element[];
+  onClose?: () => void;
+  children?: Children;
 }): Element;
 
 /**
@@ -436,10 +454,27 @@ interface PointerHandlers {
    * point.
    */
   onContextMenu?: (x: number, y: number) => void;
+  /**
+   * Drag and drop in one app (UI API 1.13): an element with `dragValue` was
+   * dropped on this element. `value` is its `dragValue`; `x` and `y` are
+   * as for the pointer events. The host shows where a drop can go.
+   */
+  onDrop?: (value: string, x: number, y: number) => void;
+}
+
+/** An element that the user can drag (UI API 1.13). */
+interface DragSource {
+  /**
+   * The user can drag this element onto an element with `onDrop`, which
+   * then gets this string (a key that the app chooses). A drag starts with
+   * a move after a press of the main button, or on a touch screen with a
+   * move after a long press.
+   */
+  dragValue?: string;
 }
 
 /** A layout box. `label` names it as a group for assistive technology. */
-export declare function Box(props: BoxStyle & KeyHandlers & PointerHandlers & { label?: string }): Element;
+export declare function Box(props: BoxStyle & KeyHandlers & PointerHandlers & DragSource & { label?: string }): Element;
 
 interface SpanLook {
   size?: "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
@@ -471,7 +506,7 @@ export declare function Span(props: {
 
 /** A box that the user can press: a button or a link. It is a tab stop; Enter and Space press it. */
 export declare function Pressable(
-  props: BoxStyle & KeyHandlers & PointerHandlers & { label: string; role: "button" | "link"; onPress: () => void; disabled?: boolean },
+  props: BoxStyle & KeyHandlers & PointerHandlers & DragSource & { label: string; role: "button" | "link"; onPress: () => void; disabled?: boolean },
 ): Element;
 
 /** A box that scrolls along its direction. Give it a height or a max height. */

@@ -208,6 +208,11 @@ fn inset_focus_ring<E: InteractiveElement>(d: E, accent: Hsla) -> E {
 
 /// Formats a `Value::Number` the way a `NumberField` shows it: no trailing
 /// `.0` for whole numbers (SPEC.md §6.3).
+/// An index as an event value (a list has far fewer rows than `i32::MAX`).
+fn to_i32(i: usize) -> i32 {
+    i32::try_from(i).unwrap_or(i32::MAX)
+}
+
 fn format_num(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
 }
@@ -266,6 +271,55 @@ impl Render for SliderDrag {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         gpui::Empty
     }
+}
+
+/// A drag in one app (UI API 1.13): an element with `drag-value`, or a row
+/// of a `List` with `onReorder`, or both. gpui-ce carries it from the drag
+/// source to the drop targets.
+#[derive(Clone)]
+struct PlinthDrag {
+    /// The node that the user drags. It is not a drop target for itself.
+    source: NodeId,
+    /// What the host announces: the title or label of the source.
+    label: String,
+    /// The `drag-value` of the source: elements with `onDrop` take it.
+    value: Option<String>,
+    /// For a row of a `List` with `onReorder`: the list and the row index.
+    reorder: Option<(NodeId, usize)>,
+}
+
+/// What the pointer moves while a drag goes on: the label of the source in
+/// a small card.
+struct DragPreview {
+    label: SharedString,
+    bg: Hsla,
+    fg: Hsla,
+    border: Hsla,
+}
+
+impl Render for DragPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(self.border)
+            .bg(self.bg)
+            .text_sm()
+            .text_color(self.fg)
+            .opacity(0.9)
+            .child(self.label.clone())
+    }
+}
+
+/// The name of a node for a drag: its title, its label or its drag value.
+fn drag_label(node: &Node) -> String {
+    node.str_prop(prop::TITLE)
+        .or(node.str_prop(prop::LABEL))
+        .or(node.str_prop(prop::DRAG_VALUE))
+        .unwrap_or("item")
+        .to_owned()
 }
 
 /// A destructive action waiting for the user to confirm it (SPEC.md §6.4,
@@ -361,6 +415,9 @@ pub struct PlinthRoot {
     /// The open `Menu`s with an `open` prop (UI API 1.13), with the point
     /// where each shows (`None`: where it is in the layout).
     menu_at: HashMap<NodeId, Option<Point<Pixels>>>,
+    /// The last drag-and-drop message for assistive technology (UI API
+    /// 1.13): a polite live region shows it.
+    announcement: String,
 }
 
 impl PlinthRoot {
@@ -412,6 +469,7 @@ impl PlinthRoot {
             painted_bounds: Rc::new(std::cell::RefCell::new(HashMap::new())),
             context_point: None,
             menu_at: HashMap::new(),
+            announcement: String::new(),
         };
         root.apply_commits(initial_commits);
         root.sync_dialog(cx);
@@ -450,6 +508,7 @@ impl PlinthRoot {
             painted_bounds: Rc::new(std::cell::RefCell::new(HashMap::new())),
             context_point: None,
             menu_at: HashMap::new(),
+            announcement: String::new(),
         }
     }
 
@@ -836,6 +895,20 @@ impl PlinthRoot {
                 match input {
                     Some(h) => window.focus(&h, cx),
                     None => window.focus(&self.modal_focus, cx),
+                }
+                // UI API 1.13: a `Dialog` with a form gives the focus to its
+                // first field, after the frame that shows it.
+                if let Some(Modal::Overlay(id)) = top
+                    && self.tree.get(id).is_some_and(|n| {
+                        n.kind == Some(ControlKind::Dialog)
+                            && n.children.iter().any(|&c| self.tree.get(c).is_some_and(|c| c.kind != Some(ControlKind::Action)))
+                    })
+                {
+                    cx.defer_in(window, |this, window, cx| {
+                        if this.modal_focus.is_focused(window) {
+                            this.move_focus(true, window, cx);
+                        }
+                    });
                 }
             }
             None => match self.focus_before_modal.take() {
@@ -1283,6 +1356,17 @@ impl Render for PlinthRoot {
             }
         };
         let body = body.children(overlays);
+        // UI API 1.13: the drag-and-drop messages for assistive technology.
+        let body = body.child(
+            div()
+                .id("announcer")
+                .absolute()
+                .size_0()
+                .overflow_hidden()
+                .role(accesskit::Role::Status)
+                .aria_live(accesskit::Live::Polite)
+                .aria_label(self.announcement.clone()),
+        );
 
         #[cfg(debug_assertions)]
         if let Some(start) = trace_start {
@@ -1760,7 +1844,8 @@ impl PlinthRoot {
         let style = self.primitive_style(node);
         let d = crate::canvas::render(u64::from(node.id), label, vw, vh, shapes, t).children(self.pointer_layer(node, Some(vw), cx));
         // A canvas with `onContextMenu` is a tab stop (the menu key).
-        let mut d = self.key_handlers(d, node, t, cx);
+        let d = self.key_handlers(d, node, t, cx);
+        let mut d = self.drop_target(d, node, t, cx);
         if let Some(w) = primitives::size(&style, prop::WIDTH, prop::WIDTH_FRACTION) {
             d = d.w(w).flex_shrink_0();
         }
@@ -1940,7 +2025,8 @@ impl PlinthRoot {
             return None;
         }
         let handlers = [event::POINTER_DOWN, event::POINTER_MOVE, event::POINTER_UP, event::CONTEXT_MENU].map(|ev| node.handler(ev));
-        if handlers.iter().all(Option::is_none) {
+        // A drop target needs its bounds for the position of a drop (UI API 1.13).
+        if handlers.iter().all(Option::is_none) && node.handler(event::DROP).is_none() {
             return None;
         }
         let [down, moved, up, context] = handlers;
@@ -2056,6 +2142,127 @@ impl PlinthRoot {
         }))
     }
 
+    /// UI API 1.13: an element with `drag-value` can be dragged (a press of
+    /// the main button and a move). A row of a `List` with `onReorder` is
+    /// dragged by its list item (`list_item`), with the same value.
+    fn drag_source<E: StatefulInteractiveElement + Styled>(&self, d: E, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> E {
+        if self.stopped.is_some() || self.in_reorder_list(node) {
+            return d;
+        }
+        let Some(value) = node.str_prop(prop::DRAG_VALUE) else { return d };
+        let drag = PlinthDrag { source: node.id, label: drag_label(node), value: Some(value.to_owned()), reorder: None };
+        self.on_drag_with(d, drag, t, cx)
+    }
+
+    /// Makes `d` start `drag` when the user drags it. The pointer then moves
+    /// a card with the label of the source, and the source shows faded.
+    fn on_drag_with<E: StatefulInteractiveElement + Styled>(&self, d: E, drag: PlinthDrag, t: &Tokens, cx: &mut Context<Self>) -> E {
+        let dragged = cx.active_drag().and_then(|a| a.value.downcast_ref::<PlinthDrag>()).is_some_and(|a| a.source == drag.source);
+        let d = if dragged { d.opacity(0.5) } else { d };
+        let (bg, fg, border) = (t.surface, t.text, t.accent);
+        let entity = cx.entity().downgrade();
+        d.on_drag(drag, move |drag, _, _, cx| {
+            let label = drag.label.clone();
+            let _ = entity.update(cx, |this, cx| {
+                this.announcement = format!("Dragging {label}");
+                cx.notify();
+            });
+            cx.new(|_| DragPreview { label: label.into(), bg, fg, border })
+        })
+    }
+
+    /// UI API 1.13: an element with `onDrop` takes a drag with a value
+    /// (not its own). While such a drag is over it, the host shows it as a
+    /// drop target. The event value is `[value, x, y]`, with `x` and `y` as
+    /// for the pointer events (`pointer_layer` keeps the bounds).
+    fn drop_target<E: InteractiveElement>(&self, d: E, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> E {
+        let Some(h) = node.handler(event::DROP).filter(|_| self.stopped.is_none()) else { return d };
+        let id = node.id;
+        let (selected, accent) = (t.selected, t.accent);
+        let painted = self.painted_bounds.clone();
+        d.can_drop(move |any, _, _| any.downcast_ref::<PlinthDrag>().is_some_and(|d| d.value.is_some() && d.source != id))
+            .drag_over::<PlinthDrag>(move |s, _, _, _| s.bg(selected).border_color(accent))
+            .on_drop(cx.listener(move |this, drag: &PlinthDrag, window, cx| {
+                let Some(value) = drag.value.clone() else { return };
+                let at = match painted.borrow().get(&id).copied() {
+                    Some((bounds, scale)) => point_value(window.mouse_position(), bounds, scale),
+                    None => Value::List(vec![Value::Number(0.0), Value::Number(0.0)]),
+                };
+                let mut items = vec![Value::Str(value)];
+                if let Value::List(xy) = at {
+                    items.extend(xy);
+                }
+                this.announcement = format!("Dropped {}", drag.label);
+                this.fire(h, event::DROP, Value::List(items), cx);
+            }))
+    }
+
+    /// Whether `node` is a row of a `List` with `onReorder` (UI API 1.13).
+    fn in_reorder_list(&self, node: &Node) -> bool {
+        self.tree
+            .get(node.parent)
+            .is_some_and(|p| p.kind == Some(ControlKind::List) && p.handler(event::REORDER).is_some())
+    }
+
+    /// The row `c` (index `i` of `count`) of `list`. In a `List` with
+    /// `onReorder` (UI API 1.13), the user can drag it onto another row,
+    /// and Alt+Up and Alt+Down move it while it (or a control in it) has
+    /// the focus. The host shows the place of a drop with a line.
+    fn list_item(&self, list: &Node, i: usize, c: NodeId, count: usize, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let row = self.render_node(c, t, cx);
+        let d = div().when(i + 1 < count, |d| d.border_b_1().border_color(t.border));
+        let Some(h) = list.handler(event::REORDER).filter(|_| self.stopped.is_none()) else {
+            return d.child(row).into_any_element();
+        };
+        let list_id = list.id;
+        let child = self.tree.get(c);
+        let label = child.map(drag_label).unwrap_or_default();
+        let value = child.and_then(|n| n.str_prop(prop::DRAG_VALUE)).map(str::to_owned);
+        let drag = PlinthDrag { source: c, label: label.clone(), value, reorder: Some((list_id, i)) };
+        let accent = t.accent;
+        let d = self.on_drag_with(d.id(eid("list-item", c)), drag, t, cx);
+        d.can_drop(move |any, _, _| {
+            any.downcast_ref::<PlinthDrag>().is_some_and(|d| matches!(d.reorder, Some((l, from)) if l == list_id && from != i))
+        })
+        // The line shows where the row goes: under this row when it comes
+        // from above, over it when it comes from below.
+        .drag_over::<PlinthDrag>(move |s, d, _, _| match d.reorder {
+            Some((_, from)) if from < i => s.border_b_2().border_color(accent),
+            Some((_, from)) if from > i => s.border_t_2().border_color(accent),
+            _ => s,
+        })
+        .on_drop(cx.listener(move |this, d: &PlinthDrag, _, cx| {
+            if let Some((_, from)) = d.reorder {
+                this.reorder(h, list_id, from, i, &d.label, cx);
+            }
+        }))
+        .on_key_down(cx.listener(move |this, ev: &KeyDownEvent, _, cx| {
+            let k = &ev.keystroke;
+            if !k.modifiers.alt || k.modifiers.control || k.modifiers.platform || k.modifiers.shift {
+                return;
+            }
+            let to = match k.key.as_str() {
+                "up" => i.checked_sub(1),
+                "down" => (i + 1 < count).then_some(i + 1),
+                _ => return,
+            };
+            cx.stop_propagation();
+            if let Some(to) = to {
+                this.reorder(h, list_id, i, to, &label, cx);
+            }
+        }))
+        .child(row)
+        .into_any_element()
+    }
+
+    /// Sends `reorder` `[from, to]` to the list's handler and tells
+    /// assistive technology where the row went.
+    fn reorder(&mut self, h: u32, list: NodeId, from: usize, to: usize, label: &str, cx: &mut Context<Self>) {
+        let count = self.tree.get(list).map_or(0, |l| l.children.len());
+        self.announcement = format!("Moved {label} to position {} of {count}", to + 1);
+        self.fire(h, event::REORDER, Value::List(vec![Value::Int(to_i32(from)), Value::Int(to_i32(to))]), cx);
+    }
+
     /// A layout box. Without a label it is a plain container for AccessKit;
     /// with one it is a named group.
     fn render_box(&self, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
@@ -2063,6 +2270,7 @@ impl PlinthRoot {
         let style = self.primitive_style(node);
         let d = primitives::box_style(div().id(eid("box", node.id)), &style, t, false);
         let d = self.key_handlers(d, node, t, cx);
+        let d = self.drop_target(self.drag_source(d, node, t, cx), node, t, cx);
         self.state_styles(d, node, t)
             .when_some(label, |d, l| d.role(accesskit::Role::Group).aria_label(l))
             .children(self.pointer_layer(node, None, cx))
@@ -2118,7 +2326,9 @@ impl PlinthRoot {
         }
         if !disabled {
             d = self.key_handlers(d, node, t, cx);
+            d = self.drag_source(d, node, t, cx);
         }
+        d = self.drop_target(d, node, t, cx);
         if let Some(h) = node.handler(event::PRESS).filter(|_| !disabled) {
             d = d
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.fire(h, event::PRESS, Value::Null, cx)))
@@ -2140,6 +2350,7 @@ impl PlinthRoot {
         let d = primitives::box_style(d, &style, t, false);
         let d = if primitives::is_row(&style) { d.overflow_x_scroll() } else { d.overflow_y_scroll() };
         let d = self.key_handlers(d, node, t, cx);
+        let d = self.drop_target(d, node, t, cx);
         // A row scroll shows the x range from its offset: its content builds
         // only what is in it (with overscan). A column scroll keeps the range
         // that it got and builds only the rows near its viewport.
@@ -2495,11 +2706,7 @@ impl PlinthRoot {
         if count > VIRTUAL_LIST_THRESHOLD {
             return self.render_virtual_list(node, t, cx);
         }
-        let rows = node.children.iter().enumerate().map(|(i, &c)| {
-            div()
-                .when(i + 1 < count, |d| d.border_b_1().border_color(t.border))
-                .child(self.render_node(c, t, cx))
-        });
+        let rows = node.children.iter().enumerate().map(|(i, &c)| self.list_item(node, i, c, count, t, cx));
         // Rows run edge to edge inside the section card.
         div()
             .id(eid("list", node.id))
@@ -2558,13 +2765,12 @@ impl PlinthRoot {
         };
         let t = *t;
         let entity = cx.entity();
-        let last_id = children.last().copied();
+        let list_id = node.id;
         let list = gpui::list(state, move |i, _window, app| {
             let Some(&c) = children.get(i) else { return div().into_any_element() };
-            let last = Some(c) == last_id;
-            entity.update(app, |this, cx| {
-                let row = this.render_node(c, &t, cx);
-                div().when(!last, |d| d.border_b_1().border_color(t.border)).child(row).into_any_element()
+            entity.update(app, |this, cx| match this.tree.get(list_id).cloned() {
+                Some(list) => this.list_item(&list, i, c, count, &t, cx),
+                None => div().into_any_element(),
             })
         })
         .with_sizing_behavior(gpui::ListSizingBehavior::Auto)
@@ -2618,15 +2824,18 @@ impl PlinthRoot {
             )
             .when_some(trailing, |d, tr| d.child(div().flex_none().text_sm().text_color(t.text_muted).child(tr)))
             .child(div().flex().flex_none().items_center().gap_2().children(self.render_children(node, t, cx)));
-        // UI API 1.13: a secondary click, or the menu key on the focused row.
-        let row_el = match node.handler(event::CONTEXT_MENU).filter(|_| self.stopped.is_none()) {
-            Some(_) => {
-                let d = row_el.relative().children(self.pointer_layer(node, None, cx));
-                let d = if handler.is_none() { inset_focus_ring(d.tab_index(0), t.accent) } else { d };
-                self.context_keys(d, node, cx)
-            }
-            None => row_el,
-        };
+        // UI API 1.13: a secondary click, or the menu key on the focused row;
+        // a drop on the row; a row of a list that the user can reorder.
+        let live = self.stopped.is_none();
+        let context = node.handler(event::CONTEXT_MENU).filter(|_| live);
+        let drop = node.handler(event::DROP).filter(|_| live);
+        let reorder = live && self.in_reorder_list(node);
+        let row_el = if context.is_some() || drop.is_some() { row_el.relative().children(self.pointer_layer(node, None, cx)) } else { row_el };
+        // The menu key and Alt+Up/Down need the focus on the row.
+        let row_el = if (context.is_some() || reorder) && handler.is_none() { inset_focus_ring(row_el.tab_index(0), t.accent) } else { row_el };
+        let row_el = if reorder { row_el.aria_keyshortcuts("Alt+ArrowUp Alt+ArrowDown") } else { row_el };
+        let row_el = self.context_keys(row_el, node, cx);
+        let row_el = self.drop_target(self.drag_source(row_el, node, t, cx), node, t, cx);
         let accent = t.accent;
         let row_el = match handler {
             Some(h) => inset_focus_ring(keyboard_activatable(
@@ -3989,7 +4198,11 @@ impl PlinthRoot {
         let id = node.id;
         let title = node.str_prop(prop::TITLE).unwrap_or("").to_owned();
         let message = node.str_prop(prop::MESSAGE).map(str::to_owned);
-        let actions: Vec<&Node> = node.children.iter().filter_map(|&c| self.tree.get(c)).collect();
+        // UI API 1.13: the children that are not actions are a small form
+        // between the message and the actions.
+        let (actions, body): (Vec<&Node>, Vec<&Node>) =
+            node.children.iter().filter_map(|&c| self.tree.get(c)).partition(|n| n.kind == Some(ControlKind::Action));
+        let body: Vec<AnyElement> = body.into_iter().map(|n| self.render_node(n.id, t, cx)).collect();
         let top = self.top_modal() == Some(Modal::Overlay(id));
         let panel = div()
             .id(eid("dialog", id))
@@ -4010,6 +4223,7 @@ impl PlinthRoot {
             .border_color(t.border)
             .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(title))
             .when_some(message, |d, m| d.child(div().text_sm().text_color(t.text_muted).child(m)))
+            .when(!body.is_empty(), |d| d.child(div().flex().flex_col().gap_3().children(body)))
             .child(div().flex().justify_end().gap_2().children(actions.into_iter().map(|a| self.render_action_item(a, t, None, cx))));
         div()
             .id(eid("dialog-backdrop", id))
