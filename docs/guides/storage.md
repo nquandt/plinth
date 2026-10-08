@@ -1,17 +1,18 @@
 # Guide: save data
 
-This guide tells you how to save data in a Plinth app. It is for app authors. The reference is [host-apis.md](../host-apis.md) (`plinth:store`, `plinth:files`).
+This guide tells you how to save data in a Plinth app. It is for app authors. The reference is [host-apis.md](../host-apis.md) (`plinth:store`, `plinth:files`) and [SQL.md](../SQL.md) (`sql`).
 
 ## 1. Choose the API
 
-Plinth gives an app two places for its data. Both are private to the app: no other app can read them.
+Plinth gives an app three places for its data. All are private to the app: no other app can read them.
 
 | API | Use it for | Capability | Calls |
 |---|---|---|---|
 | `plinth:store` (`kv`) | Small values: settings, a list of short items, the last screen. | `store.kv` | Synchronous. A value is a string. |
-| `plinth:files` | Larger text: documents, notes, exports. | `files.private` | Asynchronous. Each call returns a `Promise`. A file is UTF-8 text. |
+| `plinth:store` (`sql`) | Records that you filter, sort, count or search: notes, tasks, contacts, a history. | `store.sql` | Asynchronous. Each call returns a `Promise`. One SQLite database for each app. |
+| `plinth:files` | Larger text: documents, exports. | `files.private` | Asynchronous. Each call returns a `Promise`. A file is UTF-8 text. |
 
-There is no SQL store. There is no sync between devices yet (`docs/LIMITS.md`).
+If you keep a list in `kv` and the list can grow past some hundred items, use `sql`. A `kv` value is read and written as one string. There is no sync between devices yet (`docs/LIMITS.md`).
 
 ## 2. Declare the capabilities
 
@@ -23,13 +24,17 @@ name = "store.kv"
 rationale = "Save your settings on this device."
 
 [[capabilities]]
+name = "store.sql"
+rationale = "Save your tasks on this device and search them."
+
+[[capabilities]]
 name = "files.private"
 rationale = "Save your drafts on this device."
 ```
 
-If you call `kv.get` or `write` and do not declare the capability, `plinth check` gives the error `PL1007`. The app does not build.
+If you call `kv.get`, `sql.query` or `write` and do not declare the capability, `plinth check` gives the error `PL1007`. The app does not build.
 
-Both capabilities have the risk level Low. The Hub allows them at install and does not ask the user. The user can refuse them later. Thus your app must work when a call is denied (§5).
+All three capabilities have the risk level Low. The Hub allows them at install and does not ask the user. The user can refuse them later. Thus your app must work when a call is denied (§5).
 
 ## 3. Example
 
@@ -110,6 +115,44 @@ function Home() {
 export default app({ screens: { home: { title: "Storage", component: Home } } });
 ```
 
+### 3.1 SQL example
+
+This example keeps tasks in a table. `sql.migrate` makes the table on the first run, and adds later changes of the schema in order.
+
+```ts
+import { sql } from "plinth:store";
+
+interface Task {
+  id: number;
+  title: string;
+  done: boolean;
+}
+
+// Append-only: add new steps at the end; never change a step that ran.
+const SCHEMA = [
+  "CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)",
+  "CREATE INDEX tasks_done ON tasks (done)",
+];
+
+export async function open(): Promise<void> {
+  await sql.migrate(SCHEMA);
+}
+
+export async function add(title: string): Promise<number> {
+  const r = await sql.exec("INSERT INTO tasks (title) VALUES (?)", [title]);
+  return r.lastInsertId;
+}
+
+export async function openTasks(): Promise<Task[]> {
+  return await sql.query<Task>("SELECT id, title, done FROM tasks WHERE done = ? ORDER BY id", [false]);
+}
+
+export async function finishAll(ids: number[]): Promise<void> {
+  // One transaction: all rows change, or none.
+  await sql.batch(ids.map((id) => ({ sql: "UPDATE tasks SET done = 1 WHERE id = ?", params: [id] })));
+}
+```
+
 More examples: `examples/notes/app/storage.ts` (`store.sql` with a full-text search, and a one-time move of old kv data), `examples/files-demo` (files).
 
 ## 4. Rules for each API
@@ -121,7 +164,16 @@ More examples: `examples/notes/app/storage.ts` (`store.sql` with a full-text sea
 - `kv.keys()` returns all keys, in no fixed order.
 - To keep an object, use `JSON.stringify` and `JSON.parse<T>`. `JSON.parse<T>` returns `null` for invalid JSON or for a wrong shape. Always handle `null`: an older version of your app can have saved a different shape.
 
-### 4.2 Files
+### 4.2 `sql`
+
+- Write each statement as a string literal or a `const`, with `?` for each value. Do not build a statement from user text: the compiler gives the warning `PL2026`.
+- A parameter is a `number`, a `string`, a `boolean` (stored as 0 or 1) or `null`. `BLOB` values are not supported.
+- `query<T>` decodes each row into `T`, one field for each column. Give each column a name that is the same as the field name (`SELECT count(*) AS n`). A `boolean` field reads 0 and 1. A missing column or a wrong type rejects the promise.
+- One call runs one statement. Use `batch` for a transaction. The host refuses `BEGIN`, `COMMIT`, `ATTACH`, `VACUUM`, extensions and most `PRAGMA`s (`docs/SQL.md` §4).
+- Keep the steps of `sql.migrate` append-only. The database records how many steps ran (`PRAGMA user_version`). A list with fewer steps than the database has is an error.
+- Full-text search (SQLite FTS5) is available on every host. To search user text, put each word in `"…"` and double each `"` in it. Then an FTS5 operator in the text is plain text. `examples/notes/app/storage.ts` shows this.
+
+### 4.3 Files
 
 - A path is relative, with `/` between segments, for example `notes/2026/today.md`. The host refuses absolute paths, `.` and `..`, empty segments, `\`, `:` and other characters. [host-apis.md](../host-apis.md) has the full list of path rules. The rules are the same on every host.
 - `write` makes the parent folders. A folder exists only while it holds a file. There is no `mkdir`.
@@ -137,6 +189,7 @@ A denied call never stops your app. Show the problem to the user as a normal sta
 | API | On denial | How to find the reason |
 |---|---|---|
 | `kv` | `get` returns `null`, `set` and `remove` do nothing, `keys` returns `[]`. | `kv.lastError()` returns `"denied:undeclared"`, `"denied:refused"` or `"denied:unsupported"`, or `null` after a call that worked. Read it right after the call. |
+| `sql` | The promise rejects with an `Error`. | `message` is `"denied:<reason>"`, or `"sql: <detail>"` for a SQL error, for example `"sql: the query took too long"`, `"sql: the database is full"` or a syntax error. |
 | Files | The promise rejects with an `Error`. | `message` is the reason: `"denied:<reason>"`, `"invalid-path: <rule>"`, `"not-found"`, `"not-a-file"`, `"not-a-directory"`, `"not-text"`, `"too-large"`, `"quota"` or `"io: <detail>"`. |
 
 An uncaught rejection does not stop the app. The host reports it as an uncaught error.
@@ -148,18 +201,22 @@ An uncaught rejection does not stop the app. The host reports it as an uncaught 
 | `kv` size | No quota. | In a sandboxed frame (the web Hub, a web export): 512 Ki characters of keys and values for each app. A `set` over the quota does nothing and `kv.lastError()` returns `"denied:refused"`. A key longer than 1024 characters gets the same result. |
 | One file | 8 MiB (`"too-large"`). | 8 MiB. |
 | All files of one app | 50 MiB (`"quota"`). | 50 MiB. |
+| One SQL database | 256 MiB (`"sql: the database is full"`). | 256 MiB. |
+| One SQL statement | 2 s (`"sql: the query took too long"`). | 2 s. One SQLite Worker runs the calls of all apps of the page in turn. |
+| One `query` result | 16 MiB of JSON. | 16 MiB. |
 
 ## 7. Where the data is
 
-| Host | `kv` | Files |
-|---|---|---|
-| Desktop | `%APPDATA%\plinth\apps\<app id>\kv.json` on Windows. One file for each app id. | `%APPDATA%\plinth\spaces\private\<owner>\<app id>\`. `<owner>` comes from the publisher key of a signed package, from the package digest of an unsigned package (so each new build gets a new space), or is `dev` for `plinth dev`. |
-| Web, in a sandboxed frame | The `localStorage` of the page, keys `plinth-hub:kv:<app id>:<key>`. | The IndexedDB of the page, database `plinth-files`. |
-| Web, stand-alone page (`web/index.html`, for tests) | `localStorage`, keys `plinth:<app id>:<key>`. | In memory. The files go away at a reload. |
+| Host | `kv` | `sql` | Files |
+|---|---|---|---|
+| Desktop | `%APPDATA%\plinth\apps\<app id>\kv.json` on Windows. One file for each app id. | `%APPDATA%\plinth\spaces\private\<owner>\<app id>+sql\store.sqlite`, next to the private space. The `files` API cannot reach it. | `%APPDATA%\plinth\spaces\private\<owner>\<app id>\`. `<owner>` comes from the publisher key of a signed package, from the package digest of an unsigned package (so each new build gets a new space), or is `dev` for `plinth dev`. |
+| Web, in a sandboxed frame | The `localStorage` of the page, keys `plinth-hub:kv:<app id>:<key>`. | The OPFS of the page, folder `.plinth-sql`, one database for each app id. Without OPFS (an old browser), in memory. | The IndexedDB of the page, database `plinth-files`. |
+| Web, stand-alone page (`web/index.html`, for tests) | `localStorage`, keys `plinth:<app id>:<key>`. | The same as in a sandboxed frame. | In memory. The files go away at a reload. |
 
 Notes:
 
-- On the desktop, the kv store is keyed by the app id only, and the private file space by the owner and the app id.
+- On the desktop, the kv store is keyed by the app id only, and the private file space and the SQL database by the owner and the app id.
+- On the web, only one browser tab of an origin at a time can open the SQL databases (`docs/SQL.md` §9 W5). A web export (`plinth build --target web`) does not have `sql` yet.
 - On the desktop, the files of an unsigned package are in a new space after each build. Sign your package (see [publishing.md](publishing.md)) to keep the same space across versions.
 - On the web, all data is in the storage of the page origin. The apps cannot read the data of other apps, but code of the page can (`docs/THREAT-MODEL.md` §6).
 - [host-apis.md](../host-apis.md) "Support on each host" has the other differences between hosts.
