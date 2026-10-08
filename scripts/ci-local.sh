@@ -125,6 +125,12 @@ if [ "$mode" = full ]; then
     node "$t"
   done
   end
+
+  step "plinth test (the examples with app/*.test.ts(x), docs/TESTING.md)"
+  for dir in examples/*/ examples/7guis/*/; do
+    if ls "$dir"app/*.test.ts* > /dev/null 2>&1; then "$plinth" test "$dir"; fi
+  done
+  end
 fi
 
 if [ "$shoot" = yes ]; then

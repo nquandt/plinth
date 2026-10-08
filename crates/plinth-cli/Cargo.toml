@@ -29,7 +29,6 @@ wit-component.workspace = true
 wasmparser.workspace = true
 sha2.workspace = true
 wasm-opt.workspace = true
-
-[dev-dependencies]
+# `plinth test` (docs/TESTING.md): the runner and the UI tree, with no window.
 plinth-runner-wasmtime.workspace = true
 plinth-ui.workspace = true

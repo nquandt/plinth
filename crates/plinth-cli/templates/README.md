@@ -8,11 +8,12 @@ screen), wired up in `app/main.tsx`.
 ```sh
 npm run dev     # run the app; it reloads when you save
 npm run check   # type-check
+npm test        # run the tests in app/*.test.tsx
 npm run build   # make dist/{{slug}}.plnt
 ```
 
 Without npm, run the same commands with the `plinth` binary: `plinth dev`,
-`plinth check`, `plinth build`.
+`plinth check`, `plinth test`, `plinth build`.
 
 Tasks save to the device with the `store.kv` capability (declared in
 `plinth.toml`), so they are still there next time the app runs. The app

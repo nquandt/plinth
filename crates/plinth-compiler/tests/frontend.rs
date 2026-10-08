@@ -336,7 +336,10 @@ fn missing_app() {
 /// names the compiler knows (SPEC.md §4.7).
 #[test]
 fn std_typings_match() {
-    use plinth_compiler::check::stdlib::{CLIPBOARD_NAMES, CORE_NAMES, DIALOG_NAMES, FILES_NAMES, HUB_NAMES, LOCALE_NAMES, NET_NAMES, NOTIFY_NAMES, STORE_NAMES, TIME_NAMES, UI_NAMES};
+    use plinth_compiler::check::stdlib::{
+        CLIPBOARD_NAMES, CORE_NAMES, DIALOG_NAMES, FILES_NAMES, HUB_NAMES, LOCALE_NAMES, NET_NAMES, NOTIFY_NAMES, STORE_NAMES, TEST_NAMES, TIME_NAMES,
+        UI_NAMES,
+    };
     let std_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../std");
     let exports = |file: &str| -> Vec<String> {
         let text = std::fs::read_to_string(std_dir.join(file)).unwrap();
@@ -345,7 +348,7 @@ fn std_typings_match() {
             .filter_map(|l| {
                 let rest = l.trim_start().strip_prefix("export ")?;
                 let rest = rest.strip_prefix("declare ").unwrap_or(rest);
-                let rest = ["function ", "const ", "interface ", "type "].iter().find_map(|k| rest.strip_prefix(k))?;
+                let rest = ["function ", "const ", "interface ", "type ", "class "].iter().find_map(|k| rest.strip_prefix(k))?;
                 Some(rest.split(|c: char| !c.is_alphanumeric() && c != '_').next()?.to_owned())
             })
             .collect();
@@ -371,6 +374,13 @@ fn std_typings_match() {
     assert_eq!(exports("hub.d.ts"), sorted(HUB_NAMES), "std/hub.d.ts and check::stdlib::HUB_NAMES differ");
     assert_eq!(exports("notify.d.ts"), sorted(NOTIFY_NAMES), "std/notify.d.ts and check::stdlib::NOTIFY_NAMES differ");
     assert_eq!(exports("locale.d.ts"), sorted(LOCALE_NAMES), "std/locale.d.ts and check::stdlib::LOCALE_NAMES differ");
+    assert_eq!(exports("test.d.ts"), sorted(TEST_NAMES), "std/test.d.ts and check::stdlib::TEST_NAMES differ");
+    // `plinth:test` is Plinth TS: each public name is an export of its source.
+    let prelude = plinth_compiler::driver::TEST_PRELUDE;
+    for name in TEST_NAMES {
+        let exported = ["function", "async function", "class", "interface"].iter().any(|k| prelude.contains(&format!("export {k} {name}")));
+        assert!(exported, "plinth:test (src/testkit.tsx) does not export `{name}`");
+    }
     for c in plinth_compiler::controls::CONTROLS {
         assert!(UI_NAMES.contains(&c.name), "control {} is not in UI_NAMES", c.name);
     }

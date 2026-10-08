@@ -567,6 +567,13 @@ impl Cx<'_> {
             T::TSTypeReference(r) => {
                 let name = match &r.type_name {
                     o::TSTypeName::IdentifierReference(id) => id.name.to_string(),
+                    // `JSX.Element`, the type of an element (the checker
+                    // knows this one qualified name).
+                    o::TSTypeName::QualifiedName(q)
+                        if q.right.name == "Element" && matches!(&q.left, o::TSTypeName::IdentifierReference(l) if l.name == "JSX") =>
+                    {
+                        "JSX.Element".to_owned()
+                    }
                     _ => {
                         self.err(code::NAMESPACE, r.span, "qualified type names are not supported");
                         return None;

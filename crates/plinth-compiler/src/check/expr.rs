@@ -657,8 +657,14 @@ impl Checker<'_> {
                 Some(Binding::Std(f)) => return self.std_call(f, type_args, args, span, expected),
                 Some(Binding::StdObj(StdObj::Navigate)) => return self.std_call(StdFn::Navigate, type_args, args, span, expected),
                 Some(Binding::Func(fid)) => {
+                    if let Some(call) = self.test_overload(fid, args, span) {
+                        return call;
+                    }
                     let ft = self.func_type(fid, callee.span);
-                    let targs = self.call_args(&ft, args, span);
+                    let thunked = self.test_thunk_args(fid, &ft, args);
+                    let args = thunked.as_deref().unwrap_or(args);
+                    let mut targs = self.call_args(&ft, args, span);
+                    self.fill_callsite(fid, args.len(), &mut targs, span);
                     return TExpr::new(TExprKind::Call(fid, targs), ft.ret.clone(), span);
                 }
                 Some(Binding::Generic(gid)) => {
@@ -987,6 +993,108 @@ impl Checker<'_> {
         TExpr::new(TExprKind::Block(vec![TStmt::Let(v, Some(te)), guard], bx(result)), target, span)
     }
 
+    /// A test build (docs/TESTING.md): a call of a `plinth:test` function
+    /// that leaves out its last parameter `__at` gets the place of the call
+    /// (`app/x.test.tsx:12`) there. `given` counts the arguments in the
+    /// source (and `this` for a method).
+    fn fill_callsite(&mut self, fid: FuncId, given: usize, targs: &mut [TExpr], span: Span) {
+        let Some(test) = &self.test else { return };
+        let Some(prelude) = test.prelude_file else { return };
+        let f = &self.prog.funcs[fid as usize];
+        // Calls inside `plinth:test` give their own `__at` on.
+        if span.file == prelude || f.span.file != prelude {
+            return;
+        }
+        let Some(&last) = f.params.last() else { return };
+        if self.prog.vars[last as usize].name != "__at" || given >= f.params.len() || targs.len() != f.params.len() {
+            return;
+        }
+        let (line, _) = test.sources.line_col(span);
+        let place = format!("{}:{line}", test.sources.path(span.file));
+        let ty = self.prog.vars[last as usize].ty.clone();
+        let lit = TExpr::new(TExprKind::Str(place), Type::String, span);
+        let value = self.coerce(lit, &ty);
+        if let Some(slot) = targs.last_mut() {
+            *slot = value;
+        }
+    }
+
+    /// A test build (docs/TESTING.md): `plinth:test` has a form of `f` for
+    /// each kind of value, `f$string`, `f$number` and `f$boolean` (Plinth
+    /// has no unions of these types). A call of `f` picks the form from the
+    /// type of its first argument; any other type keeps `f`. `None` when
+    /// `f` has no such forms.
+    fn test_overload(&mut self, fid: FuncId, args: &[Expr], span: Span) -> Option<TExpr> {
+        let test = self.test.as_ref()?;
+        let (prelude_file, module) = (test.prelude_file?, test.prelude_module?);
+        let f = &self.prog.funcs[fid as usize];
+        if f.span.file != prelude_file || args.is_empty() {
+            return None;
+        }
+        let name = f.name.clone();
+        let forms = ["string", "number", "boolean"].map(|t| self.exports[module].get(&format!("{name}${t}")).cloned());
+        if forms.iter().all(Option::is_none) {
+            return None;
+        }
+        let first = self.expr(&args[0], None);
+        let base = match &first.ty {
+            Type::Nullable(inner) => (**inner).clone(),
+            t => t.clone(),
+        };
+        let form = match base {
+            Type::String | Type::StrLits(_) => forms[0].clone(),
+            Type::Number | Type::Int => forms[1].clone(),
+            Type::Bool => forms[2].clone(),
+            _ => None,
+        };
+        let target = match form {
+            Some(Binding::Func(f)) => f,
+            _ => fid,
+        };
+        let ft = self.func_type(target, span);
+        let mut targs = vec![self.coerce(first, &ft.params[0])];
+        let rest = FuncType { params: ft.params[1..].to_vec(), required: ft.required.saturating_sub(1), ret: ft.ret.clone() };
+        targs.extend(self.call_args(&rest, &args[1..], span));
+        self.fill_callsite(target, args.len(), &mut targs, span);
+        Some(TExpr::new(TExprKind::Call(target, targs), ft.ret.clone(), span))
+    }
+
+    /// A test build (docs/TESTING.md): a JSX element given to a
+    /// `plinth:test` function that takes `() => JSX.Element` (`render`)
+    /// becomes `() => <element>`, so that the element is made where the
+    /// test kit shows it.
+    fn test_thunk_args(&self, fid: FuncId, ft: &FuncType, args: &[Expr]) -> Option<Vec<Expr>> {
+        let prelude = self.test.as_ref()?.prelude_file?;
+        if self.prog.funcs[fid as usize].span.file != prelude {
+            return None;
+        }
+        let mut out = args.to_vec();
+        let mut changed = false;
+        for (a, p) in out.iter_mut().zip(&ft.params) {
+            let wants_thunk = matches!(p, Type::Func(f) if f.params.is_empty() && f.ret == Type::Element);
+            if wants_thunk && matches!(a.kind, ExprKind::Jsx(_)) {
+                let span = a.span;
+                let body = std::mem::replace(a, Expr { kind: ExprKind::Null, span });
+                *a = Expr {
+                    kind: ExprKind::Func(Box::new(ast::FuncDecl {
+                        name: None,
+                        params: Vec::new(),
+                        ret: None,
+                        body: ast::Body::Expr(Box::new(body)),
+                        exported: false,
+                        is_default: false,
+                        span,
+                        type_params: Vec::new(),
+                        is_async: false,
+                    })),
+                    span,
+                };
+                changed = true;
+            }
+        }
+        changed.then_some(out)
+    }
+
     /// Checks arguments against a signature. Missing optional arguments
     /// become null.
     pub(super) fn call_args(&mut self, ft: &FuncType, args: &[Expr], span: Span) -> Vec<TExpr> {
@@ -1152,6 +1260,7 @@ impl Checker<'_> {
                 if let Some(fid) = self.resolve_method(sid, prop) {
                     let ft = self.func_type(fid, prop_span);
                     let mut targs = self.method_args(&ft, o, args, span);
+                    self.fill_callsite(fid, args.len() + 1, &mut targs, span);
                     let this = targs.remove(0);
                     // Codegen resolves this to a direct call, or to an
                     // inline dispatch on the receiver's runtime type, once

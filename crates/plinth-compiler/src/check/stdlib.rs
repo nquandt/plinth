@@ -52,6 +52,27 @@ pub const TIME_NAMES: &[&str] = &[
     "DateParts",
 ];
 pub const STORE_NAMES: &[&str] = &["kv", "sql"];
+/// `plinth:test` (docs/TESTING.md): the public names of the test kit. The
+/// kit is Plinth TS (`src/testkit.tsx`), not built-in calls; its other
+/// exports are for the compiler and the test runner.
+pub const TEST_NAMES: &[&str] = &[
+    "test",
+    "render",
+    "renderApp",
+    "tick",
+    "settle",
+    "expect",
+    "Query",
+    "TestScreen",
+    "QueryMatchers",
+    "QueryExpectation",
+    "StringMatchers",
+    "StringExpectation",
+    "NumberMatchers",
+    "NumberExpectation",
+    "BooleanMatchers",
+    "BooleanExpectation",
+];
 pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
 pub const DIALOG_NAMES: &[&str] = &["alert", "confirm", "prompt"];
 pub const NET_NAMES: &[&str] = &["fetch", "Response", "FetchOptions"];

@@ -27,6 +27,14 @@ fn new_project_checks_and_builds() {
     let check_out = String::from_utf8_lossy(&check.stdout);
     assert!(check_out.contains("0 warnings"), "expected 0 warnings, got: {check_out}");
 
+    // `npm test`: the template has tests (docs/TESTING.md), and they pass.
+    let pkg = std::fs::read_to_string(dir.join("package.json")).unwrap();
+    assert!(pkg.contains("\"test\": \"plinth test\""), "package.json should have a test script: {pkg}");
+    let test = Command::new(plinth_bin()).arg("test").arg(&dir).output().expect("run plinth test");
+    let test_out = String::from_utf8_lossy(&test.stdout);
+    assert!(test.status.success(), "plinth test failed: {test_out}{}", String::from_utf8_lossy(&test.stderr));
+    assert!(test_out.contains("2 passed, 0 failed"), "{test_out}");
+
     let build = Command::new(plinth_bin()).arg("build").arg(&dir).output().expect("run plinth build");
     assert!(build.status.success(), "plinth build failed: {}", String::from_utf8_lossy(&build.stderr));
 

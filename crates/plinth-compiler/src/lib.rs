@@ -73,8 +73,18 @@ pub(crate) fn with_stack<R>(f: impl FnOnce() -> R) -> R {
     stacker::maybe_grow(STACK_SIZE / 2, STACK_SIZE, f)
 }
 
+/// Compiles a test build (docs/TESTING.md): the app, the test files
+/// `tests` (paths such as `app/tasks.test.tsx`) and `plinth:test`, linked
+/// into the release core. `plinth test` runs it; it is never a package.
+pub fn compile_tests(fs: &dyn FileSystem, capabilities: &[String], tests: &[String]) -> anyhow::Result<(Frontend, Option<Artifact>)> {
+    with_stack(|| build(driver::frontend_tests(fs, capabilities, tests), false))
+}
+
 fn compile_impl(fs: &dyn FileSystem, capabilities: &[String], dev: bool) -> anyhow::Result<(Frontend, Option<Artifact>)> {
-    let mut front = driver::frontend_with_capabilities(fs, capabilities);
+    build(driver::frontend_with_capabilities(fs, capabilities), dev)
+}
+
+fn build(mut front: Frontend, dev: bool) -> anyhow::Result<(Frontend, Option<Artifact>)> {
     let Some(mut program) = front.program.take() else {
         return Ok((front, None));
     };

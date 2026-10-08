@@ -36,6 +36,16 @@ impl RequestQueue {
         self.open.contains(&id)
     }
 
+    /// The number of open requests.
+    pub fn len(&self) -> usize {
+        self.open.len()
+    }
+
+    /// True if no request is open.
+    pub fn is_empty(&self) -> bool {
+        self.open.is_empty()
+    }
+
     /// Marks `id` as answered. Answering an unknown id is not an error.
     pub fn close(&mut self, id: u32) {
         self.open.remove(&id);

@@ -136,6 +136,7 @@ pub fn load(
         sql: None,
         locale: None,
         locale_fixed: false,
+        test_clock: None,
     };
     let mut store = Store::new(engine, state);
     store.limiter(|s| &mut s.limits);

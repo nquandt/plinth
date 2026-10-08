@@ -257,9 +257,18 @@ struct HostState {
     /// True when the host or a test fixed the locale (`Guest::set_locale`):
     /// `Guest::refresh_locale` then does not read the OS again.
     locale_fixed: bool,
+    /// A test clock (`Guest::use_test_clock`, `plinth test`): the clocks
+    /// and the timers read it instead of the real time. `(now, the epoch
+    /// time of now in ms)`.
+    test_clock: Option<(Instant, u64)>,
 }
 
 impl HostState {
+    /// The time of the timers: the test clock, else the real time.
+    fn instant_now(&self) -> Instant {
+        self.test_clock.map_or_else(Instant::now, |(now, _)| now)
+    }
+
     /// The locale of the app: the fixed one, else the OS locale at the first
     /// read (`docs/I18N.md` §3.1).
     fn current_locale(&mut self) -> &str {
@@ -307,16 +316,20 @@ impl bindings::plinth::app::error::Host for HostState {
 
 impl bindings::plinth::app::time::Host for HostState {
     fn now(&mut self) -> u64 {
+        if let Some((_, epoch_ms)) = self.test_clock {
+            return epoch_ms;
+        }
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
     }
 
     fn monotonic_now(&mut self) -> u64 {
-        self.monotonic_origin.elapsed().as_millis() as u64
+        self.instant_now().saturating_duration_since(self.monotonic_origin).as_millis() as u64
     }
 
     fn set_timer(&mut self, ms: u32, repeat: bool) -> Result<u32, HostError> {
         // `time` needs no capability (SPEC.md §11): always allowed.
-        Ok(self.timers.set(Instant::now(), ms, repeat))
+        let now = self.instant_now();
+        Ok(self.timers.set(now, ms, repeat))
     }
 
     fn cancel_timer(&mut self, timer: u32) {
@@ -325,7 +338,8 @@ impl bindings::plinth::app::time::Host for HostState {
 
     fn set_frame_timer(&mut self) -> Result<u32, HostError> {
         // `time` needs no capability (SPEC.md §11): always allowed.
-        Ok(self.timers.set_frame(Instant::now()))
+        let now = self.instant_now();
+        Ok(self.timers.set_frame(now))
     }
 
     fn timezone_offset(&mut self, ms: i64) -> i32 {
@@ -745,7 +759,10 @@ impl bindings::plinth::app::files::Host for HostState {
 /// `PLINTH_ENGINE=wasmi` on desktop, for tests). `Runner::new` reads
 /// `PLINTH_ENGINE` once and keeps the engine for its own lifetime.
 enum Backend {
-    Wasmtime { engine: Engine, stop_ticker: Arc<AtomicBool> },
+    /// `last`: the last component that `load` compiled, with a hash of its
+    /// bytes. A host that loads the same app again (`plinth test` makes a
+    /// new instance for each test) does not compile it again.
+    Wasmtime { engine: Engine, stop_ticker: Arc<AtomicBool>, last: std::sync::Mutex<Option<(u64, usize, Component)>> },
     #[cfg(feature = "wasmi")]
     Wasmi { engine: wasmi::Engine },
 }
@@ -786,7 +803,7 @@ impl Runner {
                 }
             }
         })?;
-        Ok(Self { backend: Backend::Wasmtime { engine, stop_ticker } })
+        Ok(Self { backend: Backend::Wasmtime { engine, stop_ticker, last: std::sync::Mutex::new(None) } })
     }
 
     /// Compiles a component and checks its imports. Grants every capability
@@ -825,11 +842,25 @@ impl Runner {
         hub: Option<Box<dyn HubBackend>>,
     ) -> Result<Guest> {
         match &self.backend {
-            Backend::Wasmtime { engine, .. } => {
-                let component = Component::new(engine, bytes)
-                    .map_err(anyhow::Error::from)
-                    .context("the artifact is not a valid component")?;
-                check_imports(engine, &component)?;
+            Backend::Wasmtime { engine, last, .. } => {
+                let hash = {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    bytes.hash(&mut h);
+                    h.finish()
+                };
+                let cached = last.lock().unwrap().as_ref().filter(|(h, len, _)| *h == hash && *len == bytes.len()).map(|(_, _, c)| c.clone());
+                let component = match cached {
+                    Some(c) => c,
+                    None => {
+                        let c = Component::new(engine, bytes)
+                            .map_err(anyhow::Error::from)
+                            .context("the artifact is not a valid component")?;
+                        check_imports(engine, &c)?;
+                        *last.lock().unwrap() = Some((hash, bytes.len(), c.clone()));
+                        c
+                    }
+                };
 
                 let mut linker = Linker::<HostState>::new(engine);
                 App::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
@@ -855,6 +886,7 @@ impl Runner {
                     sql: None,
                     locale: None,
                     locale_fixed: false,
+                    test_clock: None,
                 };
                 let mut store = Store::new(engine, state);
                 store.limiter(|s| &mut s.limits);
@@ -1053,6 +1085,31 @@ impl Guest {
         self.data_mut().notify = notify;
     }
 
+    /// Starts a test clock (`plinth test`, docs/TESTING.md): from now on,
+    /// `time.now` is `epoch_ms`, `monotonic-now` stops, and timers are due
+    /// only when `advance_test_clock` moves the clock on. Call it before
+    /// `init`. Returns the instant of the clock.
+    pub fn use_test_clock(&mut self, epoch_ms: u64) -> Instant {
+        let data = self.data_mut();
+        let now = Instant::now();
+        data.monotonic_origin = now;
+        data.test_clock = Some((now, epoch_ms));
+        now
+    }
+
+    /// Moves the test clock to `to` (not back). Fires nothing: call
+    /// `fire_due_timers` with the result. Returns the instant of the clock,
+    /// or `None` without a test clock.
+    pub fn advance_test_clock(&mut self, to: Instant) -> Option<Instant> {
+        let data = self.data_mut();
+        let (now, epoch) = data.test_clock?;
+        if to > now {
+            let ms = to.duration_since(now).as_millis() as u64;
+            data.test_clock = Some((to, epoch + ms));
+        }
+        data.test_clock.map(|(n, _)| n)
+    }
+
     /// The soonest time a timer is due, if any is pending. The desktop
     /// host sleeps until this instant (via `gpui`'s executor timers,
     /// SPEC.md §9.4), then calls `fire_due_timers`.
@@ -1108,6 +1165,14 @@ impl Guest {
     /// way it polls timers; a test reads it to simulate the host answering.
     pub fn pending_dialogs(&self) -> &[PendingDialog] {
         &self.data().dialogs
+    }
+
+    /// The number of open requests that the host answers by itself (not
+    /// dialogs, which wait for the user): `net`, `files`, `notify` and
+    /// the others. `plinth test` waits for them in `settle`.
+    pub fn open_host_requests(&self) -> usize {
+        let data = self.data();
+        data.requests.len().saturating_sub(data.dialogs.len())
     }
 
     /// Drains the `net.fetch` requests a worker thread has finished since

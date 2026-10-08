@@ -146,7 +146,7 @@ Production apps run code from many publishers. This area must be complete before
 |---|---|---|---|---|
 | T1 | `plinth new`, `dev` (hot reload), `check`, `build`, `run`, `native` | Preview | Done | SPEC §13 |
 | T2 | VS Code extension: diagnostics, completion | 1.0 | Partial | `editors/vscode`. Next: publish it to the Marketplace. |
-| T3 | A test kit for app authors: render a screen, send events, check the tree | Beta | Open | The internal harness in `tests/apps.rs` can be the base. |
+| T3 | A test kit for app authors: render a screen, send events, check the tree | Beta | Partial | Step 1 done (2026-10-08), design and API in `docs/TESTING.md`: tests in Plinth TS (`app/**/*.test.tsx`, module `plinth:test`), run by `plinth test [dir] [--filter]` (and `npm test` in a new project). `render(<X />)`, `renderApp()`, queries by label, title, text and role (an ambiguous match fails and lists the matches), `press`, `type`, `submit`, `toggle`, `select`, `moveUp`/`moveDown`, `showScreen`, `tick` and `settle` on a test clock, `expect` with query and value matchers and `not`. Each test runs in a new instance with a new kv store and private space. The test code runs in the guest and talks to the runner over `dev.log` and UI events: no core function and no WIT item for tests. A failure gives the line (the compiler fills `__at`) and the screen as text. Tests: `crates/plinth-cli/tests/plinth_test.rs`; `examples/todo` (8 tests) and `examples/counter`; the `plinth new` template; `ci-local.sh full` runs `plinth test` on the examples with tests. Next (TESTING §12): the same tests on wasmi and the web host, dialog answers, fake network answers, pointer and key steps, `beforeEach`/`describe`, deep `toEqual`. |
 | T4 | A debugger or an inspector: the UI tree, signals, host calls | Beta | Open | |
 | T5 | A profiler view: frame times, GC, memory (`PLINTH_TRACE_RENDER` as a start) | 1.0 | Open | |
 | T6 | `plinth publish` to a registry | Beta | Partial | SPEC §12, `plinth hub` |
@@ -221,7 +221,7 @@ Count on 2026-10-08, by gate and status. Run `bash scripts/production-status.sh`
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
 | Preview | 26 | 0 | 0 |
-| Beta | 24 | 14 | 14 |
+| Beta | 24 | 15 | 13 |
 | 1.0 | 1 | 2 | 20 |
 | Later (after 1.0) | 0 | 0 | 1 |
 

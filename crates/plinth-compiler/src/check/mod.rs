@@ -332,6 +332,17 @@ pub struct Checker<'d> {
     /// The `matchAll` helper, then the `replace`-with-a-function helpers
     /// for a callback of 0 to 3 parameters (`check/regexps.rs`).
     regex_helpers: [Option<FuncId>; 5],
+    /// Set in a test build (docs/TESTING.md).
+    test: Option<TestCx>,
+}
+
+/// The test build part of the checker (docs/TESTING.md).
+struct TestCx {
+    /// The file of `plinth:test`, if a test file imports it.
+    prelude_file: Option<FileId>,
+    /// The module index of `plinth:test`.
+    prelude_module: Option<usize>,
+    sources: crate::diag::Sources,
 }
 
 /// The built-in `Error` class (SPEC.md §5.6). `throw` takes an instance of
@@ -380,6 +391,34 @@ pub fn check(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>, ca
 /// Like [`check`], with the asset paths under `assets/` (SPEC.md §10.1),
 /// for checking `<Image src>`.
 pub fn check_ex(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>, capabilities: &[String], assets: &[String]) -> Program {
+    check_full(modules, main, diags, capabilities, assets, None)
+}
+
+/// What a test build (docs/TESTING.md) adds to the checker.
+pub struct TestBuild {
+    /// The module index of `plinth:test`, if a test file imports it.
+    pub prelude: Option<usize>,
+    /// The sources, for the places (`file:line`) that the checker gives to
+    /// the `__at` parameters of `plinth:test`.
+    pub sources: crate::diag::Sources,
+}
+
+/// The names of the screens that a test build adds after the app screens
+/// (docs/TESTING.md): the view screen of `render`, then the harness screen
+/// that the test runner sends its answers to.
+pub const TEST_SCREENS: [(&str, &str); 2] = [("__plinth_test_view", "__View"), ("__plinth_test_harness", "__Harness")];
+
+/// Like [`check_ex`]; `test` makes a test build (docs/TESTING.md).
+pub fn check_full(
+    modules: &[ModuleSrc],
+    main: usize,
+    diags: &mut Vec<Diagnostic>,
+    capabilities: &[String],
+    assets: &[String],
+    test: Option<TestBuild>,
+) -> Program {
+    let test_prelude = test.as_ref().and_then(|t| t.prelude);
+    let prelude_file = test_prelude.map(|m| modules[m].file);
     let mut c = Checker {
         prog: Program::default(),
         diags,
@@ -415,11 +454,22 @@ pub fn check_ex(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>,
         promise_alls: Vec::new(),
         regex_globals: HashMap::new(),
         regex_helpers: [None; 5],
+        test: test.map(|t| TestCx { prelude_file, prelude_module: test_prelude, sources: t.sources }),
     };
     c.prog.module_count = modules.len() as u32;
     c.declare_error_class(modules[main].file);
     for (i, m) in modules.iter().enumerate() {
         c.check_module(i, m, i == main);
+    }
+    // A test build: the screens of `plinth:test` go after the app screens.
+    if let Some(m) = test_prelude
+        && c.app_seen
+    {
+        for (name, func) in TEST_SCREENS {
+            if let Some(Binding::Func(fid)) = c.exports[m].get(func).cloned() {
+                c.prog.screens.push(Screen { name: name.into(), icon: None, component: fid, primary: false });
+            }
+        }
     }
     if !c.app_seen {
         let file = modules[main].file;

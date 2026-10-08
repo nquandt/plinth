@@ -140,7 +140,7 @@ impl Diagnostic {
 }
 
 /// The source files of one compilation.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Sources {
     files: Vec<(String, String)>,
 }

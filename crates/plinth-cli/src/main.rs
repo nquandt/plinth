@@ -12,6 +12,7 @@ mod dev_tools;
 mod feed_cmd;
 mod optimize;
 mod registry_cmd;
+mod test_cmd;
 mod web_export;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -27,6 +28,8 @@ usage:
   plinth build [dir] [--out <file>] [--sign] [--release]
                                    make dist/<name>.plnt (--sign adds signature.json;
                                    --release makes the app code smaller with wasm-opt)
+  plinth test [dir] [--filter <text>]
+                                   run the tests in app/**/*.test.ts(x) (docs/TESTING.md)
   plinth build [dir] --target web [--single-file] [--out <path>] [--release]
                                    make dist/web/ (index.html, plinth.js, the core,
                                    the package) for any static web host, or
@@ -92,6 +95,7 @@ const TYPINGS: &[(&str, &str)] = &[
     ("dialog.d.ts", include_str!("../../../std/dialog.d.ts")),
     ("net.d.ts", include_str!("../../../std/net.d.ts")),
     ("files.d.ts", include_str!("../../../std/files.d.ts")),
+    ("test.d.ts", include_str!("../../../std/test.d.ts")),
 ];
 
 fn main() -> ExitCode {
@@ -144,6 +148,12 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
                 Some(t) => bail!("unknown target `{t}`; use `--target web`, or `plinth native` for an executable"),
             };
             Ok(if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+        }
+        Some("test") => {
+            let filter = args.iter().position(|a| *a == "--filter").and_then(|i| args.get(i + 1)).copied();
+            let project = positional[1..].iter().find(|p| Some(**p) != filter).map(PathBuf::from);
+            let project = project.unwrap_or_else(|| PathBuf::from("."));
+            Ok(if test_cmd::run(&project, filter)? { ExitCode::SUCCESS } else { ExitCode::FAILURE })
         }
         Some("sign") => {
             let file = positional.get(1).context("usage: plinth sign <file.plnt>")?;
@@ -273,6 +283,7 @@ fn new_project(dir: &Path) -> Result<()> {
     write("app/model.ts", include_str!("../templates/hello/model.ts"))?;
     write("app/tasks.tsx", include_str!("../templates/hello/tasks.tsx"))?;
     write("app/detail.tsx", include_str!("../templates/hello/detail.tsx"))?;
+    write("app/tasks.test.tsx", include_str!("../templates/hello/tasks.test.tsx"))?;
     write("tsconfig.json", include_str!("../templates/tsconfig.json"))?;
     write(".gitignore", include_str!("../templates/gitignore"))?;
     write("README.md", include_str!("../templates/README.md"))?;
@@ -285,7 +296,7 @@ fn new_project(dir: &Path) -> Result<()> {
     write(
         "package.json",
         &format!(
-            "{{\n  \"name\": \"{slug}\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"scripts\": {{\n    \"dev\": \"plinth dev\",\n    \"check\": \"plinth check\",\n    \"build\": \"plinth build\",\n    \"build:web\": \"plinth build --target web\"\n  }},\n  \"devDependencies\": {{\n    \"@plinth/cli\": \"^{VERSION}\"\n  }}\n}}\n"
+            "{{\n  \"name\": \"{slug}\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"scripts\": {{\n    \"dev\": \"plinth dev\",\n    \"check\": \"plinth check\",\n    \"test\": \"plinth test\",\n    \"build\": \"plinth build\",\n    \"build:web\": \"plinth build --target web\"\n  }},\n  \"devDependencies\": {{\n    \"@plinth/cli\": \"^{VERSION}\"\n  }}\n}}\n"
         ),
     )?;
     write_typings(dir)?;

@@ -1173,3 +1173,7 @@ owner's PC).
 
 
 `core = "patch"` must mean "only patches of the minor version that the app was built with" (SPEC §10.5, `docs/getting-started.md` §7.1). `cores::select_patch` uses `need.1`, the lowest minor that the app *needs* (from its imports), not the minor that built it, and the manifest does not record the build core for this policy. So a small app that needs core 1.0 but was built with core 1.12 does not link on a host that has only 1.12: `plinth registry build` fails with "the app needs core 1.0 (policy `patch`)". Fix: record the build core version in the manifest for `patch` (as `core-digest` does for `pinned`; an optional field, `docs/COMPATIBILITY.md` §4), select on it, and fall back to `need` for a manifest without it. Add a test with an app that needs 1.0 and was built with 1.12. `docs/guides/updates.md` has a caution until the fix.
+
+## `===` on nullable values (found by the test kit, 2026-10-08, open)
+
+`===` between two values of type `string | null` (or `number | null`, `boolean | null`) compares the boxed references, not the values. `pick("x" + "y") === pick("xy")` is `false` when `pick` returns `string | null`; the same for `const a: number | null = 1 + 1; a === 2`-like cases with two nullable operands. JavaScript gives `true`. The workaround (used in `plinth:test`, `crates/plinth-compiler/src/testkit.tsx`): check for `null` first, then compare the narrowed values. Fix: for two `T | null` operands, the checker must emit "both null, or neither null and the `T` values are equal" (`EqKind` of `T`). Add cases to the language suite.

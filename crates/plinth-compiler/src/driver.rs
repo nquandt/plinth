@@ -11,6 +11,19 @@ use std::path::{Path, PathBuf};
 /// The entry module of every app.
 pub const ENTRY: &str = "app/main.tsx";
 
+/// The import name of the test kit (docs/TESTING.md). Only test files of a
+/// test build can import it.
+pub const TEST_MODULE: &str = "plinth:test";
+
+/// The source of `plinth:test`: Plinth TS that the compiler adds to a test
+/// build (docs/TESTING.md).
+pub const TEST_PRELUDE: &str = include_str!("testkit.tsx");
+
+/// True for a test file: `*.test.ts` or `*.test.tsx` (docs/TESTING.md).
+pub fn is_test_file(path: &str) -> bool {
+    path.ends_with(".test.ts") || path.ends_with(".test.tsx")
+}
+
 /// Where the compiler reads source files. Paths are relative to the project
 /// root and use `/`.
 pub trait FileSystem {
@@ -109,10 +122,18 @@ pub fn frontend(fs: &dyn FileSystem) -> Frontend {
 /// errors. `capabilities` are the capability names from `plinth.toml`
 /// (SPEC.md §11), used to check host API calls.
 pub fn frontend_with_capabilities(fs: &dyn FileSystem, capabilities: &[String]) -> Frontend {
-    crate::with_stack(|| frontend_impl(fs, capabilities))
+    crate::with_stack(|| frontend_impl(fs, capabilities, None))
 }
 
-fn frontend_impl(fs: &dyn FileSystem, capabilities: &[String]) -> Frontend {
+/// Parses and checks a test build (docs/TESTING.md): the app, the test
+/// files `tests` (paths such as `app/tasks.test.tsx`) and `plinth:test`.
+/// The program has two more screens: the view screen of `render` and the
+/// harness screen of the test runner.
+pub fn frontend_tests(fs: &dyn FileSystem, capabilities: &[String], tests: &[String]) -> Frontend {
+    crate::with_stack(|| frontend_impl(fs, capabilities, Some(tests)))
+}
+
+fn frontend_impl(fs: &dyn FileSystem, capabilities: &[String], tests: Option<&[String]>) -> Frontend {
     let mut sources = Sources::default();
     let mut diags = Vec::new();
     let Some(text) = fs.read(ENTRY) else {
@@ -127,10 +148,25 @@ fn frontend_impl(fs: &dyn FileSystem, capabilities: &[String]) -> Frontend {
     // Load all modules, breadth first.
     let mut loaded: Vec<Loaded> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
-    let mut queue = vec![(ENTRY.to_owned(), text)];
+    // `pop` takes the last entry: the app entry loads first (index 0), then
+    // the test files, which are roots of their own.
+    let mut queue = Vec::new();
+    let mut test_files = Vec::new();
+    for t in tests.unwrap_or_default().iter().rev() {
+        match fs.read(t) {
+            Some(text) => queue.push((t.clone(), text)),
+            None => {
+                let file = sources.add(t.clone(), String::new());
+                diags.push(Diagnostic::error(code::MODULE_NOT_FOUND, Span::new(file, 0, 0), format!("cannot read the test file `{t}`")));
+            }
+        }
+        test_files.push(t.clone());
+    }
+    queue.push((ENTRY.to_owned(), text));
+    let test_build = tests.is_some();
     while let Some((path, text)) = queue.pop() {
         let file = sources.add(path.clone(), text);
-        let is_tsx = path.ends_with(".tsx");
+        let is_tsx = path.ends_with(".tsx") || path == TEST_MODULE;
         let ast = crate::parse::parse(file, sources.text(file), is_tsx, &mut diags);
         index.insert(path.clone(), loaded.len());
         loaded.push(Loaded { path, file, ast, imports: Vec::new(), deps: Vec::new() });
@@ -142,7 +178,12 @@ fn frontend_impl(fs: &dyn FileSystem, capabilities: &[String]) -> Frontend {
             .filter_map(|i| if let Item::Import(imp) = i { Some((imp.source.clone(), imp.source_span)) } else { None })
             .collect();
         for (spec, span) in imports {
-            let target = match resolve(fs, &loaded[me].path, &spec) {
+            let resolved = if spec == TEST_MODULE {
+                test_module(&loaded[me].path, test_build)
+            } else {
+                resolve(fs, &loaded[me].path, &spec)
+            };
+            let target = match resolved {
                 Ok(Target::Std(m)) => Some(ModRef::Std(m)),
                 Ok(Target::File(p, text)) => {
                     let idx = match index.get(&p) {
@@ -204,6 +245,14 @@ fn frontend_impl(fs: &dyn FileSystem, capabilities: &[String]) -> Frontend {
         order.push(i);
     }
     visit(0, &loaded, &mut state, &mut order, &mut diags);
+    // The test files of a test build: roots that the app does not import.
+    for t in &test_files {
+        if let Some(&i) = index.get(t)
+            && state[i] == 0
+        {
+            visit(i, &loaded, &mut state, &mut order, &mut diags);
+        }
+    }
 
     let has_syntax_errors = diags.iter().any(|d| d.severity == Severity::Error);
     if has_syntax_errors {
@@ -233,7 +282,11 @@ fn frontend_impl(fs: &dyn FileSystem, capabilities: &[String]) -> Frontend {
         .collect();
     let main = new_index[0];
     let assets = fs.list_assets();
-    let program = check::check_ex(&modules, main, &mut diags, capabilities, &assets);
+    let test = test_build.then(|| check::TestBuild {
+        prelude: index.get(TEST_MODULE).map(|&i| new_index[i]),
+        sources: sources.clone(),
+    });
+    let program = check::check_full(&modules, main, &mut diags, capabilities, &assets, test);
     let ok = !diags.iter().any(|d| d.severity == Severity::Error);
     Frontend { sources, diags, program: ok.then_some(program) }
 }
@@ -245,6 +298,18 @@ thread_local! {
 enum Target {
     Std(StdModule),
     File(String, String),
+}
+
+/// Resolves `plinth:test` (docs/TESTING.md): the test kit, for a test file
+/// of a test build only.
+fn test_module(from: &str, test_build: bool) -> Result<Target, DiagFn> {
+    if test_build && is_test_file(from) {
+        return Ok(Target::File(TEST_MODULE.to_owned(), TEST_PRELUDE.to_owned()));
+    }
+    Err(Box::new(|span| {
+        Diagnostic::error(code::UNKNOWN_STD_MODULE, span, "`plinth:test` is for test files only")
+            .help("import it in a `*.test.ts` or `*.test.tsx` file, and run the tests with `plinth test`")
+    }))
 }
 
 type DiagFn = Box<dyn Fn(Span) -> Diagnostic>;

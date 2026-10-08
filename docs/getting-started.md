@@ -85,6 +85,7 @@ plinth dev                 # a window with hot reload
 plinth check                # type-check and run the closed-world rules, no build
 plinth check --json          # the same, as machine-readable output
 plinth check --watch          # type-check again on every save
+plinth test                  # run the tests in app/**/*.test.tsx (section 9)
 plinth build                 # writes dist/<name>.plnt
 plinth build --release        # the same, with smaller app code (wasm-opt); use it to publish
 plinth run dist/<name>.plnt    # run the built package in the local host
@@ -342,7 +343,63 @@ your site. For an app that declares `store.sql`, the folder also has
 stays in the browser storage (OPFS) of your site. A `plinth:net` request needs CORS on the target server. See
 SPEC.md §10.3.
 
-## 9. Next steps
+## 9. Test your app
+
+Put tests next to your code, in files that end in `.test.tsx` (or
+`.test.ts`). A test is Plinth TS that uses `plinth:test`: it shows a
+screen, does what a user does, and checks the screen.
+
+```tsx
+// app/tasks.test.tsx
+import { test, render, renderApp, expect } from "plinth:test";
+import Tasks from "./tasks";
+
+test("adds a task", async () => {
+  const s = await render(<Tasks />);
+  await s.type("Title", "Buy milk");      // the text field with this label
+  await s.press("Add task");              // the button with this label
+  expect(s.row("Buy milk")).toExist();    // a list row with this title
+});
+
+test("starts with no tasks", async () => {
+  const s = await renderApp();            // the app as it starts
+  expect(s.byText("0 of 0 left")).toExist();
+});
+```
+
+Run them:
+
+```sh
+plinth test                  # or: npm test
+plinth test --filter "adds"  # only the tests whose names contain "adds"
+```
+
+```
+  ok  adds a task (3 ms)
+  ok  starts with no tasks (2 ms)
+2 passed, 0 failed
+```
+
+Rules:
+
+- Write `await` before each step (`render`, `press`, `type`, `toggle`,
+  `tick`, ...). Each step goes through the same event path as a user
+  action, so your signals, effects and lists update as in the app.
+- A query finds a node by its label, title or text (`s.get("Save")`), by
+  its role (`s.byRole("button", "Save")`), or under another node
+  (`s.row("Buy milk").get("Delete")`). When a step finds more than one
+  node, the test fails and lists them.
+- Each test starts a new app: the module state, the `kv` store and the
+  files are new. Timers run only when the test moves the clock:
+  `await tick(1000)` runs a `setTimeout(f, 1000)`.
+- A failure gives the expectation, the line in the test file, and the
+  screen as text.
+- Test files never go into the package: `plinth build` reads only what
+  `app/main.tsx` imports.
+
+[TESTING.md](TESTING.md) has the full API and how it works.
+
+## 10. Next steps
 
 The [guides](guides/README.md) tell you how to do one task each: save
 data, use the network, ship updates, publish to a registry, make your app
