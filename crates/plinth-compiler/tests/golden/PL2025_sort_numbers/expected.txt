@@ -1,0 +1,3 @@
+app/main.tsx(2,52): warning PL2025: sort() without a comparator compares numbers as strings; pass (a, b) => a - b
+  function Home() { const xs: number[] = [10, 9, 1]; xs.sort(); return <Screen title="Home" />; }
+                                                     ^^^^^^^^^

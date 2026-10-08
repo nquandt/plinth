@@ -78,3 +78,32 @@ fn golden_diagnostics() {
         panic!("{} of {} golden case(s) failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
     }
 }
+
+/// Every diagnostic code in `src/diag.rs` has at least one golden case
+/// (`tests/golden/<code>_<name>/`), so each code has an example and its
+/// text cannot change without a review (`docs/language.md` "Diagnostics").
+/// A code that no check emits is in `RESERVED`.
+#[test]
+fn every_code_has_a_golden_case() {
+    const RESERVED: &[&str] = &["PL3011"];
+    let diag = std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/diag.rs")).unwrap();
+    let codes: Vec<&str> = diag
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("pub const "))
+        .filter_map(|l| l.split('"').nth(1))
+        .filter(|c| c.starts_with("PL"))
+        .collect();
+    assert!(codes.len() > 50, "found only {} codes in src/diag.rs", codes.len());
+    let cases: Vec<String> = std::fs::read_dir(golden_root())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    let missing: Vec<&str> = codes
+        .iter()
+        .copied()
+        .filter(|c| !RESERVED.contains(c))
+        .filter(|c| !cases.iter().any(|n| n.starts_with(&format!("{c}_"))))
+        .collect();
+    assert!(missing.is_empty(), "no golden case for {missing:?}: add tests/golden/<code>_<name>/");
+}
