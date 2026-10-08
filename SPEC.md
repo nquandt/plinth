@@ -423,7 +423,13 @@ UI API 1.2 adds the controls `Checkbox`, `TextArea`, `Slider`, `NumberField`, `P
 
 - The runtime supplies the type scale, color tokens, elevation, corner radii, and motion, in light and dark.
 - Each app chooses one **accent** from a fixed named palette. No other theming exists.
-- The runtime respects the OS settings for dark mode, contrast, reduced motion, and text size.
+- The runtime follows the OS settings at start and when they change, with no restart (`docs/ui.md` "Theme and system settings"):
+  - **Dark mode:** the light or dark theme.
+  - **High contrast:** text at least 7:1 against its background, borders in the text color, a 3 px focus ring. When the OS gives its own colors (Windows high contrast, the web `forced-colors` mode), those colors win.
+  - **Text size:** the type scale grows with the OS text size (100–225 %). Controls grow with their text, and the layout must hold at 200 %.
+  - **Reduced motion:** no host transitions and no caret blink.
+- Apps cannot read these settings. The theme tokens in `Box`, `Span` and `Canvas` follow them, so an app needs no code for them. An app's own `onFrame` animation is the app's responsibility.
+- The desktop host has overrides for tests: `PLINTH_THEME`, `PLINTH_HIGH_CONTRAST`, `PLINTH_TEXT_SCALE` and `PLINTH_REDUCED_MOTION`.
 
 ### 6.6 Versioning
 
