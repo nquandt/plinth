@@ -16,6 +16,7 @@ use std::time::Duration;
 
 pub mod consent;
 pub mod notify;
+pub mod system_settings;
 pub mod updater;
 
 pub use plinth_runner_wasmtime::files::Owner;
@@ -365,6 +366,8 @@ pub fn start_with_policy_and_hub(
 /// before the first `open_app`.
 pub fn init_app(cx: &mut App) {
     plinth_ui::init(cx);
+    // The theme follows the OS settings (SPEC.md §6.5, PRODUCTION U7).
+    system_settings::install(cx);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
     cx.on_window_closed(|cx, _| {

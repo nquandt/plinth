@@ -14,7 +14,7 @@ use gpui::{
     App, AppContext, Bounds, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, Styled,
     StatefulInteractiveElement, Window, WindowBounds, WindowOptions, actions, div, px, size,
 };
-use plinth_ui::Tokens;
+use plinth_ui::{SystemSettings, Tokens};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -101,7 +101,12 @@ impl ConsentView {
 
 impl Render for ConsentView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = Tokens::new(window.appearance(), "teal");
+        // The OS settings (PRODUCTION U7), as in an app window.
+        let settings = cx.try_global::<SystemSettings>().copied().unwrap_or_default();
+        if window.rem_size() != settings.rem_size() {
+            window.set_rem_size(settings.rem_size());
+        }
+        let t = Tokens::themed(window.appearance(), &settings, "teal");
         // A signed package shows its checked publisher name; an unsigned
         // one shows the manifest's claim as unverified (`docs/HUB.md`
         // §6.1, §6.2, phase H1).
@@ -267,6 +272,7 @@ pub fn show(app_name: &str, publisher: &str, signed: Option<&str>, capabilities:
 
     gpui_platform::application().run(move |cx: &mut App| {
         plinth_ui::init(cx);
+        crate::system_settings::install(cx);
         cx.on_action(|_: &ConsentQuit, cx| cx.quit());
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {

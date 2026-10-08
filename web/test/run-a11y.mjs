@@ -350,6 +350,7 @@ async function main() {
       ["drag and drop, Alt+Up/Down, a form in a Dialog (dnd-fixture)", checkDragDrop],
       ["drag and drop in the sandboxed app frame (dnd-fixture as a web export)", checkDragDropFrame],
       ["host banners: an uncaught error, then a stopped app (stop-fixture)", checkStopBanner],
+      ["system settings: dark, high contrast, forced colors, reduced motion, text size (todo)", checkSystemSettings],
     ].filter(([name]) => !only || name.includes(only))) {
       console.log(`== ${name} ==`);
       try {
@@ -1224,6 +1225,103 @@ async function checkNotify(cdpPort) {
     await page.close();
     server.close();
     await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * The theme follows the system settings (SPEC.md §6.5, PRODUCTION U7): dark
+ * mode, high contrast (`prefers-contrast: more`, with text at least 7:1),
+ * forced colors (the browser colors win, controls keep a border), reduced
+ * motion (no transitions) and a larger default font size (all type is in
+ * rem). DevTools `Emulation.setEmulatedMedia` gives each setting, so the
+ * result does not depend on the settings of this machine. axe has no
+ * serious violation in dark and in high contrast.
+ */
+async function checkSystemSettings(cdpPort, base) {
+  const page = await openApp(cdpPort, base, "todo", `document.querySelector("#app .pl-section .pl-button")`);
+  const media = (features) => page.send("Emulation.setEmulatedMedia", { features });
+  const DEFAULTS = [
+    { name: "prefers-color-scheme", value: "light" },
+    { name: "prefers-contrast", value: "no-preference" },
+    { name: "forced-colors", value: "none" },
+    { name: "prefers-reduced-motion", value: "no-preference" },
+  ];
+  const withMedia = (over) => DEFAULTS.map((d) => over.find((o) => o.name === d.name) ?? d);
+  // The colors of the page, and the WCAG contrast of the text and the muted
+  // text on the background.
+  const look = () => page.eval(`(() => {
+    const rgb = (c) => (c.match(/[0-9.]+/g) ?? []).slice(0, 3).map(Number);
+    const lum = (c) => { const [r, g, b] = rgb(c).map((v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+    const body = getComputedStyle(document.body);
+    const section = getComputedStyle(document.querySelector("#app .pl-section"));
+    const muted = getComputedStyle(document.querySelector("#app .pl-section-title, #app .pl-field-label"));
+    const button = document.querySelector("#app .pl-button, #app .pl-action");
+    const b = getComputedStyle(button);
+    const r = button.getBoundingClientRect();
+    return { bg: body.backgroundColor, text: body.color, border: section.borderTopColor, borderWidth: section.borderTopWidth,
+      textRatio: ratio(body.color, body.backgroundColor), mutedRatio: ratio(muted.color, body.backgroundColor),
+      button: { border: b.borderTopStyle, borderWidth: parseFloat(b.borderTopWidth), w: r.width, h: r.height } };
+  })()`);
+  try {
+    const out = [];
+    // Dark and light.
+    await media(withMedia([{ name: "prefers-color-scheme", value: "light" }]));
+    const light = await look();
+    if (light.bg !== "rgb(245, 246, 248)") throw new Error(`light: the background is ${light.bg}`);
+    await media(withMedia([{ name: "prefers-color-scheme", value: "dark" }]));
+    const dark = await look();
+    if (dark.bg !== "rgb(11, 12, 15)") throw new Error(`dark: the background is ${dark.bg}`);
+    const axeSerious = async (name) => {
+      const v = (await axeRun(page)).filter((x) => x.impact === "serious" || x.impact === "critical");
+      if (v.length) throw new Error(`${name}: axe ${v.map((x) => `${x.id} (${x.nodes.map((n) => n.target).join(" ")})`).join(", ")}`);
+    };
+    await axeSerious("dark");
+    out.push("dark and light follow prefers-color-scheme");
+    // High contrast, dark and light: 7:1, borders in the text color, 2 px.
+    for (const scheme of ["dark", "light"]) {
+      await media(withMedia([{ name: "prefers-color-scheme", value: scheme }, { name: "prefers-contrast", value: "more" }]));
+      const hc = await look();
+      const want = scheme === "dark" ? ["rgb(0, 0, 0)", "rgb(255, 255, 255)"] : ["rgb(255, 255, 255)", "rgb(0, 0, 0)"];
+      if (hc.bg !== want[0] || hc.border !== want[1] || hc.borderWidth !== "2px") throw new Error(`high contrast ${scheme}: ${JSON.stringify(hc)}`);
+      if (hc.textRatio < 7 || hc.mutedRatio < 7) throw new Error(`high contrast ${scheme}: text ${hc.textRatio.toFixed(2)}:1, muted ${hc.mutedRatio.toFixed(2)}:1`);
+      const ring = await page.eval(`(() => { const b = document.querySelector("#app .pl-input"); b.focus({ focusVisible: true }); const w = getComputedStyle(b).outlineWidth; b.blur(); return w; })()`);
+      if (ring !== "3px") throw new Error(`high contrast ${scheme}: the focus ring is ${ring}`);
+      await axeSerious(`high contrast ${scheme}`);
+    }
+    out.push("high contrast 7:1");
+    // Forced colors: the system colors win; buttons keep a visible border.
+    await media(withMedia([{ name: "forced-colors", value: "active" }]));
+    const forced = await look();
+    const canvas = await page.eval(`(() => { const d = document.createElement("div"); d.style.background = "Canvas"; d.style.color = "CanvasText"; document.body.append(d); const s = getComputedStyle(d); const v = [s.backgroundColor, s.color]; d.remove(); return v; })()`);
+    if (forced.bg !== canvas[0] || forced.text !== canvas[1]) throw new Error(`forced colors: the page is ${forced.bg}/${forced.text}, the system colors ${canvas}`);
+    if (forced.button.border !== "solid" || forced.button.borderWidth < 1 || forced.button.w < 1 || forced.button.h < 1) throw new Error(`forced colors: the button is not visible: ${JSON.stringify(forced.button)}`);
+    out.push("forced colors");
+    // Reduced motion: no transitions.
+    const probe = `(() => { let d = document.getElementById("pl-motion-probe"); if (!d) { d = document.createElement("div"); d.id = "pl-motion-probe"; d.style.transition = "opacity 1s"; document.body.append(d); } return getComputedStyle(d).transitionDuration; })()`;
+    await media(withMedia([]));
+    if ((await page.eval(probe)) !== "1s") throw new Error(`no preference: the transition is ${await page.eval(probe)}`);
+    await media(withMedia([{ name: "prefers-reduced-motion", value: "reduce" }]));
+    if ((await page.eval(probe)) !== "0s") throw new Error(`reduced motion: the transition is ${await page.eval(probe)}`);
+    out.push("reduced motion");
+    await media(withMedia([]));
+    // Text size: a default font size of 32 px (200 %) doubles the type.
+    const sizes = `(() => ({ title: parseFloat(getComputedStyle(document.querySelector("#app .pl-title")).fontSize),
+      button: parseFloat(getComputedStyle(document.querySelector("#app .pl-button, #app .pl-action")).fontSize),
+      overflow: document.documentElement.scrollWidth > innerWidth + 1 }))()`;
+    const normal = await page.eval(sizes);
+    await page.send("Page.setFontSizes", { fontSizes: { standard: 32 } });
+    await page.eval(`location.reload()`);
+    await page.waitFor(`document.querySelector("#app .pl-section") ? true : null`, 30000);
+    const large = await page.eval(sizes);
+    if (Math.abs(large.title / normal.title - 2) > 0.05 || Math.abs(large.button / normal.button - 2) > 0.05) {
+      throw new Error(`text size 200 %: ${JSON.stringify({ normal, large })}`);
+    }
+    if (large.overflow) throw new Error("text size 200 %: the page scrolls sideways");
+    out.push(`text ${normal.title}px -> ${large.title}px`);
+    return out.join(", ");
+  } finally {
+    await page.close();
   }
 }
 

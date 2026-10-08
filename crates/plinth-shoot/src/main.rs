@@ -43,6 +43,10 @@ fn main() -> Result<()> {
             .ok()
     });
     cx.update(plinth_ui::init);
+    // The shots use the default theme; `PLINTH_THEME`, `PLINTH_HIGH_CONTRAST`,
+    // `PLINTH_TEXT_SCALE` and `PLINTH_REDUCED_MOTION` force a setting. The
+    // OS settings of this machine never change a shot.
+    cx.update(|cx| cx.set_global(plinth_ui::SystemSettings::default().with_env_overrides()));
 
     let mut count = 0;
     for (class, w, h) in SIZES {

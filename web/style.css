@@ -49,6 +49,67 @@
   }
 }
 
+/* High contrast (PRODUCTION U7, `prefers-contrast: more`): text and its
+   background at least 7:1, borders in the text color, no faint muted text
+   and a 3 px focus ring, as the desktop high-contrast tokens
+   (crates/plinth-ui/src/theme.rs). Dark first, then light. */
+@media (prefers-contrast: more) {
+  :root {
+    --pl-bg: #000000;
+    --pl-surface: #000000;
+    --pl-text: #ffffff;
+    --pl-muted: #e6e6e6;
+    --pl-accent: #a8b8ff;
+    --pl-accent-text: #000000;
+    --pl-danger: #ff9e94;
+    --pl-border: #ffffff;
+    --pl-surface-alt: #141414;
+    --pl-accent-fg: #a8b8ff;
+    --pl-success: #7ee787;
+    --pl-hover: #2a2a2a;
+    --pl-selected: rgb(168 184 255 / 0.25);
+  }
+}
+@media (prefers-contrast: more) and (prefers-color-scheme: light) {
+  :root {
+    --pl-bg: #ffffff;
+    --pl-surface: #ffffff;
+    --pl-text: #000000;
+    --pl-muted: #1f1f1f;
+    --pl-accent: #1f3fa8;
+    --pl-accent-text: #ffffff;
+    --pl-danger: #9b0000;
+    --pl-border: #000000;
+    --pl-surface-alt: #f0f0f0;
+    --pl-accent-fg: #1f3fa8;
+    --pl-success: #0b5d1e;
+    --pl-hover: #e0e0e0;
+    --pl-selected: rgb(31 63 168 / 0.14);
+  }
+}
+/* Reduced motion (PRODUCTION U7, `prefers-reduced-motion: reduce`): no
+   transitions, no animations and no smooth scroll. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Text size: all type is in rem, so the user's default font size in the
+   browser scales it (PRODUCTION U7). Buttons do not inherit the font by
+   default (a fixed 13.33 px in Chromium); give them a rem size too. */
+button,
+select {
+  font-family: inherit;
+  font-size: 0.875rem;
+}
+
 body {
   margin: 0;
   background: var(--pl-bg);
@@ -138,7 +199,7 @@ body {
 
 .pl-button {
   background: var(--pl-accent);
-  color: #fff;
+  color: var(--pl-accent-text);
   border: none;
   border-radius: 6px;
   padding: 8px 14px;
@@ -328,7 +389,7 @@ body {
 .pl-badge {
   display: inline-block;
   background: var(--pl-accent, #3b7);
-  color: white;
+  color: var(--pl-accent-text);
   border-radius: 999px;
   padding: 2px 8px;
   font-size: 0.8rem;
@@ -766,4 +827,67 @@ body {
   padding: 4px 12px;
   cursor: pointer;
   font: inherit;
+}
+
+/* High contrast and forced colors (PRODUCTION U7): last in the file, so
+   that they win over the rules of each control above. */
+@media (prefers-contrast: more) {
+  :focus-visible,
+  .pl-pressable:focus-visible,
+  .pl-scroll:focus-visible {
+    outline-width: 3px;
+  }
+  .pl-row,
+  .pl-section,
+  .pl-input,
+  .pl-select,
+  .pl-textarea,
+  .pl-action,
+  .pl-segmented {
+    border-width: 2px;
+  }
+}
+
+/* Windows high contrast and other forced colors (`forced-colors: active`):
+   the browser colors win. The tokens become system colors, and controls
+   that have no border of their own get one, so that they stay visible
+   when the browser removes their background. */
+@media (forced-colors: active) {
+  :root {
+    --pl-bg: Canvas;
+    --pl-surface: Canvas;
+    --pl-surface-alt: Canvas;
+    --pl-text: CanvasText;
+    --pl-muted: CanvasText;
+    --pl-accent: Highlight;
+    --pl-accent-text: HighlightText;
+    --pl-accent-fg: LinkText;
+    --pl-danger: CanvasText;
+    --pl-success: CanvasText;
+    --pl-border: CanvasText;
+    --pl-hover: Canvas;
+    --pl-selected: Highlight;
+  }
+  .pl-button,
+  .pl-nav-item,
+  .pl-tab,
+  .pl-back,
+  .pl-menu-item,
+  .pl-badge,
+  .pl-host-banner {
+    border: 1px solid ButtonText;
+  }
+  .pl-nav-item:disabled,
+  .pl-tab-selected,
+  .pl-segment:has(.pl-segment-input:checked),
+  .pl-row-selected {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+  :focus-visible,
+  .pl-pressable:focus-visible,
+  .pl-scroll:focus-visible {
+    outline: 3px solid Highlight;
+  }
 }

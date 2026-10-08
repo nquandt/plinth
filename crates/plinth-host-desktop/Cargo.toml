@@ -33,7 +33,9 @@ serde_json.workspace = true
 # `plinth:notify` on Windows (src/notify.rs): WinRT toasts. The same
 # versions as gpui-ce uses, so no new crate comes into the build.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Data_Xml_Dom", "Foundation", "UI_Notifications", "Win32_System_WinRT"] }
+# The system settings (src/system_settings.rs, PRODUCTION U7): high
+# contrast, its colors and "Animation effects".
+windows = { version = "0.62", features = ["Data_Xml_Dom", "Foundation", "UI_Notifications", "Win32_Graphics_Gdi", "Win32_System_WinRT", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging"] }
 windows-registry = "0.6"
 
 [dev-dependencies]

@@ -95,7 +95,9 @@ function pageStorage(name) {
  * dialog only, so they do not change the page.
  */
 function pageCss(styleCss) {
-  const [dark = "", light = ""] = (styleCss.match(/:root\s*\{[^}]*\}/g) ?? []).map((b) => b.replace(/^:root/, ".host-dialog"));
+  // The :root blocks of style.css, in order: dark, light, high contrast
+  // dark and light, forced colors (PRODUCTION U7).
+  const [dark = "", light = "", hcDark = "", hcLight = "", forced = ""] = (styleCss.match(/:root\s*\{[^}]*\}/g) ?? []).map((b) => b.replace(/^:root/, ".host-dialog"));
   return `
 plinth-app { display: block; }
 plinth-app[height="fill"] { height: 100%; }
@@ -104,6 +106,10 @@ plinth-app[height="fill"] > .host-frame { height: 100%; }
 plinth-app > .plinth-app-error { margin: 0; padding: 16px; white-space: pre-wrap; color: #c62828; font-family: ui-monospace, Consolas, monospace; }
 ${dark}
 @media (prefers-color-scheme: light) { ${light} }
+@media (prefers-contrast: more) { ${hcDark} }
+@media (prefers-contrast: more) and (prefers-color-scheme: light) { ${hcLight} }
+@media (forced-colors: active) { ${forced} }
+@media (prefers-reduced-motion: reduce) { .host-dialog, .host-dialog * { transition-duration: 0s !important; animation-duration: 0s !important; } }
 .host-dialog { background: var(--pl-bg); color: var(--pl-text); border: 1px solid var(--pl-border); border-radius: 12px;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.45;
   width: min(480px, calc(100vw - 32px)); box-sizing: border-box; padding: 16px 20px; }

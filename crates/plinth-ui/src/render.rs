@@ -2,12 +2,12 @@
 //!
 //! The runtime owns all layout, spacing and color. Apps only supply the tree.
 
-use crate::theme::{Tokens, WidthClass, icon_glyph, with_alpha};
+use crate::theme::{SystemSettings, Tokens, WidthClass, icon_glyph, with_alpha};
 use crate::tree::{Node, Tree};
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FocusHandle, Focusable, FontWeight, Hsla, Image, ImageFormat,
     DispatchPhase, Hitbox, HitboxBehavior, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
-    Point, Render, SharedString, Stateful, Subscription, Window, anchored, canvas, deferred, div, img, prelude::*, px,
+    Point, Render, SharedString, Stateful, StyleRefinement, Subscription, Window, anchored, canvas, deferred, div, img, prelude::*, px, rems,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -189,21 +189,26 @@ fn point_value(p: Point<Pixels>, bounds: Bounds<Pixels>, scale: f32) -> Value {
 /// by node id (`PlinthRoot::painted_bounds`).
 type PaintedBounds = Rc<std::cell::RefCell<HashMap<NodeId, (Bounds<Pixels>, f32)>>>;
 
-/// The width of the focus ring, in pixels. The web host draws a 2 px
-/// outline in the accent color (`web/style.css`, `:focus-visible`).
-const FOCUS_RING: f32 = 2.0;
-
 /// Adds the runtime's focus ring to an element that takes the keyboard
 /// focus: a ring in the accent color, shown when the focus came from the
-/// keyboard. A ring is a shadow, so it does not change the layout.
-fn focus_ring<E: InteractiveElement>(d: E, accent: Hsla) -> E {
-    d.focus_visible(move |s| s.ring(px(FOCUS_RING)).ring_color(accent))
+/// keyboard. A ring is a shadow, so it does not change the layout. Its
+/// width is a theme token: 2 px, or 3 px in high contrast (PRODUCTION U7);
+/// the web host draws the same outline (`web/style.css`, `:focus-visible`).
+fn focus_ring<E: InteractiveElement>(d: E, t: &Tokens) -> E {
+    d.focus_visible(ring_style(t))
+}
+
+/// The focus ring as a style, for `focus` and `focus_visible`.
+fn ring_style(t: &Tokens) -> impl FnOnce(StyleRefinement) -> StyleRefinement + 'static {
+    let (width, color) = (t.focus_ring, t.accent);
+    move |s| s.ring(px(width)).ring_color(color)
 }
 
 /// The focus ring inside the bounds, for rows that touch the next row
 /// (a ring outside would be under the next row).
-fn inset_focus_ring<E: InteractiveElement>(d: E, accent: Hsla) -> E {
-    d.focus_visible(move |s| s.inset_ring(px(FOCUS_RING)).inset_ring_color(accent))
+fn inset_focus_ring<E: InteractiveElement>(d: E, t: &Tokens) -> E {
+    let (width, color) = (t.focus_ring, t.accent);
+    d.focus_visible(move |s| s.inset_ring(px(width)).inset_ring_color(color))
 }
 
 /// Formats a `Value::Number` the way a `NumberField` shows it: no trailing
@@ -372,6 +377,8 @@ pub struct PlinthRoot {
     /// first), and the window activation observer that sends it.
     active: Option<bool>,
     activation: Option<Subscription>,
+    /// The window appearance observer (the OS light/dark setting).
+    appearance: Option<Subscription>,
     /// The package's assets (SPEC.md §10.1), by path under `assets/`
     /// (without the prefix), for `<Image>`.
     assets: Arc<HashMap<String, Vec<u8>>>,
@@ -455,6 +462,7 @@ impl PlinthRoot {
             pointer_owner: Rc::new(Cell::new(None)),
             active: None,
             activation: None,
+            appearance: None,
             assets,
             date_cursor: HashMap::new(),
             list_states: std::cell::RefCell::new(HashMap::new()),
@@ -494,6 +502,7 @@ impl PlinthRoot {
             pointer_owner: Rc::new(Cell::new(None)),
             active: None,
             activation: None,
+            appearance: None,
             assets: Arc::new(HashMap::new()),
             date_cursor: HashMap::new(),
             list_states: std::cell::RefCell::new(HashMap::new()),
@@ -1004,7 +1013,6 @@ impl PlinthRoot {
         let message = dialog.message.clone();
         let kind = dialog.kind;
         let input_field = dialog.input.clone();
-        let accent = t.accent;
         let input_row = input_field.clone().map(|state| {
             let focus = state.read(cx).focus_handle(cx).tab_stop(true);
             // AccessKit takes no name on the text input itself (gpui-ce), so
@@ -1013,11 +1021,11 @@ impl PlinthRoot {
                 text_input(eid("dlg", dialog.id))
                     .state(state.downgrade())
                     .track_focus(&focus)
-                    .focus(move |s| s.ring(px(FOCUS_RING)).ring_color(accent))
+                    .focus(ring_style(t))
                     .accepts_input(true)
                     .caret_color(t.text)
                     .selection_color(t.selection)
-                    .caret_blink_interval_500ms()
+                    .when(!t.reduced_motion, |d| d.caret_blink_interval_500ms())
                     .w_full()
                     .px_3()
                     .py_2()
@@ -1188,7 +1196,7 @@ where
     E: IntoElement + 'static,
     Stateful<E>: InteractiveElement,
 {
-    activation_keys(focus_ring(d.tab_index(0), t.accent), cx, on_activate)
+    activation_keys(focus_ring(d.tab_index(0), t), cx, on_activate)
 }
 
 /// Enter and Space run `on_activate` (the element is focusable already).
@@ -1241,6 +1249,9 @@ impl Render for PlinthRoot {
             self.activation = Some(cx.observe_window_activation(window, |this, window, cx| {
                 this.send_lifecycle(window.is_window_active(), cx);
             }));
+            // The OS light/dark setting changes the window appearance; draw
+            // again with the new theme, without a restart (PRODUCTION U7).
+            self.appearance = Some(cx.observe_window_appearance(window, |_, _, cx| cx.notify()));
         }
         self.drive_frames(window, cx);
         self.class = WidthClass::from_width(window.viewport_size().width);
@@ -1255,7 +1266,14 @@ impl Render for PlinthRoot {
             window.focus(&h, cx);
         }
         self.sync_modal_focus(window, cx);
-        let t = Tokens::new(window.appearance(), &self.accent);
+        // The OS settings (SPEC.md §6.5, PRODUCTION U7): the host keeps the
+        // `SystemSettings` global up to date; the headless tests have none.
+        let settings = cx.try_global::<SystemSettings>().copied().unwrap_or_default();
+        let rem = settings.rem_size();
+        if window.rem_size() != rem {
+            window.set_rem_size(rem);
+        }
+        let t = Tokens::themed(window.appearance(), &settings, &self.accent);
 
         let content = div()
             .flex_1()
@@ -1567,9 +1585,10 @@ impl PlinthRoot {
 
         let bar = div().id("nav").role(accesskit::Role::Navigation).aria_label("Screens").flex().bg(t.surface).border_color(t.border);
         match self.class {
-            WidthClass::Compact => bar.flex_row().h(px(60.)).border_t_1().children(items).into_any_element(),
-            WidthClass::Regular => bar.flex_col().w(px(84.)).pt_4().gap_2().border_r_1().children(items).into_any_element(),
-            WidthClass::Wide => bar.flex_col().w(px(232.)).p_3().gap_1().border_r_1().children(items).into_any_element(),
+            // In rems: the bars grow with the text size (PRODUCTION U7).
+            WidthClass::Compact => bar.flex_row().min_h(rems(3.75)).border_t_1().children(items).into_any_element(),
+            WidthClass::Regular => bar.flex_col().w(rems(5.25)).pt_4().gap_2().border_r_1().children(items).into_any_element(),
+            WidthClass::Wide => bar.flex_col().w(rems(14.5)).p_3().gap_1().border_r_1().children(items).into_any_element(),
         }
     }
 
@@ -1717,7 +1736,7 @@ impl PlinthRoot {
         cx: &mut Context<Self>,
     ) -> Stateful<gpui::Div> {
         let focus = self.kept_focus(owner, part::TRIGGER, cx).tab_stop(true);
-        activation_keys(focus_ring(d.track_focus(&focus), t.accent), cx, move |this, cx| this.toggle_menu_focus(owner, first, cx))
+        activation_keys(focus_ring(d.track_focus(&focus), t), cx, move |this, cx| this.toggle_menu_focus(owner, first, cx))
     }
 
     /// Opens or closes the menu of `owner`. An open menu takes the focus
@@ -1764,7 +1783,7 @@ impl PlinthRoot {
             return keyboard_activatable(d, t, cx, move |this, cx| this.press_action(id, cx)).into_any_element();
         };
         let focus = self.kept_focus(id, part::ITEM, cx).tab_stop(true);
-        let d = activation_keys(focus_ring(d.track_focus(&focus), t.accent), cx, move |this, cx| this.press_action(id, cx));
+        let d = activation_keys(focus_ring(d.track_focus(&focus), t), cx, move |this, cx| this.press_action(id, cx));
         d.on_key_down(cx.listener(move |this, ev: &KeyDownEvent, _, cx| {
             let to = match ev.keystroke.key.as_str() {
                 "up" => before,
@@ -2009,8 +2028,8 @@ impl PlinthRoot {
     fn focus_style<E: InteractiveElement>(&self, d: E, node: &Node, t: &Tokens) -> E {
         let tokens = *t;
         match primitives::partial(node, prop::FOCUS) {
-            Some(f) => d.focus_visible(move |r| primitives::box_style(r.ring(px(FOCUS_RING)).ring_color(tokens.accent), &f, &tokens, true)),
-            None => focus_ring(d, t.accent),
+            Some(f) => d.focus_visible(move |r| primitives::box_style(r.ring(px(tokens.focus_ring)).ring_color(tokens.accent), &f, &tokens, true)),
+            None => focus_ring(d, t),
         }
     }
 
@@ -2562,7 +2581,9 @@ impl PlinthRoot {
             .rounded_lg()
             .bg(bg)
             .text_color(fg)
-            .map(|d| if large { d.h(px(56.)).text_xl() } else { d.h(px(36.)).text_sm() })
+            // A minimum height, so a larger text size (PRODUCTION U7) makes
+            // the button taller and does not cut the label.
+            .map(|d| if large { d.min_h(px(56.)).text_xl() } else { d.min_h(px(36.)).text_sm() })
             .font_weight(FontWeight::MEDIUM)
             .child(label)
             .when(disabled, |d| d.opacity(0.5))
@@ -2606,7 +2627,6 @@ impl PlinthRoot {
         let Some(field) = self.fields.get(&node.id) else { return div().into_any_element() };
         let id = node.id;
         let disabled = node.bool_prop(prop::DISABLED);
-        let accent = t.accent;
         let input = div()
             .id(eid("tf-wrap", id))
             .role(accesskit::Role::Group)
@@ -2626,13 +2646,13 @@ impl PlinthRoot {
                 text_input(eid("tf", id))
                     .state(field.state.downgrade())
                     .track_focus(&field.focus.clone().tab_stop(!disabled && self.stopped.is_none()))
-                    .focus(move |s| s.ring(px(FOCUS_RING)).ring_color(accent))
+                    .focus(ring_style(t))
                     .accepts_input(self.stopped.is_none() && !disabled)
                     .placeholder(placeholder)
                     .placeholder_color(t.text_muted)
                     .caret_color(t.text)
                     .selection_color(t.selection)
-                    .caret_blink_interval_500ms()
+                    .when(!t.reduced_motion, |d| d.caret_blink_interval_500ms())
                     .w_full()
                     .px_3()
                     .py_2()
@@ -2812,18 +2832,21 @@ impl PlinthRoot {
             .py_2()
             .min_h(px(44.))
             .rounded_md()
+            // The controls go to a second line when the title has less than
+            // 6 rem (a narrow window or a large text size, PRODUCTION U7).
+            .flex_wrap()
             .when_some(glyph, |d, g| d.child(div().w(px(20.)).text_color(t.accent).child(g)))
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(rems(6.))
                     .flex()
                     .flex_col()
                     .child(div().text_sm().child(title))
                     .when_some(subtitle, |d, s| d.child(div().text_xs().text_color(t.text_muted).child(s))),
             )
             .when_some(trailing, |d, tr| d.child(div().flex_none().text_sm().text_color(t.text_muted).child(tr)))
-            .child(div().flex().flex_none().items_center().gap_2().children(self.render_children(node, t, cx)));
+            .child(div().flex().flex_none().ml_auto().items_center().gap_2().children(self.render_children(node, t, cx)));
         // UI API 1.13: a secondary click, or the menu key on the focused row;
         // a drop on the row; a row of a list that the user can reorder.
         let live = self.stopped.is_none();
@@ -2832,11 +2855,10 @@ impl PlinthRoot {
         let reorder = live && self.in_reorder_list(node);
         let row_el = if context.is_some() || drop.is_some() { row_el.relative().children(self.pointer_layer(node, None, cx)) } else { row_el };
         // The menu key and Alt+Up/Down need the focus on the row.
-        let row_el = if (context.is_some() || reorder) && handler.is_none() { inset_focus_ring(row_el.tab_index(0), t.accent) } else { row_el };
+        let row_el = if (context.is_some() || reorder) && handler.is_none() { inset_focus_ring(row_el.tab_index(0), t) } else { row_el };
         let row_el = if reorder { row_el.aria_keyshortcuts("Alt+ArrowUp Alt+ArrowDown") } else { row_el };
         let row_el = self.context_keys(row_el, node, cx);
         let row_el = self.drop_target(self.drag_source(row_el, node, t, cx), node, t, cx);
-        let accent = t.accent;
         let row_el = match handler {
             Some(h) => inset_focus_ring(keyboard_activatable(
                 row_el.cursor_pointer().hover(move |s| s.bg(hover)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -2845,7 +2867,7 @@ impl PlinthRoot {
                 t,
                 cx,
                 move |this, cx| this.fire(h, event::PRESS, Value::Null, cx),
-            ), accent),
+            ), t),
             None => row_el,
         };
         row_el.into_any_element()
@@ -2945,7 +2967,6 @@ impl PlinthRoot {
         let Some(field) = self.fields.get(&node.id) else { return div().into_any_element() };
         let id = node.id;
         let disabled = node.bool_prop(prop::DISABLED);
-        let accent = t.accent;
         let input = div()
             .id(eid("ta-wrap", id))
             .role(accesskit::Role::Group)
@@ -2957,13 +2978,13 @@ impl PlinthRoot {
             text_area(eid("ta", id))
                 .state(field.state.downgrade())
                 .track_focus(&field.focus.clone().tab_stop(!disabled && self.stopped.is_none()))
-                .focus(move |s| s.ring(px(FOCUS_RING)).ring_color(accent))
+                .focus(ring_style(t))
                 .accepts_input(self.stopped.is_none() && !disabled)
                 .placeholder(placeholder)
                 .placeholder_color(t.text_muted)
                 .caret_color(t.text)
                 .selection_color(t.selection)
-                .caret_blink_interval_500ms()
+                .when(!t.reduced_motion, |d| d.caret_blink_interval_500ms())
                 .w_full()
                 .min_h(px(80.))
                 .px_3()
@@ -3084,7 +3105,7 @@ impl PlinthRoot {
                 });
             let entity = cx.entity();
             let page = ((max - min) / 10.0).max(step);
-            let track = focus_ring(track.tab_index(0), t.accent).on_key_down(move |ev: &KeyDownEvent, _window, cx| {
+            let track = focus_ring(track.tab_index(0), t).on_key_down(move |ev: &KeyDownEvent, _window, cx| {
                 let delta = match ev.keystroke.key.as_str() {
                     "right" | "up" => step,
                     "left" | "down" => -step,
@@ -3146,7 +3167,6 @@ impl PlinthRoot {
         let id = node.id;
         let Some(field) = self.fields.get(&id) else { return div().into_any_element() };
         warn_if_unlabeled("NumberField", id, &label);
-        let accent = t.accent;
         let input = div()
             .id(eid("nf-wrap", id))
             .role(accesskit::Role::SpinButton)
@@ -3174,11 +3194,11 @@ impl PlinthRoot {
             text_input(eid("nf", id))
                 .state(field.state.downgrade())
                 .track_focus(&field.focus.clone().tab_stop(!disabled))
-                .focus(move |s| s.ring(px(FOCUS_RING)).ring_color(accent))
+                .focus(ring_style(t))
                 .accepts_input(!disabled)
                 .caret_color(t.text)
                 .selection_color(t.selection)
-                .caret_blink_interval_500ms()
+                .when(!t.reduced_motion, |d| d.caret_blink_interval_500ms())
                 .w(px(64.))
                 .px_2()
                 .py_2()
@@ -3225,7 +3245,7 @@ impl PlinthRoot {
         let n = options.len();
         let focus = self.kept_focus(owner, part::ITEM + i as u32, cx).tab_stop(chosen.unwrap_or(0) == i);
         let value = options[i].clone();
-        let d = activation_keys(focus_ring(d.track_focus(&focus), t.accent), cx, move |this, cx| this.choose(owner, value.clone(), cx));
+        let d = activation_keys(focus_ring(d.track_focus(&focus), t), cx, move |this, cx| this.choose(owner, value.clone(), cx));
         let options = options.clone();
         d.on_key_down(cx.listener(move |this, ev: &KeyDownEvent, _, cx| {
             let key = ev.keystroke.key.as_str();
@@ -3337,7 +3357,7 @@ impl PlinthRoot {
                         .cursor_pointer()
                         .hover(move |s| s.bg(hover))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(id, opt.clone(), cx)));
-                    inset_focus_ring(self.roving_option(d, id, i, &options, chosen, ArrowKeys::Vertical, false, t, cx), t.accent).into_any_element()
+                    inset_focus_ring(self.roving_option(d, id, i, &options, chosen, ArrowKeys::Vertical, false, t, cx), t).into_any_element()
                 })
                 .collect();
             div()
@@ -3612,7 +3632,7 @@ impl PlinthRoot {
                 this.toggle_date_picker_focus(id, cx);
             }));
             let focus = self.kept_focus(id, part::TRIGGER, cx).tab_stop(true);
-            activation_keys(focus_ring(trigger.track_focus(&focus), t.accent), cx, move |this, cx| this.toggle_date_picker_focus(id, cx))
+            activation_keys(focus_ring(trigger.track_focus(&focus), t), cx, move |this, cx| this.toggle_date_picker_focus(id, cx))
         };
         let mut wrap = div().flex().flex_col().gap_1().child(trigger);
         if open {

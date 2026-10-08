@@ -10,7 +10,7 @@ mod theme;
 pub mod tree;
 
 pub use render::{DialogKind, GuestPort, PendingDialog, PlinthRoot};
-pub use theme::{Tokens, WidthClass};
+pub use theme::{SystemColors, SystemSettings, Tokens, WidthClass, blend, contrast_ratio, relative_luminance};
 
 /// Registers the key bindings that the controls need. Call it one time at
 /// application start.
