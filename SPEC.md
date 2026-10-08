@@ -209,6 +209,7 @@ The compiler rejects these features, and each one has a clear error message and 
 | `plinth:clipboard`, `plinth:notify`, `plinth:share`, `plinth:dialog` | as the names say |
 | `plinth:canvas` | 2D drawing API for `<Canvas>` — capability `ui.canvas` |
 | `plinth:locale` | locale, number and date formatting, plural rules |
+| `plinth:test` | app tests: `test`, `render`, queries, steps and `expect` (`docs/TESTING.md`). Only test files (`*.test.ts`, `*.test.tsx`) in a test build can import it. |
 
 Each module has a hand-written `.d.ts` file in `std/` of this repo. The editor reads these files. The compiler has the same signatures built in, because it does not evaluate TypeScript type-level code. The test `std_typings_match` fails when the two disagree, so the `.d.ts` files stay the single source of truth.
 
@@ -245,6 +246,8 @@ The compiler is written in Rust. It is one binary, `plinth`, together with the C
 8. **Link** the prebuilt **runtime library** (`plinth-rt`, Rust compiled to `wasm32-unknown-unknown`). It holds the GC, strings, collections, signals, the op-buffer writer, and the scheduler. The compiler embeds `plinth-rt`. The **append linker** adds the app's types, functions, globals, table entries and passive data segments after those of `plinth-rt`, so no index inside the runtime changes. App code calls the exported `__plinth_rt_*` functions (`rt_abi.rs` lists them; the linker checks each name and type). The runtime calls app code only through *callables*: a thunk in the function table and a closure object. A start function gives the app entry point to the runtime. The linker removes the `__plinth_rt_*` exports. It also replaces each runtime function that the app cannot reach with a stub (`unreachable`). A stub keeps its index, so the append rule stays true. The roots are the runtime exports, the start function, the table entries, and the runtime functions that the app code calls.
 9. **Wrap** the module as a component with `wit-component`, against the `plinth:app` WIT world.
 10. **Validate** the imports (§4.1 level 3) and optimize the module (`wasm-opt`, optional).
+
+**Test build** (`plinth test`, `docs/TESTING.md`). The compiler builds the app from `app/main.tsx`, adds the test files as extra roots and the test kit (`plinth:test`, written in Plinth TS), and adds two screens after the app's own: a view screen for `render` and a harness screen. It links the release core. A test build is never packaged: `plinth build`, `check` and `dev` read only what `main.tsx` imports. Three compiler hooks apply only to the kit's functions in a test build: a missing last parameter `__at` gets the call place (`file:line`); `render(<X />)` becomes `() => <X />`; `expect(x)` picks the form for the type of `x`. The kit and the test runner talk through `dev.log` lines and `change` events on the harness screen. This is a private protocol between the kit and the runner, not a host contract, and it adds no core function or WIT item.
 
 ### 5.2 Diagnostics
 
@@ -807,6 +810,7 @@ A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version i
 | `plinth dev [--target desktop\|web]` | Compile, run in a dev host, and hot-reload on save. Hot reload keeps signal state where the shapes did not change. |
 | `plinth check [--json] [--watch]` | Type check and run the closed-world rules. No build. |
 | `plinth build [--target t] [--single-file] [--release]` | Make the `.plnt` package, or a single-file export. |
+| `plinth test [dir] [--filter <text>]` | Build the test build (§5.1) and run each test of `app/**/*.test.ts(x)` in a fresh app instance on the desktop runner. Prints one line for each test and a summary; the exit code is 1 when a test fails. |
 | `plinth run <file.plnt\|url>` | Run a package in the local runtime. |
 | `plinth validate <file.plnt>` | Validate the package structure, the manifest, and the Wasm imports. |
 | `plinth publish` | Sign and upload to the hub. |
@@ -819,7 +823,7 @@ A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version i
 The developer experience must be as simple as `npm create vite` or `npx sv create`.
 
 - **Start a project:** `npm create plinth@latest my-app` (the `create-plinth` package, or `plinth new my-app`) writes a "hello world" app, the closed-world `tsconfig.json`, `plinth.toml`, and a `package.json`.
-- **Daily commands** are npm scripts: `npm run dev`, `npm run build`, `npm run check`. Each script calls the `plinth` binary.
+- **Daily commands** are npm scripts: `npm run dev`, `npm run build`, `npm run check`, `npm test`. Each script calls the `plinth` binary.
 - **The `@plinth/cli` package** gives the `plinth` command and the `plinth:*` typings. (The npm name `plinth` is taken; see Q2.) The binary comes in one optional package for each platform (as `esbuild` and `@biomejs/biome` do), so `npm install` gets no build step and needs no Rust toolchain.
 - **One self-contained binary.** The `plinth` binary contains the compiler, the prebuilt `plinth-rt`, the typings, and the desktop dev host. It never reads `node_modules` to compile. Only the editor reads the typings there.
 - **The project tsconfig** maps `plinth:*` to `.plinth/types/*`. Each `plinth` command writes the typings of its own version there, so the editor and the compiler always agree, with or without npm.
@@ -835,6 +839,7 @@ my-app/
   app/
     main.tsx          # export default app({...})
     home.tsx
+    home.test.tsx     # app tests (plinth test); never packaged
   assets/
   .plinth/types/      # plinth:* .d.ts files, generated
 ```

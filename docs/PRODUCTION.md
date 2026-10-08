@@ -212,6 +212,8 @@ Decisions of 2026-10-07:
 | — | Project key (S6, UP-Q4) | An offline root key held by the owner, and a release key for CI that the root key signs and can revoke. |
 | — | `apply = "live"` (UP-Q2) | After 1.0. |
 | — | Update feeds (UP-Q3) | The author's URL and the registries that the user adds. No Plinth-run service. |
+| — | App tests (T3), 2026-10-08 | Written in Plinth TS: `*.test.tsx` files with `plinth:test`, run by `plinth test` and `npm test`. Not a JavaScript package. |
+| — | Linux and macOS work, 2026-10-08 | Agents on Linux and macOS machines do it later. Until then, each item is tracked in `docs/PLATFORM-TODO.md`. |
 | PR-Q5 | Does 1.0 need sync (H6)? | **No.** Sync comes after 1.0. Sync means: one user has the same app on two devices (for example a phone and a desktop), and the app data is the same on both. A change on one device goes to the other. Owner decision 7 says the data stays on the user's device or the user's storage, so sync goes through storage that the user owns (a folder that a sync service like OneDrive or iCloud copies, or a user-owned server), never a Plinth server. `docs/STORAGE.md` §6 has the design draft. |
 
 ## 16. Summary
