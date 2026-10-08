@@ -37,6 +37,16 @@ export declare function isActive(): boolean;
  * row runs its own `onMount` again each time it renders anew. */
 export declare function onMount(f: () => void): void;
 
+/** Runs `handler` once, at start, when the data this version of the app
+ * wrote needs to be migrated: when the host has a stored data version and
+ * it is lower than this app's version (core 1.13, `PRODUCTION.md` D4).
+ * `fromVersion` is that stored version. A first install, the same
+ * version, or a downgrade all run no hook; the current version is simply
+ * recorded as the data version. `handler` may be `async`; it (or its
+ * rejection) is reported as an uncaught error on a throw, and the data
+ * version is marked done only once it finishes without one. */
+export declare function onUpgrade(handler: (fromVersion: string) => void | Promise<void>): void;
+
 // -- App ----------------------------------------------------------------------
 
 export type Accent = "teal" | "blue" | "indigo" | "purple" | "pink" | "red" | "orange" | "green";

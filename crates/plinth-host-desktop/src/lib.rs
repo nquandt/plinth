@@ -362,6 +362,12 @@ pub fn start_with_policy_and_hub(
             // The banner shows the plain reason (the top message); the runner logs
             // the wasm detail.
             let init = guest.init(&init_args).map_err(|e| format!("{e}"));
+            if init.is_ok() {
+                // `plinth:app-info` (core 1.13, `PRODUCTION.md` D4): store
+                // the data version now, unless the guest claimed a
+                // pending upgrade and will store it itself.
+                guest.finish_start();
+            }
             print_logs(&mut guest);
             (Box::new(WasmGuest { guest, _runner: runner }), init)
         }

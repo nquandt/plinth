@@ -30,6 +30,8 @@ pub const UI_NAMES: &[&str] = &[
     "strokeRect", "strokeCircle",
     // Core 1.12: lifecycle (docs/GAPS.md G10)
     "onCleanup", "isActive", "onMount",
+    // Core 1.13 (PRODUCTION.md D4): the upgrade hook.
+    "onUpgrade",
 ];
 pub const CORE_NAMES: &[&str] = &["Math", "parseNumber", "toString", "console", "int", "int", "JSON", "seedRandom"];
 pub const TIME_NAMES: &[&str] = &[
@@ -273,6 +275,8 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "onCleanup" => Binding::Std(StdFn::OnCleanup),
             "isActive" => Binding::Std(StdFn::IsActive),
             "onMount" => Binding::Std(StdFn::OnMount),
+            // Core 1.13 (PRODUCTION.md D4).
+            "onUpgrade" => Binding::Std(StdFn::OnUpgrade),
             "app" => Binding::Std(StdFn::App),
             "navigate" => Binding::StdObj(StdObj::Navigate),
             "Signal" => Binding::Type(Type::Signal(Box::new(Type::Error))),
@@ -456,6 +460,7 @@ impl Checker<'_> {
                 let (cb, _) = self.callback(&args[0], &[], Some(Type::Void));
                 TExpr::new(TExprKind::RtCallback("on_mount", Box::new(cb)), Type::Void, span)
             }
+            StdFn::OnUpgrade => self.on_upgrade(args, span),
             StdFn::Effect => {
                 if !one_arg(self, "effect") {
                     return TExpr::new(TExprKind::Null, Type::Error, span);
@@ -1627,6 +1632,118 @@ impl Checker<'_> {
                 None
             }
         }
+    }
+
+    /// `onUpgrade(handler)` (core 1.13, `PRODUCTION.md` D4): lowers to
+    /// Plinth-TS-equivalent TIR, built directly (no AST), reusing the
+    /// `Promise` machinery of `check/asyncfn.rs`:
+    ///
+    /// ```ts
+    /// const from = __app_data_version();   // string | null
+    /// if (from !== null) {
+    ///   try {
+    ///     const r = handler(from);
+    ///     if (r is a Promise<void>) {
+    ///       r.then(() => { __app_mark_data_version(); });  // no onRejected:
+    ///       // a rejection forwards to the new, unobserved promise that
+    ///       // `.then` returns, which the microtask drain reports as an
+    ///       // unhandled rejection (check/asyncfn.rs's `make_async_rt`).
+    ///     } else {
+    ///       __app_mark_data_version();
+    ///     }
+    ///   } catch (e) {
+    ///     // Same trick for a synchronous throw: reject an unobserved
+    ///     // promise with it, so the drain reports it the same way.
+    ///     const p = new Promise<void>(...); reject(p, e);
+    ///   }
+    /// }
+    /// ```
+    fn on_upgrade(&mut self, args: &[Expr], span: Span) -> TExpr {
+        if args.len() != 1 {
+            self.err(code::ARG_COUNT, span, "`onUpgrade` takes a callback");
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        let (cb, _arity) = self.callback(&args[0], &[Type::String], None);
+        if cb.ty.is_error() {
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        let Type::Func(ft) = cb.ty.clone() else {
+            unreachable!("`callback` returns a `Func` or `Error`")
+        };
+        let ret_ty = ft.ret.clone();
+        let is_void_promise = self.promise_of(&ret_ty).is_some_and(|i| i.ty == Type::Void);
+        if ret_ty != Type::Void && !is_void_promise && !ret_ty.is_error() {
+            let msg = format!("the `onUpgrade` callback must return `void` or `Promise<void>`, not `{}`", self.show(&ret_ty));
+            self.err(code::TYPE_MISMATCH, args[0].span, msg);
+        }
+
+        let str_ty = Type::String;
+        let opt_str_ty = Type::Nullable(Box::new(str_ty.clone()));
+        let from_v = self.temp(opt_str_ty.clone());
+        let from_var = TExpr::new(TExprKind::Var(from_v), opt_str_ty.clone(), span);
+        let from_call = TExpr::new(TExprKind::Rt("app_data_version", Vec::new()), opt_str_ty.clone(), span);
+        let not_null = TExpr::new(TExprKind::Not(Box::new(TExpr::new(TExprKind::IsNull(Box::new(from_var.clone())), Type::Bool, span))), Type::Bool, span);
+        let from_str = TExpr::new(TExprKind::Coerce(Coercion::Retag, Box::new(from_var.clone())), str_ty, span);
+        let call = TExpr::new(TExprKind::CallClosure(Box::new(cb), vec![from_str]), ret_ty.clone(), span);
+        let mark = || TStmt::Expr(TExpr::new(TExprKind::Rt("app_mark_data_version", Vec::new()), Type::Void, span));
+
+        let err_ty = self.error_type();
+        let ev = self.temp(err_ty.clone());
+        let e_var = TExpr::new(TExprKind::Var(ev), err_ty, span);
+
+        // The unobserved promise that turns a failure into an unhandled
+        // rejection (reported by the drain, `check/asyncfn.rs`).
+        let void_info = self.promise_info(&Type::Void);
+        let (then_fid, reject_fid) = self.promise_then_reject();
+        let reject_unobserved = |c: &mut Self, e: TExpr| -> Vec<TStmt> {
+            let pv = c.temp(Type::Struct(void_info.sid));
+            let p = TExpr::new(TExprKind::Var(pv), Type::Struct(void_info.sid), span);
+            vec![
+                TStmt::Let(pv, Some(c.new_promise(&void_info, span))),
+                TStmt::Expr(TExpr::new(TExprKind::Call(reject_fid, vec![c.as_base(p), e]), Type::Void, span)),
+            ]
+        };
+
+        let try_body = if is_void_promise {
+            let qinfo = self.promise_of(&ret_ty).cloned().expect("checked above");
+            let r_v = self.temp(ret_ty.clone());
+            let r_var = TExpr::new(TExprKind::Var(r_v), ret_ty.clone(), span);
+
+            let (r_var2, qinfo2) = (r_var.clone(), qinfo.clone());
+            let k = self.gen_void_closure("<onUpgrade>", span, move |c, _kf| {
+                use super::asyncfn::{ERROR, STATE, is};
+                let fulfilled = is(c.pfield(&r_var2, qinfo2.sid, STATE, Type::Int), 1, span);
+                let ok_branch = vec![mark()];
+                let err_ty2 = c.error_type();
+                let err_val = TExpr::new(
+                    TExprKind::Coerce(Coercion::Retag, Box::new(c.pfield(&r_var2, qinfo2.sid, ERROR, err_ty2.clone().nullable()))),
+                    err_ty2,
+                    span,
+                );
+                let bad_branch = reject_unobserved(c, err_val);
+                vec![TStmt::If(fulfilled, ok_branch, bad_branch)]
+            });
+
+            vec![TStmt::Let(r_v, Some(call)), TStmt::Expr(TExpr::new(TExprKind::Call(then_fid, vec![self.as_base(r_var), k]), Type::Void, span))]
+        } else {
+            vec![TStmt::Expr(call), mark()]
+        };
+
+        let try_stmt = TStmt::Try { body: try_body, catch: Some((ev, reject_unobserved(self, e_var))), finally: None };
+        let body = vec![TStmt::Let(from_v, Some(from_call)), TStmt::If(not_null, vec![try_stmt], Vec::new())];
+        let void_val = TExpr::new(TExprKind::Coerce(Coercion::Discard, Box::new(TExpr::new(TExprKind::Bool(true), Type::Bool, span))), Type::Void, span);
+        TExpr::new(TExprKind::Block(body, Box::new(void_val)), Type::Void, span)
+    }
+
+    /// A closure with no parameters that returns `void` (`onUpgrade`'s
+    /// waiter); like `check/promises.rs`'s private `gen_closure`, but that
+    /// one is not reachable from here (module-private).
+    fn gen_void_closure(&mut self, name: &str, span: Span, build: impl FnOnce(&mut Self, FuncId) -> Vec<TStmt>) -> TExpr {
+        let fid = self.prog.new_func(FuncDef { name: name.to_owned(), kind: FuncKind::Closure, params: Vec::new(), ret: Type::Void, body: Vec::new(), span });
+        let body = build(self, fid);
+        self.prog.funcs[fid as usize].body = body;
+        let ft = Type::Func(std::rc::Rc::new(crate::types::FuncType { params: Vec::new(), required: 0, ret: Type::Void }));
+        TExpr::new(TExprKind::Closure(fid), ft, span)
     }
 }
 

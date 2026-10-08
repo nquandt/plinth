@@ -265,7 +265,7 @@ struct HostState {
     /// The app's manifest version (`plinth:app-info`, core 1.13,
     /// `PRODUCTION.md` D4); `None` until the host sets one with
     /// `Guest::set_app_version`. Without it, `mark-data-version` and
-    /// `Guest::note_start_without_hook` do nothing.
+    /// `Guest::finish_start` do nothing.
     app_version: Option<String>,
     /// The stored data version (`plinth:app-info`): the last app version
     /// whose `onUpgrade` step finished (or, with no hook, the last version
@@ -276,6 +276,11 @@ struct HostState {
     /// True once `data_version` was loaded from disk (or confirmed there
     /// is no file), so a later read does not re-read it.
     data_version_loaded: bool,
+    /// True once `data-version()` returned a version to the guest (an
+    /// upgrade was pending): `Guest::finish_start` then leaves storing the
+    /// version to the guest's `mark-data-version()` call instead of
+    /// storing it itself.
+    upgrade_claimed: bool,
 }
 
 impl HostState {
@@ -755,7 +760,18 @@ impl bindings::plinth::app::locale::Host for HostState {
 // `plinth:locale`.
 impl bindings::plinth::app::app_info::Host for HostState {
     fn data_version(&mut self) -> Option<String> {
-        self.current_data_version()
+        // Step B: the guest only ever sees a version when an upgrade is
+        // pending (a stored version exists and is lower than the current
+        // app version). Nothing stored, an equal or higher stored
+        // version, or no app version set: `None`.
+        let Some(app_version) = self.app_version.clone() else { return None };
+        let stored = self.current_data_version()?;
+        if app_info::cmp_versions(&stored, &app_version) == std::cmp::Ordering::Less {
+            self.upgrade_claimed = true;
+            Some(stored)
+        } else {
+            None
+        }
     }
 
     fn mark_data_version(&mut self) {
@@ -947,6 +963,7 @@ impl Runner {
                     app_version: None,
                     data_version: None,
                     data_version_loaded: false,
+                    upgrade_claimed: false,
                 };
                 let mut store = Store::new(engine, state);
                 store.limiter(|s| &mut s.limits);
@@ -1133,19 +1150,24 @@ impl Guest {
 
     /// Sets the app's manifest version (`plinth:app-info`, core 1.13,
     /// `PRODUCTION.md` D4): `data-version()`/`mark-data-version()` and
-    /// `note_start_without_hook` use it. Call it before `init`. Without
-    /// it, `mark-data-version` and `note_start_without_hook` do nothing.
+    /// `finish_start` use it. Call it before `init`. Without it,
+    /// `mark-data-version` and `finish_start` do nothing.
     pub fn set_app_version(&mut self, version: &str) {
         self.data_mut().app_version = Some(version.to_owned());
     }
 
-    /// Called after `init` when the app registered no `onUpgrade` hook
-    /// (step B decides exactly when the host calls this): stores the
-    /// current app version as the data version, unless the version
-    /// already stored is higher (a downgrade keeps the higher one). Does
-    /// nothing when no app version was set (`set_app_version`).
-    pub fn note_start_without_hook(&mut self) {
+    /// Called once `init` has returned (step B, `PRODUCTION.md` D4):
+    /// stores the current app version as the data version, unless the
+    /// version already stored is higher (a downgrade keeps the higher
+    /// one) — UNLESS the guest already claimed a pending upgrade this run
+    /// (`data-version()` returned a version), in which case storing is
+    /// left to the guest's own `mark-data-version()` call. Does nothing
+    /// when no app version was set (`set_app_version`).
+    pub fn finish_start(&mut self) {
         let data = self.data_mut();
+        if data.upgrade_claimed {
+            return;
+        }
         let Some(version) = data.app_version.clone() else { return };
         let stored = data.current_data_version();
         if app_info::should_store(stored.as_deref(), &version) {

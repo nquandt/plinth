@@ -141,6 +141,7 @@ pub fn load(
         app_version: None,
         data_version: None,
         data_version_loaded: false,
+        upgrade_claimed: false,
     };
     let mut store = Store::new(engine, state);
     store.limiter(|s| &mut s.limits);
