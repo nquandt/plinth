@@ -622,7 +622,7 @@ impl HostState {
     #[allow(dead_code)]
     fn sql_store(&mut self) -> Option<&sql::SqlStore> {
         if self.sql.is_none() {
-            let dir = self.files.root()?.to_path_buf();
+            let dir = sql::database_dir(self.files.root()?);
             self.sql = Some(sql::SqlStore::open(dir, sql::Limits::default()));
         }
         self.sql.as_ref()

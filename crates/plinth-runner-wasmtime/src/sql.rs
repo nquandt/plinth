@@ -1,7 +1,8 @@
 //! The desktop engine of `store.sql` (`docs/SQL.md`, step 1 of §7).
 //!
-//! Each app has one SQLite database: `<private space>/store.sqlite`. The
-//! host derives the path; the app cannot name a file (`docs/SQL.md` §4
+//! Each app has one SQLite database: `<app id>+sql/store.sqlite`, next to
+//! the app's private space and not in it (`database_dir`). The host
+//! derives the path; the app cannot name a file (`docs/SQL.md` §4
 //! rule 1). The host opens the file with `SQLITE_OPEN_NOFOLLOW` and without
 //! `SQLITE_OPEN_URI`. (The bundled SQLite is compiled with
 //! `SQLITE_USE_URI`, so a name that starts with `file:` is a URI. The host
@@ -62,8 +63,21 @@ use std::time::{Duration, Instant};
 /// `plinth_link::capabilities` and checks it.
 pub const STORE_SQL: &str = "store.sql";
 
-/// The file name of the database in the app's private space.
+/// The file name of the database in the app's database folder.
 pub const FILE_NAME: &str = "store.sqlite";
+
+/// The database folder of the app whose `plinth:files` private space is
+/// `files_root`: the sibling folder `<app id>+sql`. The database is not in
+/// the files folder, so `plinth:files` cannot read, change or remove the
+/// database or its journal, and the database does not count toward the
+/// files quota. No app id gives a folder name with `+`
+/// (`files::private_space_dir` hashes such ids), so the name is never the
+/// private space of another app.
+pub fn database_dir(files_root: &Path) -> PathBuf {
+    let mut name = files_root.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push("+sql");
+    files_root.with_file_name(name)
+}
 
 /// The time limit of one statement: the same as the time limit of an app call.
 pub const DEFAULT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -778,6 +792,20 @@ mod tests {
         let rows = db.query("SELECT title FROM docs WHERE docs MATCH ? ORDER BY rank", r#"["milk"]"#).unwrap();
         assert_eq!(json(&rows), json(r#"[{"title":"Groceries"}]"#));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_database_is_not_in_the_files_space() {
+        use crate::files::{Owner, private_space_dir};
+        let data = Path::new("data");
+        let space = private_space_dir(data, &Owner::Dev, "com.example.notes");
+        let db = database_dir(&space);
+        assert_eq!(db, space.with_file_name("com.example.notes+sql"));
+        assert!(!db.starts_with(&space), "plinth:files must not reach the database");
+        // No app id maps to the database folder of another app.
+        for id in ["com.example.notes+sql", "COM.EXAMPLE.NOTES+SQL"] {
+            assert_ne!(private_space_dir(data, &Owner::Dev, id), db);
+        }
     }
 
     #[test]

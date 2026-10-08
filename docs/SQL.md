@@ -18,8 +18,8 @@ SQLite on every host, so that the SQL dialect and the results are the same.
 
 | Host | Engine | Where the file is |
 |---|---|---|
-| Desktop | SQLite through `rusqlite` with the bundled SQLite build, in the host, on a worker thread | `<private space>/store.sqlite` |
-| Mobile | The same as the desktop (gpui hosts, Rust) | The app's private space on the device |
+| Desktop | SQLite through `rusqlite` with the bundled SQLite build, in the host, on a worker thread | `<app id>+sql/store.sqlite`, next to the app's private space (`sql::database_dir`). The folder is not in the private space, so `plinth:files` cannot read or change the database, and the database does not count toward the files quota. |
+| Mobile | The same as the desktop (gpui hosts, Rust) | The same as the desktop, on the device |
 | Web | The official SQLite Wasm build in a Worker of the **parent page** (the host shell), with the OPFS VFS (`opfs-sahpool`) | OPFS of the page origin, one file for each app id |
 
 **Why the parent page on the web:** an app runs in a sandboxed frame with an opaque origin, and its code runs in a Worker of that frame (SPEC §10.3). An opaque origin has no storage, so OPFS is not available there. The parent page has an origin and storage. So the parent runs the database, and the app's calls go over the existing bridge, as `files` calls do (`web/frame-host.js`).
@@ -106,3 +106,5 @@ The database is one file in the private space. When the sync engine (`docs/STORA
 | SQL-Q3 | `BLOB` values? | Needs a byte-array type in the language; the `files` API covers most binary data. |
 | SQL-Q4 | Full-text search (FTS5) on every host? | The bundled SQLite and the official Wasm build both include FTS5; check the size. |
 | SQL-Q5 | One database for each app, or named databases? | One is simpler and enough for V2; named databases can come later with no break. |
+| SQL-Q6 | Temporary data (temporary tables, large sorts) uses SQLite temporary files that the quota does not count. | Set `temp_store` to memory and a heap limit (`sqlite3_hard_heap_limit64`) before step 2 opens the API. |
+| SQL-Q7 | The authorizer refuses plain `VACUUM` (it attaches a database internally), so an app cannot make its file smaller. | The host can run `VACUUM` itself with the bypass flag, for example from a Hub "Compact" action or when the free pages are more than half the file. |
