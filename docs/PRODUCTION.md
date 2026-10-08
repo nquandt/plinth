@@ -217,7 +217,7 @@ Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh`
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
 | Preview | 26 | 0 | 0 |
-| Beta | 11 | 17 | 24 |
+| Beta | 12 | 16 | 24 |
 | 1.0 | 1 | 1 | 21 |
 | Later (after 1.0) | 0 | 0 | 1 |
 
@@ -225,8 +225,9 @@ Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh`
 
 **The next level is Beta.** Start with the items that the owner and the code do not block:
 
-1. L4 and H3: finish `RegExp` and notifications (on branches).
-2. C3: ship core 1.12 and freeze it, after L4 and H3 merge.
-3. R3: the web time limit (the Worker split is on a branch).
-4. U3, U4: desktop accessibility and keyboard tests (on a branch).
-5. T7, R6, L9: `wasm-opt`, performance budgets, source locations in errors.
+1. H3: notifications step 2 (the `plinth:notify` module, the desktop toast, then the web).
+2. L4: `RegExp` step 3 (`String.match/replace/split/search`).
+3. C3: ship core 1.12 and freeze it, after H3 and L4.
+4. T7, R6, L9: `wasm-opt`, performance budgets, source locations in errors.
+5. R4, Q4: wasmi in all suites and in CI.
+6. The owner decisions H4, S6 and D7.
