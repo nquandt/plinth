@@ -14,7 +14,7 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 
 ## 0. Read this first
 
-**State (2026-10-07, end of session):** `master` is the only active branch. The gate passes on it: `bash scripts/ci-local.sh full --shoot` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; the commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
+**State (2026-10-07, late):** `master` is the only active branch (agent branches `wt/*` are merged or reset; old ones can be deleted). The production checklist `docs/PRODUCTION.md` is the plan to 1.0; `bash scripts/production-status.sh` counts it. The gate passes on it: `bash scripts/ci-local.sh full --shoot` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; the commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
 
 ### 0.1 Owner decisions (keep them)
 
@@ -171,15 +171,23 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 - **Platform decisions:** `docs/UPDATES.md` (three-layer updates), wasmi for iOS, core patch versions and the `core` policy.
 - **CI:** self-hosted runner files and `ci.yml` (owner steps open, §0.2). Pushed to GitHub up to `b6e766e`.
 
+## 9a. Session log 2026-10-07, second part (production checklist)
+
+- **`docs/PRODUCTION.md`:** gates Preview, Beta, 1.0 and Later; owner decisions in §15 (1.0 = all platforms, localization and sound; rolling support; MIT OR Apache-2.0; no sync in 1.0). Preview is complete. New docs: `docs/LIMITS.md`, `CHANGELOG.md`, `SECURITY.md`, `docs/THREAT-MODEL.md`, `docs/COMPATIBILITY.md`, `docs/PRIVACY.md`, `docs/I18N.md` (design), `docs/DEPENDENCIES.md`, `docs/guides/`, `CODE_OF_CONDUCT.md`.
+- **Security fixes:** `net.local` covered too few private ranges (both hosts; the desktop now also checks the address after DNS resolution); the package signature did not cover `manifest.toml` (now `plinth.signature/2`, which refuses `/1`).
+- **Built:** RegExp (linear-time Pike VM in the core; literals, `new RegExp`, `test`, `exec`; collectable objects); notify step 1 (WIT, core, runner; no compiler module yet); updater re-consent and the restart prompt; package format compatibility; a WIT append-only snapshot test (`wit/plinth/app.wit.snapshot`, bless with `PLINTH_BLESS=1`); the web 64 MiB memory cap and a Worker for each web app; `cargo deny` and `npm audit` in the gate; desktop keyboard and accessibility for every control (`plinth-shoot/tests/a11y_controls.rs`).
+- **Flaky tests fixed:** six test files named temp folders from the clock only (100 ns steps on Windows); they now add an atomic counter.
+- **Lesson (agents):** seven parallel agents with cold worktree builds overloaded the PC for hours. Run at most one or two build agents; tell an agent to run only the tests of the crates it changes, then merge into `master` and run the full gate there (the cache of `master` is warm). Give an agent one bounded step; a large task makes it stop with no code.
+
 ## 10. Next steps (in order)
 
-`docs/PRODUCTION.md` §16 lists the Beta items to do first. Prefer them to the items below when the owner agrees.
+`docs/PRODUCTION.md` §16 lists the Beta items to do first; they come before the items below. In progress at the end of this session: R3 step 2 (the web watchdog). Then: C3 (ship and freeze core 1.12, which now has RegExp and notify), the `core = "patch"` defect (GAPS "Core policy `patch`"), notify step 2 (the `plinth:notify` module, a desktop toast, the web), RegExp step 3 (`String.match/replace/split/search`), the gpui-ce one-line fix for text input names (`EditableTextElement::write_a11y_info`, PRODUCTION U3).
 
 1. **wasmi, the rest** (steps 1–2 merged; details in GAPS "wasmi engine (2026-10-07)"): (a) run `--test monkey`, `async_await`, `files`, `hub_api` and `net` with `PLINTH_ENGINE=wasmi` — `files`, `hub_api` and `net` exercise imports that never ran on wasmi; (b) release speed numbers, wasmtime against wasmi (`apps::pong_plays_a_point`, `sevenguis::cells_formulas_propagate_and_find_cycles`, `perf.rs` `list_10k_perf` with `--release --ignored`); (c) check `FUEL_PER_MS` with more workloads (calibrated from two, with a 15x spread); (d) a wasmi job in CI (for example `PLINTH_ENGINE=wasmi` for the errors and language suites); (e) step 3: move the engine-free host state into its own crate, so an iOS build does not depend on wasmtime; (f) find out why opt-level 3 on the `wasmi` crate crashes a Windows debug build, and report it upstream if it is a wasmi bug.
-2. **Updates, the rest** (steps 1–3 done, UPDATES §9.1): the `prompt` dialog, re-consent for new capabilities on a self-update, `onUpgrade(fromVersion)`, then the web service worker cache, `apply = "live"`, mobile.
+2. **Updates, the rest** (UPDATES §9.1; the prompt and re-consent are done): `onUpgrade(fromVersion)`, then the web service worker cache, `apply = "live"`, mobile.
 3. **gpui-ce layout fix (GAPS F1):** make nested flex layout linear in the owner's fork (when no agent builds), then remove other needless flex boxes in `render.rs`; check with `frame_cost.rs` and the screenshots.
 4. **Smooth motion, the rest:** host-side transitions (UI-ADVANCED U2 motion), a release build for play (say it in `docs/getting-started.md`). Ask the owner to play Pong first.
-5. **Web robustness:** R1 a time limit (a Worker per app with a watchdog), R2 a memory cap.
+5. **Web robustness:** done except the watchdog (R3 step 2, in progress).
 6. **Pointer, the rest (GAPS G4, 7G-6, 7G-7):** a secondary button or `onContextMenu`; children in `Dialog`; a modal overlay that blocks pointer events on the desktop; `onDrag` and drop targets.
 7. **Game gaps:** sound (G7), scale to the window (G9), transitions and springs.
 8. **Storage (`docs/STORAGE.md` §6):** a `vault` space and the Hub UI for spaces; a folder as a space; `watch`; sync. Then the notes app (VALIDATION V2).
