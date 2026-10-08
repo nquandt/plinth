@@ -18,6 +18,7 @@ pub mod net;
 pub mod notify;
 pub mod policy;
 pub mod requests;
+pub mod sql;
 pub mod timers;
 #[cfg(feature = "wasmi")]
 pub mod wasmi_core;
@@ -245,6 +246,9 @@ struct HostState {
     /// The `plinth:notify` backend (core 1.12). A `MemoryNotify` until the
     /// host gives its own with `Guest::set_notify`.
     notify: Box<dyn NotifyBackend>,
+    /// The `store.sql` database (`docs/SQL.md`), made at its first use in
+    /// the folder of the private space (`files`).
+    sql: Option<sql::SqlStore>,
 }
 
 /// 64 bits of entropy for `Math.random`: the standard library's random
@@ -612,6 +616,18 @@ impl bindings::plinth::app::net::Host for HostState {
 }
 
 impl HostState {
+    /// The `store.sql` database, made at the first call. `None` if the
+    /// guest has no private space.
+    // Step 2 of docs/SQL.md §7 connects this to the `sql` import of the WIT.
+    #[allow(dead_code)]
+    fn sql_store(&mut self) -> Option<&sql::SqlStore> {
+        if self.sql.is_none() {
+            let dir = self.files.root()?.to_path_buf();
+            self.sql = Some(sql::SqlStore::open(dir, sql::Limits::default()));
+        }
+        self.sql.as_ref()
+    }
+
     fn files_call(&mut self, op: files::Op) -> u32 {
         let id = self.requests.open();
         self.files.submit(&self.policy, id, op, &self.net_results);
@@ -753,6 +769,7 @@ impl Runner {
                     hub,
                     files: files::Files::unavailable(),
                     notify: Box::new(notify::MemoryNotify::default()),
+                    sql: None,
                 };
                 let mut store = Store::new(engine, state);
                 store.limiter(|s| &mut s.limits);

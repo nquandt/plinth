@@ -483,7 +483,7 @@ mod tests {
         for (p, why) in bad {
             assert_eq!(check_path(p, false), Err(why), "{p:?}");
         }
-        assert_eq!(check_path(&"a/".repeat(40).trim_end_matches('/').to_owned(), false), Err("too deep"));
+        assert_eq!(check_path("a/".repeat(40).trim_end_matches('/'), false), Err("too deep"));
         assert_eq!(check_path(&"x".repeat(256), false), Err("segment too long"));
         assert_eq!(check_path(&"abcd/".repeat(300), false), Err("too long"));
         assert_eq!(check_path("", true), Ok(vec![]));

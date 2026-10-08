@@ -2,7 +2,7 @@
 
 This document is the design of `store.sql`: a SQL database for each app. It is checklist item H4 in `docs/PRODUCTION.md`. The owner decided on 2026-10-07 that Plinth gives apps a SQL store (`docs/STORAGE.md` ST-Q1).
 
-Status: design draft, 2026-10-08. Nothing in this document is built yet.
+Status: design draft, 2026-10-08. Step 1 of §7 (the desktop engine) is built: `crates/plinth-runner-wasmtime/src/sql.rs`, with unit tests. No app can call it yet (step 2).
 
 ## 1. Goals
 
@@ -68,6 +68,10 @@ await sql.batch([
 
 1. **One database for each app and instance.** The host derives the path; the app cannot name a file (`docs/STORAGE.md` §3 rule 1).
 2. **No way out of the file.** An SQLite authorizer refuses `ATTACH`, `DETACH`, `load_extension`, `VACUUM INTO` and every `PRAGMA` except a safe list (`user_version` read, `foreign_keys`, `table_info`, `index_list`). The host opens the file with `SQLITE_OPEN_NOFOLLOW` and no URI file names.
+   - The desktop engine also allows `data_version` (read only). FTS5 reads it in its own statements, and it tells only if the file changed.
+   - `VACUUM` attaches a database internally, so the authorizer refuses all `VACUUM` statements, not only `VACUUM INTO`.
+   - The authorizer refuses `BEGIN`, `COMMIT`, `ROLLBACK` and `SAVEPOINT`. Use `sql.batch` for a transaction. (A transaction that an app starts and does not end would stop all later writes.)
+   - Extension loading is off (the bundled SQLite turns it on by default), the connection is in defensive mode, and it does not trust the schema.
 3. **Time limit.** A statement stops after 2 s (an SQLite progress handler), the same limit as an app call. It rejects with `Error("sql: the query took too long")`; the app keeps running.
 4. **Size limit.** A quota for each database (`max_page_count`; a default of 256 MiB, and a host policy can change it). A write past the quota rejects with `Error("sql: the database is full")`.
 5. **Result size.** A query result over 16 MiB rejects (as `net` has a body limit).
@@ -87,7 +91,7 @@ The database is one file in the private space. When the sync engine (`docs/STORA
 
 ## 7. Steps
 
-1. The desktop engine: `rusqlite` in the runner's `HostState` on a worker thread, the authorizer, the limits, and unit tests.
+1. **Done.** The desktop engine: `rusqlite` in the runner's `HostState` on a worker thread, the authorizer, the limits, and unit tests (`crates/plinth-runner-wasmtime/src/sql.rs`). The module comment gives the JSON shapes of the calls.
 2. WIT, core 1.13, the compiler module and `query<T>`; tests on wasmtime and wasmi.
 3. The web engine: SQLite Wasm with OPFS in a Worker of the parent page, the bridge messages, and Node and Edge tests. The same SQL test file runs on both hosts and compares the results.
 4. The notes app (VALIDATION V2) uses it for its index and search (SQLite FTS5).

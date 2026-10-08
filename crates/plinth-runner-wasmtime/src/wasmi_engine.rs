@@ -131,6 +131,7 @@ pub fn load(
         hub,
         files: crate::files::Files::unavailable(),
         notify: Box::new(crate::notify::MemoryNotify::default()),
+        sql: None,
     };
     let mut store = Store::new(engine, state);
     store.limiter(|s| &mut s.limits);
