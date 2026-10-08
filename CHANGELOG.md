@@ -51,6 +51,7 @@ No public release yet. The first release is a Preview for Windows and the web. `
 
 ### Fixed
 
+- A long expression chain no longer stops the compiler (PRODUCTION L6, GAPS R3). A sum, a string concatenation, an `&&`/`||`/`??` chain or a chain of method calls (`b.add(1).add(2)...`) with more than 1000 terms gave `PL1000` ("this code nests more than 1000 levels deep"); `tsc` accepts it. Now a chain has no length limit: 100,000 terms compile in a few seconds (a chain of `??`, `?.` or `||` on values that are not booleans stops near 50,000 links, at the Wasm limit of locals). Code that nests deeper than 1000 levels (parentheses, `?:`, blocks, JSX) gets its own code, `PL1008`, also when it nests far deeper (before, 100,000 parentheses overflowed the stack of the compiler).
 - `JSON.stringify` of a large array or map (about 100 KB of text, for example 1,000 notes) no longer stops the app with "out of memory". The memory now grows with the length of the text, not with its square.
 - Web host: a `kv.get` (and other host calls that give back a string) after the app's memory grew no longer fails with "Cannot perform DataView.prototype.setUint32 on a detached ArrayBuffer".
 - `store.sql` on the desktop: the keys of a row are always in column order. Before, the order changed with the build (sorted, or in column order when another crate turned on the `preserve_order` feature of `serde_json`). A `query<Map<string, V>>` row now has the column order on every host.

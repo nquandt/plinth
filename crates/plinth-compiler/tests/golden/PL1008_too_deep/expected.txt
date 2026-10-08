@@ -1,0 +1,4 @@
+app/main.tsx(1003,1): error PL1008: this code nests more than 1000 levels deep
+  (
+  ^
+  help: move the inner parts into named `const`s or functions

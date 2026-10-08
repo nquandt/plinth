@@ -285,7 +285,7 @@ impl Checker<'_> {
                         let msg = format!("`throw` takes an `Error` or a string, not `{}`", self.show(&te.ty));
                         self.err_help(code::TYPE_MISMATCH, e.span, msg, "write `throw new Error(\"message\")`");
                     }
-                    TExpr { ty: Type::Error, ..te }
+                    te.with_ty(Type::Error)
                 };
                 vec![TStmt::Throw(te)]
             }
@@ -595,51 +595,47 @@ impl Checker<'_> {
 
     /// The variables/member paths that a condition narrows: `(when true,
     /// when false)`.
-    pub(super) fn narrowing(&self, cond: &TExpr) -> (Vec<(super::NarrowKey, Type)>, Vec<(super::NarrowKey, Type)>) {
-        match &cond.kind {
-            TExprKind::IsNull(inner) => match self.narrowable(inner) {
-                Some((v, t)) => (Vec::new(), vec![(v, t)]),
-                None => (Vec::new(), Vec::new()),
-            },
-            TExprKind::Not(inner) => {
-                let (t, f) = self.narrowing(inner);
-                (f, t)
-            }
-            TExprKind::Coerce(Coercion::Truthy, inner) => match self.narrowable(inner) {
-                Some((v, t)) => (vec![(v, t)], Vec::new()),
-                None => (Vec::new(), Vec::new()),
-            },
-            TExprKind::And(a, b) => {
-                let (mut ta, _) = self.narrowing(a);
-                let (tb, _) = self.narrowing(b);
-                ta.extend(tb);
-                (ta, Vec::new())
-            }
-            TExprKind::Or(a, b) => {
-                let (_, mut fa) = self.narrowing(a);
-                let (_, fb) = self.narrowing(b);
-                fa.extend(fb);
-                (Vec::new(), fa)
-            }
-            // `x instanceof C` (SPEC.md §4.2 v1): narrows `x` to `C` in the
-            // true branch. The false branch keeps `x`'s declared type (a
-            // subclass is not the only thing it could still not be).
-            TExprKind::InstanceOf(obj, sid) => match self.narrow_path(obj) {
-                Some(k) => (vec![(k, Type::Struct(*sid))], Vec::new()),
-                None => (Vec::new(), Vec::new()),
-            },
-            // `typeof x === "..."` or a discriminant comparison, both
-            // compiled to `UnionIs` (HANDOFF.md item 2).
-            TExprKind::UnionIs(obj, idxs) => match (self.narrow_path(obj), &obj.ty) {
-                (Some(k), Type::Union(members)) => {
-                    let picked: Vec<Type> = idxs.iter().map(|i| members[*i].clone()).collect();
-                    let rest: Vec<Type> = members.iter().enumerate().filter(|(i, _)| !idxs.contains(i)).map(|(_, m)| m.clone()).collect();
-                    (vec![(k.clone(), one_of(picked))], vec![(k, one_of(rest))])
+    pub(super) fn narrowing(&self, cond: &TExpr) -> super::Narrowing {
+        (self.narrowing_when(cond, true), self.narrowing_when(cond, false))
+    }
+
+    /// One side of `narrowing`: what `cond` narrows when its value is
+    /// `when`. It walks the condition with a stack, so a long `&&`/`||`
+    /// chain does not recurse (docs/GAPS.md R3).
+    fn narrowing_when(&self, cond: &TExpr, when: bool) -> Vec<(super::NarrowKey, Type)> {
+        let mut out = Vec::new();
+        let mut stack = vec![(cond, when)];
+        while let Some((e, when)) = stack.pop() {
+            match &e.kind {
+                TExprKind::IsNull(inner) if !when => out.extend(self.narrowable(inner)),
+                TExprKind::Not(inner) => stack.push((inner, !when)),
+                TExprKind::Coerce(Coercion::Truthy, inner) if when => out.extend(self.narrowable(inner)),
+                // `a && b` narrows when true (both sides), `a || b` when
+                // false. Push `b` first: `a` comes first in the list.
+                TExprKind::And(a, b) if when => stack.extend([(&**b, true), (&**a, true)]),
+                TExprKind::Or(a, b) if !when => stack.extend([(&**b, false), (&**a, false)]),
+                // `x instanceof C` (SPEC.md §4.2 v1): narrows `x` to `C` in
+                // the true branch. The false branch keeps `x`'s declared type
+                // (a subclass is not the only thing it could still not be).
+                TExprKind::InstanceOf(obj, sid) if when => {
+                    out.extend(self.narrow_path(obj).map(|k| (k, Type::Struct(*sid))));
                 }
-                _ => (Vec::new(), Vec::new()),
-            },
-            _ => (Vec::new(), Vec::new()),
+                // `typeof x === "..."` or a discriminant comparison, both
+                // compiled to `UnionIs` (HANDOFF.md item 2).
+                TExprKind::UnionIs(obj, idxs) => {
+                    if let (Some(k), Type::Union(members)) = (self.narrow_path(obj), &obj.ty) {
+                        let picked: Vec<Type> = if when {
+                            idxs.iter().map(|i| members[*i].clone()).collect()
+                        } else {
+                            members.iter().enumerate().filter(|(i, _)| !idxs.contains(i)).map(|(_, m)| m.clone()).collect()
+                        };
+                        out.push((k, one_of(picked)));
+                    }
+                }
+                _ => {}
+            }
         }
+        out
     }
 
     /// The narrowing key a (possibly narrowed/retagged) expression reads,
@@ -648,24 +644,32 @@ impl Checker<'_> {
     /// where every step is a direct struct field read (`check/expr.rs`'s
     /// `property`), never a method call or computed index. See
     /// `docs/language.md` ("Narrowing") for the exact rule and why it is
-    /// capped at two field hops and dropped on assignment/calls.
+    /// capped at two field hops and dropped on assignment/calls. A loop:
+    /// it stops at the third field of a long `a.b.c.d...` read.
     pub(super) fn narrow_path(&self, e: &TExpr) -> Option<super::NarrowKey> {
-        match &e.kind {
-            TExprKind::Var(v) => {
-                let info = &self.prog.vars[*v as usize];
-                let is_param = self.prog.funcs[info.owner as usize].params.contains(v);
-                if info.mutable && !is_param { None } else { Some((*v, Vec::new())) }
-            }
-            TExprKind::Coerce(Coercion::Retag, inner) => self.narrow_path(inner),
-            TExprKind::Field(obj, _sid, idx) => {
-                let (v, mut path) = self.narrow_path(obj)?;
-                if path.len() >= 2 {
-                    return None;
+        let mut path = Vec::new();
+        let mut e = e;
+        loop {
+            match &e.kind {
+                TExprKind::Var(v) => {
+                    let info = &self.prog.vars[*v as usize];
+                    let is_param = self.prog.funcs[info.owner as usize].params.contains(v);
+                    if info.mutable && !is_param {
+                        return None;
+                    }
+                    path.reverse();
+                    return Some((*v, path));
                 }
-                path.push(*idx);
-                Some((v, path))
+                TExprKind::Coerce(Coercion::Retag, inner) => e = inner,
+                TExprKind::Field(obj, _sid, idx) => {
+                    if path.len() >= 2 {
+                        return None;
+                    }
+                    path.push(*idx);
+                    e = obj;
+                }
+                _ => return None,
             }
-            _ => None,
         }
     }
 

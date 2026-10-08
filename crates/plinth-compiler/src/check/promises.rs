@@ -376,7 +376,7 @@ impl Checker<'_> {
 
     /// A `Promise` that is already fulfilled with `v`.
     fn settled_promise(&self, info: &PromiseInfo, v: TExpr, span: Span) -> TExpr {
-        let TExpr { kind: TExprKind::StructLit(sid, mut fields), ty, .. } = self.new_promise(info, span) else { unreachable!() };
+        let (TExprKind::StructLit(sid, mut fields), ty, _) = self.new_promise(info, span).into_parts() else { unreachable!() };
         fields[STATE as usize] = int(1, span);
         fields[VALUE as usize] = v;
         TExpr::new(TExprKind::StructLit(sid, fields), ty, span)
@@ -396,7 +396,7 @@ impl Checker<'_> {
                 let msg = format!("expected an `Error` or a string, not `{}`", self.show(&te.ty));
                 self.err_help(code::TYPE_MISMATCH, e.span, msg, "write `new Error(\"message\")`");
             }
-            TExpr { ty: Type::Error, ..te }
+            te.with_ty(Type::Error)
         }
     }
 

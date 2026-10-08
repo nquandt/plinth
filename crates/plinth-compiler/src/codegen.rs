@@ -877,82 +877,59 @@ fn stmt_vars(s: &TStmt, out: &mut Vec<VarId>) {
     }
 }
 
+/// Collects the variables that an expression reads or writes. A stack,
+/// not recursion: a long chain (`a + b + c`) is deep on its left side
+/// (docs/GAPS.md R3).
 fn expr_vars(e: &TExpr, out: &mut Vec<VarId>) {
-    let mut go = |x: &TExpr| expr_vars(x, out);
-    match &e.kind {
-        TExprKind::Var(v) => out.push(*v),
-        TExprKind::Assign(p, v) => {
-            match p {
-                Place::Var(x) => out.push(*x),
-                Place::Field(o, ..) => expr_vars(o, out),
-                Place::Index(a, i) => {
-                    expr_vars(a, out);
-                    expr_vars(i, out);
+    let mut stack = vec![e];
+    while let Some(e) = stack.pop() {
+        let mut kids: Vec<&TExpr> = Vec::new();
+        match &e.kind {
+            TExprKind::Var(v) => out.push(*v),
+            TExprKind::Assign(p, v) => {
+                match p {
+                    Place::Var(x) => out.push(*x),
+                    Place::Field(o, ..) => kids.push(o),
+                    Place::Index(a, i) => kids.extend([&**a, &**i]),
                 }
+                kids.push(v);
             }
-            expr_vars(v, out);
-        }
-        TExprKind::Field(o, ..)
-        | TExprKind::Neg(o)
-        | TExprKind::Not(o)
-        | TExprKind::IsNull(o)
-        | TExprKind::Coerce(_, o)
-        | TExprKind::UnionTag(o)
-        | TExprKind::UnionIs(o, _) => go(o),
-        TExprKind::Index(a, b)
-        | TExprKind::Num2(_, a, b)
-        | TExprKind::Int2(_, a, b)
-        | TExprKind::Cmp(_, _, a, b)
-        | TExprKind::StrCmp(_, a, b)
-        | TExprKind::Concat(a, b)
-        | TExprKind::And(a, b)
-        | TExprKind::Or(a, b) => {
-            go(a);
-            go(b);
-        }
-        TExprKind::Cond(a, b, c) => {
-            go(a);
-            go(b);
-            go(c);
-        }
-        TExprKind::Call(_, args) | TExprKind::Rt(_, args) | TExprKind::MathOp(_, args) | TExprKind::StructLit(_, args) => {
-            for a in args {
-                expr_vars(a, out);
+            TExprKind::Field(o, ..)
+            | TExprKind::Neg(o)
+            | TExprKind::Not(o)
+            | TExprKind::IsNull(o)
+            | TExprKind::Coerce(_, o)
+            | TExprKind::UnionTag(o)
+            | TExprKind::UnionIs(o, _)
+            | TExprKind::InstanceOf(o, _) => kids.push(o),
+            TExprKind::Index(a, b)
+            | TExprKind::Num2(_, a, b)
+            | TExprKind::Int2(_, a, b)
+            | TExprKind::Cmp(_, _, a, b)
+            | TExprKind::StrCmp(_, a, b)
+            | TExprKind::Concat(a, b)
+            | TExprKind::And(a, b)
+            | TExprKind::Or(a, b)
+            | TExprKind::ArrayHof { arr: a, f: b, .. }
+            | TExprKind::ArraySearch { arr: a, value: b, .. } => kids.extend([&**a, &**b]),
+            TExprKind::Cond(a, b, c) => kids.extend([&**a, &**b, &**c]),
+            TExprKind::Call(_, args) | TExprKind::Rt(_, args) | TExprKind::MathOp(_, args) | TExprKind::StructLit(_, args) => {
+                kids.extend(args.iter())
             }
-        }
-        TExprKind::CallClosure(c, args) => {
-            expr_vars(c, out);
-            for a in args {
-                expr_vars(a, out);
+            TExprKind::CallClosure(c, args) | TExprKind::MethodCall(_, _, c, args) => {
+                kids.push(c);
+                kids.extend(args.iter());
             }
-        }
-        TExprKind::ArrayLit(items) => {
-            for (_, a) in items {
-                expr_vars(a, out);
+            TExprKind::ArrayLit(items) => kids.extend(items.iter().map(|(_, a)| a)),
+            TExprKind::Block(stmts, v) => {
+                for s in stmts {
+                    stmt_vars(s, out);
+                }
+                kids.push(v);
             }
+            _ => {}
         }
-        TExprKind::ArrayHof { arr, f, .. } => {
-            expr_vars(arr, out);
-            expr_vars(f, out);
-        }
-        TExprKind::ArraySearch { arr, value, .. } => {
-            expr_vars(arr, out);
-            expr_vars(value, out);
-        }
-        TExprKind::Block(stmts, v) => {
-            for s in stmts {
-                stmt_vars(s, out);
-            }
-            expr_vars(v, out);
-        }
-        TExprKind::MethodCall(_, _, this, args) => {
-            expr_vars(this, out);
-            for a in args {
-                expr_vars(a, out);
-            }
-        }
-        TExprKind::InstanceOf(o, _) => go(o),
-        _ => {}
+        stack.extend(kids.into_iter().rev());
     }
 }
 
@@ -1616,6 +1593,9 @@ impl FnGen {
     }
 
     fn expr_code(&mut self, g: &mut Codegen, e: &TExpr) {
+        if e.kind.chain_left().is_some() {
+            return self.chain(g, e);
+        }
         let r = e.repr();
         match &e.kind {
             TExprKind::Num(v) => match r {
@@ -1630,27 +1610,10 @@ impl FnGen {
             TExprKind::Null => self.zero(if r == Repr::F64 { Repr::F64 } else { Repr::I32 }),
             TExprKind::Var(v) => self.get_var(g, *v),
             TExprKind::Assign(place, value) => self.assign(g, place, value),
-            TExprKind::Field(o, sid, idx) => {
-                self.expr(g, o);
-                let (off, fr) = g.structs[*sid as usize].offsets[*idx as usize];
-                self.emit(load(off, fr));
-            }
-            TExprKind::Index(a, i) => {
-                self.expr(g, a);
-                self.expr(g, i);
-                self.emit(I::I32TruncSatF64S);
-                self.rt(g, if r == Repr::F64 { "arr_get_f64" } else { "arr_get_i32" });
-            }
-            TExprKind::Call(fid, args) => {
+            // A call with no arguments; the other calls are chain links.
+            TExprKind::Call(fid, _) => {
                 self.emit(I::I32Const(0));
-                for a in args {
-                    self.expr(g, a);
-                }
-                let idx = g.func_ref(*fid);
-                self.emit(I::Call(idx));
-                if g.may_throw.contains(fid) {
-                    self.check_exc(g);
-                }
+                self.call_func(g, *fid);
             }
             TExprKind::CallClosure(c, args) => {
                 let Type::Func(ft) = &c.ty else { panic!("calling a non-function") };
@@ -1671,29 +1634,6 @@ impl FnGen {
                 }
             }
             TExprKind::Closure(fid) => self.closure(g, *fid),
-            TExprKind::Num2(op, a, b) => {
-                self.expr(g, a);
-                self.expr(g, b);
-                match op {
-                    NumOp::Add => self.emit(I::F64Add),
-                    NumOp::Sub => self.emit(I::F64Sub),
-                    NumOp::Mul => self.emit(I::F64Mul),
-                    NumOp::Div => self.emit(I::F64Div),
-                    NumOp::Rem => self.rt(g, "f64_rem"),
-                    NumOp::Pow => self.rt(g, "f64_pow"),
-                }
-            }
-            TExprKind::Int2(op, a, b) => {
-                self.expr(g, a);
-                self.expr(g, b);
-                match op {
-                    IntOp::Add => self.emit(I::I32Add),
-                    IntOp::Sub => self.emit(I::I32Sub),
-                    IntOp::Mul => self.emit(I::I32Mul),
-                    IntOp::Div => self.emit(I::I32DivS),
-                    IntOp::Rem => self.emit(I::I32RemS),
-                }
-            }
             TExprKind::Neg(a) => {
                 self.expr(g, a);
                 self.emit(I::F64Neg);
@@ -1701,69 +1641,6 @@ impl FnGen {
             TExprKind::Not(a) => {
                 self.expr(g, a);
                 self.emit(I::I32Eqz);
-            }
-            TExprKind::Cmp(op, kind, a, b) => {
-                self.expr(g, a);
-                self.expr(g, b);
-                match kind {
-                    EqKind::F64 => self.emit(match op {
-                        CmpOp::Eq => I::F64Eq,
-                        CmpOp::Ne => I::F64Ne,
-                        CmpOp::Lt => I::F64Lt,
-                        CmpOp::Le => I::F64Le,
-                        CmpOp::Gt => I::F64Gt,
-                        CmpOp::Ge => I::F64Ge,
-                    }),
-                    EqKind::Str | EqKind::NullStr | EqKind::NullF64 | EqKind::NullI32 => {
-                        self.eq(g, *kind);
-                        if *op == CmpOp::Ne {
-                            self.emit(I::I32Eqz);
-                        }
-                    }
-                    EqKind::I32 | EqKind::Ref => self.emit(match op {
-                        CmpOp::Ne => I::I32Ne,
-                        CmpOp::Lt => I::I32LtS,
-                        CmpOp::Le => I::I32LeS,
-                        CmpOp::Gt => I::I32GtS,
-                        CmpOp::Ge => I::I32GeS,
-                        CmpOp::Eq => I::I32Eq,
-                    }),
-                }
-            }
-            TExprKind::StrCmp(op, a, b) => {
-                self.expr(g, a);
-                self.expr(g, b);
-                self.rt(g, "str_cmp");
-                self.emit(I::I32Const(0));
-                self.emit(match op {
-                    CmpOp::Lt => I::I32LtS,
-                    CmpOp::Le => I::I32LeS,
-                    CmpOp::Gt => I::I32GtS,
-                    CmpOp::Ge => I::I32GeS,
-                    CmpOp::Eq => I::I32Eq,
-                    CmpOp::Ne => I::I32Ne,
-                });
-            }
-            TExprKind::Concat(a, b) => {
-                self.expr(g, a);
-                self.expr(g, b);
-                self.rt(g, "str_concat");
-            }
-            TExprKind::And(a, b) => {
-                self.expr(g, a);
-                self.open(I::If(BlockType::Result(ValType::I32)));
-                self.expr(g, b);
-                self.emit(I::Else);
-                self.emit(I::I32Const(0));
-                self.close();
-            }
-            TExprKind::Or(a, b) => {
-                self.expr(g, a);
-                self.open(I::If(BlockType::Result(ValType::I32)));
-                self.emit(I::I32Const(1));
-                self.emit(I::Else);
-                self.expr(g, b);
-                self.close();
             }
             TExprKind::Cond(c, a, b) => {
                 self.expr(g, c);
@@ -1867,41 +1744,6 @@ impl FnGen {
                 }
                 self.free(th, Repr::I32);
             }
-            TExprKind::MethodCall(sid, name, this, args) => {
-                let targets = g.dispatch_targets(*sid, name);
-                if targets.len() == 1 {
-                    self.emit(I::I32Const(0));
-                    self.expr(g, this);
-                    for a in args {
-                        self.expr(g, a);
-                    }
-                    self.emit(I::Call(targets[0].1));
-                } else {
-                    let this_t = self.tmp(Repr::I32);
-                    self.expr(g, this);
-                    self.emit(I::LocalTee(this_t));
-                    self.emit(load(0, Repr::I32));
-                    let tag_t = self.tmp(Repr::I32);
-                    self.emit(I::LocalSet(tag_t));
-                    let mut arg_temps = Vec::new();
-                    for a in args {
-                        let ar = a.repr();
-                        let t = self.tmp(ar);
-                        self.expr(g, a);
-                        self.emit(I::LocalSet(t));
-                        arg_temps.push((t, ar));
-                    }
-                    self.emit_dispatch(&targets, tag_t, this_t, &arg_temps, block_type(r));
-                    self.free(this_t, Repr::I32);
-                    self.free(tag_t, Repr::I32);
-                    for (t, ar) in arg_temps {
-                        self.free(t, ar);
-                    }
-                }
-                if g.throwing_methods.contains(name) {
-                    self.check_exc(g);
-                }
-            }
             TExprKind::InstanceOf(o, sid) => {
                 let ids: Vec<u32> = g.class_descendants(*sid).iter().map(|s| g.sid_type(*s)).collect();
                 self.expr(g, o);
@@ -1919,6 +1761,202 @@ impl FnGen {
                 self.free(th, Repr::I32);
             }
             other => panic!("codegen: `lower` must remove {other:?}"),
+        }
+    }
+
+    /// Emits a left-deep chain (`TExprKind::chain_left`) with a loop, not
+    /// recursion (docs/GAPS.md R3). The code of a link is: its opening
+    /// (`link_open`), its left side, then the rest (`link_close`). The
+    /// source marks are the ones `expr` gives each link.
+    fn chain(&mut self, g: &mut Codegen, top: &TExpr) {
+        // `expr` marked `top` already.
+        let open = self.link_open(g, top);
+        let mut spine = vec![(top, open, None)];
+        let mut cur = top.kind.chain_left().expect("a chain link");
+        loop {
+            let here = g.locate(cur.span);
+            let restore = here.map(|_| self.cur);
+            self.mark(here);
+            if cur.kind.chain_left().is_none() {
+                self.expr_code(g, cur);
+                if let Some(outer) = restore {
+                    self.mark(outer);
+                }
+                break;
+            }
+            let open = self.link_open(g, cur);
+            spine.push((cur, open, restore));
+            cur = cur.kind.chain_left().expect("a chain link");
+        }
+        while let Some((node, open, restore)) = spine.pop() {
+            self.link_close(g, node, open);
+            if let Some(outer) = restore {
+                self.mark(outer);
+            }
+        }
+    }
+
+    /// The code of a chain link before its left side.
+    fn link_open(&mut self, g: &mut Codegen, e: &TExpr) -> LinkOpen {
+        match &e.kind {
+            TExprKind::Call(..) => {
+                self.emit(I::I32Const(0));
+                LinkOpen::Plain
+            }
+            TExprKind::MethodCall(sid, name, ..) => {
+                let targets = g.dispatch_targets(*sid, name);
+                if targets.len() == 1 {
+                    self.emit(I::I32Const(0));
+                    LinkOpen::Method(targets, None)
+                } else {
+                    let this_t = self.tmp(Repr::I32);
+                    LinkOpen::Method(targets, Some(this_t))
+                }
+            }
+            _ => LinkOpen::Plain,
+        }
+    }
+
+    /// The code of a chain link after its left side.
+    fn link_close(&mut self, g: &mut Codegen, e: &TExpr, open: LinkOpen) {
+        let r = e.repr();
+        match (&e.kind, open) {
+            (TExprKind::Field(_, sid, idx), _) => {
+                let (off, fr) = g.structs[*sid as usize].offsets[*idx as usize];
+                self.emit(load(off, fr));
+            }
+            (TExprKind::Index(_, i), _) => {
+                self.expr(g, i);
+                self.emit(I::I32TruncSatF64S);
+                self.rt(g, if r == Repr::F64 { "arr_get_f64" } else { "arr_get_i32" });
+            }
+            (TExprKind::Call(fid, args), _) => {
+                for a in &args[1..] {
+                    self.expr(g, a);
+                }
+                self.call_func(g, *fid);
+            }
+            (TExprKind::Num2(op, _, b), _) => {
+                self.expr(g, b);
+                match op {
+                    NumOp::Add => self.emit(I::F64Add),
+                    NumOp::Sub => self.emit(I::F64Sub),
+                    NumOp::Mul => self.emit(I::F64Mul),
+                    NumOp::Div => self.emit(I::F64Div),
+                    NumOp::Rem => self.rt(g, "f64_rem"),
+                    NumOp::Pow => self.rt(g, "f64_pow"),
+                }
+            }
+            (TExprKind::Int2(op, _, b), _) => {
+                self.expr(g, b);
+                match op {
+                    IntOp::Add => self.emit(I::I32Add),
+                    IntOp::Sub => self.emit(I::I32Sub),
+                    IntOp::Mul => self.emit(I::I32Mul),
+                    IntOp::Div => self.emit(I::I32DivS),
+                    IntOp::Rem => self.emit(I::I32RemS),
+                }
+            }
+            (TExprKind::Cmp(op, kind, _, b), _) => {
+                self.expr(g, b);
+                match kind {
+                    EqKind::F64 => self.emit(match op {
+                        CmpOp::Eq => I::F64Eq,
+                        CmpOp::Ne => I::F64Ne,
+                        CmpOp::Lt => I::F64Lt,
+                        CmpOp::Le => I::F64Le,
+                        CmpOp::Gt => I::F64Gt,
+                        CmpOp::Ge => I::F64Ge,
+                    }),
+                    EqKind::Str | EqKind::NullStr | EqKind::NullF64 | EqKind::NullI32 => {
+                        self.eq(g, *kind);
+                        if *op == CmpOp::Ne {
+                            self.emit(I::I32Eqz);
+                        }
+                    }
+                    EqKind::I32 | EqKind::Ref => self.emit(match op {
+                        CmpOp::Ne => I::I32Ne,
+                        CmpOp::Lt => I::I32LtS,
+                        CmpOp::Le => I::I32LeS,
+                        CmpOp::Gt => I::I32GtS,
+                        CmpOp::Ge => I::I32GeS,
+                        CmpOp::Eq => I::I32Eq,
+                    }),
+                }
+            }
+            (TExprKind::StrCmp(op, _, b), _) => {
+                self.expr(g, b);
+                self.rt(g, "str_cmp");
+                self.emit(I::I32Const(0));
+                self.emit(match op {
+                    CmpOp::Lt => I::I32LtS,
+                    CmpOp::Le => I::I32LeS,
+                    CmpOp::Gt => I::I32GtS,
+                    CmpOp::Ge => I::I32GeS,
+                    CmpOp::Eq => I::I32Eq,
+                    CmpOp::Ne => I::I32Ne,
+                });
+            }
+            (TExprKind::Concat(_, b), _) => {
+                self.expr(g, b);
+                self.rt(g, "str_concat");
+            }
+            (TExprKind::And(_, b), _) => {
+                self.open(I::If(BlockType::Result(ValType::I32)));
+                self.expr(g, b);
+                self.emit(I::Else);
+                self.emit(I::I32Const(0));
+                self.close();
+            }
+            (TExprKind::Or(_, b), _) => {
+                self.open(I::If(BlockType::Result(ValType::I32)));
+                self.emit(I::I32Const(1));
+                self.emit(I::Else);
+                self.expr(g, b);
+                self.close();
+            }
+            (TExprKind::MethodCall(_, name, _, args), LinkOpen::Method(targets, None)) => {
+                for a in args {
+                    self.expr(g, a);
+                }
+                self.emit(I::Call(targets[0].1));
+                if g.throwing_methods.contains(name) {
+                    self.check_exc(g);
+                }
+            }
+            (TExprKind::MethodCall(_, name, _, args), LinkOpen::Method(targets, Some(this_t))) => {
+                self.emit(I::LocalTee(this_t));
+                self.emit(load(0, Repr::I32));
+                let tag_t = self.tmp(Repr::I32);
+                self.emit(I::LocalSet(tag_t));
+                let mut arg_temps = Vec::new();
+                for a in args {
+                    let ar = a.repr();
+                    let t = self.tmp(ar);
+                    self.expr(g, a);
+                    self.emit(I::LocalSet(t));
+                    arg_temps.push((t, ar));
+                }
+                self.emit_dispatch(&targets, tag_t, this_t, &arg_temps, block_type(r));
+                self.free(this_t, Repr::I32);
+                self.free(tag_t, Repr::I32);
+                for (t, ar) in arg_temps {
+                    self.free(t, ar);
+                }
+                if g.throwing_methods.contains(name) {
+                    self.check_exc(g);
+                }
+            }
+            (other, _) => panic!("codegen: not a chain link: {other:?}"),
+        }
+    }
+
+    /// A direct call of `fid`, after its arguments.
+    fn call_func(&mut self, g: &mut Codegen, fid: FuncId) {
+        let idx = g.func_ref(fid);
+        self.emit(I::Call(idx));
+        if g.may_throw.contains(&fid) {
+            self.check_exc(g);
         }
     }
 
@@ -2405,13 +2443,17 @@ pub(crate) fn stmt_parts(s: &TStmt) -> (Vec<&TExpr>, Vec<&[TStmt]>) {
     }
 }
 
+/// Calls `fe` on `e` and every expression in it, in pre-order (and `fs`
+/// on the statements of a `Block`). A stack, not recursion: a long chain
+/// (`a + b + c`) is deep on its left side (docs/GAPS.md R3).
 pub(crate) fn walk_expr(e: &TExpr, fs: &mut dyn FnMut(&TStmt), fe: &mut dyn FnMut(&TExpr)) {
-    fe(e);
-    if let TExprKind::Block(stmts, _) = &e.kind {
-        walk_stmts(stmts, fs, fe);
-    }
-    for c in expr_children(e) {
-        walk_expr(c, fs, fe);
+    let mut stack = vec![e];
+    while let Some(e) = stack.pop() {
+        fe(e);
+        if let TExprKind::Block(stmts, _) = &e.kind {
+            walk_stmts(stmts, fs, fe);
+        }
+        stack.extend(expr_children(e).into_iter().rev());
     }
 }
 
@@ -2584,4 +2626,12 @@ fn jsx_exprs<'a>(j: &'a TJsx, out: &mut Vec<&'a TExpr>) {
         }
         TJsx::Component { props, .. } => out.extend(props.iter()),
     }
+}
+
+/// What `link_open` did for a chain link, for `link_close`.
+enum LinkOpen {
+    Plain,
+    /// The dispatch targets of a method call, and the local for `this`
+    /// when there is more than one target.
+    Method(Vec<(u32, u32)>, Option<u32>),
 }

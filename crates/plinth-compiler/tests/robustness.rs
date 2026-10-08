@@ -319,12 +319,14 @@ fn app_with(expr: &str) -> MemFs {
 /// Deep nesting overflowed the stack (a debug build stopped at a sum of 60
 /// terms on the 1 MiB main thread of Windows). Now each compile runs on a
 /// large stack and the parser limits the depth. The test threads have a
-/// small stack too, so these also check `with_stack`.
+/// small stack too, so these also check `with_stack`. A long left-deep
+/// chain (`1+1+...`) is not nesting: it builds at any length
+/// (`tests/chains.rs`).
 #[test]
 fn deep_nesting_builds_up_to_the_limit_and_is_a_diagnostic_past_it() {
     let depth = plinth_compiler::parse::MAX_DEPTH as usize;
     let ok = [
-        vec!["1"; depth - 10].join("+"),
+        vec!["1"; depth * 5].join("+"),
         format!("{}1{}", "(".repeat(depth - 10), ")".repeat(depth - 10)),
         format!("JSON.stringify({}1{})", "[".repeat(300), "]".repeat(300)),
         format!("{}0", "1 > 0 ? 1 : ".repeat(depth - 10)),
@@ -334,7 +336,10 @@ fn deep_nesting_builds_up_to_the_limit_and_is_a_diagnostic_past_it() {
         let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
         assert!(artifact.is_some(), "case {i} must build: {diags:?}");
     }
-    let too_deep = [vec!["1"; depth * 5].join("+"), format!("{}1{}", "(".repeat(depth * 5), ")".repeat(depth * 5))];
+    let too_deep = [
+        format!("{}1{}", "1+(".repeat(depth * 5), ")".repeat(depth * 5)),
+        format!("{}1{}", "(".repeat(depth * 5), ")".repeat(depth * 5)),
+    ];
     for (i, e) in too_deep.iter().enumerate() {
         let (front, artifact) = plinth_compiler::compile(&app_with(e)).unwrap();
         assert!(artifact.is_none(), "case {i} must not build");

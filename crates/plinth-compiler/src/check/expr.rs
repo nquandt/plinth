@@ -1,6 +1,6 @@
 //! Expressions.
 
-use super::{Binding, Checker, FnCx, ReactiveCtx, Scope, StdFn, StdObj};
+use super::{Binding, Checker, FnCx, Narrowing, ReactiveCtx, Scope, StdFn, StdObj};
 use crate::ast::{self, BinOp, Expr, ExprKind, LogicOp, ObjProp, UnOp};
 use crate::diag::{Span, code};
 use crate::tir::*;
@@ -9,6 +9,58 @@ use std::rc::Rc;
 
 fn bx(e: TExpr) -> Box<TExpr> {
     Box::new(e)
+}
+
+/// `a` then `b`, as `narrowing` gives for `x && y`. A later entry for a
+/// key replaces an earlier one, as in the map of a scope, so the list is
+/// never longer than the number of keys.
+fn merge_narrowing(mut a: Vec<(super::NarrowKey, Type)>, b: Vec<(super::NarrowKey, Type)>) -> Vec<(super::NarrowKey, Type)> {
+    for (k, t) in b {
+        a.retain(|(k2, _)| *k2 != k);
+        a.push((k, t));
+    }
+    a
+}
+
+/// `{ let t = { s...; v }; ... }` as `{ s...; let t = v; ... }`: the same
+/// code, with one `Block` less. A chain of `??`, of `?.` or of `||` on
+/// values that are not booleans would otherwise nest one `Block` in the
+/// next for each link, and the later phases recurse on that nesting
+/// (docs/GAPS.md R3).
+fn flatten_block(e: TExpr) -> TExpr {
+    let (kind, ty, span) = e.into_parts();
+    let TExprKind::Block(mut stmts, value) = kind else { return TExpr::new(kind, ty, span) };
+    if let Some(TStmt::Let(_, Some(init))) = stmts.first_mut()
+        && matches!(init.kind, TExprKind::Block(..))
+    {
+        let init_ty = init.ty.clone();
+        let inner = std::mem::replace(init, TExpr::new(TExprKind::Null, Type::Void, span));
+        let (TExprKind::Block(mut inner_stmts, v), ..) = inner.into_parts() else { unreachable!("checked") };
+        *init = (*v).with_ty(init_ty);
+        inner_stmts.append(&mut stmts);
+        stmts = inner_stmts;
+    }
+    TExpr::new(TExprKind::Block(stmts, value), ty, span)
+}
+
+/// The left side of `e` if `e` is a link of a left-deep chain that
+/// `Checker::chain` checks with a loop: a binary or logical operator
+/// (not a `typeof` comparison), a member access or an index on a value
+/// that is not a plain name, or a method call on such a value.
+fn chain_left(e: &Expr) -> Option<&Expr> {
+    let is_name = |x: &Expr| matches!(x.kind, ExprKind::Ident(_));
+    let is_typeof = |x: &Expr| matches!(x.kind, ExprKind::Unary(UnOp::Typeof, _) | ExprKind::Str(_));
+    match &e.kind {
+        ExprKind::Binary(BinOp::Eq | BinOp::Ne, l, r) if is_typeof(l) || is_typeof(r) => None,
+        ExprKind::Binary(_, l, _) | ExprKind::Logical(_, l, _) => Some(l),
+        ExprKind::Member { obj, .. } if !is_name(obj) => Some(obj),
+        ExprKind::Index { obj, optional: false, .. } => Some(obj),
+        ExprKind::Call { callee, optional: false, .. } => match &callee.kind {
+            ExprKind::Member { obj, optional: false, .. } if !is_name(obj) => Some(obj),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 impl Checker<'_> {
@@ -29,6 +81,64 @@ impl Checker<'_> {
     }
 
     pub(crate) fn expr(&mut self, e: &Expr, expected: Option<&Type>) -> TExpr {
+        if chain_left(e).is_some_and(|l| chain_left(l).is_some()) {
+            return self.chain(e, expected);
+        }
+        self.expr_one(e, expected)
+    }
+
+    /// Checks a left-deep chain (`a + b + c`, `a && b && c`,
+    /// `x.f().g()`) with a loop, from the innermost left side up, so a
+    /// long chain does not recurse (docs/GAPS.md R3). Each link is checked
+    /// by the same code as a single operator (`binary_rest`,
+    /// `logical_rest`, `member_rest`, `index_rest`, `method_call`).
+    fn chain(&mut self, top: &Expr, expected: Option<&Type>) -> TExpr {
+        let mut spine = vec![top];
+        let mut cur = chain_left(top).expect("a chain");
+        while let Some(next) = chain_left(cur) {
+            spine.push(cur);
+            cur = next;
+        }
+        let mut acc = self.expr_one(cur, None);
+        // The narrowing of `acc` as a condition, when known, so that a long
+        // `&&`/`||` chain does not walk its left side again at each link.
+        let mut known: Option<Narrowing> = None;
+        let mut left = cur;
+        for node in spine.into_iter().rev() {
+            let expected = if std::ptr::eq(node, top) { expected } else { None };
+            let span = node.span;
+            let mut next_known = None;
+            acc = match &node.kind {
+                ExprKind::Binary(op, _, r) => self.binary_rest(*op, acc, r, span),
+                ExprKind::Logical(op, _, r) => {
+                    let (te, n) = self.logical_rest(*op, acc, left.span, r, span, expected, known.take());
+                    next_known = n;
+                    te
+                }
+                ExprKind::Member { prop, prop_span, optional, .. } => self.member_rest(acc, prop, *prop_span, *optional, span),
+                ExprKind::Index { index, .. } => self.index_rest(acc, index, span),
+                ExprKind::Call { callee, args, .. } => {
+                    let ExprKind::Member { prop, prop_span, .. } = &callee.kind else { unreachable!("chain_left gives only method calls") };
+                    let r = self.method_call(acc, prop, *prop_span, args, span);
+                    self.invalidate_member_narrowing();
+                    r
+                }
+                _ => unreachable!("chain_left gives only these"),
+            };
+            // A link that keeps its left side in a temporary (`??`, `||` on
+            // values that are not booleans, `?.`) gives a `Block`; when the
+            // left side is a link too, merge the two.
+            if !std::ptr::eq(left, cur) {
+                acc = flatten_block(acc);
+            }
+            known = next_known;
+            left = node;
+        }
+        acc
+    }
+
+    /// Checks one expression; a chain inside it goes back to `expr`.
+    fn expr_one(&mut self, e: &Expr, expected: Option<&Type>) -> TExpr {
         let span = e.span;
         match &e.kind {
             ExprKind::Num(n) => {
@@ -77,27 +187,7 @@ impl Checker<'_> {
                     self.err(code::UNSUPPORTED, span, "`?.[` is not supported yet");
                 }
                 let o = self.expr(obj, None);
-                match o.ty.clone() {
-                    Type::Array(elem) => {
-                        let i = self.expr(index, Some(&Type::Number));
-                        let i = self.coerce(i, &Type::Number);
-                        TExpr::new(TExprKind::Index(bx(o), bx(i)), *elem, span)
-                    }
-                    Type::Struct(sid) if self.tuple_shape(sid).is_some() => match self.tuple_index(sid, index) {
-                        Some(TupleAt::Field(i, ty)) => TExpr::new(TExprKind::Field(bx(o), sid, i), ty, span),
-                        Some(TupleAt::Rest(f, k, ty)) => {
-                            let arr = TExpr::new(TExprKind::Field(bx(o), sid, f), Type::Array(Box::new(ty.clone())), span);
-                            TExpr::new(TExprKind::Index(bx(arr), bx(self.num_lit(k as f64, span))), ty, span)
-                        }
-                        None => TExpr::new(TExprKind::Null, Type::Error, span),
-                    },
-                    Type::Error => TExpr::new(TExprKind::Null, Type::Error, span),
-                    other => {
-                        let msg = format!("cannot index a value of type `{}`", self.show(&other));
-                        self.err_help(code::COMPUTED_ACCESS, span, msg, "only arrays support `[i]`; use a field name");
-                        TExpr::new(TExprKind::Null, Type::Error, span)
-                    }
-                }
+                self.index_rest(o, index, span)
             }
             ExprKind::Call { callee, type_args, args, optional } => {
                 if *optional {
@@ -198,6 +288,31 @@ impl Checker<'_> {
                         TExpr::new(TExprKind::Null, Type::Error, span)
                     }
                 }
+            }
+        }
+    }
+
+    /// `o[index]`, with `o` checked.
+    fn index_rest(&mut self, o: TExpr, index: &Expr, span: Span) -> TExpr {
+        match o.ty.clone() {
+            Type::Array(elem) => {
+                let i = self.expr(index, Some(&Type::Number));
+                let i = self.coerce(i, &Type::Number);
+                TExpr::new(TExprKind::Index(bx(o), bx(i)), *elem, span)
+            }
+            Type::Struct(sid) if self.tuple_shape(sid).is_some() => match self.tuple_index(sid, index) {
+                Some(TupleAt::Field(i, ty)) => TExpr::new(TExprKind::Field(bx(o), sid, i), ty, span),
+                Some(TupleAt::Rest(f, k, ty)) => {
+                    let arr = TExpr::new(TExprKind::Field(bx(o), sid, f), Type::Array(Box::new(ty.clone())), span);
+                    TExpr::new(TExprKind::Index(bx(arr), bx(self.num_lit(k as f64, span))), ty, span)
+                }
+                None => TExpr::new(TExprKind::Null, Type::Error, span),
+            },
+            Type::Error => TExpr::new(TExprKind::Null, Type::Error, span),
+            other => {
+                let msg = format!("cannot index a value of type `{}`", self.show(&other));
+                self.err_help(code::COMPUTED_ACCESS, span, msg, "only arrays support `[i]`; use a field name");
+                TExpr::new(TExprKind::Null, Type::Error, span)
             }
         }
     }
@@ -367,6 +482,11 @@ impl Checker<'_> {
             }
         }
         let o = self.expr(obj, None);
+        self.member_rest(o, prop, prop_span, optional, span)
+    }
+
+    /// `o.prop` or `o?.prop`, with `o` checked.
+    fn member_rest(&mut self, o: TExpr, prop: &str, prop_span: Span, optional: bool, span: Span) -> TExpr {
         if optional {
             // `o?.prop` → `tmp = o; tmp === null ? null : tmp.prop`
             let inner = match &o.ty {
@@ -778,7 +898,7 @@ impl Checker<'_> {
         let te = self.expr(inner, None);
         let from = te.ty.clone();
         if from == target {
-            return TExpr::new(te.kind, target, span);
+            return TExpr::new(te.into_parts().0, target, span);
         }
         match (&from, &target) {
             (Type::String, Type::StrLits(lits)) | (Type::StrLits(_), Type::StrLits(lits)) => {
@@ -953,7 +1073,7 @@ impl Checker<'_> {
             other => {
                 let msg = format!("expected a function, not `{}`", self.show(&other));
                 self.err(code::TYPE_MISMATCH, e_span, msg);
-                (TExpr { ty: Type::Error, ..te }, 0)
+                (te.with_ty(Type::Error), 0)
             }
         }
     }
@@ -2846,9 +2966,20 @@ impl Checker<'_> {
     // -- Operators --------------------------------------------------------
 
     fn binary(&mut self, op: BinOp, l: &Expr, r: &Expr, span: Span) -> TExpr {
+        if matches!(op, BinOp::Eq | BinOp::Ne)
+            && let Some(test) = self.typeof_narrow(l, r, span)
+        {
+            return if op == BinOp::Ne { TExpr::new(TExprKind::Not(bx(test)), Type::Bool, span) } else { test };
+        }
+        let lt = self.expr(l, None);
+        self.binary_rest(op, lt, r, span)
+    }
+
+    /// `lt op r`, with the left side `lt` checked (not a `typeof`
+    /// comparison).
+    fn binary_rest(&mut self, op: BinOp, lt: TExpr, r: &Expr, span: Span) -> TExpr {
         match op {
             BinOp::Add => {
-                let lt = self.expr(l, None);
                 let rt = self.expr(r, None);
                 if lt.ty.is_stringish() || rt.ty.is_stringish() {
                     let a = self.to_str(lt);
@@ -2863,7 +2994,6 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Num2(NumOp::Add, bx(a), bx(b)), Type::Number, span)
             }
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow => {
-                let lt = self.expr(l, None);
                 let rt = self.expr(r, None);
                 if op != BinOp::Pow && lt.ty == Type::Int && rt.ty == Type::Int {
                     let iop = match op {
@@ -2886,10 +3016,6 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Num2(nop, bx(a), bx(b)), Type::Number, span)
             }
             BinOp::Eq | BinOp::Ne => {
-                if let Some(test) = self.typeof_narrow(l, r, span) {
-                    return if op == BinOp::Ne { TExpr::new(TExprKind::Not(bx(test)), Type::Bool, span) } else { test };
-                }
-                let lt = self.expr(l, None);
                 let rt = self.expr(r, Some(&lt.ty.clone()));
                 let test = self.equality(lt, rt, span);
                 if op == BinOp::Ne { TExpr::new(TExprKind::Not(bx(test)), Type::Bool, span) } else { test }
@@ -2901,7 +3027,6 @@ impl Checker<'_> {
                     BinOp::Gt => CmpOp::Gt,
                     _ => CmpOp::Ge,
                 };
-                let lt = self.expr(l, None);
                 let rt = self.expr(r, None);
                 if lt.ty.is_stringish() && rt.ty.is_stringish() {
                     return TExpr::new(TExprKind::StrCmp(cop, bx(lt), bx(rt)), Type::Bool, span);
@@ -3051,44 +3176,78 @@ impl Checker<'_> {
     }
 
     fn logical(&mut self, op: LogicOp, l: &Expr, r: &Expr, span: Span, expected: Option<&Type>) -> TExpr {
+        let lt = self.expr(l, None);
+        self.logical_rest(op, lt, l.span, r, span, expected, None).0
+    }
+
+    /// `lt op r`, with the left side `lt` (at `l_span`) checked. `known`
+    /// is the narrowing of `lt` as a condition, if the caller knows it.
+    /// Also returns the narrowing of the result as a condition, so that a
+    /// chain (`chain`) does not compute it again from the whole left side.
+    #[allow(clippy::too_many_arguments)]
+    fn logical_rest(
+        &mut self,
+        op: LogicOp,
+        lt: TExpr,
+        l_span: Span,
+        r: &Expr,
+        span: Span,
+        expected: Option<&Type>,
+        known: Option<Narrowing>,
+    ) -> (TExpr, Option<Narrowing>) {
+        // A `Block` or `Cond` result does not narrow anything (`narrowing`).
+        let none = || Some((Vec::new(), Vec::new()));
         match op {
             LogicOp::Nullish => {
-                let lt = self.expr(l, None);
                 if !matches!(lt.ty, Type::Nullable(_)) && !lt.ty.is_error() {
                     let msg = format!("the left side has type `{}`, which is never null", self.show(&lt.ty));
-                    self.err(code::TYPE_MISMATCH, l.span, msg);
+                    self.err(code::TYPE_MISMATCH, l_span, msg);
                 }
-                self.coalesce(lt, r, span, expected)
+                (self.coalesce(lt, r, span, expected), none())
             }
             LogicOp::And | LogicOp::Or => {
-                let lt = self.expr(l, None);
-                let lt_t = self.truthy(lt.clone());
+                let lt_ty = lt.ty.clone();
+                let lt_t = self.truthy(lt);
+                let (when_true, when_false) = known.unwrap_or_else(|| self.narrowing(&lt_t));
                 // The right side sees the narrowing of the left side.
-                let (when_true, when_false) = self.narrowing(&lt_t);
                 self.push_scope();
-                self.fx.scopes.last_mut().unwrap().narrow.extend(if op == LogicOp::And { when_true } else { when_false });
+                let add = if op == LogicOp::And { when_true.clone() } else { when_false.clone() };
+                self.fx.scopes.last_mut().unwrap().narrow.extend(add);
                 let rt = self.expr(r, expected);
                 self.pop_scope();
                 // `cond && <X/>`: an element or nothing.
                 if op == LogicOp::And && rt.ty == Type::Element {
-                    let none = TExpr::new(TExprKind::Null, Type::Element, span);
-                    return TExpr::new(TExprKind::Cond(bx(lt_t), bx(rt), bx(none)), Type::Element, span);
+                    let nothing = TExpr::new(TExprKind::Null, Type::Element, span);
+                    return (TExpr::new(TExprKind::Cond(bx(lt_t), bx(rt), bx(nothing)), Type::Element, span), none());
                 }
-                if lt.ty == Type::Bool && rt.ty == Type::Bool || lt.ty.is_error() || rt.ty.is_error() {
+                if lt_ty == Type::Bool && rt.ty == Type::Bool || lt_ty.is_error() || rt.ty.is_error() {
                     let rt = self.truthy(rt);
-                    let kind = if op == LogicOp::And { TExprKind::And(bx(lt_t), bx(rt)) } else { TExprKind::Or(bx(lt_t), bx(rt)) };
-                    return TExpr::new(kind, Type::Bool, span);
+                    let (rt_true, rt_false) = self.narrowing(&rt);
+                    let (kind, n) = if op == LogicOp::And {
+                        (TExprKind::And(bx(lt_t), bx(rt)), (merge_narrowing(when_true, rt_true), Vec::new()))
+                    } else {
+                        (TExprKind::Or(bx(lt_t), bx(rt)), (Vec::new(), merge_narrowing(when_false, rt_false)))
+                    };
+                    return (TExpr::new(kind, Type::Bool, span), Some(n));
                 }
-                if op == LogicOp::Or && self.conversion(&rt.ty, &self.widen(lt.ty.clone())).is_some() {
+                if op == LogicOp::Or && self.conversion(&rt.ty, &self.widen(lt_ty.clone())).is_some() {
+                    // `truthy` kept a `bool` as it is and wrapped anything
+                    // else; take the left side back without a copy.
+                    let lt = if lt_ty == Type::Bool {
+                        lt_t
+                    } else {
+                        let (TExprKind::Coerce(Coercion::Truthy, inner), ..) = lt_t.into_parts() else { unreachable!("`truthy` wraps") };
+                        *inner
+                    };
                     // `a || b` with one type: `tmp = a; truthy(tmp) ? tmp : b`.
-                    let ty = self.widen(lt.ty.clone());
+                    let ty = self.widen(lt_ty);
                     let tmp = self.temp(ty.clone());
-                    let read = TExpr::new(TExprKind::Var(tmp), ty.clone(), l.span);
+                    let read = TExpr::new(TExprKind::Var(tmp), ty.clone(), l_span);
                     let test = self.truthy(read.clone());
                     let rt = self.coerce(rt, &ty);
                     let lt = self.coerce(lt, &ty);
                     let cond = TExpr::new(TExprKind::Cond(bx(test), bx(read), bx(rt)), ty.clone(), span);
-                    return TExpr::new(TExprKind::Block(vec![TStmt::Let(tmp, Some(lt))], bx(cond)), ty, span);
+                    return (TExpr::new(TExprKind::Block(vec![TStmt::Let(tmp, Some(lt))], bx(cond)), ty, span), none());
                 }
                 self.err_help(
                     code::TYPE_MISMATCH,
@@ -3096,7 +3255,7 @@ impl Checker<'_> {
                     format!("`{}` works on booleans here", if op == LogicOp::And { "&&" } else { "||" }),
                     "use a ternary (`a ? b : c`) or `??`",
                 );
-                TExpr::new(TExprKind::Bool(false), Type::Error, span)
+                (TExpr::new(TExprKind::Bool(false), Type::Error, span), none())
             }
         }
     }
@@ -3351,7 +3510,7 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Call(fid, vec![value]), Type::String, span)
             }
             Type::Map(k, v) if *k == Type::String => self.json_stringify_map(value, &v, span),
-            Type::Error => TExpr { ty: Type::Error, ..value },
+            Type::Error => value.with_ty(Type::Error),
             other => {
                 let msg = format!("`JSON.stringify` does not support a value of type `{}`", self.show(&other));
                 self.err(code::TYPE_MISMATCH, span, msg);

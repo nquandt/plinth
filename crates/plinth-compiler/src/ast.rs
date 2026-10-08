@@ -289,7 +289,7 @@ pub enum UnOp {
     Typeof,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
@@ -369,4 +369,69 @@ pub enum JsxChild {
     Text(String, Span),
     Expr(Expr),
     Element(JsxElement),
+}
+
+/// Copies a left-deep chain (`a + b + c`, `x.f().g()`) with a loop, not
+/// recursion (docs/GAPS.md R3).
+impl Clone for Expr {
+    fn clone(&self) -> Self {
+        let mut spine = Vec::new();
+        let mut cur = self;
+        while let Some(left) = chain_left(&cur.kind) {
+            spine.push(cur);
+            cur = left;
+        }
+        let mut acc = Expr { kind: cur.kind.clone(), span: cur.span };
+        while let Some(node) = spine.pop() {
+            let l = Box::new(acc);
+            let kind = match &node.kind {
+                ExprKind::Binary(op, _, r) => ExprKind::Binary(*op, l, r.clone()),
+                ExprKind::Logical(op, _, r) => ExprKind::Logical(*op, l, r.clone()),
+                ExprKind::Member { prop, prop_span, optional, .. } => {
+                    ExprKind::Member { obj: l, prop: prop.clone(), prop_span: *prop_span, optional: *optional }
+                }
+                ExprKind::Index { index, optional, .. } => ExprKind::Index { obj: l, index: index.clone(), optional: *optional },
+                ExprKind::Call { type_args, args, optional, .. } => {
+                    ExprKind::Call { callee: l, type_args: type_args.clone(), args: args.clone(), optional: *optional }
+                }
+                _ => unreachable!("`chain_left` gives only these"),
+            };
+            acc = Expr { kind, span: node.span };
+        }
+        acc
+    }
+}
+
+/// The left side of a chain link (`Clone` and `Drop` of `Expr`).
+fn chain_left(kind: &ExprKind) -> Option<&Expr> {
+    match kind {
+        ExprKind::Binary(_, l, _) | ExprKind::Logical(_, l, _) => Some(l),
+        ExprKind::Member { obj, .. } | ExprKind::Index { obj, .. } => Some(obj),
+        ExprKind::Call { callee, .. } => Some(callee),
+        _ => None,
+    }
+}
+
+/// Drops a left-deep chain (`a + b + c`, `x.f().g()`) with a loop. The
+/// default drop recurses once per link, and a chain has no length limit
+/// (docs/GAPS.md R3).
+impl Drop for Expr {
+    fn drop(&mut self) {
+        let mut next = take_chain_left(&mut self.kind);
+        while let Some(mut e) = next {
+            next = take_chain_left(&mut e.kind);
+        }
+    }
+}
+
+/// Takes the left side out of a chain link; the rest of the link drops
+/// here.
+fn take_chain_left(kind: &mut ExprKind) -> Option<Box<Expr>> {
+    chain_left(kind)?;
+    match std::mem::replace(kind, ExprKind::Null) {
+        ExprKind::Binary(_, l, _) | ExprKind::Logical(_, l, _) => Some(l),
+        ExprKind::Member { obj, .. } | ExprKind::Index { obj, .. } => Some(obj),
+        ExprKind::Call { callee, .. } => Some(callee),
+        _ => None,
+    }
 }

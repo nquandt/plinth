@@ -200,6 +200,10 @@ pub enum Binding {
 /// is `(x, [idx_a, idx_b])`). See `docs/language.md` ("Narrowing").
 pub(crate) type NarrowKey = (VarId, Vec<u32>);
 
+/// What a condition narrows: `(when true, when false)` (`narrowing` in
+/// `check/stmt.rs`).
+pub(crate) type Narrowing = (Vec<(NarrowKey, Type)>, Vec<(NarrowKey, Type)>);
+
 #[derive(Default)]
 struct Scope {
     names: HashMap<String, Binding>,
@@ -1514,7 +1518,10 @@ impl Checker<'_> {
     /// Converts `e` to `to`, or reports a mismatch.
     fn coerce(&mut self, e: TExpr, to: &Type) -> TExpr {
         match self.conversion(&e.ty, to) {
-            Some(None) => TExpr { ty: if e.ty.is_error() { e.ty } else { to.clone() }, ..e },
+            Some(None) => {
+                let ty = if e.ty.is_error() { e.ty.clone() } else { to.clone() };
+                e.with_ty(ty)
+            }
             Some(Some(c)) => {
                 let span = e.span;
                 TExpr::new(TExprKind::Coerce(c, Box::new(e)), to.clone(), span)
@@ -1533,7 +1540,7 @@ impl Checker<'_> {
                     Some(h) => self.err_help(code::TYPE_MISMATCH, e.span, msg, h),
                     None => self.err(code::TYPE_MISMATCH, e.span, msg),
                 }
-                TExpr { ty: Type::Error, ..e }
+                e.with_ty(Type::Error)
             }
         }
     }
@@ -1553,7 +1560,7 @@ impl Checker<'_> {
             _ => {
                 let msg = format!("a value of type `{}` cannot become a string", self.show(&e.ty));
                 self.err(code::TYPE_MISMATCH, span, msg);
-                return TExpr { ty: Type::Error, ..e };
+                return e.with_ty(Type::Error);
             }
         };
         TExpr::new(TExprKind::Coerce(c, Box::new(e)), Type::String, span)

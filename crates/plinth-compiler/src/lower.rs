@@ -147,114 +147,75 @@ fn is_dynamic(e: &TExpr) -> bool {
     dynamic
 }
 
-/// Visits an expression tree without entering closures.
+/// Visits an expression tree without entering closures, in pre-order. A
+/// stack, not recursion: a long chain (`a + b + c`) is deep on its left
+/// side (docs/GAPS.md R3). Statements in a `Block` still recurse; they
+/// are real nesting, which the parser limits.
 fn visit_expr(e: &TExpr, f: &mut dyn FnMut(&TExpr)) {
-    f(e);
-    let mut go = |x: &TExpr| visit_expr(x, f);
-    match &e.kind {
-        TExprKind::Assign(p, v) => {
-            match p {
-                Place::Var(_) => {}
-                Place::Field(o, ..) => go(o),
-                Place::Index(a, i) => {
-                    go(a);
-                    go(i);
+    let mut stack = vec![e];
+    while let Some(e) = stack.pop() {
+        f(e);
+        let mut kids: Vec<&TExpr> = Vec::new();
+        match &e.kind {
+            TExprKind::Assign(p, v) => {
+                match p {
+                    Place::Var(_) => {}
+                    Place::Field(o, ..) => kids.push(o),
+                    Place::Index(a, i) => kids.extend([&**a, &**i]),
                 }
+                kids.push(v);
             }
-            go(v);
-        }
-        TExprKind::Field(o, ..)
-        | TExprKind::Neg(o)
-        | TExprKind::Not(o)
-        | TExprKind::IsNull(o)
-        | TExprKind::Coerce(_, o)
-        | TExprKind::SignalNew(o)
-        | TExprKind::SignalGet(o)
-        | TExprKind::SignalPeek(o)
-        | TExprKind::ComputedNew(o)
-        | TExprKind::ComputedGet(o)
-        | TExprKind::EffectNew(o)
-        | TExprKind::RtCallback(_, o)
-        | TExprKind::UnionTag(o) => go(o),
-        TExprKind::UnionIs(o, _) => go(o),
-        TExprKind::Index(a, b)
-        | TExprKind::Num2(_, a, b)
-        | TExprKind::Int2(_, a, b)
-        | TExprKind::Cmp(_, _, a, b)
-        | TExprKind::StrCmp(_, a, b)
-        | TExprKind::Concat(a, b)
-        | TExprKind::And(a, b)
-        | TExprKind::Or(a, b)
-        | TExprKind::SignalSet(a, b) => {
-            go(a);
-            go(b);
-        }
-        TExprKind::Cond(a, b, c) => {
-            go(a);
-            go(b);
-            go(c);
-        }
-        TExprKind::Call(_, args) | TExprKind::Rt(_, args) | TExprKind::MathOp(_, args) | TExprKind::StructLit(_, args) => {
-            for a in args {
-                go(a);
+            TExprKind::Field(o, ..)
+            | TExprKind::Neg(o)
+            | TExprKind::Not(o)
+            | TExprKind::IsNull(o)
+            | TExprKind::Coerce(_, o)
+            | TExprKind::SignalNew(o)
+            | TExprKind::SignalGet(o)
+            | TExprKind::SignalPeek(o)
+            | TExprKind::ComputedNew(o)
+            | TExprKind::ComputedGet(o)
+            | TExprKind::EffectNew(o)
+            | TExprKind::RtCallback(_, o)
+            | TExprKind::UnionTag(o)
+            | TExprKind::UnionIs(o, _) => kids.push(o),
+            TExprKind::Index(a, b)
+            | TExprKind::Num2(_, a, b)
+            | TExprKind::Int2(_, a, b)
+            | TExprKind::Cmp(_, _, a, b)
+            | TExprKind::StrCmp(_, a, b)
+            | TExprKind::Concat(a, b)
+            | TExprKind::And(a, b)
+            | TExprKind::Or(a, b)
+            | TExprKind::SignalSet(a, b)
+            | TExprKind::ArrayHof { arr: a, f: b, .. }
+            | TExprKind::ArraySearch { arr: a, value: b, .. }
+            | TExprKind::TimerNew(a, _, b)
+            | TExprKind::DialogCall(_, a, b) => kids.extend([&**a, &**b]),
+            TExprKind::Cond(a, b, c) | TExprKind::HostCall(_, _, a, b, c) => kids.extend([&**a, &**b, &**c]),
+            TExprKind::NotifyShow(a, b, c, d) => kids.extend([&**a, &**b, &**c, &**d]),
+            TExprKind::NetFetchCall(a, b, c, d, x) => kids.extend([&**a, &**b, &**c, &**d, &**x]),
+            TExprKind::Call(_, args) | TExprKind::Rt(_, args) | TExprKind::MathOp(_, args) | TExprKind::StructLit(_, args) => {
+                kids.extend(args.iter())
             }
-        }
-        TExprKind::CallClosure(c, args) => {
-            go(c);
-            for a in args {
-                go(a);
+            TExprKind::CallClosure(c, args) => {
+                kids.push(c);
+                kids.extend(args.iter());
             }
-        }
-        TExprKind::ArrayLit(items) => {
-            for (_, a) in items {
-                go(a);
+            TExprKind::ArrayLit(items) => kids.extend(items.iter().map(|(_, a)| a)),
+            TExprKind::Block(stmts, v) => {
+                for s in stmts {
+                    visit_stmt(s, &mut |x| visit_expr(x, f));
+                }
+                kids.push(v);
             }
-        }
-        TExprKind::ArrayHof { arr, f: cb, .. } => {
-            go(arr);
-            go(cb);
-        }
-        TExprKind::ArraySearch { arr, value, .. } => {
-            go(arr);
-            go(value);
-        }
-        TExprKind::Block(stmts, v) => {
-            for s in stmts {
-                visit_stmt(s, &mut go);
+            TExprKind::Jsx(_) => {
+                // JSX in an expression creates nodes: treat it as dynamic.
+                f(&TExpr::new(TExprKind::CallClosure(Box::new(e.clone()), Vec::new()), Type::Void, e.span));
             }
-            go(v);
+            _ => {}
         }
-        TExprKind::Jsx(_) => {
-            // JSX in an expression creates nodes: treat it as dynamic.
-            f(&TExpr::new(TExprKind::CallClosure(Box::new(e.clone()), Vec::new()), Type::Void, e.span));
-        }
-        TExprKind::TimerNew(ms, _, cb) => {
-            go(ms);
-            go(cb);
-        }
-        TExprKind::DialogCall(_, message, cb) => {
-            go(message);
-            go(cb);
-        }
-        TExprKind::HostCall(_, _, path, text, cb) => {
-            go(path);
-            go(text);
-            go(cb);
-        }
-        TExprKind::NotifyShow(title, body, tag, cb) => {
-            go(title);
-            go(body);
-            go(tag);
-            go(cb);
-        }
-        TExprKind::NetFetchCall(url, method, headers, body, cb) => {
-            go(url);
-            go(method);
-            go(headers);
-            go(body);
-            go(cb);
-        }
-        _ => {}
+        stack.extend(kids.into_iter().rev());
     }
 }
 
@@ -434,7 +395,10 @@ impl Cx<'_> {
     }
 
     fn expr(&mut self, e: TExpr) -> TExpr {
-        let TExpr { kind, ty, span } = e;
+        if e.kind.chain_left().is_some() {
+            return self.chain(e);
+        }
+        let (kind, ty, span) = e.into_parts();
         let kind = match kind {
             TExprKind::SignalNew(init) => {
                 let init = self.expr(*init);
@@ -528,21 +492,13 @@ impl Cx<'_> {
                 };
                 TExprKind::Assign(p, self.bx(v))
             }
-            TExprKind::Field(o, s, i) => TExprKind::Field(self.bx(o), s, i),
-            TExprKind::Index(a, i) => TExprKind::Index(self.bx(a), self.bx(i)),
-            TExprKind::Call(f, args) => TExprKind::Call(f, args.into_iter().map(|a| self.expr(a)).collect()),
+            // A call with no arguments; the other calls are chain links.
+            TExprKind::Call(f, args) => TExprKind::Call(f, args),
             TExprKind::CallClosure(c, args) => {
                 TExprKind::CallClosure(self.bx(c), args.into_iter().map(|a| self.expr(a)).collect())
             }
-            TExprKind::Num2(op, a, b) => TExprKind::Num2(op, self.bx(a), self.bx(b)),
-            TExprKind::Int2(op, a, b) => TExprKind::Int2(op, self.bx(a), self.bx(b)),
             TExprKind::Neg(a) => TExprKind::Neg(self.bx(a)),
             TExprKind::Not(a) => TExprKind::Not(self.bx(a)),
-            TExprKind::Cmp(op, k, a, b) => TExprKind::Cmp(op, k, self.bx(a), self.bx(b)),
-            TExprKind::StrCmp(op, a, b) => TExprKind::StrCmp(op, self.bx(a), self.bx(b)),
-            TExprKind::Concat(a, b) => TExprKind::Concat(self.bx(a), self.bx(b)),
-            TExprKind::And(a, b) => TExprKind::And(self.bx(a), self.bx(b)),
-            TExprKind::Or(a, b) => TExprKind::Or(self.bx(a), self.bx(b)),
             TExprKind::Cond(a, b, c) => TExprKind::Cond(self.bx(a), self.bx(b), self.bx(c)),
             TExprKind::IsNull(a) => TExprKind::IsNull(self.bx(a)),
             TExprKind::UnionTag(a) => TExprKind::UnionTag(self.bx(a)),
@@ -557,9 +513,6 @@ impl Cx<'_> {
             }
             TExprKind::Rt(n, args) => TExprKind::Rt(n, args.into_iter().map(|a| self.expr(a)).collect()),
             TExprKind::MathOp(op, args) => TExprKind::MathOp(op, args.into_iter().map(|a| self.expr(a)).collect()),
-            TExprKind::MethodCall(sid, name, this, args) => {
-                TExprKind::MethodCall(sid, name, self.bx(this), args.into_iter().map(|a| self.expr(a)).collect())
-            }
             TExprKind::InstanceOf(a, sid) => TExprKind::InstanceOf(self.bx(a), sid),
             TExprKind::Await(a) => TExprKind::Await(self.bx(a)),
             k @ (TExprKind::Num(_)
@@ -569,6 +522,63 @@ impl Cx<'_> {
             | TExprKind::Var(_)
             | TExprKind::Closure(_)
             | TExprKind::ThunkOf(_)) => k,
+            TExprKind::Field(..)
+            | TExprKind::Index(..)
+            | TExprKind::Num2(..)
+            | TExprKind::Int2(..)
+            | TExprKind::Cmp(..)
+            | TExprKind::StrCmp(..)
+            | TExprKind::Concat(..)
+            | TExprKind::And(..)
+            | TExprKind::Or(..)
+            | TExprKind::MethodCall(..) => unreachable!("a chain link goes to `chain`"),
+        };
+        TExpr { kind, ty, span }
+    }
+
+    /// Lowers a left-deep chain (`TExprKind::chain_left`) with a loop: the
+    /// innermost left side first, then each link from the inside out, in
+    /// the same order as recursion would (docs/GAPS.md R3).
+    fn chain(&mut self, top: TExpr) -> TExpr {
+        let mut spine = Vec::new();
+        let mut cur = top;
+        while let Some(left) = cur.kind.chain_left_mut() {
+            let left = std::mem::replace(left, TExpr::new(TExprKind::Null, Type::Void, Span::default()));
+            spine.push(cur);
+            cur = left;
+        }
+        let mut acc = self.expr(cur);
+        while let Some(mut node) = spine.pop() {
+            *node.kind.chain_left_mut().expect("a chain link") = acc;
+            acc = self.link(node);
+        }
+        acc
+    }
+
+    /// Lowers the parts of a chain link after its left side, which is
+    /// lowered already.
+    fn link(&mut self, e: TExpr) -> TExpr {
+        let (kind, ty, span) = e.into_parts();
+        let kind = match kind {
+            TExprKind::Field(o, s, i) => TExprKind::Field(o, s, i),
+            TExprKind::Index(a, i) => TExprKind::Index(a, self.bx(i)),
+            TExprKind::Call(f, args) => {
+                let mut args = args.into_iter();
+                let mut out: Vec<TExpr> = args.next().into_iter().collect();
+                out.extend(args.map(|a| self.expr(a)));
+                TExprKind::Call(f, out)
+            }
+            TExprKind::Num2(op, a, b) => TExprKind::Num2(op, a, self.bx(b)),
+            TExprKind::Int2(op, a, b) => TExprKind::Int2(op, a, self.bx(b)),
+            TExprKind::Cmp(op, k, a, b) => TExprKind::Cmp(op, k, a, self.bx(b)),
+            TExprKind::StrCmp(op, a, b) => TExprKind::StrCmp(op, a, self.bx(b)),
+            TExprKind::Concat(a, b) => TExprKind::Concat(a, self.bx(b)),
+            TExprKind::And(a, b) => TExprKind::And(a, self.bx(b)),
+            TExprKind::Or(a, b) => TExprKind::Or(a, self.bx(b)),
+            TExprKind::MethodCall(sid, name, this, args) => {
+                TExprKind::MethodCall(sid, name, this, args.into_iter().map(|a| self.expr(a)).collect())
+            }
+            other => unreachable!("not a chain link: {other:?}"),
         };
         TExpr { kind, ty, span }
     }

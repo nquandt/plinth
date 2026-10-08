@@ -215,16 +215,22 @@ struct Acx {
     span: Span,
 }
 
+/// True if `e` has an `await`. A stack, not recursion: a long chain
+/// (`a + b + c`) is deep on its left side (docs/GAPS.md R3).
 fn has_await_expr(e: &TExpr) -> bool {
-    if matches!(e.kind, TExprKind::Await(_)) {
-        return true;
+    let mut stack = vec![e];
+    while let Some(e) = stack.pop() {
+        if matches!(e.kind, TExprKind::Await(_)) {
+            return true;
+        }
+        if let TExprKind::Block(stmts, _) = &e.kind
+            && stmts.iter().any(has_await)
+        {
+            return true;
+        }
+        stack.extend(expr_children(e));
     }
-    if let TExprKind::Block(stmts, _) = &e.kind
-        && stmts.iter().any(has_await)
-    {
-        return true;
-    }
-    expr_children(e).into_iter().any(has_await_expr)
+    false
 }
 
 fn has_await(s: &TStmt) -> bool {
@@ -901,7 +907,7 @@ impl Checker<'_> {
         let q = self.var_in(cx.owner, "$q", qty.clone(), None);
         let q_r = TExpr::new(TExprKind::Var(q), qty, pe.span);
         let value = self.pfield(&q_r, qinfo.sid, VALUE, value_ty(&qinfo.ty));
-        let value = if qinfo.ty == Type::Void { TExpr { ty: Type::Void, ..value } } else { value };
+        let value = if qinfo.ty == Type::Void { value.with_ty(Type::Void) } else { value };
         replace_top_await(e, value);
         let bad = has_await_expr(e) || has_await_expr(&pe);
         if bad {
@@ -1061,10 +1067,31 @@ impl Checker<'_> {
         if !has_await_expr(&e) {
             return e;
         }
+        // A chain whose `await`s are all in its innermost left side (`await
+        // p + 1 + 2`): only that side changes, so walk down to it with a
+        // loop, not recursion (docs/GAPS.md R3). `e` has an `await`, so when
+        // the other parts of a link have none, its left side has one.
+        let only_left = |e: &TExpr| e.kind.chain_left().is_some() && expr_children(e).into_iter().skip(1).all(|k| !has_await_expr(k));
+        if only_left(&e) {
+            let mut spine = Vec::new();
+            let mut cur = e;
+            while only_left(&cur) {
+                let hole = TExpr::new(TExprKind::Null, Type::Void, cur.span);
+                let left = std::mem::replace(cur.kind.chain_left_mut().expect("a chain link"), hole);
+                spine.push(cur);
+                cur = left;
+            }
+            let mut acc = self.lin(cx, cur, pre);
+            while let Some(mut node) = spine.pop() {
+                *node.kind.chain_left_mut().expect("a chain link") = acc;
+                acc = node;
+            }
+            return acc;
+        }
         let span = e.span;
         let ty = e.ty.clone();
         let is_and = matches!(e.kind, TExprKind::And(..));
-        match e.kind {
+        match e.into_parts().0 {
             TExprKind::Await(inner) => {
                 let inner = self.lin(cx, *inner, pre);
                 let t = self.tmp(cx, ty.clone());
@@ -1327,10 +1354,12 @@ pub(super) fn reown(prog: &mut Program, stmts: &[TStmt], fid: FuncId, lp: Option
 }
 
 fn reown_expr(prog: &mut Program, e: &TExpr, fid: FuncId, lp: Option<LoopId>) {
-    if let TExprKind::Block(stmts, _) = &e.kind {
-        reown(prog, stmts, fid, lp);
-    }
-    for c in expr_children(e) {
-        reown_expr(prog, c, fid, lp);
+    // A stack, not recursion (see `has_await_expr`).
+    let mut stack = vec![e];
+    while let Some(e) = stack.pop() {
+        if let TExprKind::Block(stmts, _) = &e.kind {
+            reown(prog, stmts, fid, lp);
+        }
+        stack.extend(expr_children(e).into_iter().rev());
     }
 }

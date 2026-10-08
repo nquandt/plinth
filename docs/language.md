@@ -574,13 +574,19 @@ Rules:
   dereference, out-of-bounds index, a failed `as` cast, out-of-memory)
   are traps, not exceptions: no `catch` gets them, and the host shows a
   "this app stopped" screen. See "Errors and exceptions".
-- **Limits.** Code can nest at most 1000 levels deep (expressions,
-  statements, JSX elements and types; a nested `if` with a block counts
-  two levels). Past that, the compiler gives `PL1000` ("this code nests
-  more than 1000 levels deep"); split a long `a + b + ...` chain into
-  several `const`s. A call that runs longer than the host's time limit
-  (2 s on the desktop), endless recursion and memory past the host's cap
-  (64 MiB on the desktop) stop the app with a plain reason.
+- **Limits.** Code can nest at most 1000 levels deep (parentheses, the
+  right side of an operator, `?:`, prefix operators, statements, JSX
+  elements and types; a nested `if` with a block counts two levels).
+  Past that, the compiler gives `PL1008` ("this code nests more than
+  1000 levels deep"); move the inner parts into named `const`s or
+  functions. A left-deep chain is not nesting: `a + b + c + ...`,
+  `a && b && ...` and `x.f().g()...` have no length limit (the compiler
+  reads 100,000 terms in a few seconds). A chain of `??`, `?.` or `||`
+  on values that are not booleans keeps one local for each link, so it
+  stops near 50,000 links (the Wasm limit of locals in a function). A
+  call that runs longer than the host's time limit (2 s on the
+  desktop), endless recursion and memory past the host's cap (64 MiB on
+  the desktop) stop the app with a plain reason.
 - **`for (let i = ...)`** uses one binding for the whole loop — closures
   made inside the body see its final value, matching old-style `var`
   behavior rather than per-iteration `let`. `for…of` loop variables, and
@@ -633,7 +639,7 @@ Codes are grouped by range:
 
 | Range | Meaning |
 |---|---|
-| `PL1000`–`PL1007` | Modules and the closed world (SPEC.md §4.1): parse errors, the import graph (bare imports, missing modules, cycles), unknown std modules, a missing `app/main.tsx`, and undeclared capabilities (SPEC.md §11). |
+| `PL1000`–`PL1008` | Modules and the closed world (SPEC.md §4.1): parse errors, the import graph (bare imports, missing modules, cycles), unknown std modules, a missing `app/main.tsx`, undeclared capabilities (SPEC.md §11), and code that nests more than 1000 levels deep (`PL1008`, see "Limits"). |
 | `PL2000`–`PL2026` | Rejected language features (SPEC.md §4.4): TypeScript/JavaScript syntax Plinth does not support yet or ever — `any`, classes (restricted subset), `this`, non-null assertions, type assertions, `for…in`, `delete`, generators and `await` in a `case` value, a typed or destructured `catch` variable, computed member access, advanced types, namespaces, `var`, user generics, getters/setters, labels, invalid or unsupported regular expressions (`PL2018`), `BigInt`, non-reactive signal reads, unbound methods, the class `extends`/`super`/`override` rules, and two warnings: `sort()` of numbers with no comparator (`PL2025`) and a `store.sql` statement that is not a string literal or a `const` (`PL2026`). |
 | `PL3000`–`PL3013` | Types (SPEC.md §4, §4.3): the structural type checker — mismatches, unknown names/types, missing properties or fields, uncallable values, wrong argument counts, uninferable types, assigning to `const`, nullability, duplicate definitions, and missing `return`s. (`PL3011`, struct layout, is reserved but not emitted by any check today.) |
 | `PL4000`–`PL4009` | JSX and the UI API (SPEC.md §6, §7.2): unknown controls, props, and children; missing required props; bad two-way bindings; the `app({...})` config; `navigate` targets; and image assets (missing, or an empty `alt`). |

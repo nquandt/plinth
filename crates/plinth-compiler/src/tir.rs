@@ -133,7 +133,7 @@ pub enum TStmt {
     Block(Vec<TStmt>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TExpr {
     pub kind: TExprKind,
     pub ty: Type,
@@ -147,6 +147,61 @@ impl TExpr {
 
     pub fn repr(&self) -> Repr {
         self.ty.repr()
+    }
+
+    /// The same expression with the static type `ty`.
+    pub fn with_ty(mut self, ty: Type) -> Self {
+        self.ty = ty;
+        self
+    }
+
+    /// The parts of the expression. (`TExpr` has a `Drop`, so a pattern
+    /// cannot move them out.)
+    pub fn into_parts(mut self) -> (TExprKind, Type, Span) {
+        let kind = std::mem::replace(&mut self.kind, TExprKind::Null);
+        let ty = std::mem::replace(&mut self.ty, Type::Void);
+        (kind, ty, self.span)
+    }
+}
+
+impl TExprKind {
+    /// The left side of a chain link: the part of the expression that runs
+    /// first, before all its other parts. A long `a + b + c` or
+    /// `x.f().g()` is deep only on this side, so `lower` and codegen walk
+    /// such a chain with a loop, not recursion (docs/GAPS.md R3).
+    pub fn chain_left(&self) -> Option<&TExpr> {
+        match self {
+            TExprKind::Num2(_, a, _)
+            | TExprKind::Int2(_, a, _)
+            | TExprKind::Cmp(_, _, a, _)
+            | TExprKind::StrCmp(_, a, _)
+            | TExprKind::Concat(a, _)
+            | TExprKind::And(a, _)
+            | TExprKind::Or(a, _)
+            | TExprKind::Field(a, ..)
+            | TExprKind::Index(a, _)
+            | TExprKind::MethodCall(_, _, a, _) => Some(a),
+            TExprKind::Call(_, args) => args.first(),
+            _ => None,
+        }
+    }
+
+    /// Like `chain_left`, for changing it.
+    pub fn chain_left_mut(&mut self) -> Option<&mut TExpr> {
+        match self {
+            TExprKind::Num2(_, a, _)
+            | TExprKind::Int2(_, a, _)
+            | TExprKind::Cmp(_, _, a, _)
+            | TExprKind::StrCmp(_, a, _)
+            | TExprKind::Concat(a, _)
+            | TExprKind::And(a, _)
+            | TExprKind::Or(a, _)
+            | TExprKind::Field(a, ..)
+            | TExprKind::Index(a, _)
+            | TExprKind::MethodCall(_, _, a, _) => Some(a),
+            TExprKind::Call(_, args) => args.first_mut(),
+            _ => None,
+        }
     }
 }
 
@@ -427,4 +482,67 @@ pub enum TChild {
     Element(TJsx),
     /// An expression of type `Element` (0 means none).
     Expr(TExpr),
+}
+
+/// Copies a left-deep chain (`TExprKind::chain_left`) with a loop, not
+/// recursion (docs/GAPS.md R3).
+impl Clone for TExpr {
+    fn clone(&self) -> Self {
+        let mut spine = Vec::new();
+        let mut cur = self;
+        while let Some(left) = cur.kind.chain_left() {
+            spine.push(cur);
+            cur = left;
+        }
+        let mut acc = TExpr { kind: cur.kind.clone(), ty: cur.ty.clone(), span: cur.span };
+        while let Some(node) = spine.pop() {
+            acc = TExpr { kind: node.kind.clone_link(acc), ty: node.ty.clone(), span: node.span };
+        }
+        acc
+    }
+}
+
+impl TExprKind {
+    /// A copy of a chain link with `left` as its left side.
+    fn clone_link(&self, left: TExpr) -> TExprKind {
+        let l = Box::new(left);
+        let bx = |e: &TExpr| Box::new(e.clone());
+        match self {
+            TExprKind::Num2(op, _, b) => TExprKind::Num2(*op, l, bx(b)),
+            TExprKind::Int2(op, _, b) => TExprKind::Int2(*op, l, bx(b)),
+            TExprKind::Cmp(op, k, _, b) => TExprKind::Cmp(*op, *k, l, bx(b)),
+            TExprKind::StrCmp(op, _, b) => TExprKind::StrCmp(*op, l, bx(b)),
+            TExprKind::Concat(_, b) => TExprKind::Concat(l, bx(b)),
+            TExprKind::And(_, b) => TExprKind::And(l, bx(b)),
+            TExprKind::Or(_, b) => TExprKind::Or(l, bx(b)),
+            TExprKind::Field(_, s, i) => TExprKind::Field(l, *s, *i),
+            TExprKind::Index(_, i) => TExprKind::Index(l, bx(i)),
+            TExprKind::MethodCall(sid, name, _, args) => TExprKind::MethodCall(*sid, name.clone(), l, args.clone()),
+            TExprKind::Call(f, args) => {
+                let mut out = vec![*l];
+                out.extend(args[1..].iter().cloned());
+                TExprKind::Call(*f, out)
+            }
+            other => unreachable!("not a chain link: {other:?}"),
+        }
+    }
+}
+
+/// Drops a left-deep chain (`TExprKind::chain_left`) with a loop. The
+/// default drop recurses once per link, and a chain has no length limit
+/// (docs/GAPS.md R3).
+impl Drop for TExpr {
+    fn drop(&mut self) {
+        let mut next = take_chain_left(&mut self.kind);
+        while let Some(mut e) = next {
+            next = take_chain_left(&mut e.kind);
+        }
+    }
+}
+
+/// Takes the left side out of a chain link; the rest of the link drops
+/// here.
+fn take_chain_left(kind: &mut TExprKind) -> Option<TExpr> {
+    let left = kind.chain_left_mut()?;
+    Some(std::mem::replace(left, TExpr::new(TExprKind::Null, Type::Void, Span::default())))
 }

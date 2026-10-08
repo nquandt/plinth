@@ -20,7 +20,7 @@ Plinth is not ready for production apps. The current level is "before Preview".
 |---|---|
 | Regular expressions have no lookaround and no backreferences. | L4 |
 | No locale-aware formatting. Dates and numbers use English formats only. | L5 |
-| An expression or a nesting deeper than 1000 levels gives `PL1000`. | L6 |
+| Code that nests deeper than 1000 levels (parentheses, `?:`, blocks, JSX, types) gives `PL1008`. A left-deep chain (`a + b + c`, `x.f().g()`) is not nesting and has no length limit. | L6 |
 | No shared libraries between apps. Each app has its own copy of shared code. | L8 |
 | A trap gives its source file and line only in a debug build (`plinth build` with no `--release`), on wasmtime and on the web. A release build, the wasmi engine and the web time limit give the reason with no place. The place is a line, with no column. An uncaught `Promise` rejection has no place. | L9 |
 

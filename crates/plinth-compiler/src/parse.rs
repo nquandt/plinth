@@ -11,6 +11,12 @@ use oxc_parser::Parser;
 use oxc_span::SourceType;
 
 pub fn parse(file: FileId, text: &str, is_tsx: bool, diags: &mut Vec<Diagnostic>) -> Module {
+    // oxc recurses on nesting: stop code that nests far too deep first.
+    if let Some(at) = crate::nesting::too_deep(text, is_tsx) {
+        let end = (at + 1).min(text.len() as u32);
+        diags.push(too_deep(Span::new(file, at, end)));
+        return Module { items: Vec::new() };
+    }
     let allocator = Allocator::default();
     let source_type = if is_tsx { SourceType::tsx() } else { SourceType::ts() };
     let ret = Parser::new(&allocator, text, source_type).parse();
@@ -29,9 +35,17 @@ pub fn parse(file: FileId, text: &str, is_tsx: bool, diags: &mut Vec<Diagnostic>
 }
 
 /// The deepest nesting of expressions, statements, JSX elements and types
-/// that the compiler accepts. Each later phase recurses over the tree, so
-/// the limit bounds their stack use too (`crate::STACK_SIZE`).
+/// that the compiler accepts (`code::TOO_DEEP`). Each later phase recurses
+/// over real nesting, so the limit bounds their stack use too
+/// (`crate::STACK_SIZE`). A left-deep chain (`a + b + c`, `x.f().g()`)
+/// counts as one level: each phase walks it with a loop.
 pub const MAX_DEPTH: u32 = 1000;
+
+/// The diagnostic for code that nests deeper than `MAX_DEPTH`.
+fn too_deep(span: Span) -> Diagnostic {
+    Diagnostic::error(code::TOO_DEEP, span, format!("this code nests more than {MAX_DEPTH} levels deep"))
+        .help("move the inner parts into named `const`s or functions")
+}
 
 struct Cx<'d> {
     file: FileId,
@@ -53,12 +67,8 @@ impl Cx<'_> {
         if self.depth >= MAX_DEPTH {
             if !self.too_deep {
                 self.too_deep = true;
-                self.err_help(
-                    code::SYNTAX,
-                    s,
-                    format!("this code nests more than {MAX_DEPTH} levels deep"),
-                    "split the expression into named parts (for example a long `a + b + ...` chain into several `const`s)",
-                );
+                let span = self.span(s);
+                self.diags.push(too_deep(span));
             }
             return false;
         }
@@ -976,14 +986,53 @@ impl Cx<'_> {
         if !self.enter(oxc_span::GetSpan::span(e)) {
             return None;
         }
-        let r = self.expr_inner(e);
+        let r = if chain_left(e).is_some() { self.chain(e) } else { self.expr_inner(e) };
         self.leave();
         r
     }
 
+    /// Converts a left-deep chain (`a + b + c`, `a && b`, `x.f().g()`)
+    /// with a loop: the chain counts as one level of nesting, so its
+    /// length has no limit (docs/GAPS.md R3). Each right operand is one
+    /// level deeper than the chain.
+    fn chain<'a>(&mut self, top: &'a o::Expression<'a>) -> Option<Expr> {
+        let mut spine = vec![top];
+        let mut cur = chain_left(top).expect("a chain");
+        while let Some(next) = chain_left(cur) {
+            spine.push(cur);
+            cur = next;
+        }
+        let mut acc = self.expr(cur)?;
+        for node in spine.into_iter().rev() {
+            acc = self.chain_link(node, acc)?;
+        }
+        Some(acc)
+    }
+
+    /// One link of a chain: `node` with `left` as its converted left side.
+    fn chain_link(&mut self, node: &o::Expression, left: Expr) -> Option<Expr> {
+        use o::Expression as E;
+        let span = self.span(oxc_span::GetSpan::span(node));
+        let left = Box::new(left);
+        let kind = match node {
+            E::BinaryExpression(b) => ExprKind::Binary(plain_bin_op(b.operator).expect("a chain link"), left, Box::new(self.expr(&b.right)?)),
+            E::LogicalExpression(l) => ExprKind::Logical(logic_op(l.operator), left, Box::new(self.expr(&l.right)?)),
+            E::StaticMemberExpression(m) => {
+                ExprKind::Member { obj: left, prop: m.property.name.to_string(), prop_span: self.span(m.property.span), optional: m.optional }
+            }
+            E::ComputedMemberExpression(m) => ExprKind::Index { obj: left, index: Box::new(self.expr(&m.expression)?), optional: m.optional },
+            E::CallExpression(c) => {
+                let (type_args, args) = self.call_parts(c)?;
+                ExprKind::Call { callee: left, type_args, args, optional: c.optional }
+            }
+            _ => unreachable!("chain_left gives only these"),
+        };
+        Some(Expr { kind, span })
+    }
+
     fn expr_inner(&mut self, e: &o::Expression) -> Option<Expr> {
         use o::Expression as E;
-        use oxc_syntax::operator::{AssignmentOperator as A, BinaryOperator as B, LogicalOperator as L, UnaryOperator as U};
+        use oxc_syntax::operator::{AssignmentOperator as A, BinaryOperator as B, UnaryOperator as U};
         let span = self.span(oxc_span::GetSpan::span(e));
         let kind = match e {
             E::NumericLiteral(n) => ExprKind::Num(n.value),
@@ -1043,17 +1092,6 @@ impl Cx<'_> {
                 }
                 ExprKind::Object(props)
             }
-            E::StaticMemberExpression(m) => ExprKind::Member {
-                obj: Box::new(self.expr(&m.object)?),
-                prop: m.property.name.to_string(),
-                prop_span: self.span(m.property.span),
-                optional: m.optional,
-            },
-            E::ComputedMemberExpression(m) => ExprKind::Index {
-                obj: Box::new(self.expr(&m.object)?),
-                index: Box::new(self.expr(&m.expression)?),
-                optional: m.optional,
-            },
             E::PrivateFieldExpression(p) => {
                 self.class_err(p.span);
                 return None;
@@ -1071,7 +1109,6 @@ impl Cx<'_> {
                     }
                 };
             }
-            E::CallExpression(c) => return self.call(c, span),
             E::UnaryExpression(u) => {
                 let op = match u.operator {
                     U::UnaryNegation => UnOp::Neg,
@@ -1089,20 +1126,11 @@ impl Cx<'_> {
                 };
                 ExprKind::Unary(op, Box::new(self.expr(&u.argument)?))
             }
+            // The other operators, member accesses and calls are chain links
+            // (`chain`).
             E::BinaryExpression(b) => {
-                let op = match b.operator {
-                    B::Addition => BinOp::Add,
-                    B::Subtraction => BinOp::Sub,
-                    B::Multiplication => BinOp::Mul,
-                    B::Division => BinOp::Div,
-                    B::Remainder => BinOp::Rem,
-                    B::Exponential => BinOp::Pow,
-                    B::StrictEquality => BinOp::Eq,
-                    B::StrictInequality => BinOp::Ne,
-                    B::LessThan => BinOp::Lt,
-                    B::LessEqualThan => BinOp::Le,
-                    B::GreaterThan => BinOp::Gt,
-                    B::GreaterEqualThan => BinOp::Ge,
+                match b.operator {
+                    op if plain_bin_op(op).is_some() => unreachable!("a chain link"),
                     B::Equality | B::Inequality => {
                         let fix = if b.operator == B::Equality { "===" } else { "!==" };
                         self.err_help(code::LOOSE_EQUALITY, b.span, "loose equality is not allowed", format!("use `{fix}`"));
@@ -1131,16 +1159,7 @@ impl Cx<'_> {
                         self.err(code::UNSUPPORTED, b.span, "bitwise operators come with `int`");
                         return None;
                     }
-                };
-                ExprKind::Binary(op, Box::new(self.expr(&b.left)?), Box::new(self.expr(&b.right)?))
-            }
-            E::LogicalExpression(l) => {
-                let op = match l.operator {
-                    L::And => LogicOp::And,
-                    L::Or => LogicOp::Or,
-                    L::Coalesce => LogicOp::Nullish,
-                };
-                ExprKind::Logical(op, Box::new(self.expr(&l.left)?), Box::new(self.expr(&l.right)?))
+                }
             }
             E::ConditionalExpression(c) => ExprKind::Cond(
                 Box::new(self.expr(&c.test)?),
@@ -1377,6 +1396,16 @@ impl Cx<'_> {
     }
 
     fn call(&mut self, c: &o::CallExpression, span: Span) -> Option<Expr> {
+        let (type_args, args) = self.call_parts(c)?;
+        Some(Expr {
+            kind: ExprKind::Call { callee: Box::new(self.expr(&c.callee)?), type_args, args, optional: c.optional },
+            span,
+        })
+    }
+
+    /// The type arguments and arguments of a call, after the checks on
+    /// the call itself.
+    fn call_parts(&mut self, c: &o::CallExpression) -> Option<(Vec<TypeAnn>, Vec<Expr>)> {
         let mut type_args = Vec::new();
         if let Some(ta) = &c.type_arguments {
             for p in &ta.params {
@@ -1399,10 +1428,7 @@ impl Cx<'_> {
             self.err(code::UNSUPPORTED, c.span, "`eval` and `Function` are not allowed");
             return None;
         }
-        Some(Expr {
-            kind: ExprKind::Call { callee: Box::new(self.expr(&c.callee)?), type_args, args, optional: c.optional },
-            span,
-        })
+        Some((type_args, args))
     }
 
     // -- JSX --------------------------------------------------------------
@@ -1500,6 +1526,51 @@ impl Cx<'_> {
             }
         }
         Some(())
+    }
+}
+
+/// The operator of a binary expression that converts directly (not `==`,
+/// `instanceof`, `in` or a bitwise operator, which give a diagnostic).
+fn plain_bin_op(op: oxc_syntax::operator::BinaryOperator) -> Option<BinOp> {
+    use oxc_syntax::operator::BinaryOperator as B;
+    Some(match op {
+        B::Addition => BinOp::Add,
+        B::Subtraction => BinOp::Sub,
+        B::Multiplication => BinOp::Mul,
+        B::Division => BinOp::Div,
+        B::Remainder => BinOp::Rem,
+        B::Exponential => BinOp::Pow,
+        B::StrictEquality => BinOp::Eq,
+        B::StrictInequality => BinOp::Ne,
+        B::LessThan => BinOp::Lt,
+        B::LessEqualThan => BinOp::Le,
+        B::GreaterThan => BinOp::Gt,
+        B::GreaterEqualThan => BinOp::Ge,
+        _ => return None,
+    })
+}
+
+fn logic_op(op: oxc_syntax::operator::LogicalOperator) -> LogicOp {
+    use oxc_syntax::operator::LogicalOperator as L;
+    match op {
+        L::And => LogicOp::And,
+        L::Or => LogicOp::Or,
+        L::Coalesce => LogicOp::Nullish,
+    }
+}
+
+/// The left side of `e` if `e` is a link of a left-deep chain: a binary
+/// or logical operator, a member access or a call. `Cx::chain` converts
+/// such a chain with a loop.
+fn chain_left<'a>(e: &'a o::Expression<'a>) -> Option<&'a o::Expression<'a>> {
+    use o::Expression as E;
+    match e {
+        E::BinaryExpression(b) if plain_bin_op(b.operator).is_some() => Some(&b.left),
+        E::LogicalExpression(l) => Some(&l.left),
+        E::StaticMemberExpression(m) => Some(&m.object),
+        E::ComputedMemberExpression(m) => Some(&m.object),
+        E::CallExpression(c) => Some(&c.callee),
+        _ => None,
     }
 }
 

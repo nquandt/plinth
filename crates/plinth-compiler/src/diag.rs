@@ -35,6 +35,10 @@ pub mod code {
     /// A `plinth:*` host API call needs a capability that `plinth.toml`
     /// does not declare (SPEC.md §11).
     pub const CAPABILITY_UNDECLARED: &str = "PL1007";
+    /// The code nests deeper than `parse::MAX_DEPTH` (parentheses,
+    /// right operands, blocks, JSX, types). A left-deep chain such as
+    /// `a + b + c` is not nesting (docs/GAPS.md R3).
+    pub const TOO_DEEP: &str = "PL1008";
     // 2xxx: rejected language features (SPEC.md §4.4).
     pub const UNSUPPORTED: &str = "PL2000";
     pub const ANY: &str = "PL2001";

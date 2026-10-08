@@ -10,6 +10,7 @@ pub use plinth_link::{cores, link, rt_abi, split, srcmap};
 pub mod diag;
 pub mod driver;
 pub mod lower;
+pub mod nesting;
 pub mod parse;
 pub mod regex_syntax;
 pub mod tir;
