@@ -78,15 +78,36 @@ is not listed in `primary` is reachable only through `push`.
 | `Group` | `axis?: "auto" \| "row" \| "column"`, `children?` | A logical grouping. In a row, every child gets equal width. `"auto"` behaves as a row on wider windows and a column on narrow ones. |
 | `Tabs` | `items: string[]`, `value: Signal<string> \| string`, `onChange?` | In-screen segmented tabs. |
 | `Sheet` | `open: Signal<boolean> \| boolean`, `title`, `onClose?`, `children?` | Modal: a bottom sheet on a narrow window, a side panel or dialog on a wide one. |
-| `Dialog` | `open: Signal<boolean> \| boolean`, `title`, `message?`, `actions: Element[]` | An alert or confirmation built from your UI, as opposed to the host-owned `plinth:dialog` module (see [host-apis.md](host-apis.md)). |
+| `Dialog` | `open: Signal<boolean> \| boolean`, `title`, `message?`, `actions: Element[]`, `onClose?`, `children?` | An alert or confirmation built from your UI, as opposed to the host-owned `plinth:dialog` module (see [host-apis.md](host-apis.md)). UI API 1.13: the children are a small form (a `Slider`, a `TextField`) between the message and the actions. See "Dialog with a form". |
 | `Menu` | `label`, `actions: Element[]`, `open?: Signal<boolean> \| boolean`, `onClose?` | An anchored popover menu. With `open` (UI API 1.13), the app opens it: it has no button, and it shows at the point of a context-menu event. See "Context menus". |
+
+### Dialog with a form (UI API 1.13)
+
+```tsx
+<Dialog open={adjusting} title="Adjust diameter" message="The circle at (200, 150)." onClose={closeAdjust}
+        actions={[<Action label="Done" role="primary" onPress={closeAdjust} />]}>
+  <Slider label="Diameter" value={diameter} min={4} max={100} step={1} />
+</Dialog>
+```
+
+- The children show between the message and the actions. Keep the form
+  small: one to three fields. For a longer form, use a `Sheet`.
+- When the dialog opens, its first field has the focus. Tab and
+  Shift+Tab stay in the dialog.
+- Enter in a field does not close the dialog. To act on Enter in a
+  `TextField`, give it `onSubmit`.
+- Escape and a click outside the dialog close it: `open` becomes false
+  and `onClose` runs. An action does not close the dialog: set `open` to
+  false in its `onPress`.
+- A host with an older UI API shows no children. `examples/7guis/circle-drawer`
+  uses a dialog with a slider.
 
 ## Collections
 
 | Control | Props | Notes |
 |---|---|---|
-| `List<T>` | **items: T[]**, **key: (item: T) => string \| number**, **row: (item: T) => Element**, `empty?` | Virtualized, keyed. `empty` shows when `items` is empty. |
-| `Row` | **title**, `subtitle?`, `icon?: IconName`, `onPress?`, `trailing?: string`, `selected?`, `onContextMenu?: (x, y) => void`, `children?` | The standard list row. `onContextMenu` (UI API 1.13) gets the position in spacing units. |
+| `List<T>` | **items: T[]**, **key: (item: T) => string \| number**, **row: (item: T) => Element**, `empty?`, `onReorder?: (from, to) => void` | Virtualized, keyed. `empty` shows when `items` is empty. With `onReorder` (UI API 1.13), the user can move the rows: see "Drag and drop". |
+| `Row` | **title**, `subtitle?`, `icon?: IconName`, `onPress?`, `trailing?: string`, `selected?`, `onContextMenu?: (x, y) => void`, `dragValue?: string`, `onDrop?: (value, x, y) => void`, `children?` | The standard list row. `onContextMenu` and `onDrop` (UI API 1.13) get the position in spacing units. |
 | `Grid<T>` | **items: T[]**, **key**, **cell: (item: T) => Element**, `empty?` | Like `List`, with a responsive column count instead of one row per item (2, 3, or 4 columns, by width class). |
 
 ## Content
@@ -305,6 +326,9 @@ the default, or `"row"`), `wrap`, `gap`, `padding`, `paddingX`, `paddingY`,
 - **Context menu (UI API 1.13).** `onContextMenu` on `Box`, `Pressable`,
   `Scroll`, `Canvas` and `Row` gets `(x, y)` in the same units as the
   pointer events. See "Context menus".
+- **Drag and drop (UI API 1.13).** `dragValue` on `Box`, `Pressable` and
+  `Row`; `onDrop(value, x, y)` on `Box`, `Pressable`, `Scroll`, `Canvas`
+  and `Row`. See "Drag and drop".
 - The runtime gives a `Pressable` its hover and disabled states.
 - **Partial styles (UI API 1.7).** `hover`, `active` and `focus` (on `Box`,
   `Pressable`, `Scroll`) and `compact`, `regular`, `wide` (also on `Span`)
@@ -384,6 +408,70 @@ const menu = signal(false);
   the `Menu` as a button.
 - Not built yet: paths and curves, images.
 
+### Drag and drop (UI API 1.13)
+
+Drag and drop works inside one app. It does not work between apps, or
+with the files and the text of the operating system (`docs/GAPS.md` G4).
+
+```tsx
+// The user moves the tasks of a list.
+<List items={tasks()} key={(t) => t.id} onReorder={(from, to) => moveTask(from, to)}
+      row={(t) => <Row title={t.title} />} />
+
+// The user drags a card onto a column.
+<Box label="Done" direction="column" gap={2} onDrop={(id, x, y) => setColumn(id, "done")}>
+  <Box label="Write the guide" dragValue="card-7" padding={2} bg="surface" radius="md" />
+</Box>
+```
+
+- **`onReorder(from, to)` on `List`.** The user moved the row at index
+  `from` of `items` to index `to`. Move the item in your data: the host
+  does not change the order itself. The user can:
+  - drag a row onto another row. A line shows where the row goes: under
+    the target row when the row moves down, over it when it moves up.
+  - press Alt+Up or Alt+Down while the row, or a control in it, has the
+    focus. A `Row` in such a list is a tab stop. A row of another kind
+    needs a control that takes the focus.
+- **`dragValue` on `Box`, `Pressable` and `Row`.** The user can drag the
+  element. The value is a string that you choose (a key). A row of a list
+  with `onReorder` can have a `dragValue` too: a drop on another row moves
+  it, and a drop on a target gives the value.
+- **`onDrop(value, x, y)` on `Box`, `Pressable`, `Scroll`, `Canvas` and
+  `Row`.** An element with `dragValue` was dropped on this element. `x`
+  and `y` are in the units of the pointer events. While a drag is over
+  the element, the host shows it as a target (the selected color and an
+  accent border). An element does not take its own drop. Each target
+  takes each value: ignore the values that you do not want. Only the
+  innermost target gets the drop. On a row with `onDrop`, a drop of a row
+  of the same list is a drop, not a move.
+- **How a drag starts.** With a mouse or a pen: a press of the main
+  button and a move. With a finger (web): a long press (400 ms) and then
+  a move; a move before that scrolls the page. A long press with no move
+  gives the context menu when the finger goes up (Android). A press in a
+  text field or on a slider is not a drag. Escape stops a drag on the web.
+- **What the user sees.** A small card with the label of the element
+  (`title`, `label` or the value) moves with the pointer, and the source
+  shows faded.
+- **Modal layers.** A drag does not start on an element under a `Sheet`,
+  a `Dialog` or an open menu, and nothing under them takes a drop.
+- **Keyboard.** Alt+Up and Alt+Down move a row. For a drop target, give
+  the source `onContextMenu` and a `Menu` with "Move to ..." actions (see
+  "Context menus"), or a button.
+- **Assistive technology.** A polite live region tells "Dragging Apple",
+  "Moved Apple to position 3 of 3" and "Dropped Apple". A row of a list
+  with `onReorder` tells its keys (`aria-keyshortcuts` on the web, the
+  AccessKit keyboard shortcut on the desktop).
+- **Hosts.** The desktop uses the gpui-ce drag and drop. The web uses
+  pointer events, not the HTML drag-and-drop API: that API does not work
+  with a finger and shows the browser's drag image. It works in the
+  sandboxed app frame. A host that does not know UI API 1.13 shows no drag
+  and sends no event: keep another path (buttons) if the move is
+  necessary there.
+- Not built yet: drag and drop between apps and with the operating
+  system, a drag card that the app draws, auto-scroll of a `Scroll` near
+  its edge during a drag, reorder in a `Grid`. `examples/todo` moves its
+  tasks.
+
 ## Layout rules the runtime owns
 
 - **Forms** stack fields vertically. Labels sit above the field on a
@@ -422,7 +510,11 @@ const menu = signal(false);
   `menu item`; they close on an outside click, Escape, or after an
   action runs. The menu key and Shift+F10 run `onContextMenu` on the
   focused element (UI API 1.13).
-- A `Sheet` or a `Dialog` blocks the pointer to the controls under it.
+- Alt+Up and Alt+Down move the focused row of a `List` with `onReorder`
+  (UI API 1.13). A polite live region tells the result of a drag or a
+  move.
+- A `Sheet` or a `Dialog` blocks the pointer to the controls under it,
+  and a drag under it does not start.
 
 ## Versioning
 
