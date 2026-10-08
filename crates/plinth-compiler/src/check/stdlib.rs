@@ -1040,7 +1040,7 @@ impl Checker<'_> {
             let (k, v) = (Type::String, Type::String);
             let sid = c.map_struct(&k, &v);
             let arr = |elem: &Type| TExpr::new(TExprKind::ArrayLit(Vec::new()), Type::Array(Box::new(elem.clone())), span);
-            TExpr::new(TExprKind::StructLit(sid, vec![arr(&k), arr(&v)]), Type::Map(Box::new(k), Box::new(v)), span)
+            TExpr::new(TExprKind::StructLit(sid, vec![arr(&k), arr(&v), arr(&Type::Int)]), Type::Map(Box::new(k), Box::new(v)), span)
         };
         match &e.kind {
             ExprKind::Null => (default_method(), empty_headers(self), default_body()),
@@ -1059,7 +1059,12 @@ impl Checker<'_> {
                         "headers" => {
                             let want = Type::Map(Box::new(Type::String), Box::new(Type::String));
                             let te = self.expr_with(value, &want);
-                            headers = Some(self.coerce(te, &want));
+                            let te = self.coerce(te, &want);
+                            // The core reads the arrays directly: drop the
+                            // holes of deleted headers first.
+                            let sid = self.map_struct(&Type::String, &Type::String);
+                            let (stmts, read) = self.kv_compacted(te, sid, value.span);
+                            headers = Some(TExpr::new(TExprKind::Block(stmts, Box::new(read)), want, value.span));
                         }
                         "body" => {
                             let te = self.expr_with(value, &Type::String.nullable());

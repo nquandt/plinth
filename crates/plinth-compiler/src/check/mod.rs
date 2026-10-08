@@ -1204,22 +1204,16 @@ impl Checker<'_> {
             || matches!(t, Type::Bool | Type::Int | Type::Enum(_))
     }
 
-    /// The comparison for a `Map` key or `Set` element.
-    pub(crate) fn key_eq(&self, k: &Type) -> EqKind {
-        match self.widen(k.clone()) {
-            Type::String => EqKind::Str,
-            Type::Number => EqKind::F64,
-            _ => EqKind::I32,
-        }
-    }
-
-    /// The internal 2-field struct `{ keys: K[], values: V[] }` that backs
-    /// a `Map<K, V>` at run time (HANDOFF.md item 5). A `Map`'s own fields
+    /// The internal 3-field struct `{ keys: K[], values: V[], index: int[] }`
+    /// that backs a `Map<K, V>` at run time (HANDOFF.md item 5). `index` is
+    /// the hash index that only the core's `kv_*` functions read
+    /// (`plinth-rt/src/kv.rs`); an empty array is a valid start value. A `Map`'s own fields
     /// are never exposed to user code; only `Checker` methods read them.
     pub(crate) fn map_struct(&mut self, k: &Type, v: &Type) -> types::StructId {
         let fields = vec![
             Field { name: "keys".into(), ty: Type::Array(Box::new(k.clone())), optional: false },
             Field { name: "values".into(), ty: Type::Array(Box::new(v.clone())), optional: false },
+            Field { name: "index".into(), ty: Type::Array(Box::new(Type::Int)), optional: false },
         ];
         match self.anon_struct(fields) {
             Type::Struct(s) => s,
@@ -1227,9 +1221,13 @@ impl Checker<'_> {
         }
     }
 
-    /// The internal 1-field struct `{ keys: T[] }` that backs a `Set<T>`.
+    /// The internal 2-field struct `{ keys: T[], index: int[] }` that backs
+    /// a `Set<T>`.
     pub(crate) fn set_struct(&mut self, t: &Type) -> types::StructId {
-        let fields = vec![Field { name: "keys".into(), ty: Type::Array(Box::new(t.clone())), optional: false }];
+        let fields = vec![
+            Field { name: "keys".into(), ty: Type::Array(Box::new(t.clone())), optional: false },
+            Field { name: "index".into(), ty: Type::Array(Box::new(Type::Int)), optional: false },
+        ];
         match self.anon_struct(fields) {
             Type::Struct(s) => s,
             _ => unreachable!(),

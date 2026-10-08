@@ -179,3 +179,37 @@ pub fn reverse(p: u32) {
         unsafe { core::ptr::swap_nonoverlapping(base.add(i * size), base.add(j * size), size) };
     }
 }
+
+/// The raw data buffer and the element size, for the `Map`/`Set` index
+/// (`kv.rs`), which reads and moves elements without a bounds check per
+/// element.
+pub(crate) fn raw(p: u32) -> (u32, u32) {
+    (data(p), elem_size(p))
+}
+
+/// Sets the length of `p` to `n`, which must be at most the length.
+pub(crate) fn truncate(p: u32, n: u32) {
+    if n < len(p) {
+        unsafe { store_u32(p + 8, n) };
+    }
+}
+
+/// Gives the `i32` array `p` a new buffer of `words` elements, all
+/// `fill`. The old elements are lost. `kv.rs` uses this for the index of a
+/// `Map`/`Set`.
+pub(crate) fn reset_i32(p: u32, words: u32, fill: i32) {
+    let cap = unsafe { load_u32(p + 12) };
+    if cap < words {
+        let buf = gc::buffer_alloc((words * 4) as usize);
+        free_data(p);
+        unsafe {
+            store_u32(p + 12, words);
+            store_u32(p + 16, buf);
+        }
+    }
+    let d = data(p);
+    for i in 0..words {
+        unsafe { store_u32(d + i * 4, fill as u32) };
+    }
+    unsafe { store_u32(p + 8, words) };
+}

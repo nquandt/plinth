@@ -218,6 +218,15 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("notify_last_error", &[], &[I32]),
     // -- store.sql (core 1.13, docs/SQL.md) -----------------------------------
     ("sql_call", &[I32, I32, I32, I32, I32], &[]),
+    // -- The hash index of a `Map`/`Set` (core 1.13, plinth-rt kv.rs) --------
+    ("kv_find_str", &[I32, I32, I32], &[I32]),
+    ("kv_find_f64", &[I32, I32, F64], &[I32]),
+    ("kv_find_i32", &[I32, I32, I32], &[I32]),
+    ("kv_add", &[I32, I32, I32], &[]),
+    ("kv_remove", &[I32, I32, I32, I32], &[]),
+    ("kv_compact", &[I32, I32, I32], &[]),
+    ("kv_size", &[I32, I32], &[I32]),
+    ("kv_live", &[I32, I32, I32], &[I32]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -329,6 +338,15 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("notify_last_error", 12),
     // store.sql (docs/SQL.md): the first function of core 1.13.
     ("sql_call", 13),
+    // The hash index of a `Map`/`Set` (O(1) set/get/has/delete).
+    ("kv_find_str", 13),
+    ("kv_find_f64", 13),
+    ("kv_find_i32", 13),
+    ("kv_add", 13),
+    ("kv_remove", 13),
+    ("kv_compact", 13),
+    ("kv_size", 13),
+    ("kv_live", 13),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).

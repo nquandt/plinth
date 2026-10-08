@@ -646,7 +646,10 @@ impl Checker<'_> {
     }
 
     /// A loop over the array `arr` that joins `piece(element)` with `sep`.
-    /// `None` when `piece` gives `None` (a wrong element type).
+    /// `None` when `piece` gives `None` (a wrong element type). The loop
+    /// pushes the pieces into an array and `arr_join` makes the text one
+    /// time: `acc = acc + piece` copied the text on each turn, and the GC
+    /// does not run during a call, so a long array ran out of memory.
     pub(super) fn encode_each(&mut self, arr: TExpr, sep: &str, piece: impl FnOnce(&mut Self, TExpr) -> Option<TExpr>) -> Option<TExpr> {
         let span = arr.span;
         let arr_ty = arr.ty.clone();
@@ -658,7 +661,8 @@ impl Checker<'_> {
         let len_v = self.temp(Type::Number);
         let i_v = self.temp(Type::Number);
         let pt_v = self.temp((**elem).clone());
-        let acc_v = self.temp(Type::String);
+        let parts_ty = Type::Array(Box::new(Type::String));
+        let parts_v = self.temp(parts_ty.clone());
         let i_r = var(i_v, &Type::Number);
         let len = TExpr::new(
             TExprKind::Coerce(Coercion::I32ToNum, bx(TExpr::new(TExprKind::Rt("arr_len", vec![var(arr_v, &arr_ty)]), Type::Bool, span))),
@@ -667,16 +671,7 @@ impl Checker<'_> {
         );
         let get = TExpr::new(TExprKind::Index(bx(var(arr_v, &arr_ty)), bx(i_r.clone())), (**elem).clone(), span);
         let piece = piece(self, var(pt_v, elem))?;
-        let append = |acc_v: VarId, e: TExpr| {
-            let sum = TExpr::new(TExprKind::Rt("str_concat", vec![TExpr::new(TExprKind::Var(acc_v), Type::String, span), e]), Type::String, span);
-            TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(acc_v), bx(sum)), Type::String, span))
-        };
-        let gt0 = TExpr::new(TExprKind::Cmp(CmpOp::Gt, EqKind::F64, bx(i_r.clone()), bx(num(0.0))), Type::Bool, span);
-        let body = vec![
-            TStmt::Let(pt_v, Some(get)),
-            TStmt::If(gt0, vec![append(acc_v, str_lit(sep))], Vec::new()),
-            append(acc_v, piece),
-        ];
+        let body = vec![TStmt::Let(pt_v, Some(get)), self.arr_push_discard(var(parts_v, &parts_ty), piece, span)];
         let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(var(len_v, &Type::Number))), Type::Bool, span);
         let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r), bx(num(1.0))), Type::Number, span);
         let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
@@ -684,11 +679,12 @@ impl Checker<'_> {
         let stmts = vec![
             TStmt::Let(arr_v, Some(arr)),
             TStmt::Let(len_v, Some(len)),
-            TStmt::Let(acc_v, Some(str_lit(""))),
+            TStmt::Let(parts_v, Some(TExpr::new(TExprKind::ArrayLit(Vec::new()), parts_ty.clone(), span))),
             TStmt::Let(i_v, Some(num(0.0))),
             TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body },
         ];
-        Some(TExpr::new(TExprKind::Block(stmts, bx(var(acc_v, &Type::String))), Type::String, span))
+        let joined = TExpr::new(TExprKind::Rt("arr_join", vec![var(parts_v, &parts_ty), str_lit(sep)]), Type::String, span);
+        Some(TExpr::new(TExprKind::Block(stmts, bx(joined)), Type::String, span))
     }
 
     fn children(&mut self, el: &JsxElement, spec: &controls::ControlSpec) -> TChildren {
