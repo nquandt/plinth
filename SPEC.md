@@ -335,7 +335,7 @@ Every control is a typed JSX intrinsic from `plinth:ui`. Props in **bold** are r
 | `Group` | `axis?: "auto" \| "row" \| "column"` | A logical grouping (UI API 1.1). In a row, each child gets the same width. `auto` is a row on `regular` and `wide`, and a column on `compact`. The runtime owns the spacing. |
 | `Tabs` | **items** | In-screen segmented tabs. |
 | `Sheet` | **open**, **title**, `onClose` | Modal on compact, side panel or dialog on wide. |
-| `Dialog` | **open**, **title**, `actions` | Alert or confirmation. |
+| `Dialog` | **open**, **title**, `actions`, `onClose` (1.13), children (1.13) | Alert, confirmation, or a small form. |
 
 **Collections**
 
@@ -400,7 +400,15 @@ UI API 1.2 adds the controls `Checkbox`, `TextArea`, `Slider`, `NumberField`, `P
 - **UI API 1.3** adds `Image` (**src**, **alt**, `aspect?: "square" | "wide" | "tall"`). `src` must be a string literal that names a file in the project's `assets/` directory (`PL4008` otherwise), and `alt` must not be empty (`PL4009`). `plinth build` puts the files in the `.plnt` under `assets/`. The host renders an image from the package, sized by the runtime from `aspect` and the width class, and shows a placeholder with the `alt` text if the asset is missing. (Follow-up: limit the height of large images on regular and wide windows.)
 - Every control has an AccessKit role, name and state. Interactive controls take keyboard focus (Tab) and activation (Enter or Space; arrows for `Slider`).
 - **UI API 1.13** adds the event `onContextMenu(x, y)` (id `context-menu`) on `Box`, `Pressable`, `Scroll`, `Canvas` and `Row`, with the units of the pointer events (UI API 1.12, `docs/ui.md`). A right mouse button, the menu key or Shift+F10 on the focused element (then `x, y` are its center), or the browser `contextmenu` event (also a long press on Android) fires it. Only the innermost element with a handler gets it, and an element with a handler is a tab stop. On the web, the host prevents the browser menu only where the app has a handler. `Menu` gets `open` (a `Signal<boolean>` or a boolean, bound both ways) and `onClose`: a `Menu` with `open` has no button, and when the app opens it in an `onContextMenu` handler, it shows at the point of the event. Escape, an outside click or an action closes it, and the focus goes back to where it was.
-- A modal layer (`Dialog`, `Sheet`, a host dialog, an open menu) blocks all pointer input to the controls under it, on every host.
+- **UI API 1.13** also adds drag and drop inside one app:
+  - `dragValue` (a string) on `Box`, `Pressable` and `Row` makes the element draggable.
+  - `onDrop(value, x, y)` on `Box`, `Pressable`, `Scroll`, `Canvas` and `Row` takes a drop. Only the innermost target takes it, and an element does not take its own drop.
+  - `List.onReorder(from, to)` (indexes in `items`) comes from a drag of a row onto another row, or from Alt+Up and Alt+Down on the focused row. The app moves the item; the host never changes the order itself.
+  - The host draws the drop target, the drop line and the drag card, and it announces the drag and its result in a polite live region.
+  - On a touch screen, a drag starts with a long press and then a move. A long press with no move is a context menu.
+  - Drag and drop between apps, or with the files and text of the OS, is not in 1.13.
+- **UI API 1.13** lets `Dialog` hold children: a small form between the message and the actions. The first field gets the focus, and Enter in a field does not close the dialog. `Dialog` also gets `onClose`.
+- A modal layer (`Dialog`, `Sheet`, a host dialog, an open menu) blocks all pointer input to the controls under it, on every host. A drag cannot start under it, and nothing under it takes a drop.
 
 ### 6.4 Layout rules (runtime-owned)
 
