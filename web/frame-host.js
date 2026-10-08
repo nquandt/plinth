@@ -23,7 +23,7 @@
 // result as `declared` and `refused`.
 
 import { checkFrameMessage, applyKvMessage, startMessage, CHANNEL, KV_QUOTA } from "./hub-storage.js";
-import { netDenied, httpFetch } from "./plinth-web.js";
+import { netDenied, httpFetch, browserNotify } from "./plinth-web.js";
 import { FileSpace, idbFileBackend, memoryFileBackend, FILES_CAPABILITY } from "./files.js";
 
 /** `el("p", { class: "x" }, "text", child)`: a small DOM builder (text is never parsed as HTML). */
@@ -89,6 +89,10 @@ export function hostDialog(kind, message, title = "") {
  * - `fetchImpl`: default `fetch`.
  * - `files`: the `FileSpace` of this app for `plinth:files`; default: the
  *   page's IndexedDB (`idbFileBackend(appId)`), or memory without IndexedDB.
+ * - `notify`: the `plinth:notify` backend (`{ show, cancel }`); default:
+ *   `browserNotify()`, the page's `Notification` API, with `notifyIcon` (a
+ *   URL, optional) as the icon. One backend for each frame, so `cancel`
+ *   closes only this app's notifications.
  * - `onStarted()`, `onFailed(message)`.
  *
  * `element` is the iframe; put it in the page. `destroy()` removes it.
@@ -101,6 +105,7 @@ export class AppFrame {
     this.sent = false;
     this.files =
       opts.files ?? new FileSpace(typeof indexedDB !== "undefined" ? idbFileBackend(opts.appId) : memoryFileBackend());
+    this.notify = opts.notify ?? browserNotify(globalThis.Notification, { icon: opts.notifyIcon });
     // `allow-scripts` only: an opaque origin, no forms, no popups, no modal
     // dialogs, no top navigation, no same-origin access.
     this.element = el("iframe", { class: "host-frame", sandbox: "allow-scripts", title: opts.title ?? opts.appId });
@@ -202,6 +207,23 @@ export class AppFrame {
         this.files.call(op, msg.path, op === "write" ? msg.text : null).then((r) => this.answer(msg.id, r));
         break;
       }
+      case "notify-show": {
+        // The frame checked the capability; the page checks it again.
+        if (!this.allowed("notify")) {
+          this.answer(msg.id, this.declared.has("notify") ? "denied:refused" : "denied:undeclared");
+          break;
+        }
+        Promise.resolve()
+          .then(() => this.notify.show(msg.title, msg.body ?? null, msg.tag ?? null))
+          .then(
+            (value) => this.answer(msg.id, value),
+            () => this.answer(msg.id, "unsupported"),
+          );
+        break;
+      }
+      case "notify-cancel":
+        if (this.allowed("notify")) Promise.resolve().then(() => this.notify.cancel(msg.tag)).catch(() => {});
+        break;
       case "hub-save":
         if (!this.hubAllowed()) break;
         try {

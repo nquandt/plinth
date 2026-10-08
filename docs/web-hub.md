@@ -118,6 +118,7 @@ Before the page runs a package (the Hub app and each app), it checks:
 | `clipboard.write` | Works. The page writes to the clipboard for the frame. |
 | `clipboard.read` | Limited. The page reads the clipboard for the frame; the browser asks for permission. The first read can return nothing (the browser API is asynchronous; the host keeps the last value). |
 | `net:<host>`, `net:*`, `net.local` | Limited. The page makes the request for the frame (after the same capability check), so the request has the origin of the page, not `null`. The server must allow requests from this origin (CORS). The request has no cookies. |
+| `notify` | Works. The page shows the notification for the frame with the browser's `Notification` API (an opaque origin cannot), after the same capability check. The browser asks the user for the permission one time for the page origin (it can need a click first). A tag replaces an earlier notification; `cancel` closes it. A permission that the browser denied answers `denied:refused`. |
 | `hub.manage` | Only the Hub app, signed by a trusted key (§3). An app that runs in a frame never gets it. |
 | Other names | Not supported. Calls are refused. |
 

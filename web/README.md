@@ -95,6 +95,7 @@ itself, not in a sandboxed frame: use it for tests and development only.
 | `dialog` | Stand-alone: the browser's own `alert`/`confirm`/`prompt`. In a frame: dialogs that the page draws. The answer is a `completion` event. |
 | `net` | Works with `fetch`, checked against the manifest's `net:<host>`/`net:*`/`net.local` and the refused capabilities. In a frame the page makes the request (checked again there), so it has the page's origin and no cookies. The target server must allow CORS. |
 | `files` | `plinth:files` (core 1.11) on the app's private space, gated on `files.private`. In a frame: the page keeps the files in its IndexedDB (database `plinth-files`, keys `[app id in lower case, path]`) and checks the capability and every path again (`files.js`, the same rules as the desktop host). Stand-alone and in Node: in memory (`FileSpace` on `memoryFileBackend`). |
+| `notify` | `plinth:notify` (core 1.12), gated on `notify`: the browser's `Notification` API (`browserNotify`). In a frame (an opaque origin cannot use the API): the page shows it and checks the capability again. Stand-alone: the page itself. Permission "denied" answers `denied:refused`; no permission question, no API or a sandboxed page answers "unsupported". The tag replaces; `cancel` closes. In Node: "unsupported". |
 | `hub` | With a backend (`opts.hub`, `hub-host.js`) and `hub.manage` granted: the web App Hub. Else every call is `denied(unsupported)` (or `denied(refused)`). |
 
 ## The app-frame bridge
@@ -116,6 +117,8 @@ Frame to page:
 | `net-fetch` | `id`, `url`, `method`, `headers` (`[[name, value]]`), `body` (string or null) | Checks `net:` again, makes the request, `answer` with `[ok, status, text, error]` (`error` is `"denied:<reason>"` or `"network: …"`). |
 | `files-read`, `files-list`, `files-stat`, `files-remove` | `id`, `path` | `plinth:files`: checks `files.private` again, runs the call on the app's space (`FileSpace`, which checks the path again), `answer` with `[ok, 0, text, error]` (`error` is `"denied:<reason>"`, `"invalid-path: <rule>"`, `"not-found"`, …; docs/host-apis.md). A `path` longer than 1024 characters is refused. |
 | `files-write` | `id`, `path`, `text` | The same, for `write`. A `text` longer than 8 MiB is refused. |
+| `notify-show` | `id`, `title`, `body` (string or null), `tag` (string or null) | `plinth:notify`: checks `notify` again, shows the notification (`browserNotify`), `answer` with `"shown"`, `"unsupported"` or `"denied:<reason>"`. Each text is at most 4096 characters. |
+| `notify-cancel` | `tag` | Closes the open notification of this app with that tag. |
 | `size` | `height` | The content height in CSS pixels; the page sizes the iframe if `autoHeight`. |
 | `hub-save` | `state` | Hub app only (`hub.manage` and the `hub` option): the new `plinth:hub` state of the frame's copy; the page stores it. |
 | `hub-launch` | `id` | Hub app only: opens the app (consent window, app window). |

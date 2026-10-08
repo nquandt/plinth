@@ -244,7 +244,32 @@ cancel("reminder");              // removes the notification with this tag
   characters. If Windows refuses the toast, `show` answers "unsupported"
   (the log has a warning).
 - Linux and macOS: not yet. `show` answers "unsupported".
-- Web: not yet. `show` answers "unsupported" (`docs/PRODUCTION.md` H3).
+- Web: the browser's `Notification` API (`browserNotify` in
+  `web/plinth-web.js`). An app runs in a sandboxed frame with an opaque
+  origin, which cannot use the API, so the frame sends the call to the page
+  (`notify-show`, `notify-cancel`, `web/frame-host.js`). The page checks
+  the capability again and shows the notification with the app's title,
+  body and tag (the browser replaces an earlier one with the same tag);
+  `cancel(tag)` closes this app's open notification with that tag. A
+  stand-alone page (`web/index.html`) uses the API in the page itself.
+  The permission:
+  - "granted": `show` answers "shown".
+  - "denied" (the user or the browser blocked notifications for the page):
+    `show` rejects with `Error("denied:refused")`.
+  - "default": the page asks (`Notification.requestPermission()`). If the
+    browser does not ask, or the user closes the question, `show` answers
+    "unsupported" (the console has a warning).
+  - A user gesture: a click in the app frame also activates the page
+    (Chromium's user activation goes to the parent frames; `run-a11y.mjs`
+    checks it in Edge). But the activation ends after a few seconds, and
+    `show` often comes later (`notify-demo` waits 5 s). Chromium asks
+    without a gesture; Firefox and Safari ask only after a gesture, so
+    there the first `show` without one answers "unsupported". Headless
+    Edge does not ask: it answers "denied".
+  - A browser that cannot make a `Notification` in a page (Chrome on
+    Android allows it only in a service worker) answers "unsupported".
+  - The page has no image of the app's icon, so a notification has no icon
+    (`AppFrame`'s `notifyIcon` option can give one).
 
 ## `plinth:hub` (privileged)
 
@@ -411,7 +436,7 @@ covers it. There are three hosts:
 | `dialog` | A modal overlay that the desktop host draws, one request at a time. Escape cancels; Enter confirms. | Same as wasmtime. | Stand-alone: the browser's `alert`, `confirm` and `prompt`. In a frame: a dialog that the page draws (`hostDialog`), because a sandboxed frame cannot show a browser dialog. In Node: a declined answer. |
 | `net` | `ureq` on a worker thread. Time limit 20 s. Body limit 8 MiB (`MAX_BODY`). No redirects. The private-address check runs on the host text and again on the addresses after DNS resolution. | Same as wasmtime. | **Different.** `fetch` with a 20 s time limit, `redirect: "manual"` and `credentials: "omit"`. The host code has no body limit. The private-address check runs only on the host text (`docs/THREAT-MODEL.md` §6 item 1). In a frame, the page makes the request, so the request has the origin of the page. The server must allow CORS. |
 | `files` | A folder for each owner and app id under `%APPDATA%\plinth\spaces\private\`. One worker thread for each app, in call order. 8 MiB for one file, 50 MiB for the space. | Same as wasmtime. | In a frame: the page IndexedDB (database `plinth-files`). Stand-alone and in Node: in memory, so the files go away at a reload. The same path rules and limits as the desktop (`web/files.js`). |
-| `notify` | Windows: a WinRT toast; the tag replaces and `cancel` removes. Linux and macOS: `show` answers "unsupported". | Same as wasmtime. | Not yet: `show` answers "unsupported"; a denied call answers `denied:<reason>` (step 2b of H3). |
+| `notify` | Windows: a WinRT toast; the tag replaces and `cancel` removes. Linux and macOS: `show` answers "unsupported". | Same as wasmtime. | **Different.** The browser's `Notification` API, shown by the page for the app frame. The tag replaces, `cancel` closes. A browser-denied permission answers `denied:refused`; no permission question or no API answers "unsupported". |
 | `hub` | Only for a package that a trusted Hub key signed, with a Hub backend. Else each call answers `denied:unsupported` (or `denied:refused`). | Same as wasmtime. | Only in the web App Hub (`hub-host.js`, browse mode, `docs/web-hub.md` §3.1). Else each call answers `denied:unsupported`. |
 | `error.report` | The runner logs the text and keeps it (`Guest::take_errors`). The desktop host shows the last one in a banner with "Dismiss". | Same as wasmtime. | `reportError`, which is `console.error` by default, and `PlinthApp.onError`. |
 
@@ -435,7 +460,7 @@ runs every web test except `run-a11y.mjs` (by hand).
 | `dialog` | `async_await.rs` (`the_dialogs_example_greets_with_three_awaits` and other tests) | **no test** | **no test** (`run-hub-storage.mjs` checks only the shape of the bridge message) |
 | `net` | `net.rs` (local server: GET, POST, status, denied, private addresses, DNS), unit tests in `net.rs` and `policy.rs` | **no test** | `run-net.mjs`, `run-net-private.mjs`, `run-hub-storage.mjs` (the check of the page) |
 | `files` | `files.rs`, unit tests in `plinth-runner-wasmtime/src/files.rs` | **no test** | `run-files.mjs`, `run-a11y.mjs` (files isolation in the frame) |
-| `notify` | `notify.rs` (a hand-written core caller and compiled apps, with `MemoryNotify`), unit tests in `plinth-runner-wasmtime/src/notify.rs` and `plinth-host-desktop/src/notify.rs` (the real toast only by hand: `--ignored`) | `notify.rs`, by hand | **no test** |
+| `notify` | `notify.rs` (a hand-written core caller and compiled apps, with `MemoryNotify`), unit tests in `plinth-runner-wasmtime/src/notify.rs` and `plinth-host-desktop/src/notify.rs` (the real toast only by hand: `--ignored`) | `notify.rs`, by hand | `run-notify.mjs` (a fake `Notification`, `notify-demo`), `run-a11y.mjs` (`notify-demo` export in Edge, without and with the permission) |
 | `hub` | `hub_api.rs`, `hub_ui.rs`, `plinth-host-desktop/tests/hub_host.rs` | **no test** | `run-hub-host.mjs`, `run-a11y.mjs` (the Hub app in the browser) |
 | `error.report` | `errors.rs`, `async_await.rs` (uncaught rejections) | `errors.rs`, by hand | `run-stop.mjs` |
 

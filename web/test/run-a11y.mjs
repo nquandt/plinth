@@ -370,6 +370,16 @@ async function main() {
         failed = true;
       }
     }
+    // plinth:notify through the frame and the page (export of notify-demo).
+    if (!typingOnly && !hubOnly) {
+      console.log("== notifications through the page (notify-demo export) ==");
+      try {
+        console.log(`  ok: ${await checkNotify(cdpPort)}`);
+      } catch (err) {
+        console.error(`  FAILED: ${err.stack ?? err}`);
+        failed = true;
+      }
+    }
     // The web App Hub (docs/web-hub.md): served by `plinth registry serve --web`.
     if (!typingOnly && !exportOnly) console.log("== web App Hub ==");
     if (!typingOnly && !exportOnly) try {
@@ -926,6 +936,54 @@ async function checkWebExport(cdpPort) {
     await page.waitFor(state, 20000);
     await typeKeys(page, frame, () => frame.eval(`document.querySelector("#app input[type=text]").focus()`));
     return { violations, note: "notes from a static server (kv kept across a reload), todo from one file on disk" };
+  } finally {
+    await page.close();
+    server.close();
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * `plinth:notify` (core 1.12) in Edge: notify-demo as a web export, so the
+ * app runs in the sandboxed frame and the page shows the notification
+ * (`frame-host.js`, `browserNotify`). "Remind me" (a real click) shows a
+ * notification after 5 s. First with no permission: the result must be a
+ * defined answer (headless Edge does not ask the user), and the app must
+ * not stop. Then with the permission given through DevTools: "shown".
+ */
+async function checkNotify(cdpPort) {
+  const exe = path.join(root, "target/debug", process.platform === "win32" ? "plinth.exe" : "plinth");
+  const dir = await mkdtemp(path.join(tmpdir(), "plinth-a11y-notify-"));
+  const folder = path.join(dir, "notify-web");
+  execFileSync(exe, ["build", path.join(root, "examples/notify-demo"), "--target", "web", "--out", folder], { stdio: "ignore" });
+  const server = await startServer(folder);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const page = await openPage(cdpPort);
+  const frame = frameSurface(page);
+  const remind = `[...document.querySelectorAll("#app button")].find((b) => b.textContent.trim() === "Remind me")`;
+  const result = `(() => { const t = document.getElementById("app").innerText;
+    if (t.includes("This app stopped")) throw new Error("the app stopped: " + t);
+    const m = t.match(/The notification is shown\\.|This device cannot show notifications\\.|No notification: [^\\n]*/); return m ? m[0] : null; })()`;
+  const once = async () => {
+    await page.navigate(`${base}/`);
+    await frame.waitFor(`${remind} ? true : null`, 20000);
+    const permission = await page.eval(`Notification.permission`);
+    await mouseClick(page, frame, remind);
+    // A click in the frame also activates the page (User Activation v2).
+    const activated = await page.eval(`navigator.userActivation?.isActive ?? null`);
+    await frame.waitFor(`document.getElementById("app").innerText.includes("A reminder comes") ? true : null`, 5000).catch(async () => {
+      // A new out-of-process frame can miss the first synthetic click.
+      await mouseClick(page, frame, remind);
+    });
+    const answer = await frame.waitFor(result, 15000);
+    return { answer, permission, activated };
+  };
+  try {
+    const first = await once();
+    await page.send("Browser.grantPermissions", { origin: base, permissions: ["notifications"] });
+    const granted = await once();
+    if (granted.answer !== "The notification is shown.") throw new Error(`with the permission: ${granted.answer}`);
+    return `no permission (${first.permission}, page activated by the frame click: ${first.activated}): "${first.answer}"; with the permission: "${granted.answer}"`;
   } finally {
     await page.close();
     server.close();

@@ -1138,6 +1138,72 @@ function manifestEntry(manifestText) {
 const DeniedReason = { undeclared: 0, refused: 1, unsupported: 2 };
 
 /**
+ * A `plinth:notify` backend on the browser's `Notification` API (SPEC.md
+ * §11, docs/host-apis.md "plinth:notify"): `{ show(title, body, tag),
+ * cancel(tag) }`. `show` resolves with "shown", "unsupported" or
+ * "denied:refused" (the user or the browser blocked notifications for this
+ * page). It asks for the permission when the browser has not asked yet
+ * (`Notification.requestPermission()`); a browser can refuse to ask
+ * without a user gesture, and then the answer is "unsupported". A page
+ * with an opaque origin (a sandboxed frame) cannot use the API: it answers
+ * "unsupported". `tag` is the `tag` option, so the browser replaces an
+ * earlier notification with the same tag; `cancel(tag)` closes the open
+ * notification with that tag. `opts`: `icon` (a URL), `origin` (default
+ * the origin of this page), `log` (default `console.warn`).
+ */
+function browserNotify(N = globalThis.Notification, opts = {}) {
+  const log = opts.log ?? ((s) => console.warn(s));
+  const origin = opts.origin ?? globalThis.origin;
+  const usable = typeof N === "function" && origin !== "null";
+  const open = new Map(); // tag -> the open Notification
+  return {
+    async show(title, body, tag) {
+      if (!usable) return "unsupported";
+      let permission = N.permission;
+      if (permission === "default" && typeof N.requestPermission === "function") {
+        try {
+          permission = await N.requestPermission();
+        } catch (e) {
+          log(`[plinth] notify: the browser did not ask for the permission: ${e?.message ?? e}`);
+          return "unsupported";
+        }
+      }
+      if (permission === "denied") return "denied:refused";
+      if (permission !== "granted") {
+        // The user closed the question, or the browser did not ask (no user gesture).
+        log(`[plinth] notify: no permission for notifications (${permission})`);
+        return "unsupported";
+      }
+      const options = {};
+      if (body !== null && body !== undefined) options.body = body;
+      if (tag !== null && tag !== undefined) options.tag = tag;
+      if (opts.icon) options.icon = opts.icon;
+      let n;
+      try {
+        n = new N(title, options);
+      } catch (e) {
+        // For example Chrome on Android: only a service worker can show one.
+        log(`[plinth] notify: the browser refused the notification: ${e?.message ?? e}`);
+        return "unsupported";
+      }
+      if (tag !== null && tag !== undefined) {
+        open.set(tag, n);
+        n.onclose = () => {
+          if (open.get(tag) === n) open.delete(tag);
+        };
+      }
+      return "shown";
+    },
+    cancel(tag) {
+      const n = open.get(tag);
+      if (!n) return;
+      open.delete(tag);
+      n.close();
+    },
+  };
+}
+
+/**
  * True for a host that names the local network rather than the public
  * internet (`net.local`, SPEC.md §11): `localhost` and `*.localhost`, a
  * `.local` name, or an IP literal in a non-public range: unspecified,
@@ -1381,6 +1447,7 @@ function hostImports(
     netFetch = null,
     files = null,
     onCommitBytes = null,
+    notify = null,
   } = {},
 ) {
   // A capability is usable when the manifest declares it and the user did
@@ -1442,14 +1509,24 @@ function hostImports(
     return id;
   }
   // plinth:notify (core 1.12, docs/PRODUCTION.md H3): the same request id
-  // and `[ok, 0, text, error]` completion as `net.fetch`. This host has no
-  // notification area yet, so an allowed call answers "unsupported". A
-  // denied call answers "denied:<reason>"; it never traps.
-  function openNotify() {
+  // and `[ok, 0, text, error]` completion as `net.fetch`. The capability
+  // check comes first; a denied call answers "denied:<reason>" and never
+  // traps. `notify` (`browserNotify`, or the frame's bridge to the page)
+  // answers "shown", "unsupported" or "denied:refused"; with no `notify`
+  // (Node), an allowed call answers "unsupported".
+  function openNotify(title, body, tag) {
     const id = nextRequest++;
     const reason = capReason("notify");
-    const result = reason !== null ? [false, 0, "", deniedText(reason)] : [true, 0, "unsupported", null];
-    Promise.resolve().then(() => completeRequest?.(id, result));
+    const run =
+      reason !== null
+        ? Promise.resolve([false, 0, "", deniedText(reason)])
+        : Promise.resolve()
+            .then(() => (notify ? notify.show(title, body, tag) : "unsupported"))
+            .catch(() => "unsupported")
+            .then((text) =>
+              typeof text === "string" && text.startsWith("denied:") ? [false, 0, "", text] : [true, 0, text === "shown" ? "shown" : "unsupported", null],
+            );
+    run.then((result) => completeRequest?.(id, result));
     return id;
   }
   function mem() {
@@ -1707,12 +1784,18 @@ function hostImports(
     // (each `option<string>` as for `net.fetch`'s body). `show` returns the
     // request id directly; `cancel` writes a `result<_, host-error>`.
     "plinth:app/notify@1.0.0": {
-      show(_titlePtr, _titleLen, _bodyTag, _bodyPtr, _bodyLen, _tagTag, _tagPtr, _tagLen) {
-        return openNotify();
+      show(titlePtr, titleLen, bodyTag, bodyPtr, bodyLen, tagTag, tagPtr, tagLen) {
+        const title = readString(titlePtr, titleLen);
+        const body = bodyTag === 0 ? null : readString(bodyPtr, bodyLen);
+        const tag = tagTag === 0 ? null : readString(tagPtr, tagLen);
+        return openNotify(title, body, tag);
       },
-      cancel(_ptr, _len, retptr) {
+      cancel(ptr, len, retptr) {
         const reason = capReason("notify");
         if (reason !== null) return writeDeniedUnit(retptr, reason);
+        const tag = readString(ptr, len);
+        // Fire-and-forget: an unknown tag is not an error.
+        if (notify) Promise.resolve().then(() => notify.cancel(tag)).catch(() => {});
         writeOkUnit(retptr);
       },
     },
@@ -2074,7 +2157,7 @@ function stopReason(err, lastTrap) {
   }
   return msg;
 }
-  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, readPlnt, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, defaultAskDialog, loadCore, linkApp, PlinthApp, stopReason };
+  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, readPlnt, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, defaultAskDialog, loadCore, linkApp, PlinthApp, stopReason };
   })();
 
   // ---- dom-renderer.js
@@ -4108,6 +4191,9 @@ const KV_QUOTA = 512 * 1024;
 /** The longest key that the frame accepts (characters). */
 const MAX_KEY = 1024;
 
+/** The longest title, body or tag of a notification that the page accepts (characters). */
+const MAX_NOTIFY_TEXT = 4096;
+
 /** The tag on each message between the hub page and the app frame. */
 const CHANNEL = "plinth-frame/1";
 
@@ -4326,6 +4412,9 @@ const FRAME_TYPES = {
   "files-list": { id: "number", path: "string" },
   "files-stat": { id: "number", path: "string" },
   "files-remove": { id: "number", path: "string" },
+  // plinth:notify (core 1.12): the page shows the notification.
+  "notify-show": { id: "number", title: "string" },
+  "notify-cancel": { tag: "string" },
   size: { height: "number" },
   // Only from the frame of the Hub app (the page gave it a `plinth:hub` snapshot).
   "hub-save": { state: "object" },
@@ -4360,6 +4449,11 @@ function checkFrameMessage(data) {
     if (data.type === "files-write" && data.text.length > FILES_MAX_FILE) return null;
     if (data.type !== "files-write" && data.text !== undefined) return null;
   }
+  if (data.type === "notify-show") {
+    const optional = (v) => v === null || (typeof v === "string" && v.length <= MAX_NOTIFY_TEXT);
+    if (data.title.length > MAX_NOTIFY_TEXT || !optional(data.body) || !optional(data.tag)) return null;
+  }
+  if (data.type === "notify-cancel" && data.tag.length > MAX_NOTIFY_TEXT) return null;
   if (data.type === "size" && !(Number.isFinite(data.height) && data.height >= 0)) return null;
   if (data.type === "hub-save" && (data.state === null || Array.isArray(data.state))) return null;
   if (data.type === "hub-call") {
@@ -4396,7 +4490,7 @@ function applyKvMessage(store, id, msg, quota = KV_QUOTA) {
 function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA, hub = null }) {
   return { channel: CHANNEL, type: "start", pkg, core, kv: store.kvSnapshot(id), quota, refused: [...refused], hub };
 }
-  return { KV_QUOTA, MAX_KEY, CHANNEL, entrySize, memoryStorage, HubStore, frameKvStore, checkFrameMessage, applyKvMessage, startMessage };
+  return { KV_QUOTA, MAX_KEY, MAX_NOTIFY_TEXT, CHANNEL, entrySize, memoryStorage, HubStore, frameKvStore, checkFrameMessage, applyKvMessage, startMessage };
   })();
 
   // ---- app-worker.js
@@ -4437,7 +4531,7 @@ function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA, hub = n
 // No DOM code: `test/run-worker.mjs` runs both sides in Node over a
 // `MessageChannel`.
 
-const { PlinthApp, httpFetch, defaultAskDialog, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON } = __plinth_web;
+const { PlinthApp, httpFetch, defaultAskDialog, browserNotify, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON } = __plinth_web;
 const { decodeOps } = __protocol;
 const { frameKvStore } = __hub_storage;
 const { FileSpace, memoryFileBackend } = __files;
@@ -4543,6 +4637,10 @@ function runWorker(scope) {
       },
       netFetch: (url, method, headers, body) => ask("net-fetch", { url, method, headers, body }),
       files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
+      notify: {
+        show: (title, body, tag) => ask("notify-show", { title, body, tag }),
+        cancel: (tag) => send({ type: "notify-cancel", tag }),
+      },
       hub,
       requestFrame: (callback) => {
         frameCallback = callback;
@@ -4643,7 +4741,9 @@ class WorkerApp {
    * the Worker gets a snapshot, and each write comes back to this store);
    * `kvQuota` (characters; the Worker refuses a write over it, as
    * `frameKvStore`); `refused`; `log`; `reportError`; `askDialog`;
-   * `clipboard`; `netFetch`; `files` (a `FileSpace`); `memoryLimitPages`;
+   * `clipboard`; `netFetch`; `files` (a `FileSpace`); `notify` (`{ show,
+   * cancel }`; default `browserNotify()`, the page's `Notification` API);
+   * `memoryLimitPages`;
    * `timeLimitMs` (the time limit of one call; default `CALL_TIME_LIMIT_MS`);
    * for the Hub app: `hubSnapshot`, and `send(msg)`/`ask(type, fields)` to
    * the page for the `hub-*` messages.
@@ -4822,11 +4922,22 @@ class WorkerApp {
       case "clipboard-write":
         if (this.clip) Promise.resolve().then(() => this.clip.writeText(msg.text)).catch(() => {});
         break;
+      case "notify-cancel":
+        Promise.resolve()
+          .then(() => this._notify().cancel(msg.tag))
+          .catch(() => {});
+        break;
       case "hub-save":
       case "hub-launch":
         o.send?.(msg);
         break;
     }
+  }
+
+  /** The `plinth:notify` backend: the caller's, else the page's `Notification` API. */
+  _notify() {
+    this.notifyBackend ??= this.opts.notify ?? browserNotify();
+    return this.notifyBackend;
   }
 
   /** A request from the Worker; the result is its answer. */
@@ -4835,6 +4946,7 @@ class WorkerApp {
     if (type === "dialog") return (o.askDialog ?? defaultAskDialog)(f.kind, f.message);
     if (type === "clipboard-read") return this.clip ? this.clip.readText() : null;
     if (type === "net-fetch") return o.netFetch ? o.netFetch(f.url, f.method, f.headers, f.body) : httpFetch(f.url, f.method, f.headers, f.body);
+    if (type === "notify-show") return this._notify().show(f.title, f.body ?? null, f.tag ?? null);
     if (type.startsWith("files-")) return this.files.call(type.slice("files-".length), f.path, f.text ?? null);
     if (type === "hub-call" && o.ask) return o.ask(type, f);
     throw new Error(`unknown request ${type}`);
@@ -4870,7 +4982,7 @@ class WorkerApp {
 // result as `declared` and `refused`.
 
 const { checkFrameMessage, applyKvMessage, startMessage, CHANNEL, KV_QUOTA } = __hub_storage;
-const { netDenied, httpFetch } = __plinth_web;
+const { netDenied, httpFetch, browserNotify } = __plinth_web;
 const { FileSpace, idbFileBackend, memoryFileBackend, FILES_CAPABILITY } = __files;
 
 /** `el("p", { class: "x" }, "text", child)`: a small DOM builder (text is never parsed as HTML). */
@@ -4936,6 +5048,10 @@ function hostDialog(kind, message, title = "") {
  * - `fetchImpl`: default `fetch`.
  * - `files`: the `FileSpace` of this app for `plinth:files`; default: the
  *   page's IndexedDB (`idbFileBackend(appId)`), or memory without IndexedDB.
+ * - `notify`: the `plinth:notify` backend (`{ show, cancel }`); default:
+ *   `browserNotify()`, the page's `Notification` API, with `notifyIcon` (a
+ *   URL, optional) as the icon. One backend for each frame, so `cancel`
+ *   closes only this app's notifications.
  * - `onStarted()`, `onFailed(message)`.
  *
  * `element` is the iframe; put it in the page. `destroy()` removes it.
@@ -4948,6 +5064,7 @@ class AppFrame {
     this.sent = false;
     this.files =
       opts.files ?? new FileSpace(typeof indexedDB !== "undefined" ? idbFileBackend(opts.appId) : memoryFileBackend());
+    this.notify = opts.notify ?? browserNotify(globalThis.Notification, { icon: opts.notifyIcon });
     // `allow-scripts` only: an opaque origin, no forms, no popups, no modal
     // dialogs, no top navigation, no same-origin access.
     this.element = el("iframe", { class: "host-frame", sandbox: "allow-scripts", title: opts.title ?? opts.appId });
@@ -5049,6 +5166,23 @@ class AppFrame {
         this.files.call(op, msg.path, op === "write" ? msg.text : null).then((r) => this.answer(msg.id, r));
         break;
       }
+      case "notify-show": {
+        // The frame checked the capability; the page checks it again.
+        if (!this.allowed("notify")) {
+          this.answer(msg.id, this.declared.has("notify") ? "denied:refused" : "denied:undeclared");
+          break;
+        }
+        Promise.resolve()
+          .then(() => this.notify.show(msg.title, msg.body ?? null, msg.tag ?? null))
+          .then(
+            (value) => this.answer(msg.id, value),
+            () => this.answer(msg.id, "unsupported"),
+          );
+        break;
+      }
+      case "notify-cancel":
+        if (this.allowed("notify")) Promise.resolve().then(() => this.notify.cancel(msg.tag)).catch(() => {});
+        break;
       case "hub-save":
         if (!this.hubAllowed()) break;
         try {
@@ -5349,6 +5483,12 @@ async function start(msg) {
     // plinth:files: the page keeps the files (its IndexedDB, one namespace
     // for this app) and checks the capability and the path again.
     files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
+    // plinth:notify: an opaque origin cannot use the Notification API, so
+    // the page shows the notification (it checks the capability again).
+    notify: {
+      show: (title, body, tag) => ask("notify-show", { title, body, tag }),
+      cancel: (tag) => send({ type: "notify-cancel", tag }),
+    },
     // Only the Hub app gets a `plinth:hub` snapshot; `FrameHub` runs on it
     // in the Worker, and its messages go to the page through this frame.
     hubSnapshot: msg.hub ?? null,

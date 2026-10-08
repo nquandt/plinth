@@ -24,6 +24,9 @@ export const KV_QUOTA = 512 * 1024;
 /** The longest key that the frame accepts (characters). */
 export const MAX_KEY = 1024;
 
+/** The longest title, body or tag of a notification that the page accepts (characters). */
+export const MAX_NOTIFY_TEXT = 4096;
+
 /** The tag on each message between the hub page and the app frame. */
 export const CHANNEL = "plinth-frame/1";
 
@@ -242,6 +245,9 @@ const FRAME_TYPES = {
   "files-list": { id: "number", path: "string" },
   "files-stat": { id: "number", path: "string" },
   "files-remove": { id: "number", path: "string" },
+  // plinth:notify (core 1.12): the page shows the notification.
+  "notify-show": { id: "number", title: "string" },
+  "notify-cancel": { tag: "string" },
   size: { height: "number" },
   // Only from the frame of the Hub app (the page gave it a `plinth:hub` snapshot).
   "hub-save": { state: "object" },
@@ -276,6 +282,11 @@ export function checkFrameMessage(data) {
     if (data.type === "files-write" && data.text.length > FILES_MAX_FILE) return null;
     if (data.type !== "files-write" && data.text !== undefined) return null;
   }
+  if (data.type === "notify-show") {
+    const optional = (v) => v === null || (typeof v === "string" && v.length <= MAX_NOTIFY_TEXT);
+    if (data.title.length > MAX_NOTIFY_TEXT || !optional(data.body) || !optional(data.tag)) return null;
+  }
+  if (data.type === "notify-cancel" && data.tag.length > MAX_NOTIFY_TEXT) return null;
   if (data.type === "size" && !(Number.isFinite(data.height) && data.height >= 0)) return null;
   if (data.type === "hub-save" && (data.state === null || Array.isArray(data.state))) return null;
   if (data.type === "hub-call") {

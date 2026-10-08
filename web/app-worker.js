@@ -34,7 +34,7 @@
 // No DOM code: `test/run-worker.mjs` runs both sides in Node over a
 // `MessageChannel`.
 
-import { PlinthApp, httpFetch, defaultAskDialog, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON } from "./plinth-web.js";
+import { PlinthApp, httpFetch, defaultAskDialog, browserNotify, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON } from "./plinth-web.js";
 import { decodeOps } from "./protocol.js";
 import { frameKvStore } from "./hub-storage.js";
 import { FileSpace, memoryFileBackend } from "./files.js";
@@ -140,6 +140,10 @@ export function runWorker(scope) {
       },
       netFetch: (url, method, headers, body) => ask("net-fetch", { url, method, headers, body }),
       files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
+      notify: {
+        show: (title, body, tag) => ask("notify-show", { title, body, tag }),
+        cancel: (tag) => send({ type: "notify-cancel", tag }),
+      },
       hub,
       requestFrame: (callback) => {
         frameCallback = callback;
@@ -240,7 +244,9 @@ export class WorkerApp {
    * the Worker gets a snapshot, and each write comes back to this store);
    * `kvQuota` (characters; the Worker refuses a write over it, as
    * `frameKvStore`); `refused`; `log`; `reportError`; `askDialog`;
-   * `clipboard`; `netFetch`; `files` (a `FileSpace`); `memoryLimitPages`;
+   * `clipboard`; `netFetch`; `files` (a `FileSpace`); `notify` (`{ show,
+   * cancel }`; default `browserNotify()`, the page's `Notification` API);
+   * `memoryLimitPages`;
    * `timeLimitMs` (the time limit of one call; default `CALL_TIME_LIMIT_MS`);
    * for the Hub app: `hubSnapshot`, and `send(msg)`/`ask(type, fields)` to
    * the page for the `hub-*` messages.
@@ -419,11 +425,22 @@ export class WorkerApp {
       case "clipboard-write":
         if (this.clip) Promise.resolve().then(() => this.clip.writeText(msg.text)).catch(() => {});
         break;
+      case "notify-cancel":
+        Promise.resolve()
+          .then(() => this._notify().cancel(msg.tag))
+          .catch(() => {});
+        break;
       case "hub-save":
       case "hub-launch":
         o.send?.(msg);
         break;
     }
+  }
+
+  /** The `plinth:notify` backend: the caller's, else the page's `Notification` API. */
+  _notify() {
+    this.notifyBackend ??= this.opts.notify ?? browserNotify();
+    return this.notifyBackend;
   }
 
   /** A request from the Worker; the result is its answer. */
@@ -432,6 +449,7 @@ export class WorkerApp {
     if (type === "dialog") return (o.askDialog ?? defaultAskDialog)(f.kind, f.message);
     if (type === "clipboard-read") return this.clip ? this.clip.readText() : null;
     if (type === "net-fetch") return o.netFetch ? o.netFetch(f.url, f.method, f.headers, f.body) : httpFetch(f.url, f.method, f.headers, f.body);
+    if (type === "notify-show") return this._notify().show(f.title, f.body ?? null, f.tag ?? null);
     if (type.startsWith("files-")) return this.files.call(type.slice("files-".length), f.path, f.text ?? null);
     if (type === "hub-call" && o.ask) return o.ask(type, f);
     throw new Error(`unknown request ${type}`);

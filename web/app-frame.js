@@ -71,6 +71,12 @@ async function start(msg) {
     // plinth:files: the page keeps the files (its IndexedDB, one namespace
     // for this app) and checks the capability and the path again.
     files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
+    // plinth:notify: an opaque origin cannot use the Notification API, so
+    // the page shows the notification (it checks the capability again).
+    notify: {
+      show: (title, body, tag) => ask("notify-show", { title, body, tag }),
+      cancel: (tag) => send({ type: "notify-cancel", tag }),
+    },
     // Only the Hub app gets a `plinth:hub` snapshot; `FrameHub` runs on it
     // in the Worker, and its messages go to the page through this frame.
     hubSnapshot: msg.hub ?? null,

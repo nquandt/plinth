@@ -177,6 +177,72 @@ function manifestEntry(manifestText) {
 const DeniedReason = { undeclared: 0, refused: 1, unsupported: 2 };
 
 /**
+ * A `plinth:notify` backend on the browser's `Notification` API (SPEC.md
+ * §11, docs/host-apis.md "plinth:notify"): `{ show(title, body, tag),
+ * cancel(tag) }`. `show` resolves with "shown", "unsupported" or
+ * "denied:refused" (the user or the browser blocked notifications for this
+ * page). It asks for the permission when the browser has not asked yet
+ * (`Notification.requestPermission()`); a browser can refuse to ask
+ * without a user gesture, and then the answer is "unsupported". A page
+ * with an opaque origin (a sandboxed frame) cannot use the API: it answers
+ * "unsupported". `tag` is the `tag` option, so the browser replaces an
+ * earlier notification with the same tag; `cancel(tag)` closes the open
+ * notification with that tag. `opts`: `icon` (a URL), `origin` (default
+ * the origin of this page), `log` (default `console.warn`).
+ */
+export function browserNotify(N = globalThis.Notification, opts = {}) {
+  const log = opts.log ?? ((s) => console.warn(s));
+  const origin = opts.origin ?? globalThis.origin;
+  const usable = typeof N === "function" && origin !== "null";
+  const open = new Map(); // tag -> the open Notification
+  return {
+    async show(title, body, tag) {
+      if (!usable) return "unsupported";
+      let permission = N.permission;
+      if (permission === "default" && typeof N.requestPermission === "function") {
+        try {
+          permission = await N.requestPermission();
+        } catch (e) {
+          log(`[plinth] notify: the browser did not ask for the permission: ${e?.message ?? e}`);
+          return "unsupported";
+        }
+      }
+      if (permission === "denied") return "denied:refused";
+      if (permission !== "granted") {
+        // The user closed the question, or the browser did not ask (no user gesture).
+        log(`[plinth] notify: no permission for notifications (${permission})`);
+        return "unsupported";
+      }
+      const options = {};
+      if (body !== null && body !== undefined) options.body = body;
+      if (tag !== null && tag !== undefined) options.tag = tag;
+      if (opts.icon) options.icon = opts.icon;
+      let n;
+      try {
+        n = new N(title, options);
+      } catch (e) {
+        // For example Chrome on Android: only a service worker can show one.
+        log(`[plinth] notify: the browser refused the notification: ${e?.message ?? e}`);
+        return "unsupported";
+      }
+      if (tag !== null && tag !== undefined) {
+        open.set(tag, n);
+        n.onclose = () => {
+          if (open.get(tag) === n) open.delete(tag);
+        };
+      }
+      return "shown";
+    },
+    cancel(tag) {
+      const n = open.get(tag);
+      if (!n) return;
+      open.delete(tag);
+      n.close();
+    },
+  };
+}
+
+/**
  * True for a host that names the local network rather than the public
  * internet (`net.local`, SPEC.md §11): `localhost` and `*.localhost`, a
  * `.local` name, or an IP literal in a non-public range: unspecified,
@@ -420,6 +486,7 @@ function hostImports(
     netFetch = null,
     files = null,
     onCommitBytes = null,
+    notify = null,
   } = {},
 ) {
   // A capability is usable when the manifest declares it and the user did
@@ -481,14 +548,24 @@ function hostImports(
     return id;
   }
   // plinth:notify (core 1.12, docs/PRODUCTION.md H3): the same request id
-  // and `[ok, 0, text, error]` completion as `net.fetch`. This host has no
-  // notification area yet, so an allowed call answers "unsupported". A
-  // denied call answers "denied:<reason>"; it never traps.
-  function openNotify() {
+  // and `[ok, 0, text, error]` completion as `net.fetch`. The capability
+  // check comes first; a denied call answers "denied:<reason>" and never
+  // traps. `notify` (`browserNotify`, or the frame's bridge to the page)
+  // answers "shown", "unsupported" or "denied:refused"; with no `notify`
+  // (Node), an allowed call answers "unsupported".
+  function openNotify(title, body, tag) {
     const id = nextRequest++;
     const reason = capReason("notify");
-    const result = reason !== null ? [false, 0, "", deniedText(reason)] : [true, 0, "unsupported", null];
-    Promise.resolve().then(() => completeRequest?.(id, result));
+    const run =
+      reason !== null
+        ? Promise.resolve([false, 0, "", deniedText(reason)])
+        : Promise.resolve()
+            .then(() => (notify ? notify.show(title, body, tag) : "unsupported"))
+            .catch(() => "unsupported")
+            .then((text) =>
+              typeof text === "string" && text.startsWith("denied:") ? [false, 0, "", text] : [true, 0, text === "shown" ? "shown" : "unsupported", null],
+            );
+    run.then((result) => completeRequest?.(id, result));
     return id;
   }
   function mem() {
@@ -746,12 +823,18 @@ function hostImports(
     // (each `option<string>` as for `net.fetch`'s body). `show` returns the
     // request id directly; `cancel` writes a `result<_, host-error>`.
     "plinth:app/notify@1.0.0": {
-      show(_titlePtr, _titleLen, _bodyTag, _bodyPtr, _bodyLen, _tagTag, _tagPtr, _tagLen) {
-        return openNotify();
+      show(titlePtr, titleLen, bodyTag, bodyPtr, bodyLen, tagTag, tagPtr, tagLen) {
+        const title = readString(titlePtr, titleLen);
+        const body = bodyTag === 0 ? null : readString(bodyPtr, bodyLen);
+        const tag = tagTag === 0 ? null : readString(tagPtr, tagLen);
+        return openNotify(title, body, tag);
       },
-      cancel(_ptr, _len, retptr) {
+      cancel(ptr, len, retptr) {
         const reason = capReason("notify");
         if (reason !== null) return writeDeniedUnit(retptr, reason);
+        const tag = readString(ptr, len);
+        // Fire-and-forget: an unknown tag is not an error.
+        if (notify) Promise.resolve().then(() => notify.cancel(tag)).catch(() => {});
         writeOkUnit(retptr);
       },
     },
