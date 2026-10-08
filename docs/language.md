@@ -399,9 +399,31 @@ if (word.test(input)) { /* ... */ }
 - **Not supported:** lookahead and lookbehind (`(?=`, `(?!`, `(?<=`, `(?<!`) and backreferences (`\1`). A literal with one of these is the compile error `PL2018`; `new RegExp` with one throws an `Error` that the app can catch.
 - **Members:** `test(s)`, `exec(s)`, `source`, `flags`, `global`, `lastIndex` (read and write; with `g`, `test` and `exec` start at `lastIndex` and move it).
 - **`exec` result:** `{ groups: (string | null)[]; index: number } | null`. `groups[0]` is the whole match; an unmatched group is `null`. There is no `result[0]` indexing and no object of named groups yet: use `groups[i]`.
+- **`String` methods with a `RegExp`:**
+  - `s.match(re)`: without `g`, the same result as `re.exec(s)`. With `g`, a `string[]` of all whole matches, or `null`. `lastIndex` is 0 after it.
+  - `s.matchAll(re)`: the `exec` result of each match. `re` must have `g`, else it throws an `Error`. It starts at `re.lastIndex` and does not change it.
+  - `s.replace(re, replacement)`: without `g`, it replaces the first match; with `g`, all matches. `s.replaceAll(re, replacement)` throws an `Error` if `re` has no `g`. The replacement string can use `$&` (the match), `$1` to `$99` (a group), `$<name>` (a named group), `$$` (one `$`), `` $` `` (the text before the match) and `$'` (the text after the match).
+  - `s.split(re)` and `s.split(re, limit)`: the parts between the matches, with the groups of each match between them. `g` and `lastIndex` have no effect.
+  - `s.search(re)`: the index of the first match, or -1. It does not read or change `lastIndex`.
+  - `match`, `matchAll` and `search` also take a string, which becomes `new RegExp(s)` (`new RegExp(s, "g")` for `matchAll`), as in JavaScript. With a string, `replace`, `replaceAll` and `split` work on the plain text, as before.
+  - After an empty match with `g`, the search moves on by one character, so `"abc".replace(/x*/g, "-")` gives `"-a-b-c-"`.
+
+```ts
+"2026-10-07".replace(/(\d+)-(\d+)-(\d+)/, "$3.$2.$1");       // "07.10.2026"
+"a1b22".replace(/\d+/g, (m) => "<" + m + ">");               // "a<1>b<22>"
+"a, b,c".split(/\s*,\s*/);                                    // ["a", "b", "c"]
+for (const m of "x=1 y=2".matchAll(/(\w)=(\d)/g)) { /* m.groups[1], m.index */ }
+```
+
 - **Speed:** the matcher is a Pike VM. Its time is linear in the length of the input for every pattern, so a pattern such as `(a+)+$` cannot freeze the app.
-- **Differences from JavaScript:** `\d \w \s`, word boundaries and the `i` flag use ASCII only. `.` without `s` excludes only `\n` and `\r`. Indexes are UTF-16 units, as in JavaScript.
-- **Not yet:** `String` methods that take a regular expression (`match`, `matchAll`, `replace`, `split`, `search`).
+- **Differences from JavaScript:**
+  - `\d \w \s`, word boundaries and the `i` flag use ASCII only. `.` without `s` excludes only `\n` and `\r`. Indexes are UTF-16 units, as in JavaScript.
+  - The matcher works on code points: after an empty match, the search moves on by one code point (JavaScript moves by one UTF-16 unit without the `u` flag). Plinth has no `u` flag.
+  - `s.match(re)` has a different type with and without `g`, so the compiler must know if `re` has `g`. Give a regular expression literal, or a `const` set to a literal or to `new RegExp(p, "flags")` with literal flags. Otherwise `match` is the compile error `PL2018`; use `re.exec(s)` or `s.matchAll(re)`.
+  - `matchAll` returns an array, not an iterator. `for (const m of s.matchAll(re))` works the same.
+  - A replacement function has a fixed signature: `(match: string, groups: (string | null)[], index: number) => string`, where `groups` is the same as in `exec`. JavaScript gives `(match, p1, p2, ..., offset, string, groups)`. The function can take fewer parameters, for example `(m) => m.toUpperCase()`.
+  - In `split`, an unmatched group gives `""`. JavaScript gives `undefined`.
+  - `matchAll` and `replaceAll` without `g` throw an `Error`, not a `TypeError`.
 
 ## Rejected features, and why
 

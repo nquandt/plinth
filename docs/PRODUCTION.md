@@ -47,7 +47,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | L1 | Core TypeScript subset: unions, narrowing, generics, classes, `Map`/`Set`, tuples, destructuring, JSON, `try`/`catch`, `async`/`await`, Promise API | Preview | Done | HANDOFF §2 "Compiler", `tests/language*` (171 cases) |
 | L2 | Every rejected feature gives a diagnostic with a golden test | Preview | Done | `plinth-compiler/tests/golden.rs` (SPEC M3 exit) |
 | L3 | The compiler never panics or overflows its stack on any input | Preview | Done | `tests/robustness.rs`, `PL1000`, `stacker` |
-| L4 | Regular expressions (`RegExp`) | Beta | Partial | Linear-time matcher in the core (`plinth-rt/src/regex.rs`), literals, `new RegExp`, `test`, `exec`, collectable objects (`tests/lang.rs` `regexp_*`), `docs/language.md` "Regular expressions". Next: `String.match/matchAll/replace/split/search` with a `RegExp`. |
+| L4 | Regular expressions (`RegExp`) | Beta | Done | Linear-time matcher in the core (`plinth-rt/src/regex.rs`), literals, `new RegExp`, `test`, `exec`, collectable objects; the `String` methods `match`, `matchAll`, `replace`, `replaceAll`, `split` and `search` with a `RegExp` (`plinth-rt/src/regexp.rs`, `check/regexps.rs`). Tests: `tests/lang.rs` `regexp_*` and `regex_*`, `plinth-rt` `regexp::tests`, golden `PL2018_match_unknown_g`. `docs/language.md` "Regular expressions" lists the subset and the differences from JavaScript. Lookaround and backreferences stay out (`docs/LIMITS.md`). |
 | L5 | Locale-aware text: number, date and plural formatting (`plinth:locale`) | Beta | Open | `docs/I18N.md` §3.3 (steps 1–2). |
 | L6 | Long expression chains (more than 1000 terms) | Beta | Open | GAPS R3. |
 | L7 | Smaller async code (promise machinery in the core) | 1.0 | Open | GAPS "Async code size". |
@@ -221,7 +221,7 @@ Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh`
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
 | Preview | 26 | 0 | 0 |
-| Beta | 12 | 16 | 24 |
+| Beta | 13 | 16 | 23 |
 | 1.0 | 1 | 1 | 21 |
 | Later (after 1.0) | 0 | 0 | 1 |
 
@@ -230,8 +230,7 @@ Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh`
 **The next level is Beta.** Start with the items that the owner and the code do not block:
 
 1. H3: notifications step 2 (the `plinth:notify` module, the desktop toast, then the web).
-2. L4: `RegExp` step 3 (`String.match/replace/split/search`).
-3. C3: ship core 1.12 and freeze it, after H3 and L4.
-4. T7, R6, L9: `wasm-opt`, performance budgets, source locations in errors.
-5. R4, Q4: wasmi in all suites and in CI.
-6. The owner decisions H4, S6 and D7.
+2. C3: ship core 1.12 and freeze it, after H3 (L4 is done).
+3. T7, R6, L9: `wasm-opt`, performance budgets, source locations in errors.
+4. R4, Q4: wasmi in all suites and in CI.
+5. The owner decisions H4, S6 and D7.

@@ -204,6 +204,14 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("regex_test", &[I32, I32], &[I32]),
     ("regex_exec", &[I32, I32], &[I32]),
     ("regex_last_match_index", &[], &[F64]),
+    // -- String methods with a RegExp (core 1.12, PRODUCTION.md L4 step 3) ---
+    ("regex_search", &[I32, I32], &[F64]),
+    ("regex_match", &[I32, I32], &[I32]),
+    ("regex_replace", &[I32, I32, I32, I32], &[I32]),
+    ("regex_split", &[I32, I32, F64], &[I32]),
+    ("regex_scan", &[I32, I32, I32], &[I32]),
+    ("regex_scan_indices", &[], &[I32]),
+    ("regex_splice", &[I32, I32, I32, I32], &[I32]),
     // -- plinth:notify (core 1.12, docs/PRODUCTION.md H3) ----------------------
     ("notify_show", &[I32, I32, I32, I32, I32], &[]),
     ("notify_cancel", &[I32], &[]),
@@ -306,6 +314,13 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("regex_test", 12),
     ("regex_exec", 12),
     ("regex_last_match_index", 12),
+    ("regex_search", 12),
+    ("regex_match", 12),
+    ("regex_replace", 12),
+    ("regex_split", 12),
+    ("regex_scan", 12),
+    ("regex_scan_indices", 12),
+    ("regex_splice", 12),
     // plinth:notify (docs/PRODUCTION.md H3), also in the unshipped 1.12.
     ("notify_show", 12),
     ("notify_cancel", 12),

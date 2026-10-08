@@ -3343,3 +3343,271 @@ function Home() {
     assert!(end <= allowed, "memory grew from {} KiB to {} KiB in the second half: RegExp objects leak", half >> 10, end >> 10);
 }
 
+// -- String methods with a RegExp (PRODUCTION.md L4, step 3) -----------------
+
+/// Runs `body` (statements that set `out`) in a component and returns the
+/// text it shows.
+fn regexp_out(body: &str) -> String {
+    let main = format!(
+        "import {{ app, Screen, Text }} from \"plinth:ui\";\nfunction Home() {{\n  let out = \"\";\n{body}\n  return <Screen title=\"Home\"><Text>{{out}}</Text></Screen>;\n}}\n{APP}"
+    );
+    text_of(&run(&main), ControlKind::Text)
+}
+
+#[test]
+fn regexp_string_match_with_and_without_g() {
+    let out = regexp_out(
+        r#"
+  const a = "x1y22".match(/\d+/);
+  const b = "x1y22".match(/\d+/g);
+  const c = "xy".match(/\d+/g);
+  const re = /(\d)/g;
+  re.lastIndex = 3;
+  const d = "a1b2".match(re);
+  const first = a === null ? "null" : (a.groups[0] ?? "") + "@" + a.index;
+  out = first + "," + (b === null ? "null" : b.join("|")) + "," + (c === null) + "," + (d === null ? "null" : d.join("|")) + "," + re.lastIndex;
+  const n = "a.b".match("\\.");
+  out = out + "," + (n === null ? -1 : n.index);
+  const k = new RegExp("[a-z]", "gi");
+  const e = "AbC".match(k);
+  out = out + "," + (e === null ? "null" : e.join(""));"#,
+    );
+    assert_eq!(out, "1@1,1|22,true,1|2,0,1,AbC");
+}
+
+#[test]
+fn regexp_string_match_all() {
+    let out = regexp_out(
+        r#"
+  const r = /(\w)(\d)/g;
+  for (const m of "a1 b2 c3".matchAll(r)) {
+    out = out + (m.groups[1] ?? "") + (m.groups[2] ?? "") + "@" + m.index + ";";
+  }
+  r.lastIndex = 3;
+  const rest = "a1 b2 c3".matchAll(r);
+  out = out + rest.length + "," + r.lastIndex + ",";
+  for (const m of "\u{1F600}a\u{1F600}a".matchAll(/a/g)) { out = out + m.index + ";"; }
+  out = out + "x".matchAll(/y/g).length + "," + "aXbx".matchAll("x").length;"#,
+    );
+    assert_eq!(out, "a1@0;b2@3;c3@6;2,3,2;5;0,1");
+}
+
+#[test]
+fn regexp_string_match_all_without_g_throws() {
+    let out = regexp_out(
+        r#"
+  try {
+    const all = "a".matchAll(/a/);
+    out = "no error " + all.length;
+  } catch (e) {
+    out = "caught: " + e.message;
+  }"#,
+    );
+    assert_eq!(out, "caught: matchAll needs a RegExp with the g flag");
+}
+
+#[test]
+fn regexp_string_replace_patterns() {
+    let out = regexp_out(
+        r##"
+  const parts = [
+    "abc".replace(/x*/g, "-"),
+    "a1b2".replace(/\d/, "#"),
+    "a1b2".replace(/\d/g, "#"),
+    "John Smith".replace(/(\w+)\s(\w+)/, "$2, $1"),
+    "x".replace(/x/, "$$-$&-$`-$'"),
+    "ab".replace(/b/, "[$`|$']"),
+    "2026-10".replace(/(?<y>\d+)-(?<m>\d+)/, "$<m>/$<y>"),
+    "a".replace(/(a)/, "$01$10$0$2"),
+    "ab".replace(/(x)?b/, "[$1]"),
+    "foo".replaceAll(/o/g, "0"),
+    "\u{1F600}\u{1F600}".replace(/x*/g, "-"),
+    "a.b.c".replace(".", "-"),
+    "a.b.c".replaceAll(".", "-"),
+  ];
+  out = parts.join(" ");"##,
+    );
+    assert_eq!(out, "-a-b-c- a#b2 a#b# Smith, John $-x-- a[a|] 10/2026 aa0$0$2 a[] f00 -\u{1F600}-\u{1F600}- a-b.c a-b-c");
+}
+
+#[test]
+fn regexp_string_replace_keeps_and_resets_last_index() {
+    let out = regexp_out(
+        r#"
+  const g = /a/g;
+  g.lastIndex = 2;
+  const x = "aaa".replace(g, "b");
+  const n = /a/;
+  n.lastIndex = 2;
+  const y = "aaa".replace(n, "b");
+  out = x + "," + g.lastIndex + "," + y + "," + n.lastIndex;"#,
+    );
+    assert_eq!(out, "bbb,0,baa,2");
+}
+
+#[test]
+fn regexp_string_replace_all_without_g_throws() {
+    let out = regexp_out(
+        r#"
+  try {
+    out = "aa".replaceAll(/a/, "b");
+  } catch (e) {
+    out = "caught: " + e.message;
+  }
+  const dynamic = new RegExp("a", "");
+  try {
+    out = out + "|" + "aa".replaceAll(dynamic, (m) => m + m);
+  } catch (e) {
+    out = out + "|caught: " + e.message;
+  }"#,
+    );
+    assert_eq!(out, "caught: replaceAll needs a RegExp with the g flag|caught: replaceAll needs a RegExp with the g flag");
+}
+
+#[test]
+fn regexp_string_replace_with_a_function() {
+    let out = regexp_out(
+        r#"
+  const a = "a1b22".replace(/\d+/g, (m) => "<" + m + ">");
+  const b = "a1b22".replace(/\d+/, (m) => "<" + m + ">");
+  const c = "k=v x=y".replaceAll(/(\w)=(\w)/g, (m, g, i) => (g[2] ?? "") + "=" + (g[1] ?? "") + i);
+  const up = (m: string): string => m.toUpperCase();
+  const d = "abc".replace(/[ac]/g, up);
+  const e = "abc".replace(/x*/g, () => ".");
+  let calls = 0;
+  const f = "aaa".replace(/a/g, (m) => { calls++; return "" + calls; });
+  out = [a, b, c, d, e, f].join(" ");"#,
+    );
+    assert_eq!(out, "a<1>b<22> a<1>b22 v=k0 y=x4 AbC .a.b.c. 123");
+}
+
+#[test]
+fn regexp_string_replace_function_can_throw() {
+    let out = regexp_out(
+        r#"
+  try {
+    out = "abc".replace(/b/, (m) => { throw new Error("no " + m); });
+  } catch (e) {
+    out = "caught: " + e.message;
+  }"#,
+    );
+    assert_eq!(out, "caught: no b");
+}
+
+#[test]
+fn regexp_string_split() {
+    let out = regexp_out(
+        r#"
+  const parts = [
+    "a1b2c".split(/\d/).join(","),
+    "a1b2c".split(/(\d)/).join(","),
+    "a1b2c".split(/\d/, 2).join(","),
+    "a1b2c".split(/(\d)/, 2).join(","),
+    "abc".split(/x*/).join(","),
+    "a , b,c".split(/\s*,\s*/).join(","),
+    "a-b".split(/(x)?-/).join(","),
+    "" + "".split(/,/).length,
+    "" + "".split(/x*/).length,
+    "a,b".split(",").join("+"),
+  ];
+  out = parts.join(" ");"#,
+    );
+    assert_eq!(out, "a,b,c a,1,b,2,c a,b a,1 a,b,c a,b,c a,,b 1 0 a+b");
+}
+
+#[test]
+fn regexp_string_search_ignores_last_index() {
+    let out = regexp_out(
+        r#"
+  const r = /b/g;
+  r.lastIndex = 3;
+  const a = "abcb".search(r);
+  const b = "xyz".search(/b/);
+  const c = "a.c".search(".");
+  const d = "\u{1F600}b".search(/b/);
+  out = a + "," + r.lastIndex + "," + b + "," + c + "," + d;"#,
+    );
+    assert_eq!(out, "1,3,-1,0,2");
+}
+
+#[test]
+fn regexp_string_match_needs_a_known_g_flag() {
+    let main = with_app("function first(re: RegExp): number { const m = \"a\".match(re); return 0; }");
+    assert_eq!(codes(&main), ["PL2018"]);
+    let ok = with_app("const re = new RegExp(\"a\", \"g\"); function first(): number { const m = \"a\".match(re); return m === null ? 0 : m.length; }");
+    assert!(codes(&ok).is_empty(), "{:?}", codes(&ok));
+}
+
+/// The String methods with a RegExp allocate new arrays and strings on
+/// each call; these must be collected like other app data.
+#[test]
+fn regexp_string_method_results_are_collected() {
+    let main = r#"import { app, Screen, Text, Button, signal } from "plinth:ui";
+const count = signal(0);
+function Home() {
+  return (
+    <Screen title="Home">
+      <Text>{"n" + count()}</Text>
+      <Button label="Run" onPress={() => {
+        let n = 0;
+        for (let i = 0; i < 50; i++) {
+          const s = "item" + i + "-42 and item" + i + "-7";
+          n += s.replace(/(\d+)/g, "<$1>").length > 0 ? 1 : 0;
+          n += s.replace(/\d+/g, (m) => m + m).length > 0 ? 1 : 0;
+          n += s.matchAll(/-(\d+)/g).length;
+          n += s.split(/\s+/).length;
+          const m = s.match(/\d+/g);
+          n += m === null ? 0 : 1;
+          n += s.search(/and/) > 0 ? 1 : 0;
+        }
+        count.set(n);
+      }} />
+    </Screen>
+  );
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        assert!(tree.apply(&commit).unwrap().is_empty());
+    }
+    let button = {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        loop {
+            let id = stack.pop().expect("no Button found");
+            let node = tree.get(id).unwrap();
+            if node.kind == Some(ControlKind::Button) {
+                break id;
+            }
+            stack.extend(node.children.iter());
+        }
+    };
+    let handler = tree.get(button).unwrap().handler(event::PRESS).unwrap();
+    let mut half = 0;
+    let presses = 100;
+    for i in 0..presses {
+        if i == presses / 2 {
+            half = guest.memory_bytes();
+        }
+        let mut w = Writer::new();
+        w.event(&Event::Ui { handler, event: event::PRESS, value: Value::Null });
+        for commit in guest.on_event(w.as_bytes()).unwrap() {
+            assert!(tree.apply(&commit).unwrap().is_empty());
+        }
+    }
+    let end = guest.memory_bytes();
+    // Each iteration: 1 + 1 + 2 + 3 + 1 + 1.
+    assert!(texts_in(&tree).contains(&"n450".to_string()), "{:?}", texts_in(&tree));
+    let allowed = half + (half / 4).max(256 << 10);
+    assert!(end <= allowed, "memory grew from {} KiB to {} KiB in the second half: String/RegExp results leak", half >> 10, end >> 10);
+}
+

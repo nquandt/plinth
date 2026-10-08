@@ -6,6 +6,7 @@
 mod asyncfn;
 mod expr;
 mod promises;
+mod regexps;
 mod jsx;
 pub mod stdlib;
 mod stmt;
@@ -296,6 +297,12 @@ pub struct Checker<'d> {
     /// `Promise.all` helper functions, one per element type
     /// (`check/promises.rs`).
     promise_alls: Vec<(promises::Combinator, Type, FuncId)>,
+    /// `const` variables bound to a `RegExp` whose `g` flag is known
+    /// (`check/regexps.rs`): `s.match(re)` needs it for its result type.
+    regex_globals: HashMap<VarId, bool>,
+    /// The `matchAll` helper, then the `replace`-with-a-function helpers
+    /// for a callback of 0 to 3 parameters (`check/regexps.rs`).
+    regex_helpers: [Option<FuncId>; 5],
 }
 
 /// The built-in `Error` class (SPEC.md §5.6). `throw` takes an instance of
@@ -376,6 +383,8 @@ pub fn check_ex(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>,
         promises: Vec::new(),
         async_rt: None,
         promise_alls: Vec::new(),
+        regex_globals: HashMap::new(),
+        regex_helpers: [None; 5],
     };
     c.prog.module_count = modules.len() as u32;
     c.declare_error_class(modules[main].file);

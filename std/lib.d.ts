@@ -57,12 +57,41 @@ interface String {
   slice(start?: number, end?: number): string;
   repeat(count: number): string;
   lastIndexOf(search: string): number;
-  replace(search: string, replacement: string): string;
-  replaceAll(search: string, replacement: string): string;
+  /**
+   * With a `RegExp` (PRODUCTION.md L4 step 3): the replacement string can
+   * use `$&`, `$1`..`$99`, `$<name>`, `$$`, `` $` `` and `$'`. Without
+   * `g`, only the first match is replaced. A replacement function gets the
+   * match, the groups (as `exec` gives them) and the index: a fixed
+   * signature, unlike JavaScript's `(match, p1, p2, ..., offset, string)`.
+   */
+  replace(search: string | RegExp, replacement: string | ((match: string, groups: (string | null)[], index: number) => string)): string;
+  /** With a `RegExp` without `g`, this throws an `Error` (as JavaScript). */
+  replaceAll(search: string | RegExp, replacement: string | ((match: string, groups: (string | null)[], index: number) => string)): string;
   padStart(targetLength: number, pad?: string): string;
   padEnd(targetLength: number, pad?: string): string;
   charAt(index: number): string;
   split(separator: string): string[];
+  /**
+   * The parts between the matches, then the groups of each match (an
+   * unmatched group gives "", where JavaScript gives `undefined`).
+   */
+  split(separator: RegExp, limit?: number): string[];
+  /**
+   * Without `g`: the same result as `re.exec(s)`. With `g`: all whole
+   * matches as a `string[]`, or `null`. The compiler must know if `re` has
+   * `g`: give a regular expression literal, or a `const` set to one (or to
+   * `new RegExp(p, "flags")`). This declaration joins the two shapes for
+   * editors. A string argument becomes `new RegExp(s)`.
+   */
+  match(re: RegExp | string): ({ groups: (string | null)[]; index: number } & string[]) | null;
+  /**
+   * The `exec` result of each match, as an array (not an iterator). `re`
+   * must have `g`, else this throws an `Error` (as JavaScript). It starts
+   * at `re.lastIndex` and does not change it.
+   */
+  matchAll(re: RegExp | string): { groups: (string | null)[]; index: number }[];
+  /** The index of the first match, or -1. It ignores `lastIndex`. */
+  search(re: RegExp | string): number;
 }
 
 interface Number {
@@ -179,7 +208,9 @@ interface Object {}
 /**
  * A compiled pattern (PRODUCTION.md L4 step 2): a `/pattern/flags` literal,
  * or `new RegExp(pattern, flags?)`. Supported flags are `g`, `i`, `m` and
- * `s`. Like `Map`/`Set` above, `test`/`exec`/the properties are checked
+ * `s`. The `String` methods `match`, `matchAll`, `replace`, `replaceAll`,
+ * `split` and `search` take a `RegExp` (step 3, see `String` above).
+ * Like `Map`/`Set` above, `test`/`exec`/the properties are checked
  * and run directly by the compiler and runtime
  * (`plinth-compiler/src/check/expr.rs::regexp_method`), not by a body
  * written here — this declaration is documentation for editors, kept in

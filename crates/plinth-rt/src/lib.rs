@@ -708,6 +708,19 @@ abi! {
     fn __plinth_rt_regex_test(handle: i32, input: i32) -> i32 { regexp::test(handle, ptr(input)) as i32 }
     fn __plinth_rt_regex_exec(handle: i32, input: i32) -> i32 { regexp::exec(handle, ptr(input)) as i32 }
     fn __plinth_rt_regex_last_match_index() -> f64 { regexp::last_match_index() }
+    // -- String methods with a RegExp (core 1.12, PRODUCTION.md L4 step 3) --
+    // The string comes first, then the `RegExp`: the order of `s.m(re)`.
+    fn __plinth_rt_regex_search(input: i32, handle: i32) -> f64 { regexp::search(handle, ptr(input)) }
+    fn __plinth_rt_regex_match(input: i32, handle: i32) -> i32 { regexp::match_global(handle, ptr(input)) as i32 }
+    fn __plinth_rt_regex_replace(input: i32, handle: i32, repl: i32, require_g: i32) -> i32 {
+        regexp::replace(handle, ptr(input), ptr(repl), require_g != 0) as i32
+    }
+    fn __plinth_rt_regex_split(input: i32, handle: i32, limit: f64) -> i32 { regexp::split(handle, ptr(input), limit) as i32 }
+    fn __plinth_rt_regex_scan(input: i32, handle: i32, mode: i32) -> i32 { regexp::scan(handle, ptr(input), mode) as i32 }
+    fn __plinth_rt_regex_scan_indices() -> i32 { regexp::scan_indices() as i32 }
+    fn __plinth_rt_regex_splice(input: i32, groups: i32, indices: i32, reps: i32) -> i32 {
+        regexp::splice(ptr(input), ptr(groups), ptr(indices), ptr(reps)) as i32
+    }
 }
 
 // Hot reload (SPEC.md §13): a dev-only ABI function, not declared with the

@@ -654,7 +654,7 @@ impl Checker<'_> {
     /// catchable `SyntaxError`-like `Error`, built from the plain `If`/
     /// `Throw`/`Block` machinery `try`/`catch` already has, with no new
     /// codegen needed.
-    fn regex_new(&mut self, pattern: TExpr, flags: TExpr, span: Span) -> TExpr {
+    pub(super) fn regex_new(&mut self, pattern: TExpr, flags: TExpr, span: Span) -> TExpr {
         let h = self.temp(Type::RegExp);
         let h_read = TExpr::new(TExprKind::Var(h), Type::RegExp, span);
         let compiled = TExpr::new(TExprKind::Rt("regex_compile", vec![pattern, flags]), Type::RegExp, span);
@@ -920,17 +920,23 @@ impl Checker<'_> {
             }
             _ => self.expr(e, None),
         };
+        self.callback_value(te, e.span, params, ret)
+    }
+
+    /// The checks of [`Self::callback`] on an argument that is already
+    /// checked (`e_span` is its span).
+    pub(super) fn callback_value(&mut self, te: TExpr, e_span: Span, params: &[Type], ret: Option<Type>) -> (TExpr, usize) {
         match te.ty.clone() {
             Type::Func(ft) => {
                 let n = ft.params.len();
                 if n > params.len() {
-                    self.err(code::ARG_COUNT, e.span, format!("this callback gets at most {} argument(s)", params.len()));
+                    self.err(code::ARG_COUNT, e_span, format!("this callback gets at most {} argument(s)", params.len()));
                     return (te, 0);
                 }
                 for (have, want) in ft.params.iter().zip(params) {
                     if have.repr() != want.repr() || self.conversion(want, have).is_none() {
                         let msg = format!("the callback parameter must accept `{}`", self.show(want));
-                        self.err(code::TYPE_MISMATCH, e.span, msg);
+                        self.err(code::TYPE_MISMATCH, e_span, msg);
                     }
                 }
                 if let Some(r) = &ret
@@ -939,14 +945,14 @@ impl Checker<'_> {
                     && (ft.ret.repr() != r.repr() || self.conversion(&ft.ret, r).is_none())
                 {
                     let msg = format!("the callback must return `{}`, not `{}`", self.show(r), self.show(&ft.ret));
-                    self.err(code::TYPE_MISMATCH, e.span, msg);
+                    self.err(code::TYPE_MISMATCH, e_span, msg);
                 }
                 (te, n)
             }
             Type::Error => (te, 0),
             other => {
                 let msg = format!("expected a function, not `{}`", self.show(&other));
-                self.err(code::TYPE_MISMATCH, e.span, msg);
+                self.err(code::TYPE_MISMATCH, e_span, msg);
                 (TExpr { ty: Type::Error, ..te }, 0)
             }
         }
@@ -1080,7 +1086,7 @@ impl Checker<'_> {
         }
     }
 
-    fn num_arg(&mut self, args: &[Expr], i: usize, default: f64, span: Span) -> TExpr {
+    pub(super) fn num_arg(&mut self, args: &[Expr], i: usize, default: f64, span: Span) -> TExpr {
         match args.get(i) {
             Some(a) => {
                 let te = self.expr(a, Some(&Type::Number));
@@ -1093,6 +1099,19 @@ impl Checker<'_> {
     fn string_method(&mut self, o: TExpr, prop: &str, prop_span: Span, args: &[Expr], span: Span) -> TExpr {
         let rt = |name: &'static str, args: Vec<TExpr>, ty: Type| TExpr::new(TExprKind::Rt(name, args), ty, span);
         let b = |e: TExpr| TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(e)), Type::Bool, span);
+        let (o, first) = match prop {
+            "replace" | "replaceAll" | "split" | "match" | "matchAll" | "search" => match self.string_regex_method(o, prop, args, span) {
+                Ok(e) => return e,
+                Err(back) => back,
+            },
+            _ => (o, None),
+        };
+        // The first argument, already checked by `string_regex_method`.
+        let mut first = first.map(|f| self.coerce(f, &Type::String));
+        let mut str_arg = |this: &mut Self, i: usize| match (i, first.take()) {
+            (0, Some(f)) => f,
+            _ => this.str_arg(args, i, span),
+        };
         match prop {
             "trim" => rt("str_trim", vec![o], Type::String),
             "toUpperCase" => rt("str_upper", vec![o], Type::String),
@@ -1112,13 +1131,13 @@ impl Checker<'_> {
             }
             "lastIndexOf" => rt("str_last_index_of", vec![o, self.str_arg(args, 0, span)], Type::Number),
             "replace" => {
-                let a = self.str_arg(args, 0, span);
-                let b = self.str_arg(args, 1, span);
+                let a = str_arg(self, 0);
+                let b = str_arg(self, 1);
                 rt("str_replace", vec![o, a, b], Type::String)
             }
             "replaceAll" => {
-                let a = self.str_arg(args, 0, span);
-                let b = self.str_arg(args, 1, span);
+                let a = str_arg(self, 0);
+                let b = str_arg(self, 1);
                 rt("str_replace_all", vec![o, a, b], Type::String)
             }
             "padStart" => {
@@ -1149,7 +1168,7 @@ impl Checker<'_> {
                 rt("str_slice", vec![o, a, a2], Type::String)
             }
             "split" => {
-                let sep = self.str_arg(args, 0, span);
+                let sep = str_arg(self, 0);
                 rt("str_split", vec![o, sep], Type::Array(Box::new(Type::String)))
             }
             _ => {
@@ -1173,29 +1192,7 @@ impl Checker<'_> {
             }
             "exec" => {
                 let s = self.str_arg(args, 0, span);
-                let elem_ty = Type::String.nullable();
-                let arr_ty = Type::Array(Box::new(elem_ty)).nullable();
-                let av = self.temp(arr_ty.clone());
-                let arr_read = TExpr::new(TExprKind::Var(av), arr_ty.clone(), span);
-                let call = TExpr::new(TExprKind::Rt("regex_exec", vec![o, s]), arr_ty.clone(), span);
-                let is_null = TExpr::new(TExprKind::IsNull(bx(arr_read.clone())), Type::Bool, span);
-                let non_null_arr_ty = Type::Array(Box::new(Type::String.nullable()));
-                let sid = match self.anon_struct(vec![
-                    Field { name: "groups".into(), ty: non_null_arr_ty.clone(), optional: false },
-                    Field { name: "index".into(), ty: Type::Number, optional: false },
-                ]) {
-                    Type::Struct(id) => id,
-                    _ => unreachable!("anon_struct always returns Type::Struct"),
-                };
-                let groups_val = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(arr_read.clone())), non_null_arr_ty, span);
-                let index_val = TExpr::new(TExprKind::Rt("regex_last_match_index", vec![]), Type::Number, span);
-                let built = TExpr::new(TExprKind::StructLit(sid, vec![groups_val, index_val]), Type::Struct(sid), span);
-                let result_ty = self.nullable(Type::Struct(sid), span);
-                let built = self.coerce(built, &result_ty);
-                let null_v = TExpr::new(TExprKind::Null, Type::Null, span);
-                let null_v = self.coerce(null_v, &result_ty);
-                let cond = TExpr::new(TExprKind::Cond(bx(is_null), bx(null_v), bx(built)), result_ty.clone(), span);
-                TExpr::new(TExprKind::Block(vec![TStmt::Let(av, Some(call))], bx(cond)), result_ty, span)
+                self.regex_exec_expr(o, s, span)
             }
             _ => {
                 self.err(code::NO_PROPERTY, prop_span, format!("`RegExp` has no method `{prop}`"));

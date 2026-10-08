@@ -488,6 +488,12 @@ impl Program {
     pub fn group_count(&self) -> u32 {
         self.n_groups
     }
+
+    /// Whether the pattern has a named group. A `$<name>` replacement
+    /// pattern is literal text when it has none (as in JavaScript).
+    pub fn has_names(&self) -> bool {
+        !self.names.is_empty()
+    }
 }
 
 struct Compiler {
@@ -740,7 +746,9 @@ pub fn exec(prog: &Program, input: &str, start: usize) -> Option<Captures> {
     exec_chars(prog, &chars, start)
 }
 
-fn exec_chars(prog: &Program, input: &[char], start: usize) -> Option<Captures> {
+/// Like [`exec`], on an input that is already split into chars (so a
+/// loop over the matches of one input splits it only one time).
+pub fn exec_chars(prog: &Program, input: &[char], start: usize) -> Option<Captures> {
     let insts = &prog.insts;
     let n = insts.len();
     let mut clist = ThreadList::new(n);

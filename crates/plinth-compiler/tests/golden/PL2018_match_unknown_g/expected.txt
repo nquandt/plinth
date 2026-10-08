@@ -1,0 +1,4 @@
+app/main.tsx(2,67): error PL2018: `match` needs to know if this RegExp has the `g` flag
+  function words(s: string, re: RegExp): number { const m = s.match(re); return 0; }
+                                                                    ^^
+  help: use a regular expression literal or a `const` set to one, or use `re.exec(s)` or `s.matchAll(re)`

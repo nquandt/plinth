@@ -18,7 +18,7 @@ Plinth is not ready for production apps. The current level is "before Preview".
 
 | Limit | Item |
 |---|---|
-| Regular expressions have no lookaround and no backreferences, and the `String` methods `match`, `replace`, `split` and `search` do not take a `RegExp` yet. | L4 |
+| Regular expressions have no lookaround and no backreferences. | L4 |
 | No locale-aware formatting. Dates and numbers use English formats only. | L5 |
 | An expression or a nesting deeper than 1000 levels gives `PL1000`. | L6 |
 | No shared libraries between apps. Each app has its own copy of shared code. | L8 |

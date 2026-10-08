@@ -25,6 +25,7 @@ No public release yet. The first release is a Preview for Windows and the web. `
 - The `plinth-host` executable now checks for updates when it runs an exported app, the same as the `plinth` executable.
 - Dependency audit: `cargo deny` (`deny.toml`: advisories, licenses, bans, sources) and `npm audit` run in `scripts/ci-local.sh full`, in the new `deny` mode, and in Linux CI. `docs/DEPENDENCIES.md` gives the license policy, the exceptions and the list of licenses in use (`node scripts/gen-license-list.mjs --write`).
 - Web host: `plinth:notify` shows notifications with the browser's `Notification` API. The page shows them for the app's sandboxed frame. A tag replaces an earlier notification, and `cancel` closes it. If the browser blocks notifications for the page, `show` rejects with `denied:refused`.
+- Regular expressions: the `String` methods `match`, `matchAll`, `replace`, `replaceAll`, `split` and `search` take a `RegExp`, with the JavaScript rules for `g`, `lastIndex`, empty matches and the replacement patterns `$&`, `$1`..`$99`, `$<name>`, `$$`, `` $` `` and `$'` (core 1.12). `replace` and `replaceAll` also take a replacement function. `docs/language.md` "Regular expressions" lists the differences from JavaScript.
 
 ### Changed
 

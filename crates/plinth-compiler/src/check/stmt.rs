@@ -399,6 +399,9 @@ impl Checker<'_> {
             Pattern::Ident(name, span) => {
                 let v = self.new_var(name, ty, mutable);
                 self.define(name, *span, Binding::Var(v));
+                if !mutable && let Some(g) = init.as_ref().and_then(|i| self.regex_static_global(i)) {
+                    self.regex_globals.insert(v, g);
+                }
                 if d.exported && top_level {
                     self.exports[self.module].insert(name.clone(), Binding::Var(v));
                 }
