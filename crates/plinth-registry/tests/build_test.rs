@@ -29,7 +29,7 @@ pub fn compile_package(example: &str, id: &str, version: &str) -> Vec<u8> {
     ))
     .unwrap();
     let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
-    let pkg = plinth_package::Package { manifest, component, assets: Vec::new(), signature: None };
+    let pkg = plinth_package::Package::new(manifest, component, Vec::new());
     pkg.write().unwrap()
 }
 
@@ -47,7 +47,7 @@ fn compile_counter(id: &str, version: &str) -> Vec<u8> {
     let cfg =
         plinth_package::ProjectConfig::parse(&format!("id = \"{id}\"\nname = \"Counter\"\nversion = \"{version}\"\npublisher = \"me\"\n")).unwrap();
     let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
-    let pkg = plinth_package::Package { manifest, component, assets: Vec::new(), signature: None };
+    let pkg = plinth_package::Package::new(manifest, component, Vec::new());
     pkg.write().unwrap()
 }
 
@@ -92,7 +92,7 @@ fn refuses_a_different_package_with_same_id_and_version() {
     let component = artifact.unwrap().app;
     let cfg = plinth_package::ProjectConfig::parse("id = \"com.example.counter\"\nname = \"Different\"\nversion = \"0.1.0\"\npublisher = \"me\"\n").unwrap();
     let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
-    let pkg = plinth_package::Package { manifest, component, assets: Vec::new(), signature: None };
+    let pkg = plinth_package::Package::new(manifest, component, Vec::new());
     std::fs::remove_file(dir.join("a.plnt")).ok();
     std::fs::write(dir.join("b.plnt"), pkg.write().unwrap()).unwrap();
 
@@ -134,7 +134,7 @@ fn compile_counter_signed(id: &str, version: &str, identity: &plinth_package::pu
     ))
     .unwrap();
     let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
-    let mut pkg = plinth_package::Package { manifest, component, assets: Vec::new(), signature: None };
+    let mut pkg = plinth_package::Package::new(manifest, component, Vec::new());
     pkg.signature = Some(plinth_package::signature::sign(&pkg, identity).unwrap());
     pkg.write().unwrap()
 }

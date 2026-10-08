@@ -467,7 +467,7 @@ fn build_package(dir: &Path, out: Option<PathBuf>, sign: bool) -> Result<Option<
     let core_digest = plinth_compiler::cores::digest_hex(plinth_compiler::link::runtime());
     let manifest = b.config.manifest_with_core_digest(plinth_protocol::UI_API_VERSION, &b.runtime, b.accent, &b.app, Some(&core_digest));
     let assets: Vec<(String, Vec<u8>)> = read_assets(dir).into_iter().map(|(name, bytes)| (format!("assets/{name}"), bytes)).collect();
-    let mut pkg = Package { manifest, component: b.app, assets, signature: None };
+    let mut pkg = Package::new(manifest, b.app, assets);
     if sign {
         let identity = plinth_package::publisher::load()?;
         pkg.signature = Some(plinth_package::signature::sign(&pkg, &identity)?);
@@ -654,7 +654,7 @@ fn dev(dir: &Path) -> Result<ExitCode> {
 /// `docs/HUB.md` §6.1).
 fn sign_file(path: &Path) -> Result<()> {
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let mut pkg = Package::read(&bytes).context("not a valid .plnt package")?;
+    let mut pkg = Package::read(&bytes).map_err(|e| plinth_package::read_error(e, "not a valid .plnt package"))?;
     let identity = plinth_package::publisher::load()?;
     pkg.signature = Some(plinth_package::signature::sign(&pkg, &identity)?);
     std::fs::write(path, pkg.write()?).with_context(|| format!("write {}", path.display()))?;

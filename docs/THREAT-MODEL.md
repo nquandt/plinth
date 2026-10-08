@@ -73,6 +73,7 @@ Status words as in `docs/PRODUCTION.md`: **Done**, **Partial**, **Open**.
 | Threat | Mitigation | Status |
 |---|---|---|
 | A changed package | Ed25519 signature over the digests of every entry; a package with a bad signature is refused, never treated as unsigned. | Done |
+| A changed manifest in a signed package (a new `version` that defeats the no-downgrade check, the `id` of another app of the same publisher and thus its data, more capabilities such as `net:*`, another `[updates]` feed or `core` policy) | `plinth.signature/2` digests the raw bytes of `manifest.toml` and of every other entry (`plinth-profile`, `source/…`, unknown entries). Desktop and web check the bytes in the zip, never a new serialization. The old schema `/1`, which did not cover the manifest, is refused. Tests: `plinth-package` `signature::tests`, `web/test/run-hub-integrity.mjs`. | Done |
 | An unsigned package | Accepted, with a warning; it gets an identity from its digest. | Accepted risk (§6) |
 | A changed core | The host checks the core's SHA-256 digest against its list (`core-digest` in the manifest; the web Hub checks too). | Done |
 | A malicious update | Signed feed (`feed.json.sig`), key continuity with the embedded package, no downgrade, digests, rollback after two failed starts (`docs/UPDATES.md`). | Done (desktop); Open (web, mobile) |

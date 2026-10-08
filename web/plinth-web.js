@@ -13,7 +13,7 @@
 // (web/test/*.mjs) and in the browser (dom-renderer.js consumes its
 // `PlinthApp` events instead).
 
-import { openZip } from "./zip.js";
+import { openZip, checkPlntProfile } from "./zip.js";
 import { decodeOps, encodeEvent, encodeInitArgs } from "./protocol.js";
 import { FileSpace, memoryFileBackend, FILES_CAPABILITY } from "./files.js";
 
@@ -146,6 +146,7 @@ function readTableImportMin(bytes) {
 /** Reads `name` (manifest.toml, app.wasm) out of a fetched `.plnt` zip. */
 export async function readPlnt(bytes) {
   const zip = openZip(bytes);
+  await checkPlntProfile(zip);
   const manifestText = new TextDecoder().decode(await zip.read("manifest.toml"));
   const appWasm = await zip.read(zip.has("app.wasm") ? "app.wasm" : manifestEntry(manifestText));
   // Assets (SPEC.md §10.1), by path under `assets/` without the prefix, for

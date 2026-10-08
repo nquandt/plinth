@@ -37,6 +37,9 @@ function readCentralDirectory(bytes) {
     const commentLen = readU16(view, off + 32);
     const localHeaderOffset = readU32(view, off + 42);
     const name = new TextDecoder().decode(bytes.subarray(off + 46, off + 46 + nameLen));
+    // Two entries with one name could give different bytes to different
+    // readers; the Rust reader refuses them too.
+    if (entries.has(name)) throw new Error(`the package has the entry \`${name}\` two times`);
     entries.set(name, { method, compSize, uncompSize, localHeaderOffset });
     off += 46 + nameLen + extraLen + commentLen;
   }
@@ -82,4 +85,21 @@ export function openZip(bytes) {
       throw new Error(`entry \`${name}\` uses unsupported zip compression method ${entry.method}`);
     },
   };
+}
+
+/** The newest `.plnt` container format that this host reads (`plinth_package::PROFILE_VERSION`). */
+export const PLNT_PROFILE_VERSION = 1;
+
+/**
+ * Checks `plinth-profile` of a `.plnt` zip (docs/COMPATIBILITY.md §4), as
+ * `plinth_package::Package::read` does: `plinth/N` with `N` up to
+ * `PLNT_PROFILE_VERSION` is accepted; a larger `N` gives "This app needs a
+ * newer version of Plinth"; any other text is an error.
+ */
+export async function checkPlntProfile(zip) {
+  if (!zip.has("plinth-profile")) throw new Error("the package has no plinth-profile");
+  const text = new TextDecoder().decode(await zip.read("plinth-profile")).trim();
+  const m = /^plinth\/([1-9][0-9]{0,8})$/.exec(text);
+  if (!m) throw new Error("the package profile is not valid (expected `plinth/1`)");
+  if (Number(m[1]) > PLNT_PROFILE_VERSION) throw new Error(`This app needs a newer version of Plinth (package format plinth/${m[1]})`);
 }

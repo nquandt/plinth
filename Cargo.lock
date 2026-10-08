@@ -5010,6 +5010,7 @@ dependencies = [
  "toml 0.8.23",
  "windows 0.62.2",
  "windows-registry",
+ "zip",
 ]
 
 [[package]]
@@ -5030,6 +5031,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "ed25519-dalek",
+ "log",
  "rand_core 0.6.4",
  "serde",
  "serde_json",

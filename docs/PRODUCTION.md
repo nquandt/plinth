@@ -32,7 +32,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | C1 | UI API ids are append-only and versioned | Preview | Done | `wit/plinth/ui-api.toml`, version assert in `plinth-protocol` |
 | C2 | Core ABI is append-only (`ADDED_IN`, `CORE_MINOR`, `CORE_PATCH`) | Preview | Done | `crates/plinth-link/src/rt_abi.rs`, SPEC §10.5 |
 | C3 | Ship core 1.12 and freeze it (no more additions to a shipped minor) | Beta | Open | HANDOFF §6: 1.12 is not shipped. Ship it with the first Beta release. |
-| C4 | `.plnt` container and manifest have a format version and a compatibility rule | Beta | Partial | SPEC §10.1, §10.2. Next: write the rule "a host reads every older format version" and add a test with old `.plnt` files. |
+| C4 | `.plnt` container and manifest have a format version and a compatibility rule | Beta | Done | `docs/COMPATIBILITY.md` §4: a newer `plinth-profile` gives "This app needs a newer version of Plinth"; unknown entries are kept (signed, never run, never served); the manifest tolerates unknown fields and enum values at every level; `plinth.toml` stays strict. Tests in `plinth-package`, `plinth-hub` and `web/test/run-hub-integrity.mjs`. Frozen old packages: C8. |
 | C5 | Host interfaces (`wit/plinth/app.wit`) have a version and an append-only rule | Beta | Done | `docs/COMPATIBILITY.md` §3; `plinth-link/tests/wit_append_only.rs` with `wit/plinth/app.wit.snapshot` |
 | C6 | Plinth TS language version: a list of the accepted syntax and the deviations from ECMAScript | Beta | Partial | `docs/COMPATIBILITY.md` §5 (rule: a source that compiles stays compiling). Next: freeze the 1.0 subset in `docs/language.md` at Beta. |
 | C7 | Deprecation policy: how a feature is marked, how long it stays, what diagnostic the compiler gives | Beta | Done | `docs/COMPATIBILITY.md` §6. The first deprecation adds its `PLW` golden test. |
@@ -113,6 +113,7 @@ Production apps run code from many publishers. This area must be complete before
 | S11 | Security review by a third party (sandbox, consent, signing, web bridge) | 1.0 | Open | |
 | S12 | Hub: signed indexes (H2) and a transparency log | 1.0 | Open | `docs/HUB.md` |
 | S13 | The Hub tells the user when an app's pinned core has a known vulnerability | 1.0 | Open | THREAT-MODEL §6 item 6; needs an advisory list in the core feed. |
+| S14 | The signature covers the manifest | Preview | Done | `plinth.signature/2` digests the raw bytes of `manifest.toml` and every other entry (`docs/HUB.md` §6.1, THREAT-MODEL §4.4). Desktop: `plinth-package` `signature::tests` (a changed `version`, `id`, capability, feed, `core` or profile is refused; `write` puts the signed bytes in the file). Web: `web/test/run-hub-integrity.mjs`. |
 
 ## 8. Platforms
 
@@ -215,8 +216,8 @@ Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh`
 
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
-| Preview | 25 | 0 | 0 |
-| Beta | 7 | 14 | 30 |
+| Preview | 26 | 0 | 0 |
+| Beta | 9 | 15 | 28 |
 | 1.0 | 1 | 1 | 21 |
 | Later (after 1.0) | 0 | 0 | 1 |
 
@@ -224,9 +225,9 @@ Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh`
 
 **The next level is Beta.** Start with the items that the owner and the code do not block:
 
-1. C3: ship core 1.12 and freeze it.
-2. C4, C5, C7: write the format, interface and deprecation rules, with tests.
-3. R3: the web time limit and memory cap.
-4. L4: `RegExp`.
-5. H3: notifications.
-6. S7, S8, S10: `SECURITY.md`, a dependency audit, a threat model.
+1. L4 and H3: finish `RegExp` and notifications (on branches).
+2. C3: ship core 1.12 and freeze it, after L4 and H3 merge.
+3. R3: the web time limit (the Worker split is on a branch).
+4. S8, G4: the dependency and license audit (on a branch).
+5. U3, U4: desktop accessibility and keyboard tests (on a branch).
+6. T7, R6, L9: `wasm-opt`, performance budgets, source locations in errors.

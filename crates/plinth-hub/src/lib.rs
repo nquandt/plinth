@@ -327,7 +327,7 @@ impl Hub {
     /// already there) and caches the bytes content-addressed. Returns the
     /// app id.
     pub fn add_package(&self, bytes: &[u8]) -> Result<String> {
-        let pkg = plinth_package::Package::read(bytes).context("not a valid .plnt package")?;
+        let pkg = plinth_package::Package::read(bytes).map_err(|e| plinth_package::read_error(e, "not a valid .plnt package"))?;
         plinth_link::cores::link_app_with_policy(&pkg.component, &pkg.manifest.core, pkg.manifest.core_digest.as_deref())
             .context("the package does not link against an installed core")?;
         if self.is_blocked(&pkg.manifest.id)? {
@@ -1291,7 +1291,7 @@ mod tests {
         }
         let cfg = plinth_package::ProjectConfig::parse(&toml).unwrap();
         let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
-        let pkg = plinth_package::Package { manifest, component, assets: Vec::new(), signature: None };
+        let pkg = plinth_package::Package::new(manifest, component, Vec::new());
         pkg.write().unwrap()
     }
 
@@ -1309,7 +1309,7 @@ mod tests {
         let toml = format!("id = \"{id}\"\nname = \"Test App\"\nversion = \"{version}\"\npublisher = \"{}\"\n", identity.name);
         let cfg = plinth_package::ProjectConfig::parse(&toml).unwrap();
         let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);
-        let mut pkg = plinth_package::Package { manifest, component, assets: Vec::new(), signature: None };
+        let mut pkg = plinth_package::Package::new(manifest, component, Vec::new());
         pkg.signature = Some(plinth_package::signature::sign(&pkg, identity).unwrap());
         pkg.write().unwrap()
     }
@@ -1363,6 +1363,20 @@ mod tests {
         assert_eq!(back, bytes);
         hub.remove(&id).unwrap();
         assert!(hub.list().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_package_in_a_newer_format_needs_a_newer_plinth() {
+        use std::io::Write as _;
+        let (hub, dir) = temp_hub();
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("plinth-profile", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"plinth/2").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        // The plain message, not "not a valid .plnt package".
+        let err = hub.add_package(&bytes).unwrap_err();
+        assert_eq!(err.to_string(), "This app needs a newer version of Plinth (package format plinth/2)");
         std::fs::remove_dir_all(&dir).ok();
     }
 
