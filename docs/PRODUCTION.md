@@ -223,7 +223,7 @@ Count on 2026-10-08, by gate and status. Run `bash scripts/production-status.sh`
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
 | Preview | 26 | 0 | 0 |
-| Beta | 24 | 15 | 13 |
+| Beta | 25 | 14 | 13 |
 | 1.0 | 1 | 2 | 20 |
 | Later (after 1.0) | 0 | 0 | 1 |
 
