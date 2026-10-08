@@ -1671,6 +1671,13 @@ impl Checker<'_> {
             unreachable!("`callback` returns a `Func` or `Error`")
         };
         let ret_ty = ft.ret.clone();
+        // A handler that is not `async` and mixes `return;` with
+        // `return <promise>` has the type `Promise<void> | null` (the
+        // checker's `finish_ret`): `null` is done at once.
+        let (ret_ty, maybe_null) = match &ret_ty {
+            Type::Nullable(inner) if self.promise_of(inner).is_some_and(|i| i.ty == Type::Void) => ((**inner).clone(), true),
+            _ => (ret_ty, false),
+        };
         let is_void_promise = self.promise_of(&ret_ty).is_some_and(|i| i.ty == Type::Void);
         if ret_ty != Type::Void && !is_void_promise && !ret_ty.is_error() {
             let msg = format!("the `onUpgrade` callback must return `void` or `Promise<void>`, not `{}`", self.show(&ret_ty));
@@ -1684,7 +1691,8 @@ impl Checker<'_> {
         let from_call = TExpr::new(TExprKind::Rt("app_data_version", Vec::new()), opt_str_ty.clone(), span);
         let not_null = TExpr::new(TExprKind::Not(Box::new(TExpr::new(TExprKind::IsNull(Box::new(from_var.clone())), Type::Bool, span))), Type::Bool, span);
         let from_str = TExpr::new(TExprKind::Coerce(Coercion::Retag, Box::new(from_var.clone())), str_ty, span);
-        let call = TExpr::new(TExprKind::CallClosure(Box::new(cb), vec![from_str]), ret_ty.clone(), span);
+        let call_ty = if maybe_null { Type::Nullable(Box::new(ret_ty.clone())) } else { ret_ty.clone() };
+        let call = TExpr::new(TExprKind::CallClosure(Box::new(cb), vec![from_str]), call_ty.clone(), span);
         let mark = || TStmt::Expr(TExpr::new(TExprKind::Rt("app_mark_data_version", Vec::new()), Type::Void, span));
 
         let err_ty = self.error_type();
@@ -1724,7 +1732,17 @@ impl Checker<'_> {
                 vec![TStmt::If(fulfilled, ok_branch, bad_branch)]
             });
 
-            vec![TStmt::Let(r_v, Some(call)), TStmt::Expr(TExpr::new(TExprKind::Call(then_fid, vec![self.as_base(r_var), k]), Type::Void, span))]
+            let wait = TStmt::Expr(TExpr::new(TExprKind::Call(then_fid, vec![self.as_base(r_var), k]), Type::Void, span));
+            if maybe_null {
+                // `let n = handler(v); if (n === null) mark(); else { let r = n; r.then(k); }`
+                let n_v = self.temp(call_ty.clone());
+                let n_var = TExpr::new(TExprKind::Var(n_v), call_ty.clone(), span);
+                let is_null = TExpr::new(TExprKind::IsNull(Box::new(n_var.clone())), Type::Bool, span);
+                let unwrapped = TExpr::new(TExprKind::Coerce(Coercion::Retag, Box::new(n_var)), ret_ty.clone(), span);
+                vec![TStmt::Let(n_v, Some(call)), TStmt::If(is_null, vec![mark()], vec![TStmt::Let(r_v, Some(unwrapped)), wait])]
+            } else {
+                vec![TStmt::Let(r_v, Some(call)), wait]
+            }
         } else {
             vec![TStmt::Expr(call), mark()]
         };

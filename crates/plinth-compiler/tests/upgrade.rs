@@ -238,3 +238,63 @@ export default app({ screens: { home: { title: "Home", component: Home } } });
     assert_eq!(compile(PLAIN).runtime, "plinth-core/1.12");
     assert_eq!(compile(&app_src(SYNC_APP, false)).runtime, "plinth-core/1.13");
 }
+
+/// A handler that is not `async` and mixes `return;` and `return <promise>`
+/// (GAPS "A callback that mixes `return;` and `return <promise>`"). Its
+/// type is `Promise<void> | null`. The `return;` branch (from 0.9.0) is
+/// done at once; the promise branch is done when the promise resolves.
+const MIXED_APP: &str = r#"
+import { app, signal, Screen, Text, onUpgrade } from "plinth:ui";
+import { setTimeout } from "plinth:time";
+
+const from = signal("none");
+
+onUpgrade((fromVersion) => {
+  from.set(fromVersion);
+  if (fromVersion === "0.9.0") {
+    return;
+  }
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      from.set(fromVersion + " (done)");
+      resolve();
+    }, 10);
+  });
+});
+
+function Home() {
+  return (
+    <Screen title="Home">
+      <Text>{from()}</Text>
+    </Screen>
+  );
+}
+export default app({ screens: { home: { title: "Home", component: Home } } });
+"#;
+
+#[test]
+fn a_mixed_handler_that_returns_nothing_stores_at_once() {
+    let dir = tmp("mixed-void");
+    start(MIXED_APP, &dir, "0.9.0");
+    let mut app = start(MIXED_APP, &dir, "1.1.0");
+    assert_eq!(text(&app.tree), "0.9.0");
+    assert_eq!(stored_version(&dir), Some("1.1.0".to_owned()));
+    assert!(app.guest.take_errors().is_empty());
+}
+
+#[test]
+fn a_mixed_handler_that_returns_a_promise_stores_after_it_resolves() {
+    let dir = tmp("mixed-promise");
+    start(MIXED_APP, &dir, "1.0.0");
+    let mut app = start(MIXED_APP, &dir, "1.1.0");
+    assert_eq!(text(&app.tree), "1.0.0");
+    assert_eq!(stored_version(&dir), Some("1.0.0".to_owned()), "the version is not stored before the promise resolves");
+    let deadline = app.guest.next_timer_deadline().expect("the handler set a timer");
+    let commits = app.guest.fire_due_timers(deadline + Duration::from_millis(1)).unwrap();
+    for commit in commits {
+        assert!(app.tree.apply(&commit).unwrap().is_empty());
+    }
+    assert_eq!(text(&app.tree), "1.0.0 (done)");
+    assert_eq!(stored_version(&dir), Some("1.1.0".to_owned()));
+    assert!(app.guest.take_errors().is_empty());
+}
