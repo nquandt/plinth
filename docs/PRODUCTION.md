@@ -135,7 +135,7 @@ Production apps run code from many publishers. This area must be complete before
 | D1 | npm packages: `@plinth/cli`, platform packages, `create-plinth` | Beta | Partial | `npm/`, `release.yml`. Next: publish them; test `npm create plinth` on all three OSes. |
 | D2 | Release pipeline tested on all platforms, with a changelog | Beta | Partial | `docs/RELEASING.md`. Only Windows is tested; no changelog step. |
 | D3 | Desktop self-update: signed feed, rollback, no downgrade | Preview | Done | `plinth-host-desktop::updater` |
-| D4 | Update `prompt` dialog and `onUpgrade(fromVersion)` | Beta | Partial | The desktop restart prompt is done (UPDATES §5). Next: `onUpgrade(fromVersion)` (needs a core change; UPDATES §9.1). |
+| D4 | Update `prompt` dialog and `onUpgrade(fromVersion)` | Beta | Done | The desktop restart prompt (UPDATES §5). `onUpgrade(fromVersion)` (core 1.13, 2026-10-08) on the desktop (both engines) and the web (stand-alone, the Hub, `<plinth-app>`): `crates/plinth-compiler/tests/upgrade.rs`, `web/test/run-upgrade.mjs`; the host rule in `docs/migrations/core-1.13.md` §3. UP-Q5 has an interim rule (UPDATES §6). |
 | D5 | Web updates (service worker cache) | Beta | Open | UPDATES §9.1 |
 | D6 | A public registry and the Hub app on desktop and web | Beta | Partial | `docs/HUB.md`, `docs/REGISTRY.md`, `docs/web-hub.md`. Next: host a first registry. |
 | D7 | Update policy decisions (UP-Q1..Q6) | Beta | Partial | Decided 2026-10-07: UP-Q2 `apply = "live"` after 1.0; UP-Q3 feeds at the author's URL and in registries that the user adds, no Plinth-run service; UP-Q4 the key model of S6. Open: UP-Q1 (default policy stays `follow`), UP-Q5, UP-Q6. |
@@ -223,7 +223,7 @@ Count on 2026-10-08, by gate and status. Run `bash scripts/production-status.sh`
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
 | Preview | 26 | 0 | 0 |
-| Beta | 26 | 13 | 13 |
+| Beta | 27 | 12 | 13 |
 | 1.0 | 1 | 2 | 20 |
 | Later (after 1.0) | 0 | 0 | 1 |
 

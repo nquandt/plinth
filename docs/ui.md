@@ -29,6 +29,7 @@ not a height in points.
 | `onCleanup(f)` | `(f: () => void) => void` | Core 1.12. Runs `f` when the current component, or the part of the UI that a condition or a list row made, goes away. Stop a timer or a frame loop there. |
 | `isActive()` | `() => boolean` | Core 1.12. True while the app's window is in the foreground (desktop: the window is active; web: the page is visible and has the focus). Reactive: an `effect` that reads it runs again on a change. `examples/pong` pauses there. |
 | `onMount(f)` | `(f: () => void) => void` | Core 1.12 (`docs/GAPS.md` G10). Runs `f` once, after the commit of the event or `init` that put the current component's elements in the host tree, not during rendering. A signal write inside `f` is a normal update: the runtime flushes again and sends the result in the same reply. A component inside a condition or a list row runs its own `onMount` again each time it appears, paired with its own `onCleanup`. |
+| `onUpgrade(handler)` | `(handler: (fromVersion: string) => void \| Promise<void>) => void` | Core 1.13 (`PRODUCTION.md` D4). Call it at the top level. `handler` runs once at start when the host has a stored data version that is lower than the app's version; `fromVersion` is that stored version. A first install, the same version and a downgrade run no handler. The host stores the new version when the handler returns (or its promise resolves). A throw or a rejection is an uncaught error, and the handler runs again at the next start. `docs/migrations/core-1.13.md` §2 has an example. |
 
 ## App entry and navigation
 

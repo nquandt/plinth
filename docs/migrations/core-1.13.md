@@ -27,6 +27,9 @@ Core 1.13 adds the SQL store (`store.sql`, `docs/SQL.md`), a hash table for `Map
 | `drag-value` prop, id 80 | UI API 1.13 prop (`wit/plinth/ui-api.toml`) | A string. `dragValue` on `Box`, `Pressable` and `Row`: the user can drag the element. |
 | `drop` event, id 13 | UI API 1.13 event | Value `[drag value, x, y]` (`x` and `y` in the units of the pointer events). `onDrop(value, x, y)` on `Box`, `Pressable`, `Scroll`, `Canvas` and `Row`. No core function: the core 1.12 functions `arg_i32` (the string) and `arg_at_f64` pass the three items. |
 | `reorder` event, id 14 | UI API 1.13 event | Value `[from, to]` (two ints, indexes of the rows). `onReorder(from, to)` on `List`. No core function. |
+| `app_data_version`, `app_mark_data_version` | Core functions | The data version for `onUpgrade` (`PRODUCTION.md` D4). |
+| `plinth:app/app-info` with `data-version() -> option<string>` and `mark-data-version()` | Host interface (`wit/plinth/app.wit`) | Synchronous. No capability. |
+| `onUpgrade(handler)` in `plinth:ui` | Plinth TS module export (`std/ui.d.ts`) | `handler(fromVersion)` runs once at start when the app's data comes from a lower version. It can be `async`. |
 | Children and `onClose` on `Dialog` | UI API 1.13 (the event `close`, id 6) | No new id. The children that are not `Action`s are a small form between the message and the actions. |
 
 ## 2. App authors
@@ -60,6 +63,22 @@ To use a context menu (UI API 1.13), give an element `onContextMenu` and open a 
 
 To let the user move the rows of a list (UI API 1.13), give the `List` `onReorder(from, to)` and move the item in your data (`docs/ui.md` "Drag and drop"; `examples/todo` `moveTask`). To drag an element onto a target, give the element `dragValue` and the target `onDrop(value, x, y)`. These need core 1.12 (callbacks with more than one argument), not core 1.13: an app that used no core 1.12 function now declares core 1.12 (`examples/todo` went from 1.0 to 1.12). A host with an older UI API shows no drag and sends no event, so keep a second path (buttons) where the move is necessary.
 
+To move data when a new version of the app starts, call `onUpgrade` at the top level of the app (`docs/ui.md` "Reactivity primitives"):
+
+```ts
+import { onUpgrade } from "plinth:ui";
+import { kv } from "plinth:store";
+
+onUpgrade((fromVersion) => {
+  if (fromVersion === "1.0.0") {
+    const old = kv.get("todos");
+    if (old !== null) { kv.set("tasks", old); kv.remove("todos"); }
+  }
+});
+```
+
+The host runs the handler only when the stored data version is lower than the version in `plinth.toml`. A first install, the same version and a downgrade run no handler. If the handler throws or its promise rejects, the host does not store the new version, and the handler runs again at the next start. Thus make the handler safe to run two times. An app that uses `onUpgrade` declares core 1.13. An app that does not call it does not need core 1.13 because of it.
+
 To put a small form in a `Dialog` (UI API 1.13), give it children (a `Slider`, a `TextField`) and `onClose` (`docs/ui.md` "Dialog with a form"). A host with an older UI API shows the dialog without its children. For such a host, a `Sheet` is the safe choice.
 
 To use the locale, import `locale` and `direction` from `plinth:locale` (`docs/host-apis.md` "plinth:locale"). No capability is necessary. Read them in the UI, in a `computed` value or in an `effect`, so that the app follows a change of the locale.
@@ -68,7 +87,15 @@ To format in the locale, import `formatNumber`, `formatDate`, `pluralCategory`, 
 
 ## 3. Host authors
 
-A host that uses core 1.13 must supply `plinth:app/sql` `run` and the seven functions of `plinth:app/locale`, or the core does not link (`docs/COMPATIBILITY.md` §3).
+A host that uses core 1.13 must supply `plinth:app/sql` `run`, the seven functions of `plinth:app/locale` and the two functions of `plinth:app/app-info`, or the core does not link (`docs/COMPATIBILITY.md` §3).
+
+For `plinth:app/app-info` (the same rule on each host; `crates/plinth-runner-wasmtime/src/app_info.rs` and `web/plinth-web.js` `cmpVersions`):
+
+- Store one data version for each app, next to the app's data. Keep the two together: when the host removes the app's data, it removes the data version too. The desktop host writes `<data dir>/apps/<id>/data-version`. The web host writes the key `plinth-data-version:<id>` (stand-alone page) or `plinth-hub:dv:<id>` (the Hub and `<plinth-app>`), apart from the app's `kv` keys.
+- `data-version` returns the stored version only when an upgrade is pending: a stored version exists and it is lower than the app's manifest version. Then the guest has claimed the upgrade. In all other cases it returns `none`.
+- `mark-data-version` stores the app's manifest version.
+- After `init` returns with no trap, store the manifest version, unless the guest claimed the upgrade (then the guest calls `mark-data-version` when its handler succeeds). Never store a version that is lower than the stored version: a downgrade keeps the higher version.
+- Compare versions as numbers, `MAJOR.MINOR.PATCH`. A version with a pre-release tag (`-rc.1`) is lower than the same version without one.
 
 For `plinth:app/locale`:
 

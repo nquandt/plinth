@@ -102,7 +102,8 @@ The host keeps downloaded versions in `%LOCALAPPDATA%\plinth\updates\<app id>` o
 Plan your releases with these limits (`docs/UPDATES.md` §9.1, `docs/LIMITS.md`):
 
 - A self-update that declares a new capability does not ask the user again. Do not add a capability in a self-update until this is built (`docs/PRODUCTION.md` S5).
-- There is no `onUpgrade(fromVersion)` hook. Your app must read the data that an older version wrote. For `kv` data in JSON, handle a `null` result of `JSON.parse<T>` (see [storage.md](storage.md)).
-- What a rollback does with the data that the newer version wrote is an open question (`docs/UPDATES.md` UP-Q5).
+- What a rollback does with the data that the newer version wrote is an open question (`docs/UPDATES.md` UP-Q5). For now, the host keeps the higher data version and runs no `onUpgrade` handler. Thus an older version must read the data that a newer version wrote. For `kv` data in JSON, handle a `null` result of `JSON.parse<T>` (see [storage.md](storage.md)).
+
+To move data from an older version, use `onUpgrade(fromVersion)` of `plinth:ui` (core 1.13, `docs/migrations/core-1.13.md` §2). The handler runs once, at the first start of the new version, and again at the next start if it throws.
 - There is no restart prompt (`apply = "prompt"` acts as `next-start`).
 - The web host and mobile hosts have no updater.
