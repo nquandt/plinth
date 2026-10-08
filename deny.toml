@@ -1,0 +1,140 @@
+# cargo-deny configuration for Plinth. docs/DEPENDENCIES.md tells the policy
+# and the reason for each exception.
+#
+#   bash scripts/ci-local.sh deny    # the gate step (also part of `full`, and CI)
+#   cargo deny check -W unmaintained -A unnecessary-skip  # the same, by hand
+#   cargo deny check advisories      # one check
+#   cargo deny list -l crate         # the license of each crate
+#
+# Plinth is MIT OR Apache-2.0. gpui-ce (../gpui-ce, the owner's fork of gpui)
+# is first-party code; its crates come in as path dependencies.
+
+[graph]
+# Check the dependency tree for every target that Plinth ships to.
+targets = [
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  "wasm32-unknown-unknown",
+]
+all-features = false
+
+[output]
+feature-depth = 1
+
+# ---------------------------------------------------------------------------
+# Security advisories (RustSec advisory database).
+# A vulnerability fails the check. Yanked versions give a warning. An
+# unmaintained crate (any depth) is an error in this file, because
+# cargo-deny has no warn level for it here; scripts/ci-local.sh runs
+# `cargo deny check -W unmaintained`, which makes it a warning. Each ignored
+# advisory has a reason and a tracking note in docs/DEPENDENCIES.md §4.
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+unmaintained = "all"
+yanked = "warn"
+ignore = [
+  # wasmtime 46.0.3. The fix is in wasmtime 48.0.4 and 49.0.2 (no 46.x fix):
+  # a major update. Plinth does not use the dynamic `component::Val` API, so
+  # the bug does not apply. Tracking: DEPENDENCIES.md §4, A1.
+  { id = "RUSTSEC-2026-0316", reason = "dynamic record lifting: Plinth uses only typed bindgen calls; fix needs wasmtime 48.0.4 (major update), tracked in docs/DEPENDENCIES.md A1" },
+  # wasmtime 46.0.3. The bug is in async-lifted component callbacks; Plinth
+  # does not turn on the `component-model-async` feature. Tracking: A1.
+  { id = "RUSTSEC-2026-0327", reason = "async-lifted callbacks: Plinth does not enable component-model-async; fix needs wasmtime 48.0.4 (major update), tracked in docs/DEPENDENCIES.md A1" },
+]
+
+# ---------------------------------------------------------------------------
+# Licenses. Only permissive licenses are allowed for all crates. A crate with
+# a different license gets a per-crate exception with a reason. Copyleft
+# licenses are never allowed for all crates.
+[licenses]
+confidence-threshold = 0.9
+# A license in this list that no crate uses is not an error.
+unused-allowed-license = "allow"
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "CC0-1.0",
+  "BSL-1.0",
+  "0BSD",
+  "Unlicense",
+]
+exceptions = [
+  # MPL-2.0 is weak (file-level) copyleft: Plinth can ship it in a binary if
+  # the MPL source files stay available. Plinth does not change these files.
+  # dwrote: DirectWrite font bindings, used by gpui-ce on Windows.
+  { allow = ["MPL-2.0"], crate = "dwrote" },
+  # option-ext: a small helper of dirs-sys (the user's folders).
+  { allow = ["MPL-2.0"], crate = "option-ext" },
+  # webpki-roots: the Mozilla CA root certificates as data (rustls, ureq).
+  # CDLA-Permissive-2.0 is a permissive license for data.
+  { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },
+]
+
+# wgsl-rs comes from git (pinned by gpui-ce). Its manifests have no license
+# field; the repository has an MIT LICENSE file (schell/wgsl-rs at rev
+# b2de16a1, "Copyright (c) 2025 Schell Carl Scivally").
+[[licenses.clarify]]
+crate = "wgsl-rs"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+crate = "wgsl-rs-ir"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+crate = "wgsl-rs-macros"
+expression = "MIT"
+license-files = []
+
+[licenses.private]
+# Crates with `publish = false` (plinth-rt, the Rust examples) are first-party.
+ignore = true
+
+# ---------------------------------------------------------------------------
+# Bans. Duplicate versions give a warning (gpui-ce and wasmtime pull in
+# many). A wildcard version (`*`) is denied, except for path dependencies of
+# private crates. Plinth's own path dependencies carry a version in the root
+# Cargo.toml, so they are not wildcards.
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+# These gpui-ce crates use `wgsl-rs` as a git dependency with no version,
+# which counts as a wildcard. gpui-ce pins it by commit (rev), so the build
+# is reproducible. `skip` removes these crates from the wildcard and the
+# duplicate checks only. Remove the entries when gpui-ce gives wgsl-rs a
+# version (DEPENDENCIES.md §4, B1).
+skip = [
+  { crate = "gpui_ce_apple", reason = "wgsl-rs git dependency pinned by rev (DEPENDENCIES.md B1)" },
+  { crate = "gpui_ce_render", reason = "wgsl-rs git dependency pinned by rev (DEPENDENCIES.md B1)" },
+  { crate = "gpui_ce_wgpu", reason = "wgsl-rs git dependency pinned by rev (DEPENDENCIES.md B1)" },
+  { crate = "gpui_ce_windows", reason = "wgsl-rs git dependency pinned by rev (DEPENDENCIES.md B1)" },
+]
+
+# ---------------------------------------------------------------------------
+# Sources. crates.io only, plus the git repositories that gpui-ce uses.
+# gpui-ce itself comes in by path (../gpui-ce), so it needs no entry.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+unused-allowed-source = "allow"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+  # gpui-ce, if a checkout uses git in place of the sibling path.
+  "https://github.com/nquandt/gpui-ce",
+  # wgsl-rs: a git dependency of gpui-ce (pinned by rev).
+  "https://github.com/schell/wgsl-rs",
+]

@@ -96,6 +96,19 @@ jobs:
       - name: scripts/ci-local.sh nogui
         working-directory: plinth
         run: bash scripts/ci-local.sh nogui
+      # Dependency audit (deny.toml, docs/DEPENDENCIES.md). install-action
+      # downloads a prebuilt cargo-deny into ~/.cargo/bin (no sudo, no
+      # build). It runs after the tests, so a new advisory does not hide a
+      # test result; `!cancelled()` runs it also when the tests fail.
+      - name: Install cargo-deny
+        if: ${{ !cancelled() }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - name: scripts/ci-local.sh deny
+        if: ${{ !cancelled() }}
+        working-directory: plinth
+        run: bash scripts/ci-local.sh deny
 
   macos:
     name: macOS (no GUI, weekly or by hand)

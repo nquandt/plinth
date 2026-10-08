@@ -19,6 +19,7 @@ No public release yet. The first release is a Preview for Windows and the web. `
 - Desktop self-update: an update that adds a Medium or High capability shows the consent window for the new capabilities before it runs. If the user cancels, the previous version keeps running, and the host does not ask again for that version.
 - Desktop self-update: `apply = "prompt"` shows "An update is ready. Restart now?" with "Restart" and "Later" in the app window when an update is ready.
 - The `plinth-host` executable now checks for updates when it runs an exported app, the same as the `plinth` executable.
+- Dependency audit: `cargo deny` (`deny.toml`: advisories, licenses, bans, sources) and `npm audit` run in `scripts/ci-local.sh full`, in the new `deny` mode, and in Linux CI. `docs/DEPENDENCIES.md` gives the license policy, the exceptions and the list of licenses in use (`node scripts/gen-license-list.mjs --write`).
 
 ### Changed
 

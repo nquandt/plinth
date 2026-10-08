@@ -107,7 +107,7 @@ Production apps run code from many publishers. This area must be complete before
 | S5 | Re-consent when an update asks for new capabilities | Beta | Done | `plinth-host-desktop::updater` (`update_consent`, `prepare_start`), the Hub (`docs/HUB.md` §7.3 step 3); UPDATES §6 |
 | S6 | Project key that signs cores and the Hub; key rotation and revocation | Beta | Decide | HANDOFF §0.2 item 3; HANDOFF §10 item 12 |
 | S7 | `SECURITY.md`: how to report a vulnerability, response time | Beta | Done | `SECURITY.md`. Turn on GitHub private vulnerability reporting when the repo is public (G6). |
-| S8 | Dependency audit in CI (`cargo deny` or `cargo audit`, `npm audit`) | Beta | Open | |
+| S8 | Dependency audit in CI (`cargo deny` or `cargo audit`, `npm audit`) | Beta | Done | `deny.toml`; `bash scripts/ci-local.sh deny` (also in `full`; Linux CI); `docs/DEPENDENCIES.md`. Two wasmtime advisories are ignored with a reason until the wasmtime update (DEPENDENCIES §4 A1). |
 | S9 | Fuzz tests run in CI on a schedule with more iterations | Beta | Partial | `robustness.rs`, `hostile_ops.rs`, `hostile_render.rs` run in the gate with few iterations. |
 | S10 | Threat model document: app vs app, app vs host, publisher vs user, network | Beta | Done | `docs/THREAT-MODEL.md`. Update it with each new host API. |
 | S11 | Security review by a third party (sandbox, consent, signing, web bridge) | 1.0 | Open | |
@@ -190,7 +190,7 @@ Production apps run code from many publishers. This area must be complete before
 | G1 | License: MIT OR Apache-2.0 | Preview | Done | `LICENSE-MIT`, `LICENSE-APACHE`, `Cargo.toml`, `package.json` files |
 | G2 | Final project name and npm scope | 1.0 | Open | SPEC Q2. "Plinth" is a placeholder; the npm name `plinth` is taken. | The owner decides at the end. |
 | G3 | `CONTRIBUTING.md` for outside contributors; code of conduct | Beta | Done | `CONTRIBUTING.md` ("A pull request"), `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1). Add a private contact when the repo is public (G6). |
-| G4 | Licenses of all dependencies checked and listed (also gpui-ce) | Beta | Open | `cargo deny` can do the check (S8). |
+| G4 | Licenses of all dependencies checked and listed (also gpui-ce) | Beta | Done | `cargo deny` license check (S8); policy, exceptions and the generated list in `docs/DEPENDENCIES.md`. Next: a third-party notice file in the release binaries (DEPENDENCIES §4 L1). |
 | G5 | Privacy statement: no telemetry by default; data stays with the user | Beta | Done | `docs/PRIVACY.md` |
 | G6 | Public repository and issue tracker | 1.0 | Open | The repo is private now. |
 
@@ -217,7 +217,7 @@ Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh`
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
 | Preview | 26 | 0 | 0 |
-| Beta | 9 | 15 | 28 |
+| Beta | 11 | 17 | 24 |
 | 1.0 | 1 | 1 | 21 |
 | Later (after 1.0) | 0 | 0 | 1 |
 
@@ -228,6 +228,5 @@ Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh`
 1. L4 and H3: finish `RegExp` and notifications (on branches).
 2. C3: ship core 1.12 and freeze it, after L4 and H3 merge.
 3. R3: the web time limit (the Worker split is on a branch).
-4. S8, G4: the dependency and license audit (on a branch).
-5. U3, U4: desktop accessibility and keyboard tests (on a branch).
-6. T7, R6, L9: `wasm-opt`, performance budgets, source locations in errors.
+4. U3, U4: desktop accessibility and keyboard tests (on a branch).
+5. T7, R6, L9: `wasm-opt`, performance budgets, source locations in errors.
