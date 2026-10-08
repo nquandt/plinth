@@ -714,6 +714,28 @@ abi! {
         reactive::signal_get(locale_signal());
         strings::from_str(if host::locale_is_rtl() { "rtl" } else { "ltr" }) as i32
     }
+    // Formatting (core 1.13, docs/I18N.md §3.7): the host formats in the
+    // locale of the app. Each call also tracks the locale signal.
+    fn __plinth_rt_locale_format_number(value: f64, options: i32) -> i32 {
+        reactive::signal_get(locale_signal());
+        host::locale_format_number(value, options)
+    }
+    fn __plinth_rt_locale_format_date(ms: f64, options: i32) -> i32 {
+        reactive::signal_get(locale_signal());
+        host::locale_format_date(ms, options)
+    }
+    fn __plinth_rt_locale_plural(value: f64, kind: i32) -> i32 {
+        reactive::signal_get(locale_signal());
+        host::locale_plural_category(value, kind)
+    }
+    fn __plinth_rt_locale_format_list(items: i32, kind: i32) -> i32 {
+        reactive::signal_get(locale_signal());
+        host::locale_format_list(items, kind)
+    }
+    fn __plinth_rt_locale_compare(a: i32, b: i32) -> f64 {
+        reactive::signal_get(locale_signal());
+        f64::from(host::locale_compare(a, b))
+    }
 
     // -- plinth:time date/time additions (SPEC.md §8.5, docs/GAPS.md gap #5) --
     fn __plinth_rt_tz_offset_minutes(ms: f64) -> f64 { host::timezone_offset(ms as i64) as f64 }

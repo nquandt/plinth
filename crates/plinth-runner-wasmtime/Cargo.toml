@@ -27,6 +27,20 @@ rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "limits"] }
 # `plinth:locale` (docs/I18N.md §3.1): the OS locale as a BCP 47 tag
 # (Windows `GetUserDefaultLocaleName`, macOS `CFLocale`, Linux `LANG`).
 sys-locale = "0.3.2"
+# `plinth:locale` formatting (docs/I18N.md §3.7): ICU4X 2.x with its
+# compiled data for all locales (Unicode-3.0). `icu_experimental` gives the
+# currency and percent formatters (not in a stable ICU4X crate yet).
+icu_locale_core = "2.3.0"
+icu_decimal = "2.3.0"
+icu_datetime = "2.3.0"
+icu_calendar = "2.3.0"
+icu_time = "2.3.0"
+icu_plurals = "2.3.0"
+icu_list = "2.3.0"
+icu_collator = "2.3.1"
+icu_experimental = "0.6.0"
+fixed_decimal = { version = "0.7.2", features = ["ryu"] }
+writeable = "0.6.4"
 
 [features]
 # The wasmi interpreter engine (SPEC.md §9.2), for iOS and tests. Pulls in

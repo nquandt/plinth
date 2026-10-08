@@ -1,0 +1,651 @@
+# The shared formatting cases of `plinth:locale` (core 1.13, docs/I18N.md
+# §3.7, §4 step 2). The desktop test (`tests/locale_format.rs`, ICU4X,
+# wasmtime and wasmi) and the web test (`web/test/run-locale.mjs`, the
+# browser `Intl` of Node, the real core) build ONE app with a `Text` for each
+# case, start it in each locale, and compare each text with this file. The
+# time zone is UTC on both hosts.
+#
+# Format: `=== case <name>`, then one line with the expression (a `string`
+# in Plinth TS; `plinth:locale` is imported), then one line for each locale:
+# `<locale> <text>` (a locale alone: the empty string). In the text,
+# `\u{hex}` is a code point and `\\` is a backslash; the tests write
+# spaces other than U+0020 and the invisible marks in this form.
+#
+# A known difference between the hosts: `<locale>@desktop <text>` and
+# `<locale>@web <text>`, then `known <locale>: <reason>`. A test fails when
+# a host gives another text, and when a case has a host line without its
+# `known` line. docs/I18N.md §3.7 lists the known differences.
+#
+# Timestamp 1791459845000 is 2026-10-08 11:44:05 UTC (a Thursday).
+
+=== case number_default
+formatNumber(1234567.891)
+en-US 1,234,567.891
+de-DE 1.234.567,891
+fr-FR 1\u{202f}234\u{202f}567,891
+ar-EG ١٬٢٣٤٬٥٦٧٫٨٩١
+ja-JP 1,234,567.891
+hi-IN 12,34,567.891
+pl-PL 1\u{a0}234\u{a0}567,891
+ru-RU 1\u{a0}234\u{a0}567,891
+
+=== case number_negative
+formatNumber(-1234.5)
+en-US -1,234.5
+de-DE -1.234,5
+fr-FR -1\u{202f}234,5
+ar-EG \u{61c}-١٬٢٣٤٫٥
+ja-JP -1,234.5
+hi-IN -1,234.5
+pl-PL -1234,5
+ru-RU -1\u{a0}234,5
+
+=== case number_four_digits
+formatNumber(1234)
+en-US 1,234
+de-DE 1.234
+fr-FR 1\u{202f}234
+ar-EG ١٬٢٣٤
+ja-JP 1,234
+hi-IN 1,234
+pl-PL 1234
+ru-RU 1\u{a0}234
+
+=== case number_small
+formatNumber(0.5)
+en-US 0.5
+de-DE 0,5
+fr-FR 0,5
+ar-EG ٠٫٥
+ja-JP 0.5
+hi-IN 0.5
+pl-PL 0,5
+ru-RU 0,5
+
+=== case number_max_digits
+formatNumber(1234.5678, { maximumFractionDigits: 2 })
+en-US 1,234.57
+de-DE 1.234,57
+fr-FR 1\u{202f}234,57
+ar-EG ١٬٢٣٤٫٥٧
+ja-JP 1,234.57
+hi-IN 1,234.57
+pl-PL 1234,57
+ru-RU 1\u{a0}234,57
+
+=== case number_min_digits
+formatNumber(1234.5, { minimumFractionDigits: 2 })
+en-US 1,234.50
+de-DE 1.234,50
+fr-FR 1\u{202f}234,50
+ar-EG ١٬٢٣٤٫٥٠
+ja-JP 1,234.50
+hi-IN 1,234.50
+pl-PL 1234,50
+ru-RU 1\u{a0}234,50
+
+=== case number_round_half
+formatNumber(2.5, { maximumFractionDigits: 0 })
+en-US 3
+de-DE 3
+fr-FR 3
+ar-EG ٣
+ja-JP 3
+hi-IN 3
+pl-PL 3
+ru-RU 3
+
+=== case number_no_grouping
+formatNumber(1234567, { useGrouping: false })
+en-US 1234567
+de-DE 1234567
+fr-FR 1234567
+ar-EG ١٢٣٤٥٦٧
+ja-JP 1234567
+hi-IN 1234567
+pl-PL 1234567
+ru-RU 1234567
+
+=== case percent
+formatNumber(0.256, { style: "percent" })
+en-US 26%
+de-DE 26\u{a0}%
+fr-FR 26\u{a0}%
+ar-EG@desktop ٢٦\u{200e}%\u{200e}
+ar-EG@web ٢٦٪\u{61c}
+known ar-EG: icu_experimental 0.6 gives the Latin percent sign with LEFT-TO-RIGHT MARKs; the browser (CLDR 48, arab number system) gives the Arabic percent sign U+066A and an ARABIC LETTER MARK.
+ja-JP 26%
+hi-IN 26%
+pl-PL 26%
+ru-RU 26\u{a0}%
+
+=== case percent_digits
+formatNumber(0.2567, { style: "percent", maximumFractionDigits: 1 })
+en-US 25.7%
+de-DE 25,7\u{a0}%
+fr-FR 25,7\u{a0}%
+ar-EG@desktop ٢٥٫٧\u{200e}%\u{200e}
+ar-EG@web ٢٥٫٧٪\u{61c}
+known ar-EG: icu_experimental 0.6 gives the Latin percent sign with LEFT-TO-RIGHT MARKs; the browser (CLDR 48, arab number system) gives the Arabic percent sign U+066A and an ARABIC LETTER MARK.
+ja-JP 25.7%
+hi-IN 25.7%
+pl-PL 25,7%
+ru-RU 25,7\u{a0}%
+
+=== case currency_eur
+formatNumber(1234.5, { style: "currency", currency: "EUR" })
+en-US €1,234.50
+de-DE 1.234,50\u{a0}€
+fr-FR 1\u{202f}234,50\u{a0}€
+ar-EG \u{200f}١٬٢٣٤٫٥٠\u{a0}€
+ja-JP €1,234.50
+hi-IN €1,234.50
+pl-PL 1234,50\u{a0}€
+ru-RU 1\u{a0}234,50\u{a0}€
+
+=== case currency_usd
+formatNumber(1234.5, { style: "currency", currency: "USD" })
+en-US $1,234.50
+de-DE 1.234,50\u{a0}$
+fr-FR 1\u{202f}234,50\u{a0}$US
+ar-EG \u{200f}١٬٢٣٤٫٥٠\u{a0}US$
+ja-JP $1,234.50
+hi-IN $1,234.50
+pl-PL@desktop 1234,50\u{a0}US$
+pl-PL@web 1234,50\u{a0}USD
+known pl-PL: ICU4X 2.3 (icu_experimental 0.6) has the root currency symbols (US$, JP¥) where CLDR 48 in the browser has the ISO code (USD, JPY) for this locale.
+ru-RU 1\u{a0}234,50\u{a0}$
+
+=== case currency_negative
+formatNumber(-1234.5, { style: "currency", currency: "USD" })
+en-US -$1,234.50
+de-DE -1.234,50\u{a0}$
+fr-FR -1\u{202f}234,50\u{a0}$US
+ar-EG \u{61c}-\u{200f}١٬٢٣٤٫٥٠\u{a0}US$
+ja-JP -$1,234.50
+hi-IN -$1,234.50
+pl-PL@desktop -1234,50\u{a0}US$
+pl-PL@web -1234,50\u{a0}USD
+known pl-PL: ICU4X 2.3 (icu_experimental 0.6) has the root currency symbols (US$, JP¥) where CLDR 48 in the browser has the ISO code (USD, JPY) for this locale.
+ru-RU -1\u{a0}234,50\u{a0}$
+
+=== case currency_jpy
+formatNumber(1234.5, { style: "currency", currency: "JPY" })
+en-US ¥1,235
+de-DE 1.235\u{a0}¥
+fr-FR@desktop 1\u{202f}235\u{a0}JP¥
+fr-FR@web 1\u{202f}235\u{a0}JPY
+known fr-FR: ICU4X 2.3 (icu_experimental 0.6) has the root currency symbols (US$, JP¥) where CLDR 48 in the browser has the ISO code (USD, JPY) for this locale.
+ar-EG \u{200f}١٬٢٣٥\u{a0}JP¥
+ja-JP ￥1,235
+hi-IN JP¥1,235
+pl-PL@desktop 1235\u{a0}JP¥
+pl-PL@web 1235\u{a0}JPY
+known pl-PL: ICU4X 2.3 (icu_experimental 0.6) has the root currency symbols (US$, JP¥) where CLDR 48 in the browser has the ISO code (USD, JPY) for this locale.
+ru-RU 1\u{a0}235\u{a0}¥
+
+=== case currency_whole
+formatNumber(12, { style: "currency", currency: "EUR" })
+en-US €12.00
+de-DE 12,00\u{a0}€
+fr-FR 12,00\u{a0}€
+ar-EG \u{200f}١٢٫٠٠\u{a0}€
+ja-JP €12.00
+hi-IN €12.00
+pl-PL 12,00\u{a0}€
+ru-RU 12,00\u{a0}€
+
+=== case currency_bad_code
+formatNumber(1234.5, { style: "currency", currency: "EURO" })
+en-US 1,234.5
+de-DE 1.234,5
+fr-FR 1\u{202f}234,5
+ar-EG ١٬٢٣٤٫٥
+ja-JP 1,234.5
+hi-IN 1,234.5
+pl-PL 1234,5
+ru-RU 1\u{a0}234,5
+
+=== case compact_thousand
+formatNumber(1234, { notation: "compact" })
+en-US 1.2K
+de-DE 1234
+fr-FR 1,2\u{a0}k
+ar-EG ١٫٢\u{a0}ألف
+ja-JP 1234
+hi-IN 1.2\u{a0}हज़ार
+pl-PL 1,2\u{a0}tys.
+ru-RU 1,2\u{a0}тыс.
+
+=== case compact_million
+formatNumber(1234567, { notation: "compact" })
+en-US 1.2M
+de-DE 1,2\u{a0}Mio.
+fr-FR 1,2\u{a0}M
+ar-EG ١٫٢\u{a0}مليون
+ja-JP 123万
+hi-IN 12\u{a0}लाख
+pl-PL 1,2\u{a0}mln
+ru-RU 1,2\u{a0}млн
+
+=== case compact_small
+formatNumber(999, { notation: "compact" })
+en-US 999
+de-DE 999
+fr-FR 999
+ar-EG ٩٩٩
+ja-JP 999
+hi-IN 999
+pl-PL 999
+ru-RU 999
+
+=== case compact_rounded
+formatNumber(15300, { notation: "compact" })
+en-US 15K
+de-DE 15.300
+fr-FR 15\u{a0}k
+ar-EG ١٥\u{a0}ألف
+ja-JP 1.5万
+hi-IN 15\u{a0}हज़ार
+pl-PL 15\u{a0}tys.
+ru-RU 15\u{a0}тыс.
+
+=== case date_full
+formatDate(1791459845000, { dateStyle: "full" })
+en-US Thursday, October 8, 2026
+de-DE Donnerstag, 8. Oktober 2026
+fr-FR jeudi 8 octobre 2026
+ar-EG الخميس، ٨ أكتوبر ٢٠٢٦
+ja-JP 2026年10月8日木曜日
+hi-IN गुरुवार, 8 अक्टूबर 2026
+pl-PL czwartek, 8 października 2026
+ru-RU четверг, 8 октября 2026 г.
+
+=== case date_long
+formatDate(1791459845000, { dateStyle: "long" })
+en-US October 8, 2026
+de-DE 8. Oktober 2026
+fr-FR 8 octobre 2026
+ar-EG ٨ أكتوبر ٢٠٢٦
+ja-JP 2026年10月8日
+hi-IN 8 अक्टूबर 2026
+pl-PL 8 października 2026
+ru-RU 8 октября 2026 г.
+
+=== case date_medium
+formatDate(1791459845000, { dateStyle: "medium" })
+en-US Oct 8, 2026
+de-DE 08.10.2026
+fr-FR 8 oct. 2026
+ar-EG ٠٨\u{200f}/١٠\u{200f}/٢٠٢٦
+ja-JP 2026/10/08
+hi-IN 8 अक्टू॰ 2026
+pl-PL 8 paź 2026
+ru-RU 8 окт. 2026 г.
+
+=== case date_short
+formatDate(1791459845000, { dateStyle: "short" })
+en-US 10/8/26
+de-DE 08.10.26
+fr-FR 08/10/2026
+ar-EG ٨\u{200f}/١٠\u{200f}/٢٠٢٦
+ja-JP 2026/10/08
+hi-IN 8/10/26
+pl-PL@desktop 08.10.2026
+pl-PL@web 8.10.2026
+known pl-PL: ICU4X 2.x makes the short date from a skeleton (dd.MM.y); the browser uses the CLDR short date pattern (d.MM.y).
+ru-RU 08.10.2026
+
+=== case time_medium
+formatDate(1791459845000, { timeStyle: "medium" })
+en-US 11:44:05 AM
+de-DE 11:44:05
+fr-FR 11:44:05
+ar-EG ١١:٤٤:٠٥ ص
+ja-JP 11:44:05
+hi-IN 11:44:05 am
+pl-PL 11:44:05
+ru-RU 11:44:05
+
+=== case time_short
+formatDate(1791459845000, { timeStyle: "short" })
+en-US 11:44 AM
+de-DE 11:44
+fr-FR 11:44
+ar-EG ١١:٤٤ ص
+ja-JP 11:44
+hi-IN 11:44 am
+pl-PL 11:44
+ru-RU 11:44
+
+=== case date_medium_time_short
+formatDate(1791459845000, { dateStyle: "medium", timeStyle: "short" })
+en-US Oct 8, 2026, 11:44 AM
+de-DE 08.10.2026, 11:44
+fr-FR 8 oct. 2026, 11:44
+ar-EG ٠٨\u{200f}/١٠\u{200f}/٢٠٢٦، ١١:٤٤ ص
+ja-JP 2026/10/08 11:44
+hi-IN 8 अक्टू॰ 2026, 11:44 am
+pl-PL 8 paź 2026, 11:44
+ru-RU 8 окт. 2026 г., 11:44
+
+=== case date_full_time_short
+formatDate(1791459845000, { dateStyle: "full", timeStyle: "short" })
+en-US Thursday, October 8, 2026 at 11:44 AM
+de-DE Donnerstag, 8. Oktober 2026 um 11:44
+fr-FR jeudi 8 octobre 2026 à 11:44
+ar-EG الخميس، ٨ أكتوبر ٢٠٢٦ في ١١:٤٤ ص
+ja-JP 2026年10月8日木曜日 11:44
+hi-IN गुरुवार, 8 अक्टूबर 2026 को 11:44 am बजे
+pl-PL czwartek, 8 października 2026 11:44
+ru-RU четверг, 8 октября 2026 г. в 11:44
+
+=== case date_short_time_medium
+formatDate(1791459845000, { dateStyle: "short", timeStyle: "medium" })
+en-US 10/8/26, 11:44:05 AM
+de-DE 08.10.26, 11:44:05
+fr-FR 08/10/2026 11:44:05
+ar-EG ٨\u{200f}/١٠\u{200f}/٢٠٢٦، ١١:٤٤:٠٥ ص
+ja-JP 2026/10/08 11:44:05
+hi-IN 8/10/26, 11:44:05 am
+pl-PL@desktop 08.10.2026, 11:44:05
+pl-PL@web 8.10.2026, 11:44:05
+known pl-PL: ICU4X 2.x makes the short date from a skeleton (dd.MM.y); the browser uses the CLDR short date pattern (d.MM.y).
+ru-RU 08.10.2026, 11:44:05
+
+=== case date_default
+formatDate(1791459845000)
+en-US Oct 8, 2026
+de-DE 08.10.2026
+fr-FR 8 oct. 2026
+ar-EG ٠٨\u{200f}/١٠\u{200f}/٢٠٢٦
+ja-JP 2026/10/08
+hi-IN 8 अक्टू॰ 2026
+pl-PL 8 paź 2026
+ru-RU 8 окт. 2026 г.
+
+=== case plural_0
+pluralCategory(0)
+en-US other
+de-DE other
+fr-FR one
+ar-EG zero
+ja-JP other
+hi-IN one
+pl-PL many
+ru-RU many
+
+=== case plural_1
+pluralCategory(1)
+en-US one
+de-DE one
+fr-FR one
+ar-EG one
+ja-JP other
+hi-IN one
+pl-PL one
+ru-RU one
+
+=== case plural_2
+pluralCategory(2)
+en-US other
+de-DE other
+fr-FR other
+ar-EG two
+ja-JP other
+hi-IN other
+pl-PL few
+ru-RU few
+
+=== case plural_3
+pluralCategory(3)
+en-US other
+de-DE other
+fr-FR other
+ar-EG few
+ja-JP other
+hi-IN other
+pl-PL few
+ru-RU few
+
+=== case plural_5
+pluralCategory(5)
+en-US other
+de-DE other
+fr-FR other
+ar-EG few
+ja-JP other
+hi-IN other
+pl-PL many
+ru-RU many
+
+=== case plural_11
+pluralCategory(11)
+en-US other
+de-DE other
+fr-FR other
+ar-EG many
+ja-JP other
+hi-IN other
+pl-PL many
+ru-RU many
+
+=== case plural_22
+pluralCategory(22)
+en-US other
+de-DE other
+fr-FR other
+ar-EG many
+ja-JP other
+hi-IN other
+pl-PL few
+ru-RU few
+
+=== case plural_fraction
+pluralCategory(1.5)
+en-US other
+de-DE other
+fr-FR one
+ar-EG other
+ja-JP other
+hi-IN other
+pl-PL other
+ru-RU other
+
+=== case ordinal_1
+pluralCategory(1, "ordinal")
+en-US one
+de-DE other
+fr-FR one
+ar-EG other
+ja-JP other
+hi-IN one
+pl-PL other
+ru-RU other
+
+=== case ordinal_2
+pluralCategory(2, "ordinal")
+en-US two
+de-DE other
+fr-FR other
+ar-EG other
+ja-JP other
+hi-IN two
+pl-PL other
+ru-RU other
+
+=== case ordinal_3
+pluralCategory(3, "ordinal")
+en-US few
+de-DE other
+fr-FR other
+ar-EG other
+ja-JP other
+hi-IN two
+pl-PL other
+ru-RU other
+
+=== case ordinal_4
+pluralCategory(4, "ordinal")
+en-US other
+de-DE other
+fr-FR other
+ar-EG other
+ja-JP other
+hi-IN few
+pl-PL other
+ru-RU other
+
+=== case ordinal_11
+pluralCategory(11, "ordinal")
+en-US other
+de-DE other
+fr-FR other
+ar-EG other
+ja-JP other
+hi-IN other
+pl-PL other
+ru-RU other
+
+=== case ordinal_22
+pluralCategory(22, "ordinal")
+en-US two
+de-DE other
+fr-FR other
+ar-EG other
+ja-JP other
+hi-IN other
+pl-PL other
+ru-RU other
+
+=== case list_one
+formatList(["a"])
+en-US a
+de-DE a
+fr-FR a
+ar-EG a
+ja-JP a
+hi-IN a
+pl-PL a
+ru-RU a
+
+=== case list_two
+formatList(["a", "b"])
+en-US a and b
+de-DE a und b
+fr-FR a et b
+ar-EG a وb
+ja-JP a、b
+hi-IN a और b
+pl-PL a i b
+ru-RU a и b
+
+=== case list_three
+formatList(["a", "b", "c"])
+en-US a, b, and c
+de-DE a, b und c
+fr-FR a, b et c
+ar-EG a وb وc
+ja-JP a、b、c
+hi-IN a, b, और c
+pl-PL a, b i c
+ru-RU a, b и c
+
+=== case list_or
+formatList(["a", "b", "c"], "disjunction")
+en-US a, b, or c
+de-DE a, b oder c
+fr-FR a, b ou c
+ar-EG a أو b أو c
+ja-JP a、b、またはc
+hi-IN a, b या c
+pl-PL a, b lub c
+ru-RU a, b или c
+
+=== case list_empty
+formatList([])
+en-US
+de-DE
+fr-FR
+ar-EG
+ja-JP
+hi-IN
+pl-PL
+ru-RU
+
+=== case compare_a_b
+`${compare("a", "b")}`
+en-US -1
+de-DE -1
+fr-FR -1
+ar-EG -1
+ja-JP -1
+hi-IN -1
+pl-PL -1
+ru-RU -1
+
+=== case compare_b_a
+`${compare("b", "a")}`
+en-US 1
+de-DE 1
+fr-FR 1
+ar-EG 1
+ja-JP 1
+hi-IN 1
+pl-PL 1
+ru-RU 1
+
+=== case compare_equal
+`${compare("a", "a")}`
+en-US 0
+de-DE 0
+fr-FR 0
+ar-EG 0
+ja-JP 0
+hi-IN 0
+pl-PL 0
+ru-RU 0
+
+=== case compare_case
+`${compare("a", "B")}`
+en-US -1
+de-DE -1
+fr-FR -1
+ar-EG -1
+ja-JP -1
+hi-IN -1
+pl-PL -1
+ru-RU -1
+
+=== case compare_umlaut
+`${compare("ä", "z")}`
+en-US -1
+de-DE -1
+fr-FR -1
+ar-EG -1
+ja-JP -1
+hi-IN -1
+pl-PL -1
+ru-RU -1
+
+=== case compare_ch
+`${compare("ch", "h")}`
+en-US -1
+de-DE -1
+fr-FR -1
+ar-EG -1
+ja-JP -1
+hi-IN -1
+pl-PL -1
+ru-RU -1
+
+=== case compare_digits
+`${compare("10", "9")}`
+en-US -1
+de-DE -1
+fr-FR -1
+ar-EG -1
+ja-JP -1
+hi-IN -1
+pl-PL -1
+ru-RU -1

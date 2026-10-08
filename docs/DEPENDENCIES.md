@@ -55,6 +55,8 @@ A binary that contains Apache-2.0 code (for example the desktop host, which cont
 
 `plinth-runner-wasmtime` uses the `sys-locale` crate (MIT OR Apache-2.0, from 1Password, about 800 lines) for `plinth:locale` (`docs/I18N.md` §3.1): the OS locale as a BCP 47 tag. On Windows it calls `GetUserDefaultLocaleName` with its own declaration and adds no crate; on Android it adds `libc`. Its feature `js` (for wasm32 in a browser) is off.
 
+`plinth-runner-wasmtime` uses ICU4X 2.3 (Unicode-3.0, from the Unicode Consortium) for the formatting functions of `plinth:locale` (`docs/I18N.md` §3.7): `icu_decimal`, `icu_datetime`, `icu_calendar`, `icu_time`, `icu_plurals`, `icu_list`, `icu_collator`, `icu_locale_core`, `fixed_decimal` and `writeable`, each with its compiled data (`*_data` crates) for all locales, and `icu_experimental` 0.6 for the currency and percent formatters (no stable crate has them yet; its API can change in a minor version). Unicode-3.0 is already in the `allow` list of `deny.toml` (other crates, for example `idna`, already use ICU4X). The new crates in the graph: the ICU4X crates and their data crates, `icu_pattern`, `ixdtf` (Unicode-3.0), `calendrical_calculations` (Apache-2.0), `core_maths` (MIT), `utf16_iter` and `write16` (Apache-2.0 OR MIT). Cost (Windows, 2026-10-08): about 2.5 MB in a release binary (a test binary with all five functions is 2.7 MB, without them 0.25 MB), and about 35 s of build time on a clean release build, in parallel with other crates. The notice file (L1) must include the Unicode license of the data.
+
 ### Web host: the SQLite Wasm build
 
 The web host runs `store.sql` (`docs/SQL.md` §2) on the official SQLite Wasm build. It is a vendored copy, not an npm dependency at run time and not a CDN file: the web host has no build step and no npm dependency (`web/README.md`), and `plinth registry serve --web` embeds the web files in the `plinth` binary (`crates/plinth-registry/src/web_files.rs`), so the files must be in the repository.
@@ -138,17 +140,17 @@ node scripts/gen-license-list.mjs --write
 The script reads `cargo deny list` (the same graph and targets as `deny.toml`) and `cargo metadata`.
 
 <!-- license-list:begin -->
-Third-party crates in the checked graph: **767**.
+Third-party crates in the checked graph: **794**.
 
 Crates whose license expression names each license (a crate that names two licenses counts once for each):
 
 | License | Crates |
 |---|---|
-| MIT | 670 |
-| Apache-2.0 | 518 |
+| MIT | 673 |
+| Apache-2.0 | 521 |
 | Apache-2.0 WITH LLVM-exception | 52 |
+| Unicode-3.0 | 47 |
 | Zlib | 26 |
-| Unicode-3.0 | 24 |
 | BSD-3-Clause | 14 |
 | Unlicense | 10 |
 | BSD-2-Clause | 8 |
@@ -164,14 +166,14 @@ Crates by license set (all licenses that the license expression of one crate nam
 
 | Licenses in the expression of one crate | Crates |
 |---|---|
-| Apache-2.0 / MIT | 448 |
-| MIT | 158 |
+| Apache-2.0 / MIT | 450 |
+| MIT | 159 |
+| Unicode-3.0 | 45 |
 | Apache-2.0 WITH LLVM-exception | 28 |
 | Apache-2.0 / Apache-2.0 WITH LLVM-exception / MIT | 23 |
 | Apache-2.0 / MIT / Zlib | 22 |
-| Unicode-3.0 | 22 |
+| Apache-2.0 | 11 |
 | BSD-3-Clause | 11 |
-| Apache-2.0 | 10 |
 | MIT / Unlicense | 10 |
 | Apache-2.0 / BSD-2-Clause / MIT | 4 |
 | BSD-2-Clause | 4 |

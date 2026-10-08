@@ -305,6 +305,34 @@ interface locale {
   /// True when the script of the locale is written right to left (for
   /// example Arabic, Hebrew, Persian, Urdu).
   is-rtl: func() -> bool;
+
+  // Formatting in the locale of the app (core 1.13, `docs/I18N.md` §3.3,
+  // §3.7, §4 step 2). The host formats: ICU4X on the desktop, the browser's
+  // `Intl` on the web. The options are JSON text that the compiler makes,
+  // so a new option needs no new function. The host ignores an unknown
+  // option or value.
+
+  /// `value` as text. `options` is a JSON object with the optional fields
+  /// `style` ("decimal", "percent", "currency"), `currency` (an ISO 4217
+  /// code), `minimumFractionDigits`, `maximumFractionDigits` (0 to 20),
+  /// `useGrouping` (a bool) and `notation` ("standard", "compact"). A value
+  /// that is not finite gives an empty string.
+  format-number: func(value: f64, options: string) -> string;
+  /// The time `ms` (milliseconds since the Unix epoch) as text, in the
+  /// local time zone of the host (as `time.timezone-offset`). `options` is
+  /// a JSON object with the optional fields `dateStyle` ("full", "long",
+  /// "medium", "short") and `timeStyle` ("medium", "short"). With neither,
+  /// the host uses `dateStyle` "medium".
+  format-date: func(ms: f64, options: string) -> string;
+  /// The plural category of `value`: "zero", "one", "two", "few", "many"
+  /// or "other". `kind` is "cardinal" or "ordinal".
+  plural-category: func(value: f64, kind: string) -> string;
+  /// The strings of `items` (a JSON array of strings) as one list. `kind`
+  /// is "conjunction" ("a, b, and c") or "disjunction" ("a, b, or c").
+  format-list: func(items: string, kind: string) -> string;
+  /// Compares two strings in the order of the locale (collation): -1 when
+  /// `a` comes first, 0 when they are equal, 1 when `b` comes first.
+  compare: func(a: string, b: string) -> s32;
 }
 
 world app {

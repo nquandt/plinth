@@ -8,6 +8,7 @@ No public release yet. The first release is a Preview for Windows and the web. `
 
 ### Added
 
+- `plinth:locale` formatting (core 1.13, `docs/I18N.md` step 2, no capability): `formatNumber` (decimal, percent, currency, compact), `formatDate` (date and time styles in the local time zone), `pluralCategory` (cardinal and ordinal), `formatList` and `compare` (collation for sorting). The desktop host formats with ICU4X 2.3 (all locales), the web host with the browser's `Intl`. All are reactive, as `locale()`. One case file (`crates/plinth-compiler/tests/locale_cases.txt`, 56 calls in 8 locales) checks that both hosts give the same text; `docs/I18N.md` §3.7 lists the 8 known differences.
 - `plinth:locale` (core 1.13, `docs/I18N.md` step 1, no capability): `locale()` gives the locale of the app as a BCP 47 tag (for example `"ar-EG"`), and `direction()` gives `"ltr"` or `"rtl"`. Both are reactive: the text that reads them changes when the user changes the locale while the app runs. The desktop host reads the OS locale (`PLINTH_LOCALE` overrides it); the web host reads the page locale and sets `lang` and `dir` on the root element of the app.
 - Migration guides (`docs/migrations/`, PRODUCTION X5): one guide for each core minor, starting with `core-1.13.md`. A test fails when a new core minor has no guide.
 - License: MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`).

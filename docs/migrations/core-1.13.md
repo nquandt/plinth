@@ -2,7 +2,7 @@
 
 Status: not shipped yet. Core 1.12 is the newest shipped core (`rt_abi::SHIPPED_MINOR`). Items can still be added to 1.13 until it ships.
 
-Core 1.13 adds the SQL store (`store.sql`, `docs/SQL.md`), a hash table for `Map` and `Set`, and the module `plinth:locale` (`docs/I18N.md` §4 step 1). Nothing is removed or changed. Every app that runs on core 1.12 runs on core 1.13 with the same behavior.
+Core 1.13 adds the SQL store (`store.sql`, `docs/SQL.md`), a hash table for `Map` and `Set`, and the module `plinth:locale` (`docs/I18N.md` §4 steps 1 and 2). Nothing is removed or changed. Every app that runs on core 1.12 runs on core 1.13 with the same behavior.
 
 ## 1. What is new
 
@@ -18,6 +18,9 @@ Core 1.13 adds the SQL store (`store.sql`, `docs/SQL.md`), a hash table for `Map
 | `plinth:app/locale` with `tag() -> string` and `is-rtl() -> bool` | Host interface (`wit/plinth/app.wit`) | Synchronous. No capability. `tag` is a BCP 47 tag and is never empty. |
 | `lifecycle` event, kind 4 (locale changed) | Event (SPEC §8.4, `plinth_protocol::lifecycle_kind::LOCALE`) | No payload. The core reads the locale again. A core older than 1.13 ignores it. |
 | `locale`, `direction` and the type `Direction` in `plinth:locale` | Plinth TS module (`std/locale.d.ts`) | `locale(): string`, `direction(): "ltr" \| "rtl"`. |
+| `locale_format_number`, `locale_format_date`, `locale_plural`, `locale_format_list`, `locale_compare` | Core functions | The formatting functions of `plinth:locale` (`docs/I18N.md` §3.7). Each call is reactive, as `locale()`. |
+| `plinth:app/locale` `format-number(value: f64, options: string) -> string`, `format-date(ms: f64, options: string) -> string`, `plural-category(value: f64, kind: string) -> string`, `format-list(items: string, kind: string) -> string`, `compare(a: string, b: string) -> s32` | Host interface (`wit/plinth/app.wit`) | Synchronous. No capability. `options` is a JSON object and `items` is a JSON array of strings. |
+| `formatNumber`, `formatDate`, `pluralCategory`, `formatList`, `compare` and the types `NumberFormatOptions`, `DateFormatOptions`, `PluralCategory`, `PluralType`, `ListType` in `plinth:locale` | Plinth TS module (`std/locale.d.ts`) | Numbers, dates, plural categories, lists and collation in the locale of the app. |
 | Merge sort for `Array.prototype.sort` | Compiler output | No core function. A sort of 10,000 numbers took 560 ms, and now takes 5 ms. The sort stays stable, with the same order. |
 
 ## 2. App authors
@@ -49,9 +52,11 @@ To use the SQL store:
 
 To use the locale, import `locale` and `direction` from `plinth:locale` (`docs/host-apis.md` "plinth:locale"). No capability is necessary. Read them in the UI, in a `computed` value or in an `effect`, so that the app follows a change of the locale.
 
+To format in the locale, import `formatNumber`, `formatDate`, `pluralCategory`, `formatList` or `compare` from `plinth:locale`. Write the options as an object literal at the call. `formatDate` of `plinth:time` does not change: it keeps its pattern and its English names. A file that uses both imports one with another name.
+
 ## 3. Host authors
 
-A host that uses core 1.13 must supply `plinth:app/sql` `run` and `plinth:app/locale` `tag` and `is-rtl`, or the core does not link (`docs/COMPATIBILITY.md` §3).
+A host that uses core 1.13 must supply `plinth:app/sql` `run` and the seven functions of `plinth:app/locale`, or the core does not link (`docs/COMPATIBILITY.md` §3).
 
 For `plinth:app/locale`:
 
@@ -59,6 +64,7 @@ For `plinth:app/locale`:
 - `is-rtl` follows the script subtag, else the language subtag, with the lists of `crates/plinth-runner-wasmtime/src/locale.rs` (the web host has the same lists in `web/plinth-web.js`).
 - When the locale changes while the app runs, send a `lifecycle` event with kind 4. Send it only after the new value is ready for `tag`. An app with a core older than 1.13 ignores it.
 - The web host sets `lang` and `dir` on the root element of the app.
+- The formatting functions follow `docs/I18N.md` §3.7: the option sets, the defaults, the rules for input that is not valid (never trap, never throw), the local time zone for `format-date`, and a space (U+0020) in place of U+202F in a date. `crates/plinth-compiler/tests/locale_cases.txt` has the shared cases; the desktop host (ICU4X) and the web host (`Intl`) both pass them, with the known differences that the file records.
 
 - A host with no SQL engine answers each call with `[false, 0, "", "denied:unsupported"]`. It must not leave the import out.
 - A host with a SQL engine follows `docs/SQL.md` §4: the authorizer, the time limit, the quota, the result limit, and the error texts of `crates/plinth-runner-wasmtime/src/sql.rs`. `crates/plinth-compiler/tests/sql_cases.txt` has the shared cases; the desktop and the web host both pass them.

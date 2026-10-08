@@ -135,6 +135,11 @@ fn is_dynamic(e: &TExpr) -> bool {
                     "sig_get_f64" | "sig_get_i32" | "comp_get_f64" | "comp_get_i32" | "app_active" | "locale_tag" | "locale_direction",
                     _
                 )
+                // The formatting calls of `plinth:locale` read the locale signal too.
+                | TExprKind::Rt(
+                    "locale_format_number" | "locale_format_date" | "locale_plural" | "locale_format_list" | "locale_compare",
+                    _
+                )
         ) {
             dynamic = true;
         }

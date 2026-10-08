@@ -1662,6 +1662,97 @@ function pageLocale(nav = globalThis.navigator) {
   return normalizeLocale(first);
 }
 
+// plinth:locale formatting (core 1.13, docs/I18N.md §3.7): the browser's
+// `Intl`, with the same option sets and rules as ICU4X on the desktop
+// (`crates/plinth-runner-wasmtime/src/locale_format.rs`); keep them the same.
+// The options are JSON text from the compiler. No input throws: the worst
+// result is "" (a value that is not finite) or the "decimal" style (a bad
+// currency code).
+
+function localeOptions(text) {
+  try {
+    const o = JSON.parse(text);
+    return o !== null && typeof o === "object" && !Array.isArray(o) ? o : {};
+  } catch {
+    return {};
+  }
+}
+
+/** A digit count option: an integer from 0 to 20, else `undefined`. */
+function digitsOption(v) {
+  return typeof v === "number" && Number.isFinite(v) ? Math.min(20, Math.max(0, Math.trunc(v))) : undefined;
+}
+
+/** `Intl` throws a `RangeError` for a tag that it cannot read: use "en-US". */
+function intlLocale(tag) {
+  try {
+    return Intl.getCanonicalLocales(tag)[0] ?? FALLBACK_LOCALE;
+  } catch {
+    return FALLBACK_LOCALE;
+  }
+}
+
+/** `locale.format-number`. */
+function formatNumberIntl(tag, value, options) {
+  if (!Number.isFinite(value)) return "";
+  const loc = intlLocale(tag);
+  const o = localeOptions(options);
+  const style = o.style ?? "decimal";
+  const useGrouping = o.useGrouping === false ? false : "auto";
+  let min = digitsOption(o.minimumFractionDigits);
+  let max = digitsOption(o.maximumFractionDigits);
+  if (style === "currency" && typeof o.currency === "string" && /^[A-Za-z]{3}$/.test(o.currency)) {
+    // The currency sets the fraction digits.
+    return new Intl.NumberFormat(loc, { style: "currency", currency: o.currency }).format(value);
+  }
+  if (style === "percent") {
+    min = min ?? 0;
+    max = Math.max(max ?? 0, min);
+    return new Intl.NumberFormat(loc, { style: "percent", minimumFractionDigits: min, maximumFractionDigits: max, useGrouping }).format(value);
+  }
+  if (style !== "currency" && o.notation === "compact") {
+    return new Intl.NumberFormat(loc, { notation: "compact" }).format(value);
+  }
+  min = min ?? 0;
+  max = Math.max(max ?? 3, min);
+  return new Intl.NumberFormat(loc, { minimumFractionDigits: min, maximumFractionDigits: max, useGrouping }).format(value);
+}
+
+/** `locale.format-date`, in the local time zone of this global scope. */
+function formatDateIntl(tag, ms, options) {
+  if (!Number.isFinite(ms) || Math.abs(ms) > 8.64e15) return "";
+  const o = localeOptions(options);
+  let dateStyle = ["full", "long", "medium", "short"].includes(o.dateStyle) ? o.dateStyle : undefined;
+  const timeStyle = ["medium", "short"].includes(o.timeStyle) ? o.timeStyle : undefined;
+  if (dateStyle === undefined && timeStyle === undefined) dateStyle = "medium";
+  // Some browsers give U+202F (narrow no-break space) before "AM"; the
+  // hosts give a space (docs/I18N.md §3.7).
+  return new Intl.DateTimeFormat(intlLocale(tag), { dateStyle, timeStyle }).format(ms).replace(/ /g, " ");
+}
+
+/** `locale.plural-category`. */
+function pluralCategoryIntl(tag, value, kind) {
+  if (!Number.isFinite(value)) return "other";
+  return new Intl.PluralRules(intlLocale(tag), { type: kind === "ordinal" ? "ordinal" : "cardinal" }).select(Math.abs(value));
+}
+
+/** `locale.format-list`: `items` is a JSON array of strings. */
+function formatListIntl(tag, items, kind) {
+  let list = [];
+  try {
+    const parsed = JSON.parse(items);
+    if (Array.isArray(parsed) && parsed.every((s) => typeof s === "string")) list = parsed;
+  } catch {
+    // Not a list of strings: an empty list, as on the desktop.
+  }
+  return new Intl.ListFormat(intlLocale(tag), { type: kind === "disjunction" ? "disjunction" : "conjunction" }).format(list);
+}
+
+/** `locale.compare`: -1, 0 or 1. */
+function compareIntl(tag, a, b) {
+  return Math.sign(new Intl.Collator(intlLocale(tag)).compare(a, b));
+}
+
 function hostImports(
   getExports,
   onCommit,
@@ -1808,6 +1899,13 @@ function hostImports(
     const ptr = alloc(encoded.length || 1);
     bytes().set(encoded, ptr);
     return { ptr, len: encoded.length };
+  }
+  /** A plain `string` result through `retptr` (ptr@0, len@4). */
+  function retString(retptr, s) {
+    const { ptr, len } = writeString(s);
+    const v = mem();
+    v.setUint32(retptr, ptr, true);
+    v.setUint32(retptr + 4, len, true);
   }
   // result<_, host-error>: tag@0 (1 byte), err payload (host-error: tag@1, reason@2).
   function writeDeniedUnit(retptr, reason = DeniedReason.unsupported) {
@@ -2027,6 +2125,23 @@ function hostImports(
       },
       "is-rtl"() {
         return isRtlLocale(getLocale()) ? 1 : 0;
+      },
+      // Formatting (docs/I18N.md §3.7): strings come as (ptr, len); a string
+      // result goes through `retptr` (ptr@0, len@4).
+      "format-number"(value, oPtr, oLen, retptr) {
+        retString(retptr, formatNumberIntl(getLocale(), value, readString(oPtr, oLen)));
+      },
+      "format-date"(ms, oPtr, oLen, retptr) {
+        retString(retptr, formatDateIntl(getLocale(), ms, readString(oPtr, oLen)));
+      },
+      "plural-category"(value, kPtr, kLen, retptr) {
+        retString(retptr, pluralCategoryIntl(getLocale(), value, readString(kPtr, kLen)));
+      },
+      "format-list"(iPtr, iLen, kPtr, kLen, retptr) {
+        retString(retptr, formatListIntl(getLocale(), readString(iPtr, iLen), readString(kPtr, kLen)));
+      },
+      compare(aPtr, aLen, bPtr, bLen) {
+        return compareIntl(getLocale(), readString(aPtr, aLen), readString(bPtr, bLen));
       },
     },
     "plinth:app/store@1.0.0": {
@@ -2490,7 +2605,7 @@ function plainReason(err, lastTrap) {
   }
   return msg;
 }
-  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, SRCMAP_SECTION, moduleBodies, decodeSrcMap, trapPlace, readPlnt, MAX_SQL_TEXT, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, defaultAskDialog, FALLBACK_LOCALE, normalizeLocale, isRtlLocale, pageLocale, loadCore, linkApp, PlinthApp, stopReason };
+  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, SRCMAP_SECTION, moduleBodies, decodeSrcMap, trapPlace, readPlnt, MAX_SQL_TEXT, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, defaultAskDialog, FALLBACK_LOCALE, normalizeLocale, isRtlLocale, pageLocale, formatNumberIntl, formatDateIntl, pluralCategoryIntl, formatListIntl, compareIntl, loadCore, linkApp, PlinthApp, stopReason };
   })();
 
   // ---- dom-renderer.js

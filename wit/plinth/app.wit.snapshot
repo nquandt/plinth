@@ -66,3 +66,8 @@ world app: import sql
 interface locale: tag: func() -> string
 interface locale: is-rtl: func() -> bool
 world app: import locale
+interface locale: format-number: func(value: f64, options: string) -> string
+interface locale: format-date: func(ms: f64, options: string) -> string
+interface locale: plural-category: func(value: f64, kind: string) -> string
+interface locale: format-list: func(items: string, kind: string) -> string
+interface locale: compare: func(a: string, b: string) -> s32
