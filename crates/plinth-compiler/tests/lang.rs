@@ -3611,3 +3611,214 @@ function Home() {
     assert!(end <= allowed, "memory grew from {} KiB to {} KiB in the second half: String/RegExp results leak", half >> 10, end >> 10);
 }
 
+// -- `===` on nullable values (docs/GAPS.md "`===` on nullable values"):
+// two `T | null` operands compare the values, not the boxes. --
+
+/// Runs a program whose `Home` computes `out` (a string) and shows it.
+fn eq_out(decls: &str, out: &str) -> String {
+    let main = format!(
+        "import {{ app, Screen, Text }} from \"plinth:ui\";\nimport {{ int }} from \"plinth:core\";\n{decls}\nfunction b(v: boolean): string {{ return v ? \"1\" : \"0\"; }}\nfunction Home() {{\n{out}\n  return <Screen title=\"Home\"><Text>{{out}}</Text></Screen>;\n}}\n{APP}"
+    );
+    text_of(&run(&main), ControlKind::Text)
+}
+
+#[test]
+fn nullable_eq_string() {
+    let out = eq_out(
+        "function ps(s: string): string | null { return s; }\nfunction pn(): string | null { return null; }",
+        r#"  const a = ps("x" + "y"); const b2 = ps("xy"); const c = ps("x" + "z");
+  const n = pn(); const m = pn(); const t: string = "x" + "y";
+  const out = b(a === b2) + b(a !== b2) + b(a === c) + b(a !== c) + "|"
+    + b(a === n) + b(n === a) + b(n === m) + b(n !== m) + b(a !== n) + "|"
+    + b(a === t) + b(t === a) + b(t === c) + b(n === t) + b(t === n) + b(t !== n) + "|"
+    + b(a === null) + b(n === null) + b(null === n) + b(a === undefined) + b(n === undefined) + b(a !== null) + "|"
+    + b(a === "xy") + b("x" + "y" === a) + b(n === "xy");"#,
+    );
+    assert_eq!(out, "1001|00101|110001|011011|110");
+}
+
+#[test]
+fn nullable_eq_number() {
+    let out = eq_out(
+        "function pv(x: number): number | null { return x; }\nfunction pn(): number | null { return null; }",
+        r#"  const a = pv(0.1 + 0.2); const b2 = pv(0.30000000000000004); const c = pv(0.3);
+  const n = pn(); const m = pn(); const t = 0.1 + 0.2;
+  const nan = pv(NaN); const z = pv(0); const mz = pv(-0);
+  const out = b(a === b2) + b(a !== b2) + b(a === c) + b(a !== c) + "|"
+    + b(a === n) + b(n === a) + b(n === m) + b(n !== m) + "|"
+    + b(a === t) + b(t === a) + b(t === c) + b(n === t) + b(t === n) + "|"
+    + b(nan === nan) + b(nan !== nan) + b(nan === pv(NaN)) + b(nan === NaN) + "|"
+    + b(z === mz) + b(mz === 0) + b(0 === mz) + "|"
+    + b(a === null) + b(n === null) + b(a === undefined) + b(n === undefined);"#,
+    );
+    assert_eq!(out, "1001|0010|11000|0100|111|0101");
+}
+
+#[test]
+fn nullable_eq_int() {
+    let out = eq_out(
+        "function pv(x: int): int | null { return x; }\nfunction pn(): int | null { return null; }",
+        r#"  const one: int = 1;
+  const a = pv(one + one); const b2 = pv(2); const c = pv(3);
+  const n = pn(); const m = pn(); const t: int = one + one;
+  const out = b(a === b2) + b(a !== b2) + b(a === c) + b(a !== c) + "|"
+    + b(a === n) + b(n === a) + b(n === m) + b(n !== m) + "|"
+    + b(a === t) + b(t === a) + b(t === c) + b(n === t) + b(t === n) + "|"
+    + b(a === null) + b(n === null);"#,
+    );
+    assert_eq!(out, "1001|0010|11000|01");
+}
+
+#[test]
+fn nullable_eq_boolean() {
+    let out = eq_out(
+        "function pv(x: boolean): boolean | null { return x; }\nfunction pn(): boolean | null { return null; }",
+        r#"  const yes = 1 < 2;
+  const a = pv(yes); const b2 = pv(true); const c = pv(false);
+  const n = pn(); const m = pn();
+  const out = b(a === b2) + b(a !== b2) + b(a === c) + b(a !== c) + "|"
+    + b(a === n) + b(n === a) + b(n === m) + b(n !== m) + "|"
+    + b(a === yes) + b(yes === a) + b(c === yes) + b(n === yes) + b(false === n) + "|"
+    + b(a === null) + b(n === null);"#,
+    );
+    assert_eq!(out, "1001|0010|11000|01");
+}
+
+#[test]
+fn nullable_eq_enum() {
+    let out = eq_out(
+        "enum Color { Red, Green, Blue }\nfunction pv(x: Color): Color | null { return x; }\nfunction pn(): Color | null { return null; }",
+        r#"  const a = pv(Color.Green); const b2 = pv(Color.Green); const c = pv(Color.Blue);
+  const n = pn(); const m = pn(); const t = Color.Green;
+  const out = b(a === b2) + b(a !== b2) + b(a === c) + b(a !== c) + "|"
+    + b(a === n) + b(n === a) + b(n === m) + b(n !== m) + "|"
+    + b(a === t) + b(t === a) + b(t === c) + b(n === t) + b(t === n) + "|"
+    + b(a === null) + b(n === null);"#,
+    );
+    assert_eq!(out, "1001|0010|11000|01");
+}
+
+#[test]
+fn nullable_eq_string_literal_union() {
+    let out = eq_out(
+        "type Mode = \"on\" | \"off\";\nfunction pm(x: Mode): Mode | null { return x; }\nfunction ps(s: string): string | null { return s; }",
+        r#"  const a = pm("on"); const s = ps("o" + "n"); const n = ps("o" + "ff");
+  const out = b(a === s) + b(s === a) + b(a === n) + b(a !== n);"#,
+    );
+    assert_eq!(out, "1101");
+}
+
+#[test]
+fn nullable_eq_evaluates_each_side_once_in_order() {
+    let out = eq_out(
+        "let log = \"\";\nfunction ps(tag: string, s: string): string | null { log = log + tag; return s; }",
+        r#"  const r = b(ps("a", "x" + "y") === ps("b", "xy")) + b(ps("c", "x") !== ps("d", "y"));
+  const out = r + "|" + log;"#,
+    );
+    assert_eq!(out, "11|abcd");
+}
+
+#[test]
+fn switch_on_nullable_string_compares_values() {
+    let out = eq_out(
+        "function ps(s: string): string | null { return s; }\nfunction pn(): string | null { return null; }\nfunction pick(v: string | null): string {\n  switch (v) {\n    case \"ab\": return \"AB\";\n    case \"c\" + \"d\": return \"CD\";\n    case null: return \"N\";\n    default: return \"-\";\n  }\n}",
+        r#"  const out = pick(ps("a" + "b")) + pick(ps("cd")) + pick(ps("e")) + pick(pn());"#,
+    );
+    assert_eq!(out, "ABCD-N");
+}
+
+#[test]
+fn switch_on_nullable_number_with_a_null_case() {
+    let out = eq_out(
+        "function pv(x: number): number | null { return x; }\nfunction pn(): number | null { return null; }\nfunction pick(v: number | null): string {\n  switch (v) {\n    case 1: return \"one\";\n    case 0.1 + 0.2: return \"p3\";\n    case null: return \"N\";\n    default: return \"-\";\n  }\n}",
+        r#"  const out = pick(pv(0.5 + 0.5)) + pick(pv(0.30000000000000004)) + pick(pv(2)) + pick(pn()) + pick(pv(NaN));"#,
+    );
+    assert_eq!(out, "onep3-N-");
+}
+
+#[test]
+fn includes_and_index_of_on_nullable_arrays() {
+    let out = eq_out(
+        "function ps(s: string): string | null { return s; }\nfunction pv(x: number): number | null { return x; }\nfunction pi(x: int): int | null { return x; }",
+        r#"  const ss: (string | null)[] = [ps("a"), null, ps("x" + "y")];
+  const ns: (number | null)[] = [pv(1), null, pv(0.1 + 0.2)];
+  const is: (int | null)[] = [pi(5), pi(7)];
+  const nul: string | null = null;
+  const out = b(ss.includes("x" + "y")) + b(ss.includes(ps("xy"))) + b(ss.includes("z")) + ss.indexOf("x" + "y") + ss.indexOf(null) + ss.indexOf(nul) + "|"
+    + b(ns.includes(0.1 + 0.2)) + b(ns.includes(pv(1))) + b(ns.includes(2)) + ns.indexOf(pv(0.30000000000000004)) + ns.indexOf(null) + "|"
+    + b(is.includes(7)) + is.indexOf(pi(7)) + b(is.includes(null));"#,
+    );
+    assert_eq!(out, "110211|11021|110");
+}
+
+/// A signal of a string or of a `T | null` primitive: `set` with an equal
+/// value (another string object or another box) does not notify.
+#[test]
+fn signal_set_with_an_equal_value_does_not_notify() {
+    let main = r#"import { app, Screen, Text, Button, signal, effect } from "plinth:ui";
+function ps(s: string): string | null { return s; }
+function pv(x: number): number | null { return x; }
+const s = signal<string | null>(ps("ab"));
+const t = signal("ab");
+const v = signal<number | null>(pv(0.5));
+const runs = signal("");
+effect(() => { s(); runs.update((r) => r + "s"); });
+effect(() => { t(); runs.update((r) => r + "t"); });
+effect(() => { v(); runs.update((r) => r + "v"); });
+let step = 0;
+function Home() {
+  return (
+    <Screen title="Home">
+      <Text>{runs()}</Text>
+      <Button label="go" onPress={() => {
+        step = step + 1;
+        if (step === 1) { s.set(ps("a" + "b")); t.set("a" + "b"); v.set(pv(0.25 + 0.25)); }
+        if (step === 2) { s.set(null); }
+        if (step === 3) { s.set(null); }
+        if (step === 4) { s.set("c"); t.set("c"); v.set(null); }
+      }} />
+    </Screen>
+  );
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        assert!(tree.apply(&commit).unwrap().is_empty());
+    }
+    let button = {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        loop {
+            let id = stack.pop().expect("no Button found");
+            let node = tree.get(id).unwrap();
+            if node.kind == Some(ControlKind::Button) {
+                break id;
+            }
+            stack.extend(node.children.iter());
+        }
+    };
+    let handler = tree.get(button).unwrap().handler(event::PRESS).unwrap();
+    let mut seen = vec![text_of(&tree, ControlKind::Text)];
+    for _ in 0..4 {
+        let mut w = Writer::new();
+        w.event(&Event::Ui { handler, event: event::PRESS, value: Value::Null });
+        for commit in guest.on_event(w.as_bytes()).unwrap() {
+            assert!(tree.apply(&commit).unwrap().is_empty());
+        }
+        seen.push(text_of(&tree, ControlKind::Text));
+    }
+    // Step 1 (equal values): no effect runs. Step 2 (null): `s` runs.
+    // Step 3 (null again): nothing. Step 4: all three run.
+    let want: Vec<String> = ["stv", "stv", "stvs", "stvs", "stvsstv"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(seen, want);
+}
+

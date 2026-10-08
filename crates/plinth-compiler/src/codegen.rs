@@ -1573,6 +1573,36 @@ impl FnGen {
                 self.free(ta, Repr::I32);
                 self.free(tb, br);
             }
+            EqKind::OptStr | EqKind::OptNum => {
+                // a === null || b === null ? a === b : unwrap(a) === unwrap(b)
+                let (ta, tb) = (self.tmp(Repr::I32), self.tmp(Repr::I32));
+                self.emit(I::LocalSet(tb));
+                self.emit(I::LocalSet(ta));
+                self.emit(I::LocalGet(ta));
+                self.emit(I::I32Eqz);
+                self.emit(I::LocalGet(tb));
+                self.emit(I::I32Eqz);
+                self.emit(I::I32Or);
+                self.open(I::If(BlockType::Result(ValType::I32)));
+                self.emit(I::LocalGet(ta));
+                self.emit(I::LocalGet(tb));
+                self.emit(I::I32Eq);
+                self.emit(I::Else);
+                self.emit(I::LocalGet(ta));
+                if eq == EqKind::OptNum {
+                    self.rt(g, "unbox_f64");
+                }
+                self.emit(I::LocalGet(tb));
+                if eq == EqKind::OptNum {
+                    self.rt(g, "unbox_f64");
+                    self.emit(I::F64Eq);
+                } else {
+                    self.rt(g, "str_eq");
+                }
+                self.close();
+                self.free(ta, Repr::I32);
+                self.free(tb, Repr::I32);
+            }
         }
     }
 
@@ -1868,7 +1898,7 @@ impl FnGen {
                         CmpOp::Gt => I::F64Gt,
                         CmpOp::Ge => I::F64Ge,
                     }),
-                    EqKind::Str | EqKind::NullStr | EqKind::NullF64 | EqKind::NullI32 => {
+                    EqKind::Str | EqKind::NullStr | EqKind::NullF64 | EqKind::NullI32 | EqKind::OptStr | EqKind::OptNum => {
                         self.eq(g, *kind);
                         if *op == CmpOp::Ne {
                             self.emit(I::I32Eqz);

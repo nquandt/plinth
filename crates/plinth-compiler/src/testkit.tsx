@@ -344,37 +344,6 @@ export interface StringExpectation {
   not: StringMatchers;
 }
 
-// `===` on two `T | null` values: null checks first, then `===` on `T`.
-function sameString(a: string | null, b: string | null): boolean {
-  if (a === null) {
-    return b === null;
-  }
-  if (b === null) {
-    return false;
-  }
-  return a === b;
-}
-
-function sameNumber(a: number | null, b: number | null): boolean {
-  if (a === null) {
-    return b === null;
-  }
-  if (b === null) {
-    return false;
-  }
-  return a === b;
-}
-
-function sameBoolean(a: boolean | null, b: boolean | null): boolean {
-  if (a === null) {
-    return b === null;
-  }
-  if (b === null) {
-    return false;
-  }
-  return a === b;
-}
-
 function showString(v: string | null): string {
   return v === null ? "null" : JSON.stringify(v);
 }
@@ -387,8 +356,8 @@ function stringMatchers(v: string | null, negate: boolean, at: string): StringMa
     }
   };
   return {
-    toBe: (e: string | null) => check(sameString(v, e), `to be ${showString(e)}`),
-    toEqual: (e: string | null) => check(sameString(v, e), `to equal ${showString(e)}`),
+    toBe: (e: string | null) => check(v === e, `to be ${showString(e)}`),
+    toEqual: (e: string | null) => check(v === e, `to equal ${showString(e)}`),
     toContain: (part: string) => check(v !== null && v.includes(part), `to contain ${showString(part)}`),
   };
 }
@@ -422,8 +391,8 @@ function numberMatchers(v: number | null, negate: boolean, at: string): NumberMa
     }
   };
   return {
-    toBe: (e: number | null) => check(sameNumber(v, e), `to be ${showNumber(e)}`),
-    toEqual: (e: number | null) => check(sameNumber(v, e), `to equal ${showNumber(e)}`),
+    toBe: (e: number | null) => check(v === e, `to be ${showNumber(e)}`),
+    toEqual: (e: number | null) => check(v === e, `to equal ${showNumber(e)}`),
   };
 }
 
@@ -456,8 +425,8 @@ function booleanMatchers(v: boolean | null, negate: boolean, at: string): Boolea
     }
   };
   return {
-    toBe: (e: boolean | null) => check(sameBoolean(v, e), `to be ${showBoolean(e)}`),
-    toEqual: (e: boolean | null) => check(sameBoolean(v, e), `to equal ${showBoolean(e)}`),
+    toBe: (e: boolean | null) => check(v === e, `to be ${showBoolean(e)}`),
+    toEqual: (e: boolean | null) => check(v === e, `to equal ${showBoolean(e)}`),
   };
 }
 

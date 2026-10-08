@@ -273,6 +273,10 @@ pub struct Checker<'d> {
     /// inline code, so that a recursive type (`interface Node { kids:
     /// Node[] }`) works. The third part of the key is `json_int_bools`.
     json_funcs: HashMap<(bool, types::StructId, bool), FuncId>,
+    /// The generated `set` of a signal whose values compare by value (a
+    /// string or a boxed `T | null` primitive), by the equality it uses.
+    /// Made at the first use (`check/expr.rs`, `signal_set`).
+    sig_set_funcs: HashMap<EqKind, FuncId>,
     /// Set while the checker builds the row decoder of `sql.query<T>`
     /// (`check/sql.rs`): a `boolean` field also reads the numbers 0 and 1,
     /// because SQLite stores a boolean as an integer (`docs/SQL.md` §3).
@@ -435,6 +439,7 @@ pub fn check_full(
         resolving_interface: HashSet::new(),
         anon_structs: HashMap::new(),
         json_funcs: HashMap::new(),
+        sig_set_funcs: HashMap::new(),
         json_int_bools: false,
         json_default_stack: Vec::new(),
         navigations: Vec::new(),

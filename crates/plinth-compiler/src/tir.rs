@@ -237,7 +237,7 @@ pub enum CmpOp {
 }
 
 /// How two values compare for equality.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EqKind {
     F64,
     I32,
@@ -251,6 +251,13 @@ pub enum EqKind {
     /// An `int | null` / `boolean | null` / enum `| null` (first, boxed,
     /// through the same box as `number | null`) with the plain scalar.
     NullI32,
+    /// Two `string | null` values: equal when both are null, or when
+    /// neither is null and the strings are equal.
+    OptStr,
+    /// Two boxed `T | null` values (`number`, `int`, `boolean` or an enum,
+    /// all in the `f64` box): equal when both are null, or when neither is
+    /// null and the boxed values are equal (`NaN` is not equal to itself).
+    OptNum,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

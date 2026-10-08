@@ -95,8 +95,18 @@ const TYPINGS: &[(&str, &str)] = &[
     ("dialog.d.ts", include_str!("../../../std/dialog.d.ts")),
     ("net.d.ts", include_str!("../../../std/net.d.ts")),
     ("files.d.ts", include_str!("../../../std/files.d.ts")),
+    ("notify.d.ts", include_str!("../../../std/notify.d.ts")),
+    ("locale.d.ts", include_str!("../../../std/locale.d.ts")),
     ("test.d.ts", include_str!("../../../std/test.d.ts")),
 ];
+
+/// The `std/*.d.ts` files that `TYPINGS` leaves out, each with the reason.
+/// A test checks that every file is in one of the two lists.
+#[cfg(test)]
+const TYPINGS_LEFT_OUT: &[(&str, &str)] = &[(
+    "hub.d.ts",
+    "plinth:hub needs `hub.manage`, which the host gives only to packages signed with a trusted Hub key; a normal app cannot use it",
+)];
 
 fn main() -> ExitCode {
     // A single-file export (SPEC.md §10.3) runs its payload and nothing else.
@@ -1119,5 +1129,34 @@ fn feed_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
         }
         Some(other) => bail!("unknown `plinth feed {other}`; use add"),
         None => bail!("usage: plinth feed add <feed-dir> <app.plnt>"),
+    }
+}
+
+#[cfg(test)]
+mod typings_tests {
+    use super::{TYPINGS, TYPINGS_LEFT_OUT};
+
+    #[test]
+    fn every_std_typing_is_written_or_left_out_with_a_reason() {
+        let std_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let mut files: Vec<String> = std::fs::read_dir(&std_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".d.ts"))
+            .collect();
+        files.sort();
+        assert!(!files.is_empty(), "no typings in {}", std_dir.display());
+        for f in &files {
+            let written = TYPINGS.iter().any(|(n, _)| n == f);
+            let left_out = TYPINGS_LEFT_OUT.iter().any(|(n, _)| n == f);
+            assert!(written || left_out, "std/{f} is not in TYPINGS (crates/plinth-cli/src/main.rs); add it, or add it to TYPINGS_LEFT_OUT with a reason");
+            assert!(!(written && left_out), "std/{f} is in TYPINGS and in TYPINGS_LEFT_OUT");
+        }
+        for (n, _) in TYPINGS.iter().chain(TYPINGS_LEFT_OUT) {
+            assert!(files.iter().any(|f| f == n), "{n} is listed, but std/{n} does not exist");
+        }
+        for (n, why) in TYPINGS_LEFT_OUT {
+            assert!(!why.trim().is_empty(), "{n} is left out with no reason");
+        }
     }
 }

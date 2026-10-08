@@ -239,7 +239,12 @@ impl Checker<'_> {
                     Type::Nullable(inner) => (Type::Nullable(Box::new(self.widen((**inner).clone()))), (**inner).clone()),
                     t => (self.widen(t.clone()), t.clone()),
                 };
+                // `case null:` on a `T | null` discriminant: compare as two
+                // `T | null` values (both null, or the same `T` value).
+                let null_case = cases.iter().any(|(t, _)| matches!(t.as_ref().map(|t| &t.kind), Some(ast::ExprKind::Null)));
+                let opt = if null_case { self.opt_eq_kind(&d_ty, &d_ty) } else { None };
                 let eq = match &d_ty {
+                    _ if let Some(k) = opt => k,
                     Type::Number => EqKind::F64,
                     Type::Bool | Type::Enum(_) => EqKind::I32,
                     Type::String => EqKind::Str,
@@ -260,6 +265,7 @@ impl Checker<'_> {
                     let t = test.as_ref().map(|t| {
                         let te = self.expr(t, Some(&case_ty));
                         let target = match &d_ty {
+                            Type::Nullable(_) if opt.is_some() => d_ty.clone(),
                             Type::Nullable(inner) => (**inner).clone(),
                             t => t.clone(),
                         };

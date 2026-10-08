@@ -1186,6 +1186,54 @@ impl Checker<'_> {
         }
     }
 
+    /// `sig.set(v)` for a signal of type `t` (`v` is already coerced to
+    /// `t`). The runtime does not notify when the new value is the same
+    /// value (the same bits or the same reference). A string and a boxed
+    /// `T | null` primitive must compare by value, as `===` does, so for
+    /// these types the code calls a generated function that compares first.
+    fn signal_set(&mut self, sig: TExpr, v: TExpr, t: &Type, span: Span) -> TExpr {
+        let kind = match self.widen(t.clone()) {
+            Type::String => Some(EqKind::Str),
+            w => self.opt_eq_kind(&w, &w),
+        };
+        match kind {
+            Some(k) => {
+                let fid = self.sig_set_func(k, span);
+                TExpr::new(TExprKind::Call(fid, vec![sig, v]), Type::Void, span)
+            }
+            None => TExpr::new(TExprKind::SignalSet(bx(sig), bx(v)), Type::Void, span),
+        }
+    }
+
+    /// The generated `($s: Signal<T>, $v: T) => void` that runs
+    /// `if (!(peek($s) === $v)) $s.set($v)`, for the equality `k` (`Str`,
+    /// `OptStr` or `OptNum`; `OptNum` covers every boxed `T | null`, as
+    /// they share the box). Made once per kind.
+    fn sig_set_func(&mut self, k: EqKind, span: Span) -> FuncId {
+        if let Some(fid) = self.sig_set_funcs.get(&k) {
+            return *fid;
+        }
+        let t = match k {
+            EqKind::Str => Type::String,
+            EqKind::OptStr => Type::String.nullable(),
+            _ => Type::Number.nullable(),
+        };
+        let sig_ty = Type::Signal(Box::new(t.clone()));
+        let name = format!("$sig_set_{k:?}");
+        let fid = self.prog.new_func(FuncDef { name, kind: FuncKind::TopLevel, params: Vec::new(), ret: Type::Void, body: Vec::new(), span });
+        self.sig_set_funcs.insert(k, fid);
+        let s = self.var_in(fid, "$s", sig_ty.clone(), None);
+        let v = self.var_in(fid, "$v", t.clone(), None);
+        self.prog.funcs[fid as usize].params = vec![s, v];
+        let read_s = TExpr::new(TExprKind::Var(s), sig_ty, span);
+        let read_v = TExpr::new(TExprKind::Var(v), t.clone(), span);
+        let peek = TExpr::new(TExprKind::SignalPeek(bx(read_s.clone())), t, span);
+        let same = TExpr::new(TExprKind::Cmp(CmpOp::Eq, k, bx(peek), bx(read_v.clone())), Type::Bool, span);
+        let set = TExpr::new(TExprKind::SignalSet(bx(read_s), bx(read_v)), Type::Void, span);
+        self.prog.funcs[fid as usize].body = vec![TStmt::If(same, Vec::new(), vec![TStmt::Expr(set)])];
+        fid
+    }
+
     fn method_call(&mut self, o: TExpr, prop: &str, prop_span: Span, args: &[Expr], span: Span) -> TExpr {
         match o.ty.clone() {
             Type::Signal(t) => match prop {
@@ -1205,7 +1253,7 @@ impl Checker<'_> {
                     let v = self.expr_with(&args[0], &t);
                     self.fx.reactive = saved;
                     let v = self.coerce(v, &t);
-                    TExpr::new(TExprKind::SignalSet(bx(o), bx(v)), Type::Void, span)
+                    self.signal_set(o, v, &t, span)
                 }
                 "update" => {
                     if args.len() != 1 {
@@ -1224,7 +1272,7 @@ impl Checker<'_> {
                     };
                     let call = TExpr::new(TExprKind::CallClosure(bx(f), call_args), ret, span);
                     let call = self.coerce(call, &t);
-                    let set = TExpr::new(TExprKind::SignalSet(bx(read), bx(call)), Type::Void, span);
+                    let set = self.signal_set(read, call, &t, span);
                     TExpr::new(TExprKind::Block(vec![TStmt::Let(tmp, Some(o))], bx(set)), Type::Void, span)
                 }
                 _ => {
@@ -1483,7 +1531,7 @@ impl Checker<'_> {
                     Type::Number => EqKind::F64,
                     Type::Bool | Type::Enum(_) | Type::Element => EqKind::I32,
                     Type::String => EqKind::Str,
-                    _ => EqKind::Ref,
+                    t => self.opt_eq_kind(&t, &t).unwrap_or(EqKind::Ref),
                 };
                 let index = prop == "indexOf";
                 TExpr::new(
@@ -3225,6 +3273,10 @@ impl Checker<'_> {
         if let Some(k) = null_kind(self, &lt, &rt) {
             return TExpr::new(TExprKind::Cmp(CmpOp::Eq, k, bx(a), bx(b)), Type::Bool, span);
         }
+        // `T | null` with `T | null`: compare the values, not the boxes.
+        if let Some(k) = self.opt_eq_kind(&lt, &rt) {
+            return TExpr::new(TExprKind::Cmp(CmpOp::Eq, k, bx(a), bx(b)), Type::Bool, span);
+        }
         if let Some(k) = null_kind(self, &rt, &lt) {
             // The nullable side must come first; keep the evaluation order
             // with a temporary for the left side.
@@ -3253,6 +3305,19 @@ impl Checker<'_> {
             }
         };
         TExpr::new(TExprKind::Cmp(CmpOp::Eq, eq, bx(a), bx(b)), Type::Bool, span)
+    }
+
+    /// The value equality of two nullable primitives (`string`, `number`,
+    /// `int`, `boolean` or an enum, each `| null`) of the same type.
+    /// `None` for other types (objects compare by reference).
+    pub(super) fn opt_eq_kind(&self, a: &Type, b: &Type) -> Option<EqKind> {
+        let (Type::Nullable(x), Type::Nullable(y)) = (a, b) else { return None };
+        match (self.widen((**x).clone()), self.widen((**y).clone())) {
+            (Type::String, Type::String) => Some(EqKind::OptStr),
+            (Type::Number, Type::Number) => Some(EqKind::OptNum),
+            (x, y) if x == y && x.repr() == crate::types::Repr::I32 => Some(EqKind::OptNum),
+            _ => None,
+        }
     }
 
     /// `lt ?? r`: `r` when `lt` is `null`, else `lt` without `null`. A
