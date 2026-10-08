@@ -2,7 +2,7 @@
 
 Status: not shipped yet. Core 1.12 is the newest shipped core (`rt_abi::SHIPPED_MINOR`). Items can still be added to 1.13 until it ships.
 
-Core 1.13 adds the SQL store (`store.sql`, `docs/SQL.md`). Nothing is removed or changed. Every app that runs on core 1.12 runs on core 1.13 with the same behavior.
+Core 1.13 adds the SQL store (`store.sql`, `docs/SQL.md`) and a hash table for `Map` and `Set`. Nothing is removed or changed. Every app that runs on core 1.12 runs on core 1.13 with the same behavior.
 
 ## 1. What is new
 
@@ -13,13 +13,16 @@ Core 1.13 adds the SQL store (`store.sql`, `docs/SQL.md`). Nothing is removed or
 | `sql` in `plinth:store` | Plinth TS module export (`std/store.d.ts`) | `sql.exec`, `sql.query<T>`, `sql.batch`, `sql.migrate`. |
 | `store.sql` | Capability, risk Low | Declare it in `plinth.toml` with a rationale. |
 | `PL2026` | Compiler warning | A SQL statement that is not a string literal or a `const`. |
+| `kv_find_str`, `kv_find_f64`, `kv_find_i32`, `kv_add`, `kv_remove`, `kv_clear`, `kv_size`, `kv_live`, `kv_live_copy`, `kv_iter` | Core functions (`crates/plinth-rt/src/kv.rs`) | A hash table for `Map` and `Set`. Before, each `get`, `set`, `has` and `delete` searched the keys one by one: 10,000 string keys took 1,558 ms, and now take 13 ms. A loop over a map visits each entry one time, also when the loop body adds or deletes keys. |
+| Merge sort for `Array.prototype.sort` | Compiler output | No core function. A sort of 10,000 numbers took 560 ms, and now takes 5 ms. The sort stays stable, with the same order. |
 
 ## 2. App authors
 
 You do not have to change an app.
 
-- **An app that does not use `sql`** still declares core 1.12 as the lowest core it needs (`plinth-core` section, SPEC §10.5). It keeps running on hosts that have only core 1.12.
-- **An app that uses `sql`** declares core 1.13. A host that has only older cores cannot run it. The host tells the user which core to install. Before you publish such an app, make sure that your users have a host with core 1.13.
+- **An app that uses neither `sql` nor `Map` nor `Set`** still declares core 1.12 as the lowest core it needs (`plinth-core` section, SPEC §10.5). It keeps running on hosts that have only core 1.12.
+- **An app that uses `Map` or `Set`** declares core 1.13 when you build it with the new compiler, because the new `Map` code uses the 1.13 functions. The same app, built with an older compiler, still declares the older core and keeps running.
+- **An app that uses `sql`** declares core 1.13. A host that has only older cores cannot run these apps. The host tells the user which core to install. Before you publish such an app, make sure that your users have a host with core 1.13.
 - **The `core` policy** (`plinth.toml`, SPEC §10.5):
   - `follow` (the default): the app gets core 1.13 when the host has it. No action.
   - `patch`: the app stays on the minor version it was built with (`core-built`). Build it again with the new CLI to move it to 1.13.
