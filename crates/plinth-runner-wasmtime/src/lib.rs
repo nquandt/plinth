@@ -15,6 +15,7 @@ pub mod files;
 pub mod hub;
 pub mod kv;
 pub mod locale;
+pub mod locale_format;
 pub mod net;
 pub mod notify;
 pub mod policy;
@@ -668,6 +669,28 @@ impl bindings::plinth::app::locale::Host for HostState {
 
     fn is_rtl(&mut self) -> bool {
         locale::is_rtl(self.current_locale())
+    }
+
+    // Formatting (docs/I18N.md §3.7): ICU4X, in `locale_format`.
+    fn format_number(&mut self, value: f64, options: String) -> String {
+        locale_format::format_number(self.current_locale(), value, &options)
+    }
+
+    fn format_date(&mut self, ms: f64, options: String) -> String {
+        let offset = if ms.is_finite() { bindings::plinth::app::time::Host::timezone_offset(self, ms as i64) } else { 0 };
+        locale_format::format_date(self.current_locale(), ms, offset, &options)
+    }
+
+    fn plural_category(&mut self, value: f64, kind: String) -> String {
+        locale_format::plural_category(self.current_locale(), value, &kind).to_owned()
+    }
+
+    fn format_list(&mut self, items: String, kind: String) -> String {
+        locale_format::format_list(self.current_locale(), &items, &kind)
+    }
+
+    fn compare(&mut self, a: String, b: String) -> i32 {
+        locale_format::compare(self.current_locale(), &a, &b)
     }
 }
 

@@ -57,7 +57,21 @@ pub const DIALOG_NAMES: &[&str] = &["alert", "confirm", "prompt"];
 pub const NET_NAMES: &[&str] = &["fetch", "Response", "FetchOptions"];
 pub const FILES_NAMES: &[&str] = &["read", "write", "list", "stat", "remove", "FileEntry"];
 pub const NOTIFY_NAMES: &[&str] = &["show", "cancel", "lastError", "NotifyOptions", "NotifyResult"];
-pub const LOCALE_NAMES: &[&str] = &["locale", "direction", "Direction"];
+pub const LOCALE_NAMES: &[&str] = &[
+    "locale",
+    "direction",
+    "Direction",
+    "formatNumber",
+    "formatDate",
+    "pluralCategory",
+    "formatList",
+    "compare",
+    "NumberFormatOptions",
+    "DateFormatOptions",
+    "PluralCategory",
+    "PluralType",
+    "ListType",
+];
 pub const HUB_NAMES: &[&str] = &[
     "listApps",
     "launch",
@@ -94,6 +108,32 @@ fn notify_result_type() -> Type {
 /// `Direction`: what `direction()` returns.
 fn direction_type() -> Type {
     Type::str_lits(["ltr", "rtl"].iter().map(|s| s.to_string()).collect())
+}
+
+fn lits(names: &[&str]) -> Type {
+    Type::str_lits(names.iter().map(|s| s.to_string()).collect())
+}
+
+/// `PluralCategory`: what `pluralCategory()` returns (the CLDR plural categories).
+fn plural_category_type() -> Type {
+    lits(&["zero", "one", "two", "few", "many", "other"])
+}
+
+/// The fields of `NumberFormatOptions` (`plinth:locale`, docs/I18N.md §3.7).
+fn number_format_fields() -> Vec<(&'static str, Type)> {
+    vec![
+        ("style", lits(&["decimal", "percent", "currency"])),
+        ("currency", Type::String),
+        ("minimumFractionDigits", Type::Number),
+        ("maximumFractionDigits", Type::Number),
+        ("useGrouping", Type::Bool),
+        ("notation", lits(&["standard", "compact"])),
+    ]
+}
+
+/// The fields of `DateFormatOptions`.
+fn date_format_fields() -> Vec<(&'static str, Type)> {
+    vec![("dateStyle", lits(&["full", "long", "medium", "short"])), ("timeStyle", lits(&["medium", "short"]))]
 }
 
 pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
@@ -170,6 +210,17 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "locale" => Binding::Std(StdFn::Locale),
             "direction" => Binding::Std(StdFn::Direction),
             "Direction" => Binding::Type(direction_type()),
+            "formatNumber" => Binding::Std(StdFn::LocaleFormatNumber),
+            "formatDate" => Binding::Std(StdFn::LocaleFormatDate),
+            "pluralCategory" => Binding::Std(StdFn::LocalePlural),
+            "formatList" => Binding::Std(StdFn::LocaleFormatList),
+            "compare" => Binding::Std(StdFn::LocaleCompare),
+            // The options are an object literal at the call (as
+            // `NotifyOptions`): the compiler makes their JSON text.
+            "NumberFormatOptions" | "DateFormatOptions" => Binding::Type(Type::Error),
+            "PluralCategory" => Binding::Type(plural_category_type()),
+            "PluralType" => Binding::Type(lits(&["cardinal", "ordinal"])),
+            "ListType" => Binding::Type(lits(&["conjunction", "disjunction"])),
             _ => return None,
         }),
         StdModule::Hub => Some(match name {
@@ -327,6 +378,54 @@ impl Checker<'_> {
                     self.err(code::ARG_COUNT, span, "`direction` takes no arguments");
                 }
                 TExpr::new(TExprKind::Rt("locale_direction", Vec::new()), direction_type(), span)
+            }
+            StdFn::LocaleFormatNumber | StdFn::LocaleFormatDate => {
+                let (rt, name, fields) = if matches!(f, StdFn::LocaleFormatNumber) {
+                    ("locale_format_number", "formatNumber", number_format_fields())
+                } else {
+                    ("locale_format_date", "formatDate", date_format_fields())
+                };
+                if args.is_empty() || args.len() > 2 {
+                    self.err(code::ARG_COUNT, span, format!("`{name}` takes a number and an optional options object"));
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let value = self.expr_with(&args[0], &Type::Number);
+                let value = self.coerce(value, &Type::Number);
+                let options = self.locale_options(args.get(1), name, &fields, span);
+                TExpr::new(TExprKind::Rt(rt, vec![value, options]), Type::String, span)
+            }
+            StdFn::LocalePlural => {
+                if args.is_empty() || args.len() > 2 {
+                    self.err(code::ARG_COUNT, span, "`pluralCategory` takes a number and an optional type");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let value = self.expr_with(&args[0], &Type::Number);
+                let value = self.coerce(value, &Type::Number);
+                let kind = self.locale_kind(args.get(1), &["cardinal", "ordinal"], span);
+                TExpr::new(TExprKind::Rt("locale_plural", vec![value, kind]), plural_category_type(), span)
+            }
+            StdFn::LocaleFormatList => {
+                if args.is_empty() || args.len() > 2 {
+                    self.err(code::ARG_COUNT, span, "`formatList` takes an array of strings and an optional type");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let want = Type::Array(Box::new(Type::String));
+                let items = self.expr_with(&args[0], &want);
+                let items = self.coerce(items, &want);
+                let items = self.json_stringify_value(items, args[0].span);
+                let kind = self.locale_kind(args.get(1), &["conjunction", "disjunction"], span);
+                TExpr::new(TExprKind::Rt("locale_format_list", vec![items, kind]), Type::String, span)
+            }
+            StdFn::LocaleCompare => {
+                if args.len() != 2 {
+                    self.err(code::ARG_COUNT, span, "`compare` takes two strings");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let a = self.expr_with(&args[0], &Type::String);
+                let a = self.coerce(a, &Type::String);
+                let b = self.expr_with(&args[1], &Type::String);
+                let b = self.coerce(b, &Type::String);
+                TExpr::new(TExprKind::Rt("locale_compare", vec![a, b]), Type::Number, span)
             }
             StdFn::OnMount => {
                 if args.len() != 1 {
@@ -1048,6 +1147,64 @@ impl Checker<'_> {
         let wrapper = TExpr::new(TExprKind::Closure(fid), Type::Func(std::rc::Rc::new(ft)), span);
         let call = TExpr::new(TExprKind::NotifyShow(Box::new(title), Box::new(body), Box::new(tag), Box::new(wrapper)), Type::Void, span);
         TExpr::new(TExprKind::Block(vec![TStmt::Let(pv, Some(self.new_promise(&info, span))), TStmt::Expr(call)], Box::new(p)), pty, span)
+    }
+
+    /// The options of `formatNumber` and `formatDate` (`plinth:locale`,
+    /// docs/I18N.md §3.7): an object literal at the call, with the fields of
+    /// `fields` (each optional). Gives the JSON text of the given fields
+    /// (`{}` with no options); the host reads it.
+    fn locale_options(&mut self, e: Option<&Expr>, name: &str, fields: &[(&'static str, Type)], span: Span) -> TExpr {
+        let str_lit = |s: &str| TExpr::new(TExprKind::Str(s.to_owned()), Type::String, span);
+        let cat = |a: TExpr, b: TExpr| TExpr::new(TExprKind::Concat(Box::new(a), Box::new(b)), Type::String, span);
+        let Some(e) = e else { return str_lit("{}") };
+        let ExprKind::Object(props) = &e.kind else {
+            self.err_help(
+                code::UNSUPPORTED,
+                e.span,
+                format!("the options of `{name}` must be an object literal"),
+                "write the options at the call, for example `{ style: \"percent\" }`",
+            );
+            return str_lit("{}");
+        };
+        let mut acc: Option<TExpr> = None;
+        for p in props {
+            let ObjProp::Field(field, value, fspan) = p else {
+                self.err(code::UNSUPPORTED, e.span, format!("the options of `{name}` cannot use a spread"));
+                continue;
+            };
+            let Some((key, ty)) = fields.iter().find(|(k, _)| *k == field.as_str()) else {
+                let names: Vec<String> = fields.iter().map(|(k, _)| format!("`{k}`")).collect();
+                self.err_help(
+                    code::NO_PROPERTY,
+                    *fspan,
+                    format!("the options of `{name}` have no `{field}` property"),
+                    format!("use {}", names.join(", ")),
+                );
+                continue;
+            };
+            let te = self.expr_with(value, ty);
+            let te = self.coerce(te, ty);
+            let text = self.json_stringify_value(te, value.span);
+            let head = format!("{}\"{key}\":", if acc.is_some() { "," } else { "{" });
+            acc = Some(match acc {
+                None => cat(str_lit(&head), text),
+                Some(prev) => cat(cat(prev, str_lit(&head)), text),
+            });
+        }
+        match acc {
+            None => str_lit("{}"),
+            Some(acc) => cat(acc, str_lit("}")),
+        }
+    }
+
+    /// The optional `type` argument of `pluralCategory` and `formatList`: one
+    /// of `kinds` (the first is the default), as a string for the host.
+    fn locale_kind(&mut self, e: Option<&Expr>, kinds: &[&str], span: Span) -> TExpr {
+        let Some(e) = e else { return TExpr::new(TExprKind::Str(kinds[0].to_owned()), Type::String, span) };
+        let ty = lits(kinds);
+        let te = self.expr_with(e, &ty);
+        let te = self.coerce(te, &ty);
+        TExpr::new(TExprKind::Coerce(Coercion::Retag, Box::new(te)), Type::String, span)
     }
 
     /// `fetch`'s `options`: `null`, or an object literal with optional

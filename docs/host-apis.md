@@ -46,7 +46,7 @@ import { timezoneOffset, dateParts, makeDate, formatDate, toISOString, parseDate
 | `timezoneOffset(ms)` | The local time zone's offset from UTC, in minutes east of UTC, at the instant `ms`. From the OS (desktop) or `-Date.getTimezoneOffset()` (web). |
 | `dateParts(ms, utc?)` | Breaks `ms` into `{ year, month, day, hour, minute, second, millisecond, weekday }`. `month` is 1-12; `weekday` is 0 (Sunday) to 6. Local time unless `utc` is true. |
 | `makeDate(year, month, day, hour?, minute?, second?)` | The inverse of `dateParts`: local wall-clock fields to `ms`. `hour`/`minute`/`second` default to 0. |
-| `formatDate(ms, pattern, utc?)` | A small pattern language: `YYYY MM M DD D HH H hh h mm ss SSS ddd dddd MMM MMMM A`; any other character passes through. English names only — locale-aware formatting is `plinth:locale` (SPEC.md §4.7), later. |
+| `formatDate(ms, pattern, utc?)` | A small pattern language: `YYYY MM M DD D HH H hh h mm ss SSS ddd dddd MMM MMMM A`; any other character passes through. English names only — locale-aware formatting is `formatDate(ms, { dateStyle, timeStyle })` of `plinth:locale` (core 1.13). |
 | `toISOString(ms)` | `ms` as a UTC ISO-8601 string, like JS's `Date.prototype.toISOString`. |
 | `parseDate(text)` | Parses `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM[:SS[.sss]][Z\|±HH:MM]`. No `Z`/offset means local time. Returns `null` on no match. The same format `DatePicker` stores. |
 
@@ -374,6 +374,41 @@ send it to every app.
   stand-alone page uses its own locale, and `index.html?locale=ar-EG` fixes
   it. The host sets `lang` and `dir` on the root element of the app
   (`applyLocale` in `web/dom-renderer.js`).
+
+**Formatting** (core 1.13, `docs/I18N.md` §3.7, §4 step 2). The host formats
+in the locale of the app: ICU4X on the desktop, the browser's `Intl` on the
+web. The calls are synchronous and reactive, as `locale()`. Write the
+options as an object literal at the call.
+
+```ts
+import { formatNumber, formatDate, pluralCategory, formatList, compare } from "plinth:locale";
+
+formatNumber(1234.5)                                        // "1,234.5" (en-US), "1.234,5" (de-DE)
+formatNumber(0.256, { style: "percent" })                   // "26%"
+formatNumber(1234.5, { style: "currency", currency: "EUR" }) // "€1,234.50", "1.234,50 €"
+formatNumber(1234567, { notation: "compact" })              // "1.2M"
+formatDate(now(), { dateStyle: "medium", timeStyle: "short" }) // "Oct 8, 2026, 11:44 AM"
+pluralCategory(3)                                           // "other" (en), "few" (pl, ru)
+pluralCategory(2, "ordinal")                                // "two" (en: "2nd")
+formatList(["a", "b", "c"])                                 // "a, b, and c"
+names.sort((a, b) => compare(a, b))                         // "adam, bob, Émile, Zoë"
+```
+
+| Function | Options | Notes |
+|---|---|---|
+| `formatNumber(value, options?)` | `style` ("decimal", "percent", "currency"), `currency` (ISO 4217), `minimumFractionDigits`, `maximumFractionDigits` (0 to 20), `useGrouping`, `notation` ("standard", "compact") | Defaults: 0 to 3 fraction digits ("decimal"), 0 ("percent"); the currency sets its digits. The digit options and `useGrouping` do not apply to "currency" and "compact". A bad currency code gives "decimal". A value that is not finite gives "". |
+| `formatDate(ms, options?)` | `dateStyle` ("full", "long", "medium", "short"), `timeStyle` ("medium", "short") | The local time zone of the host. No options: `dateStyle` "medium". Both hosts give a space (U+0020) where CLDR has U+202F. |
+| `pluralCategory(value, type?)` | `type`: "cardinal" (default) or "ordinal" | Returns `PluralCategory`: "zero", "one", "two", "few", "many" or "other". |
+| `formatList(items, type?)` | `type`: "conjunction" (default) or "disjunction" | The wide form. |
+| `compare(a, b)` | none | The collation of the locale: -1, 0 or 1. |
+
+`formatDate` of `plinth:time` stays: it formats with a pattern and English
+names. To use both in one file, import one with another name.
+
+The two hosts give the same text, except for the known differences in
+`docs/I18N.md` §3.7 (some currency symbols in fr-FR and pl-PL, the percent
+sign in ar-EG, the short date in pl-PL). The shared test cases are in
+`crates/plinth-compiler/tests/locale_cases.txt`.
 
 ## `plinth:hub` (privileged)
 

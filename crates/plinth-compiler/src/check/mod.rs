@@ -84,6 +84,16 @@ pub enum StdFn {
     Locale,
     /// `direction()` (core 1.13, `plinth:locale`): `"ltr"` or `"rtl"`, reactive.
     Direction,
+    /// `formatNumber(value, options?)` (core 1.13, `plinth:locale`): the host formats.
+    LocaleFormatNumber,
+    /// `formatDate(ms, options?)` (core 1.13, `plinth:locale`).
+    LocaleFormatDate,
+    /// `pluralCategory(value, type?)` (core 1.13, `plinth:locale`).
+    LocalePlural,
+    /// `formatList(items, type?)` (core 1.13, `plinth:locale`).
+    LocaleFormatList,
+    /// `compare(a, b)` (core 1.13, `plinth:locale`): collation.
+    LocaleCompare,
     /// `onMount(fn)` (core 1.12): runs `fn` once, after the elements the
     /// current render created are in the host tree.
     OnMount,

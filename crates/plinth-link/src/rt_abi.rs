@@ -232,6 +232,13 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     // -- plinth:locale (core 1.13, docs/I18N.md §3.1) -------------------------
     ("locale_tag", &[], &[I32]),
     ("locale_direction", &[], &[I32]),
+    // Formatting in the host (docs/I18N.md §3.7): the options and the list
+    // items are JSON text; `locale_compare` returns -1, 0 or 1 as a number.
+    ("locale_format_number", &[F64, I32], &[I32]),
+    ("locale_format_date", &[F64, I32], &[I32]),
+    ("locale_plural", &[F64, I32], &[I32]),
+    ("locale_format_list", &[I32, I32], &[I32]),
+    ("locale_compare", &[I32, I32], &[F64]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -357,6 +364,12 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     // plinth:locale (docs/I18N.md §4 step 1): `locale()` and `direction()`.
     ("locale_tag", 13),
     ("locale_direction", 13),
+    // plinth:locale step 2 (docs/I18N.md §4): formatting in the host.
+    ("locale_format_number", 13),
+    ("locale_format_date", 13),
+    ("locale_plural", 13),
+    ("locale_format_list", 13),
+    ("locale_compare", 13),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).

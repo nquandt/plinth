@@ -8,20 +8,43 @@
 // parent page (`AppFrame`): the locale in the `start` message, and a
 // `languagechange` of the page that goes to the frame.
 //
+// Step 2 (docs/I18N.md §3.7): the formatting functions with the browser's
+// `Intl` (Node has full ICU), with the SAME cases as the desktop test
+// `crates/plinth-compiler/tests/locale_format.rs` (the shared file
+// `crates/plinth-compiler/tests/locale_cases.txt`): one app, built by the
+// CLI, in each locale, on the real core. The time zone is UTC.
+//
 // Build first:
 //   cargo build -p plinth-cli
 //   target/debug/plinth.exe build web/test/fixtures/locale-fixture
 //   target/debug/plinth.exe core export target/core.wasm
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { PlinthApp, readPlnt, normalizeLocale, isRtlLocale, pageLocale, FALLBACK_LOCALE } from "../plinth-web.js";
+import {
+  PlinthApp,
+  readPlnt,
+  normalizeLocale,
+  isRtlLocale,
+  pageLocale,
+  FALLBACK_LOCALE,
+  formatNumberIntl,
+  formatDateIntl,
+  pluralCategoryIntl,
+  formatListIntl,
+  compareIntl,
+} from "../plinth-web.js";
 import { runWorker, WorkerApp } from "../app-worker.js";
 import { Tree, applyLocale } from "../dom-renderer.js";
 import { encodeEvent, EventCode, LifecycleKind } from "../protocol.js";
 import { ControlKind } from "../ui-api.js";
+
+// The formatting cases use UTC, as the desktop test (`set_fake_timezone_offset(0)`).
+process.env.TZ = "UTC";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const core = new Uint8Array(readFileSync(path.join(root, "target/core.wasm")));
@@ -136,6 +159,158 @@ for (const [tag, dir, side] of [
   assert.deepEqual(attrs, { lang: "ar-EG", dir: "rtl" });
   applyLocale(element, "zh-Hans-CN");
   assert.deepEqual(attrs, { lang: "zh-Hans-CN", dir: "ltr" });
+}
+
+// -- Formatting (step 2): the shared cases ------------------------------------
+
+const LOCALES = ["en-US", "de-DE", "fr-FR", "ar-EG", "ja-JP", "hi-IN", "pl-PL", "ru-RU"];
+
+/** `\u{hex}` and `\\` in a text of the case file. */
+function unescapeText(s) {
+  return s.replace(/\\(\\|u\{([0-9a-fA-F]+)\})/g, (_, all, hex) => (hex === undefined ? "\\" : String.fromCodePoint(parseInt(hex, 16))));
+}
+
+/** Reads `locale_cases.txt`: `[{ name, expr, web: { locale: text } }]`, with the checks of the Rust reader. */
+function readLocaleCases(text) {
+  const cases = [];
+  const hostLines = [];
+  const known = new Set();
+  let wantExpr = false;
+  for (const line of text.replace(/\r\n/g, "\n").split("\n")) {
+    const head = line.match(/^=== case (\S+)$/);
+    if (head) {
+      cases.push({ name: head[1], expr: "", web: {} });
+      wantExpr = true;
+      continue;
+    }
+    if (line.trim() === "" || line.startsWith("#")) continue;
+    const c = cases.at(-1);
+    if (c === undefined) throw new Error(`locale_cases.txt: a line outside a case: ${line}`);
+    if (wantExpr) {
+      c.expr = line;
+      wantExpr = false;
+      continue;
+    }
+    const k = line.match(/^known (\S+): (.+)$/);
+    if (k) {
+      known.add(`${c.name} ${k[1]}`);
+      continue;
+    }
+    const space = line.indexOf(" ");
+    const headPart = space < 0 ? line : line.slice(0, space);
+    const value = space < 0 ? "" : line.slice(space + 1);
+    const [loc, host] = headPart.split("@");
+    assert.ok(LOCALES.includes(loc), `case ${c.name}: an unknown locale ${loc}`);
+    if (host !== undefined) {
+      assert.ok(host === "desktop" || host === "web", `case ${c.name}: an unknown host ${host}`);
+      hostLines.push(`${c.name} ${loc}`);
+    }
+    if (host !== "desktop") {
+      assert.equal(c.web[loc], undefined, `case ${c.name}: two lines for ${loc}`);
+      c.web[loc] = unescapeText(value);
+    }
+  }
+  for (const h of hostLines) assert.ok(known.has(h), `case ${h}: host lines but no "known" line`);
+  for (const c of cases) for (const loc of LOCALES) assert.ok(loc in c.web, `case ${c.name}: no text for ${loc}`);
+  return cases;
+}
+
+/** Finds the CLI binary. */
+function cliPath() {
+  for (const name of ["plinth.exe", "plinth"]) {
+    const p = path.join(root, "target/debug", name);
+    if (existsSync(p)) return p;
+  }
+  throw new Error("build the CLI first: cargo build -p plinth-cli");
+}
+
+/** Builds the app of the cases (one `Text` for each case) with the CLI. */
+function buildFormatApp(cases) {
+  const dir = path.join(os.tmpdir(), `plinth-run-locale-${process.pid}`);
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(path.join(dir, "app"), { recursive: true });
+  writeFileSync(path.join(dir, "plinth.toml"), 'id = "dev.plinth.test.locale-format"\nname = "Locale Format"\nversion = "0.1.0"\npublisher = "plinth"\n');
+  const textLines = cases.map((c) => `      <Text>{${c.expr}}</Text>\n`).join("");
+  const source = `import { app, Screen, Text } from "plinth:ui";
+import { formatNumber, formatDate, pluralCategory, formatList, compare } from "plinth:locale";
+
+function Home() {
+  return (
+    <Screen title="Home">
+${textLines}    </Screen>
+  );
+}
+
+export default app({ screens: { home: { title: "Home", component: Home } } });
+`;
+  writeFileSync(path.join(dir, "app/main.tsx"), source);
+  try {
+    execFileSync(cliPath(), ["build", dir], { stdio: ["ignore", "ignore", "pipe"], encoding: "utf-8" });
+  } catch (err) {
+    throw new Error(`plinth build failed:\n${err.stderr ?? err}`);
+  }
+  const file = readdirSync(path.join(dir, "dist")).find((f) => f.endsWith(".plnt"));
+  const plnt = new Uint8Array(readFileSync(path.join(dir, "dist", file)));
+  rmSync(dir, { recursive: true, force: true });
+  return plnt;
+}
+
+function checkTexts(cases, got, tag) {
+  assert.equal(got.length, cases.length);
+  const wrong = [];
+  cases.forEach((c, i) => {
+    if (got[i] !== c.web[tag]) wrong.push(`${tag} ${c.name}: got ${JSON.stringify(got[i])}, want ${JSON.stringify(c.web[tag])}`);
+  });
+  assert.deepEqual(wrong, []);
+}
+
+{
+  const cases = readLocaleCases(readFileSync(path.join(root, "crates/plinth-compiler/tests/locale_cases.txt"), "utf-8"));
+  assert.ok(cases.length >= 50, "the shared file has the cases");
+  const plnt = await readPlnt(buildFormatApp(cases));
+  async function startFormat(locale) {
+    const app = new PlinthApp();
+    const tree = new Tree();
+    app.onCommit = (ops) => tree.apply(ops);
+    await app.load(core, plnt.appWasm, { manifestText: plnt.manifestText, locale, log: () => {}, reportError: (s) => assert.fail(s) });
+    app.init();
+    return { app, tree };
+  }
+  for (const tag of LOCALES) {
+    const { tree } = await startFormat(tag);
+    checkTexts(cases, texts(tree), tag);
+  }
+  // A locale change formats every text again.
+  const { app, tree } = await startFormat("en-US");
+  for (const tag of ["de-DE", "ar-EG", "ja-JP"]) {
+    app.setLocale(tag);
+    checkTexts(cases, texts(tree), tag);
+  }
+  // Through the Worker.
+  const { port1, port2 } = new MessageChannel();
+  runWorker(port1);
+  const worker = new WorkerApp(port2);
+  const wtree = new Tree();
+  worker.onCommit = (ops) => wtree.apply(ops);
+  await worker.load(core, plnt.appWasm, { manifestText: plnt.manifestText, locale: "hi-IN", log: () => {}, reportError: () => {} });
+  await worker.init([]);
+  checkTexts(cases, texts(wtree), "hi-IN");
+  port1.close();
+  port2.close();
+}
+
+// -- Formatting: input that is not valid never throws ---------------------------
+{
+  assert.equal(formatNumberIntl("en-US", NaN, "{}"), "");
+  assert.equal(formatNumberIntl("en-US", 1.5, "not json"), "1.5");
+  assert.equal(formatNumberIntl("not a tag!", 1234, "{}"), "1,234");
+  assert.equal(formatNumberIntl("en-US", 2, '{"style":"currency","currency":"E1"}'), "2");
+  assert.equal(formatNumberIntl("en-US", 2, '{"minimumFractionDigits":99,"maximumFractionDigits":-4}'), "2.00000000000000000000");
+  assert.equal(formatDateIntl("en-US", Infinity, "{}"), "");
+  assert.equal(formatDateIntl("en-US", 0, '{"dateStyle":"huge"}'), "Jan 1, 1970");
+  assert.equal(pluralCategoryIntl("en-US", NaN, "cardinal"), "other");
+  assert.equal(formatListIntl("en-US", "[1, 2]", "conjunction"), "");
+  assert.equal(compareIntl("en-US", "a", "b"), -1);
 }
 
 // -- The parent page (AppFrame): `start` has the locale; `languagechange` --------

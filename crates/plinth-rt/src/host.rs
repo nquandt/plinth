@@ -210,6 +210,62 @@ pub fn locale_is_rtl() -> bool {
     false
 }
 
+/// `locale.format-number` (core 1.13, `docs/I18N.md` §3.7): `options` is
+/// the JSON text that the compiler made. Returns a heap string.
+pub fn locale_format_number(value: f64, options: i32) -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    return strings::from_str(&host::locale::format_number(value, strings::as_str(options as u32))) as i32;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (value, options);
+        0
+    }
+}
+
+/// `locale.format-date` (core 1.13): `options` is JSON text.
+pub fn locale_format_date(ms: f64, options: i32) -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    return strings::from_str(&host::locale::format_date(ms, strings::as_str(options as u32))) as i32;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (ms, options);
+        0
+    }
+}
+
+/// `locale.plural-category` (core 1.13): `kind` is "cardinal" or "ordinal".
+pub fn locale_plural_category(value: f64, kind: i32) -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    return strings::from_str(&host::locale::plural_category(value, strings::as_str(kind as u32))) as i32;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (value, kind);
+        0
+    }
+}
+
+/// `locale.format-list` (core 1.13): `items` is a JSON array of strings.
+pub fn locale_format_list(items: i32, kind: i32) -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    return strings::from_str(&host::locale::format_list(strings::as_str(items as u32), strings::as_str(kind as u32))) as i32;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (items, kind);
+        0
+    }
+}
+
+/// `locale.compare` (core 1.13): -1, 0 or 1.
+pub fn locale_compare(a: i32, b: i32) -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    return host::locale::compare(strings::as_str(a as u32), strings::as_str(b as u32)).signum();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (a, b);
+        0
+    }
+}
+
 /// `setTimeout`/`setInterval`: schedules `callable` and returns a timer
 /// id (as a `number`) for `clearTimeout`/`clearInterval`.
 pub fn set_timer(callable: Callable, ms: f64, repeat: bool) -> f64 {

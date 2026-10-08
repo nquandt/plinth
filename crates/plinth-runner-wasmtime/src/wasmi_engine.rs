@@ -377,6 +377,59 @@ fn register_imports(linker: &mut Linker<HostState>) -> Result<()> {
     linker.func_wrap("plinth:app/locale@1.0.0", "is-rtl", |mut caller: Caller<HostState>| -> i32 {
         i32::from(LocaleHost::is_rtl(caller.data_mut()))
     })?;
+    // Formatting (docs/I18N.md §3.7): string parameters come as (ptr, len);
+    // a string result goes through `retptr` (ptr@0, len@4).
+    fn ret_string(caller: &mut Caller<'_, HostState>, retptr: i32, s: &str) -> Result<(), WasmiError> {
+        let (ptr, len) = write_string(caller, s)?;
+        write_bytes(caller, retptr, &ptr.to_le_bytes())?;
+        write_bytes(caller, retptr + 4, &len.to_le_bytes())
+    }
+    linker.func_wrap(
+        "plinth:app/locale@1.0.0",
+        "format-number",
+        |mut caller: Caller<HostState>, value: f64, o_ptr: i32, o_len: i32, retptr: i32| {
+            let options = read_string(&mut caller, o_ptr, o_len)?;
+            let text = LocaleHost::format_number(caller.data_mut(), value, options);
+            ret_string(&mut caller, retptr, &text)
+        },
+    )?;
+    linker.func_wrap(
+        "plinth:app/locale@1.0.0",
+        "format-date",
+        |mut caller: Caller<HostState>, ms: f64, o_ptr: i32, o_len: i32, retptr: i32| {
+            let options = read_string(&mut caller, o_ptr, o_len)?;
+            let text = LocaleHost::format_date(caller.data_mut(), ms, options);
+            ret_string(&mut caller, retptr, &text)
+        },
+    )?;
+    linker.func_wrap(
+        "plinth:app/locale@1.0.0",
+        "plural-category",
+        |mut caller: Caller<HostState>, value: f64, k_ptr: i32, k_len: i32, retptr: i32| {
+            let kind = read_string(&mut caller, k_ptr, k_len)?;
+            let text = LocaleHost::plural_category(caller.data_mut(), value, kind);
+            ret_string(&mut caller, retptr, &text)
+        },
+    )?;
+    linker.func_wrap(
+        "plinth:app/locale@1.0.0",
+        "format-list",
+        |mut caller: Caller<HostState>, i_ptr: i32, i_len: i32, k_ptr: i32, k_len: i32, retptr: i32| {
+            let items = read_string(&mut caller, i_ptr, i_len)?;
+            let kind = read_string(&mut caller, k_ptr, k_len)?;
+            let text = LocaleHost::format_list(caller.data_mut(), items, kind);
+            ret_string(&mut caller, retptr, &text)
+        },
+    )?;
+    linker.func_wrap(
+        "plinth:app/locale@1.0.0",
+        "compare",
+        |mut caller: Caller<HostState>, a_ptr: i32, a_len: i32, b_ptr: i32, b_len: i32| -> Result<i32, WasmiError> {
+            let a = read_string(&mut caller, a_ptr, a_len)?;
+            let b = read_string(&mut caller, b_ptr, b_len)?;
+            Ok(LocaleHost::compare(caller.data_mut(), a, b))
+        },
+    )?;
 
     linker.func_wrap(
         "plinth:app/store@1.0.0",
