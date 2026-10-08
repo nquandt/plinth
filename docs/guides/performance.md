@@ -118,6 +118,9 @@ On the wasmi engine (iOS, and `PLINTH_ENGINE=wasmi` on the desktop), the time li
 To stay inside the time limit:
 
 - Do long work in parts. For example, process a part of the data in each `setTimeout` callback.
+- Use a `Map` or a `Set` to find items by a key. `get`, `set`, `has` and `delete` take the same time for 10 keys and for 10,000 keys. A search in an array (`find`, `indexOf`, `includes`) looks at each item.
+- `sort` is a merge sort: a sort of 10,000 numbers takes about 5 ms in a release build.
+- To make a long text in a loop, push the parts into an array and call `join` one time. The garbage collector does not run during a call, so `text = text + part` in a loop keeps a copy of each step in memory until the call ends.
 - Do not run a large computation at start (in `init`).
 
 ## 7. App size

@@ -433,3 +433,241 @@ fn chart_series_from_a_variable_and_wrong_types() {
     let main = chart_app("const s = [{ name: \"a\", points: [1] }];\n  const add = () => {};", "data={[]} series={s}");
     assert_eq!(codes(&main), ["PL3001"]);
 }
+
+// -- Speed of `Map`, `Set`, `sort` and `join` (docs/GAPS.md, engine step 3) --
+//
+// Before the fix, `Map`/`Set` searched the keys one by one and `sort` was an
+// insertion sort: these sizes took far more than the 2 s call limit of
+// `Limits::default()`, so the run stopped with an error.
+
+#[test]
+fn map_with_20000_string_keys_is_fast() {
+    let body = r#"
+  const m = new Map<string, number>();
+  for (let i = 0; i < 20000; i++) { m.set("key" + i, i); }
+  let sum = 0;
+  for (let i = 0; i < 20000; i++) { sum += m.get("key" + i) ?? 0; if (!m.has("key" + i)) { sum = -1; } }
+  for (let i = 0; i < 20000; i += 2) { m.delete("key" + i); }
+  let first = "";
+  for (const [k, v] of m) { if (first === "") { first = k; } }
+  const left = m.size;
+  for (let i = 1; i < 20000; i += 2) { m.delete("key" + i); }"#;
+    assert_eq!(shown(body, r#"sum + "|" + left + "|" + first + "|" + m.size + "|" + m.has("key1")"#), "199990000|10000|key1|0|false");
+}
+
+#[test]
+fn set_with_20000_number_keys_is_fast() {
+    let body = r#"
+  const s = new Set<number>();
+  for (let i = 0; i < 20000; i++) { s.add(i * 0.5); s.add(i * 0.5); }
+  let n = 0;
+  for (let i = 0; i < 20000; i++) { if (s.has(i * 0.5)) { n++; } }
+  for (let i = 0; i < 20000; i += 4) { s.delete(i * 0.5); }"#;
+    assert_eq!(shown(body, r#"n + "|" + s.size + "|" + s.has(0) + s.has(0.5) + s.has(-0)"#), "20000|15000|falsetruefalse");
+}
+
+#[test]
+fn map_keeps_insertion_order_after_delete_and_set_again() {
+    let body = r#"
+  const m = new Map<string, number>();
+  m.set("a", 1); m.set("b", 2); m.set("c", 3); m.set("d", 4);
+  m.delete("b");
+  m.set("a", 10);
+  m.set("b", 20);
+  let out = "";
+  for (const [k, v] of m) { out += k + v + ","; }
+  let fe = "";
+  m.forEach((v, k) => { fe += k; });
+  const ks = m.keys().join("");
+  const vs = m.values().map((x) => "" + x).join(",");
+  const es = m.entries().map((e) => e[0]).join("");
+  const js = JSON.stringify(m);"#;
+    let main = show(body, r#"out + "|" + fe + "|" + ks + "|" + vs + "|" + es + "|" + js + "|" + m.size"#)
+        .replace("from \"plinth:ui\";", "from \"plinth:ui\";\nimport { JSON } from \"plinth:core\";");
+    assert_eq!(text_of(&run(&main), ControlKind::Text), r#"a10,c3,d4,b20,|acdb|acdb|10,3,4,20|acdb|{"a":10,"c":3,"d":4,"b":20}|4"#);
+}
+
+#[test]
+fn map_delete_during_for_of_skips_the_deleted_entry() {
+    let body = r#"
+  const m = new Map<string, number>();
+  m.set("a", 1); m.set("b", 2); m.set("c", 3);
+  let out = "";
+  for (const [k, v] of m) { out += k; if (k === "a") { m.delete("b"); m.set("d", 4); } }
+  const s = new Set<string>(); s.add("x"); s.add("y"); s.add("z");
+  let so = "";
+  s.forEach((v) => { so += v; if (v === "x") { s.delete("y"); } });
+  for (const v of s) { so += v; }
+  s.clear(); s.add("y");
+  m.clear(); m.set("q", 1);"#;
+    assert_eq!(shown(body, r#"out + "|" + so + "|" + s.size + s.has("y") + s.has("x") + "|" + m.size + m.has("a") + (m.get("q") ?? 0)"#), "acd|xzxz|1truefalse|1false1");
+}
+
+#[test]
+fn map_with_int_bool_and_enum_keys() {
+    let body = r#"
+  const m = new Map<boolean, string>();
+  m.set(true, "t"); m.set(false, "f"); m.set(true, "T");
+  const n = new Map<number, string>();
+  n.set(1, "one"); n.set(2, "two"); n.delete(1); n.set(1, "uno");
+  let o = "";
+  for (const [k, v] of n) { o += k + v; }"#;
+    assert_eq!(shown(body, r#"(m.get(true) ?? "") + (m.get(false) ?? "") + m.size + "|" + o"#), "Tf2|2two1uno");
+}
+
+#[test]
+fn map_survives_gc_stress_with_holes() {
+    let main = show(
+        r#"
+  const m = new Map<string, string>();
+  for (let i = 0; i < 300; i++) { m.set("k" + i, "v" + i); }
+  for (let i = 0; i < 300; i += 3) { m.delete("k" + i); }
+  for (let i = 0; i < 300; i++) { m.set("n" + i, "w" + i); }
+  let n = 0;
+  for (const [k, v] of m) { n += v.length; }"#,
+        r#""" + n + "|" + m.size + "|" + (m.get("k299") ?? "")"#,
+    );
+    assert_eq!(text_of(&run_with(&main, true), ControlKind::Text), "1818|500|v299");
+}
+
+#[test]
+fn sort_is_stable_and_uses_the_comparator() {
+    let body = r#"
+  const ps = [{ n: "a", k: 2 }, { n: "b", k: 1 }, { n: "c", k: 2 }, { n: "d", k: 1 }, { n: "e", k: 0 }, { n: "f", k: 2 }, { n: "g", k: 1 }, { n: "h", k: 0 }, { n: "i", k: 2 }, { n: "j", k: 1 }, { n: "k", k: 0 }, { n: "l", k: 2 }];
+  ps.sort((x, y) => x.k - y.k);
+  const desc = [3, 1, 2, 5, 4].sort((x, y) => y - x);
+  const def = [10, 9, 1].sort();
+  const strs = ["b", "a", "C", "c", "B"].sort();
+  const one = [1].sort((x, y) => x - y);
+  const none: number[] = [];
+  none.sort((x, y) => x - y);
+  const bools = [true, false, true].sort();"#;
+    assert_eq!(
+        shown(body, r#"ps.map((p) => p.n).join("") + "|" + s(desc) + "|" + s(def) + "|" + strs.join("") + "|" + s(one) + "|" + none.length + "|" + bools.join(",")"#),
+        "ehkbdgjacfil|5,4,3,2,1|1,10,9|BCabc|1|0|false,true,true"
+    );
+}
+
+#[test]
+fn sort_of_20000_numbers_is_fast() {
+    let body = r#"
+  const a: number[] = [];
+  let x = 12345;
+  for (let i = 0; i < 20000; i++) { x = (x * 1103515245 + 12345) % 2147483648; a.push(x % 1000); }
+  const r = a.sort((p, q) => p - q);
+  let ok = r === a;
+  for (let i = 1; i < a.length; i++) { if (a[i - 1] > a[i]) { ok = false; } }
+  const d: number[] = [];
+  for (let i = 0; i < 20000; i++) { d.push(20000 - i); }
+  d.sort();"#;
+    assert_eq!(shown(body, r#"ok + "|" + a.length + "|" + d[0] + "," + d[1] + "," + d[19999]"#), "true|20000|1,10,9999");
+}
+
+#[test]
+fn join_of_100000_numbers_does_not_run_out_of_memory() {
+    let body = r#"
+  const a: number[] = [];
+  for (let i = 0; i < 100000; i++) { a.push(i); }
+  const t = a.join(",");
+  const b = [true, false].join("-");"#;
+    assert_eq!(shown(body, r#"t.length + "|" + t.slice(0, 8) + "|" + b + "|" + [1.5, 2].join()"#), "588889|0,1,2,3,|true-false|1.5,2");
+}
+
+#[test]
+fn map_used_as_an_lru_keeps_its_size_and_order() {
+    // Delete and set again moves a key to the end; the holes go away when
+    // the table grows, so 50,000 moves do not make the arrays grow.
+    let body = r#"
+  const m = new Map<string, number>();
+  for (let i = 0; i < 100; i++) { m.set("k" + i, i); }
+  for (let i = 0; i < 50000; i++) { const k = "k" + (i % 100); const v = m.get(k) ?? 0; m.delete(k); m.set(k, v + 1); }
+  m.delete("k3"); m.set("k3", 0);
+  const ks = m.keys();"#;
+    assert_eq!(shown(body, r#"m.size + "|" + ks[0] + "|" + ks[98] + "|" + ks[99] + "|" + (m.get("k0") ?? 0)"#), "100|k0|k99|k3|500");
+}
+
+// -- Iteration while the map changes (each live entry one time, new entries
+// visited, deleted ones not), also when the table grows during the loop.
+
+/// A map `m` of `k0`..`k99` without the multiples of 3 (66 live entries,
+/// 34 holes), and `seen`, a count of visits for each key.
+const HOLED: &str = r#"
+  const m = new Map<string, number>();
+  for (let i = 0; i < 100; i++) { m.set("k" + i, i); }
+  for (let i = 0; i < 100; i += 3) { m.delete("k" + i); }
+  const seen = new Map<string, number>();
+  let most = 0;
+  const visit = (k: string) => { const c = (seen.get(k) ?? 0) + 1; seen.set(k, c); if (c > most) { most = c; } };"#;
+
+#[test]
+fn for_of_that_adds_many_keys_visits_each_entry_one_time() {
+    let body = format!(
+        "{HOLED}\n  for (const [k, v] of m) {{ visit(k); if (k.startsWith(\"k\")) {{ for (let j = 0; j < 10; j++) {{ m.set(\"n\" + k + \"_\" + j, j); }} }} }}"
+    );
+    assert_eq!(
+        shown(&body, r#"seen.size + "|" + most + "|" + seen.has("k0") + seen.has("nk1_9") + "|" + m.size + "|" + m.keys()[0] + "," + m.keys()[66]"#),
+        "726|1|falsetrue|726|k1,nk1_0"
+    );
+}
+
+#[test]
+fn for_each_that_adds_many_keys_visits_each_entry_one_time() {
+    let body = format!(
+        "{HOLED}\n  m.forEach((v, k) => {{ visit(k); if (k.startsWith(\"k\")) {{ for (let j = 0; j < 10; j++) {{ m.set(\"n\" + k + \"_\" + j, j); }} m.delete(\"k\" + (v + 1)); }} }});"
+    );
+    // Each visited `k<i>` deletes `k<i+1>` before the loop gets to it.
+    let out = shown(&body, r#"seen.size + "|" + most + "|" + seen.has("k1") + seen.has("k2") + seen.has("k4") + "|" + m.size"#);
+    assert_eq!(out, "363|1|truefalsetrue|363");
+}
+
+#[test]
+fn keys_and_json_inside_for_each_of_a_map_with_holes() {
+    let body = r#"
+  const m = new Map<string, number>();
+  m.set("a", 1); m.set("b", 2); m.set("c", 3); m.set("d", 4);
+  m.delete("b");
+  let out = "";
+  m.forEach((v, k) => { out += k + "=" + m.keys().join("") + JSON.stringify(m) + ";"; if (k === "a") { m.delete("c"); m.set("e", 5); } });"#;
+    let main = show(body, "out").replace("from \"plinth:ui\";", "from \"plinth:ui\";\nimport { JSON } from \"plinth:core\";");
+    assert_eq!(text_of(&run(&main), ControlKind::Text), r#"a=acd{"a":1,"c":3,"d":4};d=ade{"a":1,"d":4,"e":5};e=ade{"a":1,"d":4,"e":5};"#);
+}
+
+#[test]
+fn nested_loops_over_the_same_map() {
+    let body = r#"
+  const m = new Map<string, number>();
+  m.set("x", 0); m.set("a", 1); m.set("b", 2); m.set("c", 3);
+  m.delete("x");
+  let outer = "";
+  let pairs = 0;
+  for (const [k1, v1] of m) {
+    outer += k1;
+    for (const [k2, v2] of m) {
+      pairs++;
+      if (k1 === "a" && k2 === "a") { for (let j = 0; j < 20; j++) { m.set("n" + j, j); } }
+    }
+  }
+  m.forEach((v, k) => { m.forEach((w, q) => { if (q === "b") { m.delete("b"); } }); });
+  let after = "";
+  for (const k of m.keys()) { after += k; }"#;
+    assert_eq!(shown(body, r#"outer.slice(0, 5) + "|" + outer.length + "|" + pairs + "|" + after.slice(0, 5) + "|" + m.size"#), "abcn0|53|529|acn0n|22");
+}
+
+#[test]
+fn break_return_and_throw_out_of_a_loop_then_more_changes() {
+    let body = r#"
+  const m = new Map<string, number>();
+  for (let i = 0; i < 10; i++) { m.set("k" + i, i); }
+  const firstOver = (lim: number): string => { for (const [k, v] of m) { if (v > lim) { return k; } } return ""; };
+  let r = firstOver(4);
+  for (const k of m.keys()) { if (k === "k2") { break; } }
+  for (const [k, v] of m) { if (v === 5) { break; } }
+  m.forEach((v, k) => { if (v === 1) { return; } });
+  try { for (const [k, v] of m) { if (v === 3) { throw new Error("stop"); } } } catch (e) { r += "!"; }
+  for (const [k, v] of m) { for (const [q, w] of m) { if (w === 2) { break; } } if (v === 6) { continue; } }
+  for (let i = 0; i < 2000; i++) { const k = "k" + (i % 10); const v = m.get(k) ?? 0; m.delete(k); m.set(k, v + 1); }
+  m.delete("k4"); m.set("k4", 0); m.delete("k7");
+  let out = "";
+  for (const [k, v] of m) { out += k; }"#;
+    assert_eq!(shown(body, r#"r + "|" + out + "|" + m.size + "|" + (m.get("k0") ?? 0)"#), "k5!|k0k1k2k3k5k6k8k9k4|9|200");
+}

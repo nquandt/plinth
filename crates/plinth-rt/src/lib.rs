@@ -48,6 +48,7 @@ mod global;
 pub mod gc;
 mod host;
 mod json;
+mod kv;
 mod random;
 mod reactive;
 mod regex;
@@ -672,6 +673,18 @@ abi! {
     fn __plinth_rt_sql_call(thunk: i32, env: i32, kind: i32, statement: i32, params: i32) {
         host::sql_call(Callable { thunk: thunk as u32, env: env as u32 }, kind, statement, params)
     }
+
+    // -- The hash index of a `Map`/`Set` (core 1.13, kv.rs) -------------------
+    fn __plinth_rt_kv_find_str(keys: i32, index: i32, key: i32) -> i32 { kv::find_str(ptr(keys), ptr(index), ptr(key)) }
+    fn __plinth_rt_kv_find_f64(keys: i32, index: i32, key: f64) -> i32 { kv::find_f64(ptr(keys), ptr(index), key) }
+    fn __plinth_rt_kv_find_i32(keys: i32, index: i32, key: i32) -> i32 { kv::find_i32(ptr(keys), ptr(index), key) }
+    fn __plinth_rt_kv_add(keys: i32, values: i32, index: i32) { kv::add(ptr(keys), ptr(values), ptr(index)) }
+    fn __plinth_rt_kv_remove(keys: i32, values: i32, index: i32, pos: i32) { kv::remove(ptr(keys), ptr(values), ptr(index), pos) }
+    fn __plinth_rt_kv_clear(keys: i32, values: i32, index: i32) { kv::clear(ptr(keys), ptr(values), ptr(index)) }
+    fn __plinth_rt_kv_live_copy(arr: i32, keys: i32, index: i32) -> i32 { kv::live_copy(ptr(arr), ptr(keys), ptr(index)) as i32 }
+    fn __plinth_rt_kv_iter(keys: i32, values: i32, index: i32, delta: i32) { kv::iter(ptr(keys), ptr(values), ptr(index), delta) }
+    fn __plinth_rt_kv_size(keys: i32, index: i32) -> i32 { kv::size(ptr(keys), ptr(index)) }
+    fn __plinth_rt_kv_live(keys: i32, index: i32, pos: i32) -> i32 { kv::live(ptr(keys), ptr(index), pos) }
 
     // -- plinth:time date/time additions (SPEC.md §8.5, docs/GAPS.md gap #5) --
     fn __plinth_rt_tz_offset_minutes(ms: f64) -> f64 { host::timezone_offset(ms as i64) as f64 }

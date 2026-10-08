@@ -214,6 +214,9 @@ small local change), per the dogfooding task's scope.
   support. Insertion sort is `O(n^2)`, not `O(n log n)`; accepted because
   Plinth arrays are form-sized app state (SPEC.md §4.2), not bulk data —
   a 10,000-element sort still completes well within a test's time budget.
+  (**Fixed 2026-10-08:** the sort is now a stable merge sort, see "wasmi
+  engine", the runtime findings: 10,000 numbers took 560 ms on wasmtime,
+  now 5 ms.)
   Without a comparator, elements must be `string`, `number` or `boolean`
   (anything else is `PL3006: 'sort' needs a comparator for this element
   type`); `string`/`boolean` compare via the existing `TExprKind::StrCmp`
@@ -1077,6 +1080,57 @@ keys used 45 M fuel, 10,000 keys 16,209 M), and a sort of
 10,000 numbers takes 0.56 s on wasmtime. Both are runtime work, not engine
 work.
 
+**Fixed (2026-10-08).** The causes:
+
+- `Map` and `Set` searched the `keys` array one by one (`ArraySearch`) in
+  `get`, `set`, `has` and `delete`, and `delete` moved each later entry.
+  Now the map struct has a third field, `index`, a hash table from a key
+  to its position. Only the new core 1.13 functions `kv_find_str`,
+  `kv_find_f64`, `kv_find_i32`, `kv_add`, `kv_remove`, `kv_clear`,
+  `kv_size`, `kv_live`, `kv_live_copy` and `kv_iter` read it
+  (`plinth-rt/src/kv.rs`). The table grows by doubling and is at most
+  half full. `delete` marks a hole and moves nothing. Loops skip the
+  holes; `keys()`, `values()`, `entries()`, `JSON.stringify` and the
+  `fetch` headers read a copy without the holes. The order stays the
+  insertion order.
+- Iteration: a `for…of` or `forEach` over a map calls `kv_iter(+1)`
+  before it starts and `kv_iter(-1)` in a `finally` (thus also after
+  `break`, `return` and an exception). While a loop is active, no entry
+  moves: a growing table keeps the holes, and `clear` makes every entry
+  a hole. Thus a loop visits each live entry one time, visits the
+  entries that its body adds, and does not visit the entries that its
+  body deletes, as in JS, also when the table grows during the loop and
+  for nested loops over the same map. The holes go away when the table
+  grows with no active loop, and when the last loop ends and at least
+  half of the entries are holes. If the count stays above zero (an
+  `async` function that never continues after an `await` in such a
+  loop), that map only keeps its holes; the results stay correct.
+- `sort` was a generated insertion sort (O(n^2)). Now it is a generated
+  stable merge sort: an insertion sort of each run of 8, then bottom-up
+  merges into a copy.
+- `join` on a number or boolean array (`encode_each` in `check/jsx.rs`)
+  made the text with `acc = acc + piece`, so each step kept a copy until
+  the call ended (100,000 numbers ran out of memory). Now it pushes the
+  pieces into an array and calls `arr_join` one time, as `JSON.stringify`
+  does.
+
+The same benchmark after the fix (release build):
+
+| Workload | wasmtime | wasmi | wasmi fuel |
+|---|---|---|---|
+| Sort of 10,000 numbers | 4.95 ms (was 560 ms) | 32 ms (was 4,084 ms) | 34 M (was 3,708 M) |
+| `Map`: 10,000 `set` and `has` with string keys | 12.8 ms (was 1,558 ms) | 149 ms (was 11,806 ms) | 156 M (was 16,209 M) |
+
+Tests: `crates/plinth-compiler/tests/collections.rs` (20,000 string keys,
+20,000 number keys in a `Set`, insertion order after delete and set
+again, delete in a loop, an LRU with 50,000 moves, GC stress with holes,
+a stable sort, a sort of 20,000 numbers, `join` of 100,000 numbers,
+loops that add many keys to a map with holes, `keys()` and
+`JSON.stringify` in a `forEach`, nested loops, and `break`, `return` and
+`throw` out of a loop).
+Before the fix, the large cases went over the 2 s call limit or ran out
+of memory.
+
 **Fuel.** The release build uses 0.93 to 3.41 million fuel per ms (a 3.7x
 spread). The old `FUEL_PER_MS` (150,000) came from debug-build numbers, so
 in a release build the 2 s limit stopped a call after about 0.1 to 0.3 s
@@ -1112,7 +1166,6 @@ owner's PC).
   build ("Build note"); report it upstream if it is a wasmi bug. A fix
   can make the debug wasmi build much faster, and then `lang`,
   `sevenguis`, `monkey` and `budgets` can go into the `wasmi` gate mode.
-- The two runtime findings above (`Map` and sort speed).
 
 ## Core policy `patch` (found 2026-10-07, fixed 2026-10-07)
 

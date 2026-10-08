@@ -227,7 +227,7 @@ impl Checker<'_> {
                 return TExpr::new(TExprKind::Null, Type::Error, span);
             }
             let sid = self.map_struct(&k, &v);
-            let lit = TExpr::new(TExprKind::StructLit(sid, vec![empty_arr(&k), empty_arr(&v)]), Type::Map(Box::new(k), Box::new(v)), span);
+            let lit = TExpr::new(TExprKind::StructLit(sid, vec![empty_arr(&k), empty_arr(&v), empty_arr(&Type::Int)]), Type::Map(Box::new(k), Box::new(v)), span);
             return lit;
         }
         let t = match (type_args, expected) {
@@ -244,7 +244,7 @@ impl Checker<'_> {
             return TExpr::new(TExprKind::Null, Type::Error, span);
         }
         let sid = self.set_struct(&t);
-        TExpr::new(TExprKind::StructLit(sid, vec![empty_arr(&t)]), Type::Set(Box::new(t)), span)
+        TExpr::new(TExprKind::StructLit(sid, vec![empty_arr(&t), empty_arr(&Type::Int)]), Type::Set(Box::new(t)), span)
     }
 
     fn concat(&mut self, acc: Option<TExpr>, part: TExpr) -> TExpr {
@@ -432,11 +432,11 @@ impl Checker<'_> {
             Type::String | Type::StrLits(_) if prop == "length" => TExpr::new(TExprKind::Rt("str_len", vec![o]), Type::Number, span),
             Type::Map(k, v) if prop == "size" => {
                 let sid = self.map_struct(&k, &v);
-                self.arr_len_of(self.kv_field(&o, sid, 0, span), span)
+                self.kv_size(o, sid, span)
             }
             Type::Set(t) if prop == "size" => {
                 let sid = self.set_struct(&t);
-                self.arr_len_of(self.kv_field(&o, sid, 0, span), span)
+                self.kv_size(o, sid, span)
             }
             Type::Map(..) | Type::Set(_) => {
                 self.err_help(
@@ -1429,12 +1429,9 @@ impl Checker<'_> {
                 ];
                 TExpr::new(TExprKind::Block(prelude, bx(acc_r)), acc_ty, span)
             }
-            // `arr.sort(compare?)`: a generated stable insertion sort (a
-            // plain index loop, like `reduce`/`kv_delete`'s shift loop), not
-            // a new runtime function (GAPS.md "Larger items"). Insertion
-            // sort is stable (equal keys never cross) and small to generate;
-            // `O(n^2)` is accepted here since Plinth arrays are form-sized
-            // state, not bulk data (SPEC.md §4.2).
+            // `arr.sort(compare?)`: a generated stable merge sort, O(n log
+            // n) (plain index loops over the existing array ops), not a new
+            // runtime function (GAPS.md "Larger items"); see `array_sort`.
             "sort" => self.array_sort(o, elem, args, span),
             // `splice`/`fill`/`flat`: generated code over the existing array
             // ops (`arr_slice`, `arr_extend`, push/pop, index loops), like
@@ -1829,59 +1826,135 @@ impl Checker<'_> {
             }
         };
 
-        let arr_v = self.temp(arr_ty.clone());
-        let arr_r = TExpr::new(TExprKind::Var(arr_v), arr_ty.clone(), span);
-        let n_v = self.temp(Type::Number);
-        let n_r = TExpr::new(TExprKind::Var(n_v), Type::Number, span);
-        let i_v = self.temp(Type::Number);
-        let i_r = TExpr::new(TExprKind::Var(i_v), Type::Number, span);
-        let j_v = self.temp(Type::Number);
-        let j_r = TExpr::new(TExprKind::Var(j_v), Type::Number, span);
-        let key_v = self.temp(elem.clone());
-        let key_r = TExpr::new(TExprKind::Var(key_v), elem.clone(), span);
-
-        let one = || TExpr::new(TExprKind::Num(1.0), Type::Number, span);
-        let zero = || TExpr::new(TExprKind::Num(0.0), Type::Number, span);
-
-        // `key = arr[i]; j = i - 1;`
-        let assign_key =
-            TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(key_v), bx(self.arr_get_at(arr_r.clone(), i_r.clone(), elem.clone(), span))), elem.clone(), span));
-        let j_init = TExpr::new(TExprKind::Num2(NumOp::Sub, bx(i_r.clone()), bx(one())), Type::Number, span);
-        let assign_j = TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(j_v), bx(j_init)), Type::Number, span));
-
-        // Inner loop: `while (j >= 0 && cmp_gt(arr[j], key)) { arr[j+1] = arr[j]; j--; }`
-        let j_plus_1 = TExpr::new(TExprKind::Num2(NumOp::Add, bx(j_r.clone()), bx(one())), Type::Number, span);
-        let ge0 = TExpr::new(TExprKind::Cmp(CmpOp::Ge, EqKind::F64, bx(j_r.clone()), bx(zero())), Type::Bool, span);
-        let shift_needed = cmp_gt(self.arr_get_at(arr_r.clone(), j_r.clone(), elem.clone(), span), key_r.clone());
-        let inner_cond =
-            TExpr::new(TExprKind::Cond(bx(ge0), bx(shift_needed), bx(TExpr::new(TExprKind::Bool(false), Type::Bool, span))), Type::Bool, span);
-        let shift = self.arr_set_at(arr_r.clone(), j_plus_1.clone(), self.arr_get_at(arr_r.clone(), j_r.clone(), elem.clone(), span), span);
-        let j_dec = TExpr::new(TExprKind::Num2(NumOp::Sub, bx(j_r.clone()), bx(one())), Type::Number, span);
-        let assign_j_dec = TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(j_v), bx(j_dec)), Type::Number, span));
-        let inner_id = self.prog.new_loop();
-        let inner_loop = TStmt::Loop { id: inner_id, cond: Some(inner_cond), test_after: false, update: None, body: vec![shift, assign_j_dec] };
-
-        // `arr[j+1] = key;`
-        let place_final = self.arr_set_at(arr_r.clone(), j_plus_1, key_r.clone(), span);
-
-        let outer_cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(n_r.clone())), Type::Bool, span);
-        let i_inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r.clone()), bx(one())), Type::Number, span);
-        let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(i_inc)), Type::Number, span);
-        let outer_id = self.prog.new_loop();
-        let outer_loop = TStmt::Loop {
-            id: outer_id,
-            cond: Some(outer_cond),
-            test_after: false,
-            update: Some(update),
-            body: vec![assign_key, assign_j, inner_loop, place_final],
+        // A stable merge sort, O(n log n) (JS needs a stable sort): first an
+        // insertion sort of each run of `RUN` elements, then bottom-up merges
+        // of runs into a copy and back (the two arrays change places after
+        // each pass). An element moves left only when `cmp_gt` is true, so
+        // equal elements keep their order.
+        const RUN: f64 = 8.0;
+        let num = |n: f64| TExpr::new(TExprKind::Num(n), Type::Number, span);
+        let var = |v: VarId, ty: &Type| TExpr::new(TExprKind::Var(v), ty.clone(), span);
+        let set = |v: VarId, e: TExpr| {
+            let ty = e.ty.clone();
+            TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(v), bx(e)), ty, span))
         };
+        let add = |a: TExpr, b: TExpr| TExpr::new(TExprKind::Num2(NumOp::Add, bx(a), bx(b)), Type::Number, span);
+        let sub = |a: TExpr, b: TExpr| TExpr::new(TExprKind::Num2(NumOp::Sub, bx(a), bx(b)), Type::Number, span);
+        let min = |a: TExpr, b: TExpr| TExpr::new(TExprKind::MathOp(crate::tir::MathOp::Min, vec![a, b]), Type::Number, span);
+        let ncmp = |op: CmpOp, a: TExpr, b: TExpr| TExpr::new(TExprKind::Cmp(op, EqKind::F64, bx(a), bx(b)), Type::Bool, span);
+        let num_t = Type::Number;
+
+        let arr_v = self.temp(arr_ty.clone());
+        let arr_r = var(arr_v, &arr_ty);
+        let [n_v, b_v, e_v, i_v, j_v, w_v, lo_v, mid_v, hi_v, k_v, p_v, q_v] = [(); 12].map(|_| self.temp(Type::Number));
+        let [n, b, e, i, j, w, lo, mid, hi, k, pp, q] = [n_v, b_v, e_v, i_v, j_v, w_v, lo_v, mid_v, hi_v, k_v, p_v, q_v].map(|v| var(v, &num_t));
+        let key_v = self.temp(elem.clone());
+        let key_r = var(key_v, &elem);
+        let [src_v, dst_v, tmp_v] = [(); 3].map(|_| self.temp(arr_ty.clone()));
+        let (src, dst) = (var(src_v, &arr_ty), var(dst_v, &arr_ty));
+        let flip_v = self.temp(Type::Bool);
+        let flip = var(flip_v, &Type::Bool);
+        let get = |a: &TExpr, at: TExpr| TExpr::new(TExprKind::Index(bx(a.clone()), bx(at)), elem.clone(), span);
+        let put = |a: &TExpr, at: TExpr, value: TExpr| {
+            let ty = value.ty.clone();
+            TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Index(bx(a.clone()), bx(at)), bx(value)), ty, span))
+        };
+        let mut new_loop = |cond: TExpr, body: Vec<TStmt>| TStmt::Loop { id: self.prog.new_loop(), cond: Some(cond), test_after: false, update: None, body };
+
+        // Insertion sort of `arr[b..e]`:
+        // `while (j >= b && cmp_gt(arr[j], key)) { arr[j + 1] = arr[j]; j--; }`
+        let shift_cond = TExpr::new(TExprKind::And(bx(ncmp(CmpOp::Ge, j.clone(), b.clone())), bx(cmp_gt(get(&arr_r, j.clone()), key_r.clone()))), Type::Bool, span);
+        let shift = new_loop(shift_cond, vec![put(&arr_r, add(j.clone(), num(1.0)), get(&arr_r, j.clone())), set(j_v, sub(j.clone(), num(1.0)))]);
+        let insert = new_loop(
+            ncmp(CmpOp::Lt, i.clone(), e.clone()),
+            vec![
+                set(key_v, get(&arr_r, i.clone())),
+                set(j_v, sub(i.clone(), num(1.0))),
+                shift,
+                put(&arr_r, add(j.clone(), num(1.0)), key_r.clone()),
+                set(i_v, add(i.clone(), num(1.0))),
+            ],
+        );
+        let runs = new_loop(
+            ncmp(CmpOp::Lt, b.clone(), n.clone()),
+            vec![set(e_v, min(add(b.clone(), num(RUN)), n.clone())), set(i_v, add(b.clone(), num(1.0))), insert, set(b_v, add(b.clone(), num(RUN)))],
+        );
+
+        // Merge `src[lo..mid]` and `src[mid..hi]` into `dst[lo..hi]`; the
+        // left element goes first unless it is greater than the right one.
+        let take_left = TExpr::new(
+            TExprKind::And(
+                bx(ncmp(CmpOp::Lt, pp.clone(), mid.clone())),
+                bx(TExpr::new(
+                    TExprKind::Or(
+                        bx(ncmp(CmpOp::Ge, q.clone(), hi.clone())),
+                        bx(TExpr::new(TExprKind::Not(bx(cmp_gt(get(&src, pp.clone()), get(&src, q.clone())))), Type::Bool, span)),
+                    ),
+                    Type::Bool,
+                    span,
+                )),
+            ),
+            Type::Bool,
+            span,
+        );
+        let merge_step = TStmt::If(
+            take_left,
+            vec![put(&dst, k.clone(), get(&src, pp.clone())), set(p_v, add(pp.clone(), num(1.0)))],
+            vec![put(&dst, k.clone(), get(&src, q.clone())), set(q_v, add(q.clone(), num(1.0)))],
+        );
+        let merge = new_loop(ncmp(CmpOp::Lt, k.clone(), hi.clone()), vec![merge_step, set(k_v, add(k.clone(), num(1.0)))]);
+        let pairs = new_loop(
+            ncmp(CmpOp::Lt, lo.clone(), n.clone()),
+            vec![
+                set(mid_v, min(add(lo.clone(), w.clone()), n.clone())),
+                set(hi_v, min(add(lo.clone(), add(w.clone(), w.clone())), n.clone())),
+                set(p_v, lo.clone()),
+                set(q_v, mid.clone()),
+                set(k_v, lo.clone()),
+                merge,
+                set(lo_v, hi.clone()),
+            ],
+        );
+        let passes = new_loop(
+            ncmp(CmpOp::Lt, w.clone(), n.clone()),
+            vec![
+                set(lo_v, num(0.0)),
+                pairs,
+                set(tmp_v, src.clone()),
+                set(src_v, dst.clone()),
+                set(dst_v, var(tmp_v, &arr_ty)),
+                set(flip_v, TExpr::new(TExprKind::Not(bx(flip.clone())), Type::Bool, span)),
+                set(w_v, add(w.clone(), w.clone())),
+            ],
+        );
+        // After an odd number of passes the result is in the copy.
+        let copy_back = new_loop(ncmp(CmpOp::Lt, k.clone(), n.clone()), vec![put(&arr_r, k.clone(), get(&src, k.clone())), set(k_v, add(k.clone(), num(1.0)))]);
+        let merge_all = TStmt::If(
+            ncmp(CmpOp::Gt, n.clone(), num(RUN)),
+            vec![
+                set(src_v, arr_r.clone()),
+                set(dst_v, self.arr_copy_of(arr_r.clone(), span)),
+                set(flip_v, TExpr::new(TExprKind::Bool(false), Type::Bool, span)),
+                set(w_v, num(RUN)),
+                passes,
+                TStmt::If(flip.clone(), vec![set(k_v, num(0.0)), copy_back], Vec::new()),
+            ],
+            Vec::new(),
+        );
 
         prelude.push(TStmt::Let(arr_v, Some(o)));
         prelude.push(TStmt::Let(n_v, Some(self.arr_len_of(arr_r.clone(), span))));
+        for v in [e_v, i_v, j_v, w_v, lo_v, mid_v, hi_v, k_v, p_v, q_v] {
+            prelude.push(TStmt::Let(v, Some(num(0.0))));
+        }
+        prelude.push(TStmt::Let(b_v, Some(num(0.0))));
         prelude.push(TStmt::Let(key_v, None));
-        prelude.push(TStmt::Let(j_v, None));
-        prelude.push(TStmt::Let(i_v, Some(one())));
-        prelude.push(outer_loop);
+        for v in [src_v, dst_v, tmp_v] {
+            prelude.push(TStmt::Let(v, Some(arr_r.clone())));
+        }
+        prelude.push(TStmt::Let(flip_v, Some(TExpr::new(TExprKind::Bool(false), Type::Bool, span))));
+        prelude.push(runs);
+        prelude.push(merge_all);
 
         TExpr::new(TExprKind::Block(prelude, bx(arr_r)), arr_ty, span)
     }
@@ -1891,10 +1964,13 @@ impl Checker<'_> {
     // Both are the internal struct `{ keys: K[] }` (`Set`) or
     // `{ keys: K[], values: V[] }` (`Map`), built in `Checker::map_struct`/
     // `set_struct`. Every method desugars to array operations the checker
-    // already has (`ArraySearch`, `Index`, `Assign(Place::Index, ..)`,
-    // `arr_push_*`/`arr_pop_*`), so none of this needs new codegen or a new
-    // `plinth-rt` module. Lookup, insert and delete are linear scans: fine
-    // for the small, form-sized state Plinth apps keep (SPEC.md §4.2).
+    // already has (`Index`, `Assign(Place::Index, ..)`, `arr_push_*`/
+    // `arr_pop_*`) plus the core's hash index (`kv_*`, core 1.13,
+    // `plinth-rt/src/kv.rs`): `get`, `set`, `has` and `delete` are O(1) on
+    // average. `delete` leaves a hole. Loops skip holes with `kv_live` and
+    // tell the core that they run (`kv_iter`, in a `finally`), so that no
+    // entry moves during a loop; code that needs the arrays without holes
+    // reads a copy (`kv_live_copy`).
 
     /// A value that produces nothing on the stack, for the tail of a
     /// `Type::Void` block (unlike `TExprKind::Null`, which always pushes a
@@ -1908,6 +1984,130 @@ impl Checker<'_> {
     fn kv_field(&self, obj: &TExpr, sid: crate::types::StructId, idx: u32, span: Span) -> TExpr {
         let ty = self.prog.structs[sid as usize].fields[idx as usize].ty.clone();
         TExpr::new(TExprKind::Field(bx(obj.clone()), sid, idx), ty, span)
+    }
+
+    /// The `index` field (the last one) of a `Map`/`Set` object.
+    fn kv_index(&self, obj: &TExpr, sid: crate::types::StructId, span: Span) -> TExpr {
+        let last = self.prog.structs[sid as usize].fields.len() as u32 - 1;
+        self.kv_field(obj, sid, last, span)
+    }
+
+    /// The `values` array of a `Map`, or `null` (0) for a `Set`.
+    fn kv_values_or_null(&self, obj: &TExpr, sid: crate::types::StructId, span: Span) -> TExpr {
+        if self.prog.structs[sid as usize].fields.len() == 3 {
+            self.kv_field(obj, sid, 1, span)
+        } else {
+            TExpr::new(TExprKind::Null, Type::Null, span)
+        }
+    }
+
+    /// `kv_add`/`kv_clear(keys, values, index)` as a statement. `obj` must
+    /// be a variable (it is read three times).
+    fn kv_rt_stmt(&self, name: &'static str, obj: &TExpr, sid: crate::types::StructId, span: Span) -> TStmt {
+        let args = vec![self.kv_field(obj, sid, 0, span), self.kv_values_or_null(obj, sid, span), self.kv_index(obj, sid, span)];
+        TStmt::Expr(TExpr::new(TExprKind::Rt(name, args), Type::Void, span))
+    }
+
+    /// The position of `key` in a `Map`/`Set` as a number, or -1 (the core's
+    /// hash index). `obj` must be a variable.
+    fn kv_find(&self, obj: &TExpr, sid: crate::types::StructId, key: TExpr, span: Span) -> TExpr {
+        let f = match key.ty.repr() {
+            crate::types::Repr::F64 => "kv_find_f64",
+            crate::types::Repr::Ref => "kv_find_str",
+            _ => "kv_find_i32",
+        };
+        let pos = TExpr::new(TExprKind::Rt(f, vec![self.kv_field(obj, sid, 0, span), self.kv_index(obj, sid, span), key]), Type::Bool, span);
+        TExpr::new(TExprKind::Coerce(Coercion::I32ToNum, bx(pos)), Type::Number, span)
+    }
+
+    /// `m.size` / `s.size`: the number of entries without the holes.
+    fn kv_size(&mut self, o: TExpr, sid: crate::types::StructId, span: Span) -> TExpr {
+        let obj_v = self.temp(o.ty.clone());
+        let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
+        let n = TExpr::new(TExprKind::Rt("kv_size", vec![self.kv_field(&obj_r, sid, 0, span), self.kv_index(&obj_r, sid, span)]), Type::Bool, span);
+        let n = TExpr::new(TExprKind::Coerce(Coercion::I32ToNum, bx(n)), Type::Number, span);
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(obj_v, Some(o))], bx(n)), Type::Number, span)
+    }
+
+    /// True when the entry at `i` (a number) is not a hole. `obj` must be a
+    /// variable.
+    fn kv_live(&self, obj: &TExpr, sid: crate::types::StructId, i: TExpr, span: Span) -> TExpr {
+        let i = TExpr::new(TExprKind::Coerce(Coercion::NumToI32, bx(i)), Type::Bool, span);
+        TExpr::new(TExprKind::Rt("kv_live", vec![self.kv_field(obj, sid, 0, span), self.kv_index(obj, sid, span), i]), Type::Bool, span)
+    }
+
+    /// `kv_iter(keys, values, index, delta)`: a loop over the map starts (1)
+    /// or ends (-1). `obj` must be a variable.
+    fn kv_iter_stmt(&self, obj: &TExpr, sid: crate::types::StructId, delta: f64, span: Span) -> TStmt {
+        let d = TExpr::new(TExprKind::Coerce(Coercion::NumToI32, bx(self.num_lit(delta, span))), Type::Bool, span);
+        let args = vec![self.kv_field(obj, sid, 0, span), self.kv_values_or_null(obj, sid, span), self.kv_index(obj, sid, span), d];
+        TStmt::Expr(TExpr::new(TExprKind::Rt("kv_iter", args), Type::Void, span))
+    }
+
+    /// Wraps a loop over the map `obj` (a variable): `kv_iter(+1)`, then the
+    /// loop in a `try` whose `finally` calls `kv_iter(-1)`, so the count
+    /// goes down after a `break`, a `return`, a jump to an outer loop or an
+    /// exception too.
+    fn kv_iterating(&self, obj: &TExpr, sid: crate::types::StructId, body: Vec<TStmt>, span: Span) -> Vec<TStmt> {
+        vec![
+            self.kv_iter_stmt(obj, sid, 1.0, span),
+            TStmt::Try { body, catch: None, finally: Some(vec![self.kv_iter_stmt(obj, sid, -1.0, span)]) },
+        ]
+    }
+
+    /// Field `idx` of the map `obj` (a variable) without the holes, as a new
+    /// array (`kv_live_copy`).
+    fn kv_live_copy(&self, obj: &TExpr, sid: crate::types::StructId, idx: u32, span: Span) -> TExpr {
+        let arr = self.kv_field(obj, sid, idx, span);
+        let ty = arr.ty.clone();
+        TExpr::new(TExprKind::Rt("kv_live_copy", vec![arr, self.kv_field(obj, sid, 0, span), self.kv_index(obj, sid, span)]), ty, span)
+    }
+
+    /// `kv_live_copy` of field `idx` in a new variable: the `Let`, and a read.
+    fn kv_live_copy_var(&mut self, obj: &TExpr, sid: crate::types::StructId, idx: u32, span: Span) -> (TStmt, TExpr) {
+        let copy = self.kv_live_copy(obj, sid, idx, span);
+        let ty = copy.ty.clone();
+        let v = self.temp(ty.clone());
+        (TStmt::Let(v, Some(copy)), TExpr::new(TExprKind::Var(v), ty, span))
+    }
+
+    /// A new `Map` struct with the entries of the map `o` and no holes (an
+    /// empty index), for code in the core that reads the arrays directly
+    /// (the `fetch` headers). The map `o` does not change.
+    pub(super) fn kv_live_struct(&mut self, o: TExpr, sid: crate::types::StructId, span: Span) -> TExpr {
+        let ty = o.ty.clone();
+        let obj_v = self.temp(ty.clone());
+        let obj_r = TExpr::new(TExprKind::Var(obj_v), ty.clone(), span);
+        let index = TExpr::new(TExprKind::ArrayLit(Vec::new()), Type::Array(Box::new(Type::Int)), span);
+        let lit = TExpr::new(
+            TExprKind::StructLit(sid, vec![self.kv_live_copy(&obj_r, sid, 0, span), self.kv_live_copy(&obj_r, sid, 1, span), index]),
+            ty.clone(),
+            span,
+        );
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(obj_v, Some(o))], bx(lit)), ty, span)
+    }
+
+    /// `m.has(key)` / `s.has(key)`.
+    fn kv_has(&mut self, o: TExpr, sid: crate::types::StructId, key: TExpr, span: Span) -> TExpr {
+        let obj_v = self.temp(o.ty.clone());
+        let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
+        let pos = self.kv_find(&obj_r, sid, key, span);
+        let found = TExpr::new(
+            TExprKind::Cmp(CmpOp::Ne, EqKind::F64, bx(pos), bx(TExpr::new(TExprKind::Num(-1.0), Type::Number, span))),
+            Type::Bool,
+            span,
+        );
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(obj_v, Some(o))], bx(found)), Type::Bool, span)
+    }
+
+    /// `keys()`/`values()`: a new array with field `idx` of `o`, without
+    /// the holes.
+    fn kv_copy_field(&mut self, o: TExpr, sid: crate::types::StructId, idx: u32, span: Span) -> TExpr {
+        let obj_v = self.temp(o.ty.clone());
+        let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
+        let copy = self.kv_live_copy(&obj_r, sid, idx, span);
+        let ty = copy.ty.clone();
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(obj_v, Some(o))], bx(copy)), ty, span)
     }
 
     /// A fresh copy of `arr` (`arr_slice(arr, 0, MAX)`, the same op `.slice()`
@@ -1955,75 +2155,28 @@ impl Checker<'_> {
         TStmt::Expr(TExpr::new(TExprKind::Coerce(Coercion::Discard, bx(pop)), Type::Void, span))
     }
 
-    /// `while (arr.length > 0) arr.pop();`
-    fn arr_clear(&mut self, arr: TExpr, span: Span) -> Vec<TStmt> {
-        let arr_v = self.temp(arr.ty.clone());
-        let arr_r = TExpr::new(TExprKind::Var(arr_v), arr.ty.clone(), span);
-        let cond = TExpr::new(
-            TExprKind::Cmp(CmpOp::Gt, EqKind::F64, bx(self.arr_len_of(arr_r.clone(), span)), bx(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
-            Type::Bool,
-            span,
-        );
-        let id = self.prog.new_loop();
-        let pop = self.arr_pop_discard(arr_r, span);
-        vec![TStmt::Let(arr_v, Some(arr)), TStmt::Loop { id, cond: Some(cond), test_after: false, update: None, body: vec![pop] }]
-    }
-
-    /// `m.delete(k)` / `s.delete(v)`: finds the key, then shifts every later
-    /// entry down by one and pops, so `delete` keeps insertion order
-    /// (HANDOFF.md item 1). `for (let j = idx; j < last; j = j + 1) { keys[j]
-    /// = keys[j+1]; values[j] = values[j+1]; }` then one pop per array.
-    fn kv_delete(&mut self, sid: crate::types::StructId, has_values: bool, eq: EqKind, o: TExpr, key: TExpr, span: Span) -> TExpr {
+    /// `m.delete(k)` / `s.delete(v)`: finds the key with the hash index and
+    /// makes its entry a hole (`kv_remove`), so `delete` is O(1) on average
+    /// and keeps insertion order. A later `set` of the same key adds it at
+    /// the end, as in JS.
+    fn kv_delete(&mut self, sid: crate::types::StructId, o: TExpr, key: TExpr, span: Span) -> TExpr {
         let obj_v = self.temp(o.ty.clone());
         let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
-        let keys = self.kv_field(&obj_r, sid, 0, span);
         let idx_v = self.temp(Type::Number);
         let idx_r = TExpr::new(TExprKind::Var(idx_v), Type::Number, span);
-        let search = TExpr::new(TExprKind::ArraySearch { index: true, eq, arr: bx(keys.clone()), value: bx(key) }, Type::Number, span);
+        let search = self.kv_find(&obj_r, sid, key, span);
         let not_found = TExpr::new(
             TExprKind::Cmp(CmpOp::Eq, EqKind::F64, bx(idx_r.clone()), bx(TExpr::new(TExprKind::Num(-1.0), Type::Number, span))),
             Type::Bool,
             span,
         );
-        let last_v = self.temp(Type::Number);
-        let last_r = TExpr::new(TExprKind::Var(last_v), Type::Number, span);
-        let last_init = TExpr::new(
-            TExprKind::Num2(NumOp::Sub, bx(self.arr_len_of(keys.clone(), span)), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))),
-            Type::Number,
-            span,
-        );
-        let keys_elem = match &keys.ty {
-            Type::Array(e) => (**e).clone(),
-            _ => unreachable!(),
-        };
-
-        let j_v = self.temp(Type::Number);
-        let j_r = TExpr::new(TExprKind::Var(j_v), Type::Number, span);
-        let j_plus_1 =
-            TExpr::new(TExprKind::Num2(NumOp::Add, bx(j_r.clone()), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))), Type::Number, span);
-        let shift_cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(j_r.clone()), bx(last_r.clone())), Type::Bool, span);
-        let mut shift_body = vec![self.arr_set_at(keys.clone(), j_r.clone(), self.arr_get_at(keys.clone(), j_plus_1.clone(), keys_elem, span), span)];
-        if has_values {
-            let values = self.kv_field(&obj_r, sid, 1, span);
-            let values_elem = match &values.ty {
-                Type::Array(e) => (**e).clone(),
-                _ => unreachable!(),
-            };
-            shift_body.push(self.arr_set_at(values.clone(), j_r.clone(), self.arr_get_at(values, j_plus_1.clone(), values_elem, span), span));
-        }
-        let shift_update = TExpr::new(TExprKind::Assign(Place::Var(j_v), bx(j_plus_1)), Type::Number, span);
-        let shift_id = self.prog.new_loop();
-        let shift_loop = TStmt::Loop { id: shift_id, cond: Some(shift_cond), test_after: false, update: Some(shift_update), body: shift_body };
-
-        let mut pop_stmts = vec![TStmt::Let(j_v, Some(idx_r.clone())), shift_loop, self.arr_pop_discard(keys, span)];
-        if has_values {
-            pop_stmts.push(self.arr_pop_discard(self.kv_field(&obj_r, sid, 1, span), span));
-        }
-        let found_block =
-            TExpr::new(TExprKind::Block(pop_stmts, bx(TExpr::new(TExprKind::Bool(true), Type::Bool, span))), Type::Bool, span);
+        let pos = TExpr::new(TExprKind::Coerce(Coercion::NumToI32, bx(idx_r)), Type::Bool, span);
+        let args = vec![self.kv_field(&obj_r, sid, 0, span), self.kv_values_or_null(&obj_r, sid, span), self.kv_index(&obj_r, sid, span), pos];
+        let remove = TStmt::Expr(TExpr::new(TExprKind::Rt("kv_remove", args), Type::Void, span));
+        let found_block = TExpr::new(TExprKind::Block(vec![remove], bx(TExpr::new(TExprKind::Bool(true), Type::Bool, span))), Type::Bool, span);
         let cond =
             TExpr::new(TExprKind::Cond(bx(not_found), bx(TExpr::new(TExprKind::Bool(false), Type::Bool, span)), bx(found_block)), Type::Bool, span);
-        let prelude = vec![TStmt::Let(obj_v, Some(o)), TStmt::Let(idx_v, Some(search)), TStmt::Let(last_v, Some(last_init))];
+        let prelude = vec![TStmt::Let(obj_v, Some(o)), TStmt::Let(idx_v, Some(search))];
         TExpr::new(TExprKind::Block(prelude, bx(cond)), Type::Bool, span)
     }
 
@@ -2086,9 +2239,9 @@ impl Checker<'_> {
         let obj_v = self.temp(obj.ty.clone());
         let obj_r = TExpr::new(TExprKind::Var(obj_v), obj.ty.clone(), span);
         let keys = self.kv_field(&obj_r, sid, 0, span);
-        let len = self.arr_len_of(keys.clone(), span);
-        let len_v = self.temp(Type::Number);
-        let len_r = TExpr::new(TExprKind::Var(len_v), Type::Number, span);
+        // The length is read again on each turn: the body can add entries
+        // (JS visits them) or delete them (holes, skipped below).
+        let len_r = self.arr_len_of(keys.clone(), span);
         let i_v = self.temp(Type::Number);
         let i_r = TExpr::new(TExprKind::Var(i_v), Type::Number, span);
 
@@ -2158,21 +2311,18 @@ impl Checker<'_> {
         self.pop_scope();
         self.fx.loops.pop();
 
+        let live = self.kv_live(&obj_r, sid, i_r.clone(), span);
         let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(len_r)), Type::Bool, span);
         let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))), Type::Number, span);
         let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
-        let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: prologue };
-        Some(vec![
-            TStmt::Let(obj_v, Some(obj)),
-            TStmt::Let(len_v, Some(len)),
-            TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
-            loop_stmt,
-        ])
+        let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![TStmt::If(live, prologue, Vec::new())] };
+        let mut out = vec![TStmt::Let(obj_v, Some(obj))];
+        out.extend(self.kv_iterating(&obj_r, sid, vec![TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))), loop_stmt], span));
+        Some(out)
     }
 
     fn map_method(&mut self, o: TExpr, k: &Type, v: &Type, prop: &str, prop_span: Span, args: &[Expr], span: Span) -> TExpr {
         let sid = self.map_struct(k, v);
-        let eq = self.key_eq(k);
         let wrong_arity = |c: &mut Self, what: &str, n: usize| {
             c.err(code::ARG_COUNT, span, format!("`{what}` takes {n} argument(s)"));
         };
@@ -2186,11 +2336,10 @@ impl Checker<'_> {
                 let key = self.coerce(key, k);
                 let obj_v = self.temp(o.ty.clone());
                 let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
-                let keys = self.kv_field(&obj_r, sid, 0, span);
                 let values = self.kv_field(&obj_r, sid, 1, span);
                 let idx_v = self.temp(Type::Number);
                 let idx_r = TExpr::new(TExprKind::Var(idx_v), Type::Number, span);
-                let search = TExpr::new(TExprKind::ArraySearch { index: true, eq, arr: bx(keys), value: bx(key) }, Type::Number, span);
+                let search = self.kv_find(&obj_r, sid, key, span);
                 let not_found = TExpr::new(
                     TExprKind::Cmp(CmpOp::Eq, EqKind::F64, bx(idx_r.clone()), bx(TExpr::new(TExprKind::Num(-1.0), Type::Number, span))),
                     Type::Bool,
@@ -2219,7 +2368,7 @@ impl Checker<'_> {
                 let key_r = TExpr::new(TExprKind::Var(key_v), k.clone(), span);
                 let idx_v = self.temp(Type::Number);
                 let idx_r = TExpr::new(TExprKind::Var(idx_v), Type::Number, span);
-                let search = TExpr::new(TExprKind::ArraySearch { index: true, eq, arr: bx(keys.clone()), value: bx(key_r.clone()) }, Type::Number, span);
+                let search = self.kv_find(&obj_r, sid, key_r.clone(), span);
                 let found = TExpr::new(
                     TExprKind::Cmp(CmpOp::Ne, EqKind::F64, bx(idx_r.clone()), bx(TExpr::new(TExprKind::Num(-1.0), Type::Number, span))),
                     Type::Bool,
@@ -2233,7 +2382,8 @@ impl Checker<'_> {
                 let set_existing = self.arr_set_at(values.clone(), idx_r, val_r.clone(), span);
                 let push_key = self.arr_push_discard(keys, key_r, span);
                 let push_val = self.arr_push_discard(values, val_r, span);
-                let if_stmt = TStmt::If(found, vec![set_existing], vec![push_key, push_val]);
+                let add = self.kv_rt_stmt("kv_add", &obj_r, sid, span);
+                let if_stmt = TStmt::If(found, vec![set_existing], vec![push_key, push_val, add]);
                 let body = vec![
                     TStmt::Let(obj_v, Some(o)),
                     TStmt::Let(key_v, Some(key)),
@@ -2250,8 +2400,7 @@ impl Checker<'_> {
                 }
                 let key = self.expr_with(&args[0], k);
                 let key = self.coerce(key, k);
-                let keys = self.kv_field(&o, sid, 0, span);
-                TExpr::new(TExprKind::ArraySearch { index: false, eq, arr: bx(keys), value: bx(key) }, Type::Bool, span)
+                self.kv_has(o, sid, key, span)
             }
             "delete" => {
                 if args.len() != 1 {
@@ -2260,15 +2409,14 @@ impl Checker<'_> {
                 }
                 let key = self.expr_with(&args[0], k);
                 let key = self.coerce(key, k);
-                self.kv_delete(sid, true, eq, o, key, span)
+                self.kv_delete(sid, o, key, span)
             }
             "clear" => {
                 self.no_args(args, span);
                 let obj_v = self.temp(o.ty.clone());
                 let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
                 let mut body = vec![TStmt::Let(obj_v, Some(o))];
-                body.extend(self.arr_clear(self.kv_field(&obj_r, sid, 0, span), span));
-                body.extend(self.arr_clear(self.kv_field(&obj_r, sid, 1, span), span));
+                body.push(self.kv_rt_stmt("kv_clear", &obj_r, sid, span));
                 TExpr::new(TExprKind::Block(body, bx(self.void_tail(span))), Type::Void, span)
             }
             // `m.forEach((value, key) => ...)` (JS order: value first): an
@@ -2285,9 +2433,7 @@ impl Checker<'_> {
                 let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
                 let keys = self.kv_field(&obj_r, sid, 0, span);
                 let values = self.kv_field(&obj_r, sid, 1, span);
-                let len = self.arr_len_of(keys.clone(), span);
-                let len_v = self.temp(Type::Number);
-                let len_r = TExpr::new(TExprKind::Var(len_v), Type::Number, span);
+                let len_r = self.arr_len_of(keys.clone(), span);
                 let i_v = self.temp(Type::Number);
                 let i_r = TExpr::new(TExprKind::Var(i_v), Type::Number, span);
                 let f_v = self.temp(f.ty.clone());
@@ -2297,18 +2443,15 @@ impl Checker<'_> {
                 let mut call_args = vec![val_at, key_at];
                 call_args.truncate(arity);
                 let call = TExpr::new(TExprKind::CallClosure(bx(f_r), call_args), Type::Void, span);
+                let call = TStmt::If(self.kv_live(&obj_r, sid, i_r.clone(), span), vec![TStmt::Expr(call)], Vec::new());
                 let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r.clone()), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))), Type::Number, span);
                 let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
                 let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(len_r)), Type::Bool, span);
                 let id = self.prog.new_loop();
-                let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![TStmt::Expr(call)] };
-                let prelude = vec![
-                    TStmt::Let(obj_v, Some(o)),
-                    TStmt::Let(f_v, Some(f)),
-                    TStmt::Let(len_v, Some(len)),
-                    TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
-                    loop_stmt,
-                ];
+                let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![call] };
+                let mut prelude = vec![TStmt::Let(obj_v, Some(o)), TStmt::Let(f_v, Some(f))];
+                let looped = vec![TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))), loop_stmt];
+                prelude.extend(self.kv_iterating(&obj_r, sid, looped, span));
                 TExpr::new(TExprKind::Block(prelude, bx(self.void_tail(span))), Type::Void, span)
             }
             // `.keys()`/`.values()` as a plain array (not only as a bare
@@ -2320,11 +2463,11 @@ impl Checker<'_> {
             // ([k, v] of m)` form still works, via `kv_for_of`).
             "keys" => {
                 self.no_args(args, span);
-                self.arr_copy_of(self.kv_field(&o, sid, 0, span), span)
+                self.kv_copy_field(o, sid, 0, span)
             }
             "values" => {
                 self.no_args(args, span);
-                self.arr_copy_of(self.kv_field(&o, sid, 1, span), span)
+                self.kv_copy_field(o, sid, 1, span)
             }
             // `.entries()` as a plain `[K, V][]` (a tuple is a 2-field
             // struct, see `tuple_struct`): an index loop that pushes one new
@@ -2338,8 +2481,8 @@ impl Checker<'_> {
                 let var = |id: VarId, ty: &Type| TExpr::new(TExprKind::Var(id), ty.clone(), span);
                 let obj_v = self.temp(o.ty.clone());
                 let obj_r = var(obj_v, &o.ty);
-                let keys = self.kv_field(&obj_r, sid, 0, span);
-                let values = self.kv_field(&obj_r, sid, 1, span);
+                let (let_keys, keys) = self.kv_live_copy_var(&obj_r, sid, 0, span);
+                let (let_values, values) = self.kv_live_copy_var(&obj_r, sid, 1, span);
                 let res_v = self.temp(res_ty.clone());
                 let len_v = self.temp(Type::Number);
                 let i_v = self.temp(Type::Number);
@@ -2356,6 +2499,8 @@ impl Checker<'_> {
                 let id = self.prog.new_loop();
                 let stmts = vec![
                     TStmt::Let(obj_v, Some(o)),
+                    let_keys,
+                    let_values,
                     TStmt::Let(res_v, Some(TExpr::new(TExprKind::ArrayLit(Vec::new()), res_ty.clone(), span))),
                     TStmt::Let(len_v, Some(self.arr_len_of(keys, span))),
                     TStmt::Let(i_v, Some(self.num_lit(0.0, span))),
@@ -2377,7 +2522,6 @@ impl Checker<'_> {
 
     fn set_method(&mut self, o: TExpr, t: &Type, prop: &str, prop_span: Span, args: &[Expr], span: Span) -> TExpr {
         let sid = self.set_struct(t);
-        let eq = self.key_eq(t);
         match prop {
             "add" => {
                 if args.len() != 1 {
@@ -2391,10 +2535,15 @@ impl Checker<'_> {
                 let keys = self.kv_field(&obj_r, sid, 0, span);
                 let val_v = self.temp(t.clone());
                 let val_r = TExpr::new(TExprKind::Var(val_v), t.clone(), span);
-                let has = TExpr::new(TExprKind::ArraySearch { index: false, eq, arr: bx(keys.clone()), value: bx(val_r.clone()) }, Type::Bool, span);
-                let not_has = TExpr::new(TExprKind::Not(bx(has)), Type::Bool, span);
+                let pos = self.kv_find(&obj_r, sid, val_r.clone(), span);
+                let not_has = TExpr::new(
+                    TExprKind::Cmp(CmpOp::Eq, EqKind::F64, bx(pos), bx(TExpr::new(TExprKind::Num(-1.0), Type::Number, span))),
+                    Type::Bool,
+                    span,
+                );
                 let push = self.arr_push_discard(keys, val_r, span);
-                let if_stmt = TStmt::If(not_has, vec![push], Vec::new());
+                let add = self.kv_rt_stmt("kv_add", &obj_r, sid, span);
+                let if_stmt = TStmt::If(not_has, vec![push, add], Vec::new());
                 let body = vec![TStmt::Let(obj_v, Some(o)), TStmt::Let(val_v, Some(val)), if_stmt];
                 TExpr::new(TExprKind::Block(body, bx(self.void_tail(span))), Type::Void, span)
             }
@@ -2405,8 +2554,7 @@ impl Checker<'_> {
                 }
                 let val = self.expr_with(&args[0], t);
                 let val = self.coerce(val, t);
-                let keys = self.kv_field(&o, sid, 0, span);
-                TExpr::new(TExprKind::ArraySearch { index: false, eq, arr: bx(keys), value: bx(val) }, Type::Bool, span)
+                self.kv_has(o, sid, val, span)
             }
             "delete" => {
                 if args.len() != 1 {
@@ -2415,14 +2563,14 @@ impl Checker<'_> {
                 }
                 let val = self.expr_with(&args[0], t);
                 let val = self.coerce(val, t);
-                self.kv_delete(sid, false, eq, o, val, span)
+                self.kv_delete(sid, o, val, span)
             }
             "clear" => {
                 self.no_args(args, span);
                 let obj_v = self.temp(o.ty.clone());
                 let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
                 let mut body = vec![TStmt::Let(obj_v, Some(o))];
-                body.extend(self.arr_clear(self.kv_field(&obj_r, sid, 0, span), span));
+                body.push(self.kv_rt_stmt("kv_clear", &obj_r, sid, span));
                 TExpr::new(TExprKind::Block(body, bx(self.void_tail(span))), Type::Void, span)
             }
             // `s.forEach(v => ...)`: same shape as `Map.forEach`, over the
@@ -2436,9 +2584,7 @@ impl Checker<'_> {
                 let obj_v = self.temp(o.ty.clone());
                 let obj_r = TExpr::new(TExprKind::Var(obj_v), o.ty.clone(), span);
                 let keys = self.kv_field(&obj_r, sid, 0, span);
-                let len = self.arr_len_of(keys.clone(), span);
-                let len_v = self.temp(Type::Number);
-                let len_r = TExpr::new(TExprKind::Var(len_v), Type::Number, span);
+                let len_r = self.arr_len_of(keys.clone(), span);
                 let i_v = self.temp(Type::Number);
                 let i_r = TExpr::new(TExprKind::Var(i_v), Type::Number, span);
                 let f_v = self.temp(f.ty.clone());
@@ -2447,18 +2593,15 @@ impl Checker<'_> {
                 let mut call_args = vec![val_at];
                 call_args.truncate(arity);
                 let call = TExpr::new(TExprKind::CallClosure(bx(f_r), call_args), Type::Void, span);
+                let call = TStmt::If(self.kv_live(&obj_r, sid, i_r.clone(), span), vec![TStmt::Expr(call)], Vec::new());
                 let inc = TExpr::new(TExprKind::Num2(NumOp::Add, bx(i_r.clone()), bx(TExpr::new(TExprKind::Num(1.0), Type::Number, span))), Type::Number, span);
                 let update = TExpr::new(TExprKind::Assign(Place::Var(i_v), bx(inc)), Type::Number, span);
                 let cond = TExpr::new(TExprKind::Cmp(CmpOp::Lt, EqKind::F64, bx(i_r.clone()), bx(len_r)), Type::Bool, span);
                 let id = self.prog.new_loop();
-                let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![TStmt::Expr(call)] };
-                let prelude = vec![
-                    TStmt::Let(obj_v, Some(o)),
-                    TStmt::Let(f_v, Some(f)),
-                    TStmt::Let(len_v, Some(len)),
-                    TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
-                    loop_stmt,
-                ];
+                let loop_stmt = TStmt::Loop { id, cond: Some(cond), test_after: false, update: Some(update), body: vec![call] };
+                let mut prelude = vec![TStmt::Let(obj_v, Some(o)), TStmt::Let(f_v, Some(f))];
+                let looped = vec![TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))), loop_stmt];
+                prelude.extend(self.kv_iterating(&obj_r, sid, looped, span));
                 TExpr::new(TExprKind::Block(prelude, bx(self.void_tail(span))), Type::Void, span)
             }
             // `.keys()`/`.values()` as a plain array: both are the same
@@ -2466,7 +2609,7 @@ impl Checker<'_> {
             // caller cannot mutate the `Set` through the result.
             "keys" | "values" => {
                 self.no_args(args, span);
-                self.arr_copy_of(self.kv_field(&o, sid, 0, span), span)
+                self.kv_copy_field(o, sid, 0, span)
             }
             _ => {
                 self.err_help(
@@ -3350,8 +3493,8 @@ impl Checker<'_> {
         let id = self.prog.new_loop();
         let obj_v = self.temp(value.ty.clone());
         let obj_r = TExpr::new(TExprKind::Var(obj_v), value.ty.clone(), span);
-        let keys = self.kv_field(&obj_r, sid, 0, span);
-        let values = self.kv_field(&obj_r, sid, 1, span);
+        let (let_keys, keys) = self.kv_live_copy_var(&obj_r, sid, 0, span);
+        let (let_values, values) = self.kv_live_copy_var(&obj_r, sid, 1, span);
         let len = self.arr_len_of(keys.clone(), span);
         let len_v = self.temp(Type::Number);
         let len_r = TExpr::new(TExprKind::Var(len_v), Type::Number, span);
@@ -3384,6 +3527,8 @@ impl Checker<'_> {
         let result = self.json_parts_end(acc_v, close, span);
         let body = vec![
             TStmt::Let(obj_v, Some(value)),
+            let_keys,
+            let_values,
             TStmt::Let(len_v, Some(len)),
             TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
             TStmt::Let(acc_v, Some(TExpr::new(TExprKind::ArrayLit(vec![(false, open)]), Type::Array(Box::new(Type::String)), span))),
@@ -3670,7 +3815,8 @@ impl Checker<'_> {
             TStmt::Expr(begin),
             loop_stmt,
         ];
-        let lit = TExpr::new(TExprKind::StructLit(sid, vec![keys_r, vals_r]), map_ty.clone(), span);
+        let index = TExpr::new(TExprKind::ArrayLit(Vec::new()), Type::Array(Box::new(Type::Int)), span);
+        let lit = TExpr::new(TExprKind::StructLit(sid, vec![keys_r, vals_r, index]), map_ty.clone(), span);
         TExpr::new(TExprKind::Block(body, bx(lit)), map_ty, span)
     }
 
@@ -3706,7 +3852,8 @@ impl Checker<'_> {
                 let sid = self.map_struct(k, v);
                 let ka = TExpr::new(TExprKind::ArrayLit(Vec::new()), Type::Array(k.clone()), span);
                 let va = TExpr::new(TExprKind::ArrayLit(Vec::new()), Type::Array(v.clone()), span);
-                TExpr::new(TExprKind::StructLit(sid, vec![ka, va]), ty.clone(), span)
+                let ia = TExpr::new(TExprKind::ArrayLit(Vec::new()), Type::Array(Box::new(Type::Int)), span);
+                TExpr::new(TExprKind::StructLit(sid, vec![ka, va, ia]), ty.clone(), span)
             }
             _ => TExpr::new(TExprKind::Null, ty.clone(), span),
         }
