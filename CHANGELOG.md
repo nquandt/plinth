@@ -8,6 +8,7 @@ No public release yet. The first release is a Preview for Windows and the web. `
 
 ### Added
 
+- Tests for `plinth:clipboard` (write and read, desktop wasmtime, desktop wasmi, web) and for `plinth:dialog` on the web (PRODUCTION H7): `crates/plinth-compiler/tests/clipboard.rs` and `web/test/run-clipboard-dialog.mjs`. No "no test" cell is left in `docs/host-apis.md` "Support on each host".
 - `plinth test` and `plinth:test`, a test kit for app authors (PRODUCTION T3 step 1, `docs/TESTING.md`): write tests in Plinth TS in `app/**/*.test.tsx`, show a component with `render(<X />)` or the app with `renderApp()`, find nodes by label, title, text or role, do steps (`press`, `type`, `submit`, `toggle`, `select`, `moveUp`, `moveDown`, `showScreen`) through the normal event path, move a test clock (`tick`, `settle`), and check the screen with `expect(query).toExist()`, `toHaveText`, `toHaveCount`, `toBeChecked`, `toBeDisabled` and value matchers (`toBe`, `toEqual`, `toContain`, `.not`). Each test runs in a new app instance with a new store. A failure shows the line in the test file and the screen as text; an ambiguous query lists its matches. `plinth test --filter <text>` runs some tests; the exit code is 1 when a test fails. Test files never go into a package. `plinth new` makes a project with a test file and an `npm test` script. Runs on the desktop runner (wasmtime) for now.
 - `JSX.Element` is a valid type annotation (`function f(): JSX.Element`).
 

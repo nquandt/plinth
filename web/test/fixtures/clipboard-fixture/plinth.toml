@@ -1,0 +1,12 @@
+id = "dev.plinth.test.clipboard-fixture"
+name = "Clipboard Fixture"
+version = "0.1.0"
+publisher = "plinth"
+
+[[capabilities]]
+name = "clipboard.write"
+rationale = "Test fixture: writes text to the clipboard (web/test/run-clipboard-dialog.mjs)."
+
+[[capabilities]]
+name = "clipboard.read"
+rationale = "Test fixture: reads text back from the clipboard (web/test/run-clipboard-dialog.mjs)."
