@@ -972,6 +972,19 @@ function hostImports(
     v.setUint32(retptr + 8, ptr, true);
     v.setUint32(retptr + 12, len, true);
   }
+  // A plain `option<string>` (not wrapped in a `result`, `plinth:app-info`):
+  // option-tag@0 (0=none,1=some), string ptr@4/len@8 if some.
+  function writeOptionString(retptr, value) {
+    const v = mem();
+    if (value === null || value === undefined) {
+      v.setUint8(retptr, 0);
+      return;
+    }
+    const { ptr, len } = writeString(value);
+    v.setUint8(retptr, 1);
+    v.setUint32(retptr + 4, ptr, true);
+    v.setUint32(retptr + 8, len, true);
+  }
   // Ok(string): tag@0=0, string ptr@4/len@8 (same layout as option<string>'s
   // "some" case minus the option tag: a plain string's natural alignment is
   // already 4, so there is no extra tag byte to skip).
@@ -1171,6 +1184,18 @@ function hostImports(
       },
       compare(aPtr, aLen, bPtr, bLen) {
         return compareIntl(getLocale(), readString(aPtr, aLen), readString(bPtr, bLen));
+      },
+    },
+    // `plinth:app-info` (core 1.13, PRODUCTION.md D4, onUpgrade): step C
+    // wires these up to the web host's own stored data version. For now,
+    // `data-version` always answers `none` and `mark-data-version` is a
+    // no-op, so the web core still instantiates.
+    "plinth:app/app-info@1.0.0": {
+      "data-version"(retptr) {
+        writeOptionString(retptr, null);
+      },
+      "mark-data-version"() {
+        // step C
       },
     },
     "plinth:app/store@1.0.0": {

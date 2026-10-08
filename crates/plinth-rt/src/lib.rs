@@ -789,6 +789,10 @@ abi! {
     fn __plinth_rt_regex_splice(input: i32, groups: i32, indices: i32, reps: i32) -> i32 {
         regexp::splice(ptr(input), ptr(groups), ptr(indices), ptr(reps)) as i32
     }
+
+    // -- plinth:app-info (core 1.13, PRODUCTION.md D4, onUpgrade) ------------
+    fn __plinth_rt_app_data_version() -> i32 { host::app_data_version() }
+    fn __plinth_rt_app_mark_data_version() { host::app_mark_data_version() }
 }
 
 // Hot reload (SPEC.md §13): a dev-only ABI function, not declared with the

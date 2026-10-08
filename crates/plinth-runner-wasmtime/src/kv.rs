@@ -52,6 +52,13 @@ impl Kv {
         self.data.keys().cloned().collect()
     }
 
+    /// The app's data folder (`<data-dir>/apps/<id>/`), the folder that
+    /// holds `kv.json` and (`plinth:app-info`, core 1.13) `data-version`.
+    /// `None` for `Kv::in_memory`.
+    pub fn folder(&self) -> Option<&Path> {
+        self.path.as_deref().and_then(Path::parent)
+    }
+
     fn flush(&self) -> Result<()> {
         let Some(path) = &self.path else { return Ok(()) };
         if let Some(parent) = path.parent() {

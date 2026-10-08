@@ -335,6 +335,21 @@ interface locale {
   compare: func(a: string, b: string) -> s32;
 }
 
+/// The app's stored upgrade state (core 1.13, PRODUCTION.md D4; capability:
+/// none). `onUpgrade(fromVersion)`: at start, when the stored data version
+/// is lower than the manifest `version`, the compiler calls the app's
+/// handler with the stored version and, when it ends with no error, calls
+/// `mark-data-version` so the core stores the current version. A host with
+/// no stored version for this app (first install) has no stored version to
+/// give; the compiler then calls no handler and just marks.
+interface app-info {
+  /// The data version last stored for this app, or `none` if the host has
+  /// none (first install, or a host that was never told to mark one).
+  data-version: func() -> option<string>;
+  /// Stores the app's current manifest version as the data version.
+  mark-data-version: func();
+}
+
 world app {
   import ui;
   import dev;
@@ -348,6 +363,7 @@ world app {
   import files;
   import sql;
   import locale;
+  import app-info;
 
   /// Builds the initial tree.
   export init: func(args: list<u8>);

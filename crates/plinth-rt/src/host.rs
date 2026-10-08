@@ -864,3 +864,23 @@ pub fn hub_update(callable: Callable, id: i32) {
         register_request(request, callable);
     }
 }
+
+/// `app-info.data-version()` (core 1.13, PRODUCTION.md D4): the data
+/// version the host last stored for this app, as a heap string, or `0`
+/// (null) when the host has none.
+pub fn app_data_version() -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    return match host::app_info::data_version() {
+        Some(v) => strings::from_str(&v) as i32,
+        None => 0,
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    0
+}
+
+/// `app-info.mark-data-version()` (core 1.13, PRODUCTION.md D4): tells the
+/// host to store the app's current manifest version as the data version.
+pub fn app_mark_data_version() {
+    #[cfg(target_arch = "wasm32")]
+    host::app_info::mark_data_version();
+}

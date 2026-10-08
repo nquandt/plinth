@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use wasmtime::component::{Component, HasSelf, Linker, types::ComponentItem};
 use wasmtime::{Config, Engine, Store};
 
+pub mod app_info;
 pub mod files;
 pub mod hub;
 pub mod kv;
@@ -261,6 +262,20 @@ struct HostState {
     /// and the timers read it instead of the real time. `(now, the epoch
     /// time of now in ms)`.
     test_clock: Option<(Instant, u64)>,
+    /// The app's manifest version (`plinth:app-info`, core 1.13,
+    /// `PRODUCTION.md` D4); `None` until the host sets one with
+    /// `Guest::set_app_version`. Without it, `mark-data-version` and
+    /// `Guest::note_start_without_hook` do nothing.
+    app_version: Option<String>,
+    /// The stored data version (`plinth:app-info`): the last app version
+    /// whose `onUpgrade` step finished (or, with no hook, the last version
+    /// that started). Loaded from `kv.folder()`'s `data-version` file at
+    /// the first read; kept here only when `kv` has no folder (tests,
+    /// `plinth test`).
+    data_version: Option<String>,
+    /// True once `data_version` was loaded from disk (or confirmed there
+    /// is no file), so a later read does not re-read it.
+    data_version_loaded: bool,
 }
 
 impl HostState {
@@ -273,6 +288,34 @@ impl HostState {
     /// read (`docs/I18N.md` §3.1).
     fn current_locale(&mut self) -> &str {
         self.locale.get_or_insert_with(locale::os_locale)
+    }
+
+    /// The path of the `data-version` file, next to `kv.json`
+    /// (`crate::kv::Kv::open`); `None` when `kv` has no folder.
+    fn data_version_path(&self) -> Option<std::path::PathBuf> {
+        self.kv.folder().map(|f| f.join("data-version"))
+    }
+
+    /// The stored data version (`plinth:app-info`), loading it from disk
+    /// on the first call.
+    fn current_data_version(&mut self) -> Option<String> {
+        if !self.data_version_loaded {
+            self.data_version_loaded = true;
+            if let Some(path) = self.data_version_path() {
+                self.data_version = app_info::read(&path);
+            }
+        }
+        self.data_version.clone()
+    }
+
+    /// Stores `version` as the data version: in memory, and in the
+    /// `data-version` file when `kv` has a folder.
+    fn store_data_version(&mut self, version: &str) {
+        self.data_version = Some(version.to_owned());
+        self.data_version_loaded = true;
+        if let Some(path) = self.data_version_path() {
+            let _ = app_info::write(&path, version);
+        }
     }
 }
 
@@ -708,6 +751,20 @@ impl bindings::plinth::app::locale::Host for HostState {
     }
 }
 
+// `plinth:app-info` (core 1.13, `PRODUCTION.md` D4): no capability, as for
+// `plinth:locale`.
+impl bindings::plinth::app::app_info::Host for HostState {
+    fn data_version(&mut self) -> Option<String> {
+        self.current_data_version()
+    }
+
+    fn mark_data_version(&mut self) {
+        if let Some(version) = self.app_version.clone() {
+            self.store_data_version(&version);
+        }
+    }
+}
+
 impl bindings::plinth::app::sql::Host for HostState {
     fn run(&mut self, kind: u8, statement: String, params: String) -> u32 {
         let id = self.requests.open();
@@ -887,6 +944,9 @@ impl Runner {
                     locale: None,
                     locale_fixed: false,
                     test_clock: None,
+                    app_version: None,
+                    data_version: None,
+                    data_version_loaded: false,
                 };
                 let mut store = Store::new(engine, state);
                 store.limiter(|s| &mut s.limits);
@@ -1069,6 +1129,28 @@ impl Guest {
         }
         data.locale = Some(now);
         true
+    }
+
+    /// Sets the app's manifest version (`plinth:app-info`, core 1.13,
+    /// `PRODUCTION.md` D4): `data-version()`/`mark-data-version()` and
+    /// `note_start_without_hook` use it. Call it before `init`. Without
+    /// it, `mark-data-version` and `note_start_without_hook` do nothing.
+    pub fn set_app_version(&mut self, version: &str) {
+        self.data_mut().app_version = Some(version.to_owned());
+    }
+
+    /// Called after `init` when the app registered no `onUpgrade` hook
+    /// (step B decides exactly when the host calls this): stores the
+    /// current app version as the data version, unless the version
+    /// already stored is higher (a downgrade keeps the higher one). Does
+    /// nothing when no app version was set (`set_app_version`).
+    pub fn note_start_without_hook(&mut self) {
+        let data = self.data_mut();
+        let Some(version) = data.app_version.clone() else { return };
+        let stored = data.current_data_version();
+        if app_info::should_store(stored.as_deref(), &version) {
+            data.store_data_version(&version);
+        }
     }
 
     /// Gives the guest its private space for `plinth:files` (core 1.11,
