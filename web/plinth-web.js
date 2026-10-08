@@ -379,7 +379,7 @@ export function parseManifest(manifestText) {
  * (`alert` → null, `confirm` → boolean, `prompt` → string or null), else
  * (Node) a declined answer.
  */
-function defaultAskDialog(kind, message) {
+export function defaultAskDialog(kind, message) {
   const g = globalThis;
   if (kind === "alert") {
     if (typeof g.alert === "function") g.alert(message);
@@ -409,6 +409,7 @@ function hostImports(
     hub = null,
     netFetch = null,
     files = null,
+    onCommitBytes = null,
   } = {},
 ) {
   // A capability is usable when the manifest declares it and the user did
@@ -629,7 +630,10 @@ function hostImports(
     "plinth:app/ui@1.0.0": {
       commit(ptr, len) {
         const copy = bytes().slice(ptr, ptr + len);
-        onCommit(decodeOps(copy));
+        // `onCommitBytes` (the Worker, `app-worker.js`): the raw op bytes,
+        // decoded by the document.
+        if (onCommitBytes) onCommitBytes(copy);
+        else onCommit(decodeOps(copy));
       },
     },
     "plinth:app/dev@1.0.0": {

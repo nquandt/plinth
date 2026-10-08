@@ -4,17 +4,21 @@
 // a different app. The hub page sends the package, the core, the kv snapshot
 // of this app and the refused capabilities in one `start` message; the frame
 // sends kv writes, clipboard and dialog requests back (`hub-storage.js`).
+// The core and the app run in a dedicated Worker (`app-worker.js`); this
+// document keeps only the DOM renderer and relays the host calls of the
+// Worker that need the page.
 
-import { PlinthApp, readPlnt, parseManifest } from "./plinth-web.js";
+import { readPlnt, parseManifest } from "./plinth-web.js";
 import { Tree, DomRenderer } from "./dom-renderer.js";
 import { CHANNEL, frameKvStore } from "./hub-storage.js";
+import { WorkerApp, startAppWorker } from "./app-worker.js";
 
 const container = document.getElementById("app");
 const embedded = window.parent !== window;
 let parentOrigin = null;
 let started = false;
 let nextId = 1;
-let hub = null; // the `plinth:hub` copy of the Hub app (`FrameHub`), else null
+let app = null; // the `WorkerApp`: the app runs in its own Worker (app-worker.js)
 const pending = new Map(); // request id -> resolve
 
 function send(msg) {
@@ -43,19 +47,18 @@ async function start(msg) {
   const kvStore = frameKvStore(msg.kv, msg.quota, (m) => send(m));
   // For tests: which app this frame runs.
   document.body.dataset.appId = parseManifest(manifestText).id;
-  if (msg.hub) {
-    // Only the Hub app gets a snapshot. A web export (plinth.js) never
-    // does, so the bundle never loads this module.
-    const { FrameHub } = await import("./hub-host.js");
-    hub = new FrameHub(msg.hub, { send, ask });
-  }
-  const app = new PlinthApp();
+  // The core and the app run in a dedicated Worker (`app-worker.js`). In the
+  // bundle (plinth.js), `PLINTH_WORKER_SCRIPT` is the bundle itself as a
+  // classic script; else the Worker imports app-worker.js next to this page.
+  const bundleScript = typeof PLINTH_WORKER_SCRIPT === "string" ? PLINTH_WORKER_SCRIPT : null;
+  app = new WorkerApp(startAppWorker(new URL("app-worker.js", document.baseURI).href, bundleScript));
   const tree = new Tree();
   app.onCommit = (ops) => tree.apply(ops);
   await app.load(new Uint8Array(msg.core), appWasm, {
     log: (s) => console.log("[app]", s),
     manifestText,
     kvStore,
+    kvQuota: msg.quota,
     refused: new Set(Array.isArray(msg.refused) ? msg.refused : []),
     askDialog: (kind, message) => ask("dialog", { kind, message: String(message) }),
     clipboard: {
@@ -68,10 +71,14 @@ async function start(msg) {
     // plinth:files: the page keeps the files (its IndexedDB, one namespace
     // for this app) and checks the capability and the path again.
     files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
-    hub,
+    // Only the Hub app gets a `plinth:hub` snapshot; `FrameHub` runs on it
+    // in the Worker, and its messages go to the page through this frame.
+    hubSnapshot: msg.hub ?? null,
+    send,
+    ask,
   });
   new DomRenderer(tree, container, app, assets);
-  app.init([]);
+  await app.init([]);
   // For tests (web/test/run-a11y.mjs): how many kv entries the start message had.
   document.body.dataset.kvEntries = String(Object.keys(msg.kv ?? {}).length);
   // The content height, so that a parent page can size the iframe to it.
@@ -107,12 +114,8 @@ window.addEventListener("message", (event) => {
     const resolve = pending.get(msg.id);
     pending.delete(msg.id);
     resolve(msg.value ?? null);
-  } else if (msg.type === "hub-state" && hub && (parentOrigin === "*" || event.origin === parentOrigin)) {
-    try {
-      hub.applySnapshot({ state: msg.state });
-    } catch (err) {
-      console.error(err);
-    }
+  } else if (msg.type === "hub-state" && app && (parentOrigin === "*" || event.origin === parentOrigin)) {
+    app.applyHubState(msg.state);
   }
 });
 

@@ -1370,6 +1370,7 @@ function hostImports(
     hub = null,
     netFetch = null,
     files = null,
+    onCommitBytes = null,
   } = {},
 ) {
   // A capability is usable when the manifest declares it and the user did
@@ -1590,7 +1591,10 @@ function hostImports(
     "plinth:app/ui@1.0.0": {
       commit(ptr, len) {
         const copy = bytes().slice(ptr, ptr + len);
-        onCommit(decodeOps(copy));
+        // `onCommitBytes` (the Worker, `app-worker.js`): the raw op bytes,
+        // decoded by the document.
+        if (onCommitBytes) onCommitBytes(copy);
+        else onCommit(decodeOps(copy));
       },
     },
     "plinth:app/dev@1.0.0": {
@@ -2050,7 +2054,7 @@ function stopReason(err, lastTrap) {
   }
   return msg;
 }
-  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, capCoreMemory, readPlnt, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, loadCore, linkApp, PlinthApp, stopReason };
+  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, capCoreMemory, readPlnt, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, defaultAskDialog, loadCore, linkApp, PlinthApp, stopReason };
   })();
 
   // ---- dom-renderer.js
@@ -4375,6 +4379,387 @@ function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA, hub = n
   return { KV_QUOTA, MAX_KEY, CHANNEL, entrySize, memoryStorage, HubStore, frameKvStore, checkFrameMessage, applyKvMessage, startMessage };
   })();
 
+  // ---- app-worker.js
+  const __app_worker = (() => {
+// Each app runs in its own dedicated Worker (PRODUCTION R3, GAPS R1). The
+// document keeps the DOM renderer and a `WorkerApp`, a proxy with the same
+// surface as `PlinthApp` (`load`, `init`, `onEvent`, `onCommit`, `onStop`,
+// `onError`, `stopped`). The Worker runs `PlinthApp` (the core and the app
+// module) and talks to the proxy only through `postMessage`.
+//
+// Why: a Worker is the only place where the page can stop a computation
+// that does not end (`Worker.terminate()`). Step 1 (this file) moves the
+// app into the Worker with no change in behavior. Step 2 adds the time
+// limit (a watchdog in the proxy).
+//
+// The host imports that need the document cross the boundary as messages
+// (GAPS "R1/R2 design"):
+// - `ui.commit`: the op bytes go to the document (the buffer is
+//   transferred, not copied); the proxy decodes them and calls `onCommit`.
+// - `dev.log`, `error.report`: messages to the document.
+// - `time.*` timers: in the Worker (`setTimeout`/`setInterval` exist there).
+// - `time.set-frame-timer`: a Worker has no `requestAnimationFrame`, so the
+//   Worker asks the document for each frame (`frame-request`), and the
+//   document sends the frame time back (`frame`).
+// - `store.kv`: the Worker answers from a snapshot that the document sends
+//   at the start; each write goes to the document (the pattern of
+//   `frameKvStore` in `hub-storage.js`).
+// - `clipboard`: `write-text` goes to the document; `read-text` answers from
+//   the cache of the Worker and asks the document for a new value.
+// - `dialog`, `net.fetch`, `files.*`: a request id at once, the answer from
+//   the document later (`ask`/`answer`), as before.
+// - `hub.*` (the Hub app only): `FrameHub` runs in the Worker on its
+//   snapshot; its `hub-save`, `hub-launch` and `hub-call` messages go out
+//   through the document.
+//
+// No DOM code: `test/run-worker.mjs` runs both sides in Node over a
+// `MessageChannel`.
+
+const { PlinthApp, httpFetch, defaultAskDialog } = __plinth_web;
+const { decodeOps } = __protocol;
+const { frameKvStore } = __hub_storage;
+const { FileSpace, memoryFileBackend } = __files;
+
+/**
+ * Starts the Worker of one app from a `blob:` URL, so that no second file
+ * on disk is necessary and a sandboxed frame (an opaque origin) can start
+ * it. The Worker is always a classic script: Edge refuses a module Worker
+ * from a `blob:` URL in an opaque origin. `bundleScript`: the classic
+ * script of the bundle `plinth.js` (it calls `runWorker` itself); else a
+ * small script imports this file from `moduleUrl` (`import()` works in a
+ * classic Worker) and keeps the messages that come before the import ends.
+ */
+function startAppWorker(moduleUrl, bundleScript = null) {
+  const source =
+    bundleScript ??
+    `"use strict";
+  const early = [];
+  self.onmessage = (event) => early.push(event);
+  import(${JSON.stringify(moduleUrl)}).then(
+    (m) => {
+      m.runWorker(self);
+      for (const event of early) self.onmessage(event);
+    },
+    (err) => postMessage({ t: "load-failed", message: "the app worker did not start: " + (err && err.message ? err.message : err), stack: String(err && err.stack ? err.stack : err) }),
+  );
+`;
+  const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+  const worker = new Worker(url);
+  const revoke = () => {
+    URL.revokeObjectURL(url);
+    worker.removeEventListener("message", revoke);
+    worker.removeEventListener("error", revoke);
+  };
+  worker.addEventListener("message", revoke);
+  worker.addEventListener("error", revoke);
+  return worker;
+}
+
+/** A kv store on a snapshot that sends each write (no quota: the stand-alone page). */
+function cachedKvStore(snapshot, send) {
+  const map = new Map(Object.entries(snapshot ?? {}));
+  return {
+    get: (key) => (map.has(key) ? map.get(key) : null),
+    set(key, value) {
+      map.set(key, value);
+      send({ type: "kv-set", key, value });
+      return true;
+    },
+    delete(key) {
+      if (!map.delete(key)) return;
+      send({ type: "kv-delete", key });
+    },
+    keys: () => [...map.keys()],
+  };
+}
+
+/**
+ * The Worker side. `scope` is the global scope of the Worker (or one end
+ * of a `MessageChannel` in a test): anything with `postMessage` and
+ * `onmessage`.
+ */
+function runWorker(scope) {
+  let app = null;
+  let hub = null;
+  let frameCallback = null;
+  let nextAsk = 1;
+  const pending = new Map(); // ask id -> { resolve, reject }
+  const post = (msg, transfer = []) => scope.postMessage(msg, transfer);
+  const send = (msg) => post({ t: "send", msg });
+  const ask = (type, fields) =>
+    new Promise((resolve, reject) => {
+      const id = nextAsk++;
+      pending.set(id, { resolve, reject });
+      post({ t: "ask", id, type, fields });
+    });
+
+  async function load(m) {
+    if (m.hub) {
+      // Only the Hub app gets a snapshot. A web export (plinth.js) never
+      // does, so the bundle never loads this module.
+      const { FrameHub } = await import("./hub-host.js");
+      hub = new FrameHub(m.hub, { send, ask });
+    }
+    app = new PlinthApp();
+    app.onError = (text) => post({ t: "error", text });
+    app.onStop = (reason, err) => post({ t: "stop", reason, message: String(err?.message ?? err) });
+    await app.load(m.core, m.app, {
+      manifestText: m.manifestText,
+      kvStore: typeof m.kvQuota === "number" ? frameKvStore(m.kv, m.kvQuota, send) : cachedKvStore(m.kv, send),
+      refused: new Set(m.refused ?? []),
+      memoryLimitPages: m.memoryLimitPages,
+      log: (text) => post({ t: "log", text }),
+      reportError: () => {}, // the document reports it (`error`)
+      askDialog: (kind, message) => ask("dialog", { kind, message: String(message) }),
+      clipboard: {
+        writeText: (text) => send({ type: "clipboard-write", text }),
+        readText: () => ask("clipboard-read", {}),
+      },
+      netFetch: (url, method, headers, body) => ask("net-fetch", { url, method, headers, body }),
+      files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
+      hub,
+      requestFrame: (callback) => {
+        frameCallback = callback;
+        post({ t: "frame-request" });
+        return 1;
+      },
+      cancelFrame: () => {
+        frameCallback = null;
+        post({ t: "frame-cancel" });
+      },
+      onCommitBytes: (bytes) => post({ t: "commit", bytes }, [bytes.buffer]),
+    });
+  }
+
+  scope.onmessage = (event) => {
+    const m = event.data;
+    switch (m?.t) {
+      case "load":
+        load(m).then(
+          () => post({ t: "loaded" }),
+          (err) => post({ t: "load-failed", message: String(err?.message ?? err), stack: String(err?.stack ?? err) }),
+        );
+        break;
+      case "init":
+        app?.init(m.records);
+        post({ t: "done" });
+        break;
+      case "event":
+        app?.onEvent(m.event);
+        break;
+      case "frame": {
+        const callback = frameCallback;
+        frameCallback = null;
+        callback?.(m.time);
+        break;
+      }
+      case "answer": {
+        const p = pending.get(m.id);
+        if (!p) break;
+        pending.delete(m.id);
+        if (m.error !== undefined) p.reject(new Error(m.error));
+        else p.resolve(m.value ?? null);
+        break;
+      }
+      case "hub-state":
+        try {
+          hub?.applySnapshot({ state: m.state });
+        } catch (err) {
+          console.error(err);
+        }
+        break;
+    }
+  };
+}
+
+/**
+ * The document side: a proxy with the surface of `PlinthApp`. `worker` is
+ * a `Worker` (`startAppWorker`) or anything with `postMessage`,
+ * `onmessage` and optionally `terminate`.
+ */
+class WorkerApp {
+  constructor(worker) {
+    this.worker = worker;
+    this.onCommit = () => {};
+    /** The plain reason after a trap, else null (as `PlinthApp.stopped`). */
+    this.stopped = null;
+    /** `(reason, error)` after the app stopped. */
+    this.onStop = null;
+    /** `(message)` for each uncaught app error; the app keeps running. */
+    this.onError = null;
+    this.opts = {};
+    this._loading = null; // { resolve, reject } while `load` runs
+    this._inits = []; // resolves of the `init` calls, in order
+    this._frame = null;
+    worker.onmessage = (event) => this._receive(event.data);
+    if (typeof worker.addEventListener === "function") {
+      worker.addEventListener("error", (event) => {
+        const message = event?.message || "the app worker did not start";
+        if (this._loading) {
+          event?.preventDefault?.();
+          this._loading.reject(new Error(message));
+          this._loading = null;
+        } else console.error(`[plinth] app worker: ${message}`);
+      });
+    }
+  }
+
+  /**
+   * Starts the core and the app in the Worker. `opts` (all optional):
+   * `manifestText`; `kvStore` ({get,set,delete,keys}, the document's store:
+   * the Worker gets a snapshot, and each write comes back to this store);
+   * `kvQuota` (characters; the Worker refuses a write over it, as
+   * `frameKvStore`); `refused`; `log`; `reportError`; `askDialog`;
+   * `clipboard`; `netFetch`; `files` (a `FileSpace`); `memoryLimitPages`;
+   * for the Hub app: `hubSnapshot`, and `send(msg)`/`ask(type, fields)` to
+   * the page for the `hub-*` messages.
+   */
+  load(coreBytes, appBytes, opts = {}) {
+    this.opts = opts;
+    this.files = opts.files ?? new FileSpace(memoryFileBackend(opts.filesMap));
+    this.clip =
+      opts.clipboard ??
+      (typeof navigator !== "undefined" && navigator.clipboard?.writeText
+        ? { writeText: (t) => navigator.clipboard.writeText(t), readText: () => navigator.clipboard.readText() }
+        : null);
+    const kv = {};
+    if (opts.kvStore) for (const k of opts.kvStore.keys()) kv[k] = opts.kvStore.get(k);
+    return new Promise((resolve, reject) => {
+      this._loading = { resolve: () => resolve(this), reject };
+      this._post({
+        t: "load",
+        core: coreBytes,
+        app: appBytes,
+        manifestText: opts.manifestText ?? "",
+        kv,
+        kvQuota: opts.kvQuota ?? null,
+        refused: [...(opts.refused ?? [])],
+        hub: opts.hubSnapshot ?? null,
+        memoryLimitPages: opts.memoryLimitPages,
+      });
+    });
+  }
+
+  /** Calls `init` in the Worker; the promise resolves after the call (and its commits). */
+  init(initArgRecords = []) {
+    return new Promise((resolve) => {
+      this._inits.push(resolve);
+      this._post({ t: "init", records: initArgRecords });
+    });
+  }
+
+  onEvent(event) {
+    if (this.stopped !== null) return;
+    this._post({ t: "event", event });
+  }
+
+  /** The Hub app only: the page changed the `plinth:hub` state. */
+  applyHubState(state) {
+    this._post({ t: "hub-state", state });
+  }
+
+  /** Ends the Worker. */
+  terminate() {
+    this.worker.terminate?.();
+  }
+
+  _post(msg) {
+    this.worker.postMessage(msg);
+  }
+
+  _receive(m) {
+    switch (m?.t) {
+      case "commit":
+        this.onCommit(decodeOps(m.bytes));
+        break;
+      case "log":
+        (this.opts.log ?? ((s) => console.log(s)))(m.text);
+        break;
+      case "error":
+        (this.opts.reportError ?? ((s) => console.error(s)))(m.text);
+        this.onError?.(m.text);
+        break;
+      case "stop":
+        this.stopped = m.reason;
+        if (this.onStop) this.onStop(m.reason, new Error(m.message));
+        break;
+      case "done":
+        this._inits.shift()?.();
+        break;
+      case "loaded":
+        this._loading?.resolve();
+        this._loading = null;
+        break;
+      case "load-failed": {
+        const err = new Error(m.message);
+        err.stack = m.stack;
+        this._loading?.reject(err);
+        this._loading = null;
+        break;
+      }
+      case "frame-request":
+        if (this._frame === null) {
+          const raf = globalThis.requestAnimationFrame?.bind(globalThis) ?? ((cb) => setTimeout(() => cb(performance.now()), 16));
+          this._frame = raf((time) => {
+            this._frame = null;
+            this._post({ t: "frame", time });
+          });
+        }
+        break;
+      case "frame-cancel":
+        if (this._frame !== null) {
+          (globalThis.cancelAnimationFrame?.bind(globalThis) ?? clearTimeout)(this._frame);
+          this._frame = null;
+        }
+        break;
+      case "send":
+        this._send(m.msg);
+        break;
+      case "ask":
+        Promise.resolve()
+          .then(() => this._ask(m.type, m.fields ?? {}))
+          .then(
+            (value) => this._post({ t: "answer", id: m.id, value: value ?? null }),
+            (err) => this._post({ t: "answer", id: m.id, error: String(err?.message ?? err) }),
+          );
+        break;
+    }
+  }
+
+  /** A fire-and-forget message from the Worker. */
+  _send(msg) {
+    const o = this.opts;
+    switch (msg?.type) {
+      case "kv-set":
+        o.kvStore?.set(msg.key, msg.value);
+        break;
+      case "kv-delete":
+        o.kvStore?.delete(msg.key);
+        break;
+      case "clipboard-write":
+        if (this.clip) Promise.resolve().then(() => this.clip.writeText(msg.text)).catch(() => {});
+        break;
+      case "hub-save":
+      case "hub-launch":
+        o.send?.(msg);
+        break;
+    }
+  }
+
+  /** A request from the Worker; the result is its answer. */
+  _ask(type, f) {
+    const o = this.opts;
+    if (type === "dialog") return (o.askDialog ?? defaultAskDialog)(f.kind, f.message);
+    if (type === "clipboard-read") return this.clip ? this.clip.readText() : null;
+    if (type === "net-fetch") return o.netFetch ? o.netFetch(f.url, f.method, f.headers, f.body) : httpFetch(f.url, f.method, f.headers, f.body);
+    if (type.startsWith("files-")) return this.files.call(type.slice("files-".length), f.path, f.text ?? null);
+    if (type === "hub-call" && o.ask) return o.ask(type, f);
+    throw new Error(`unknown request ${type}`);
+  }
+}
+  return { startAppWorker, runWorker, WorkerApp };
+  })();
+
   // ---- frame-host.js
   const __frame_host = (() => {
 // The parent side of a sandboxed Plinth app (docs/web-hub.md §4,
@@ -4797,7 +5182,15 @@ function defineElement({ frameDocument, baseUrl, styleCss }) {
   return { base64Bytes, loadBytes, defaultCoreUrl, defineElement };
   })();
 
+  if (mode === "worker") {
+    // The Worker of one app (app-worker.js), started by the frame below.
+    __app_worker.runWorker(self);
+    return null;
+  }
+
   if (mode === "frame") {
+    // The frame starts the Worker of the app from this same code.
+    const PLINTH_WORKER_SCRIPT = "(" + plinthBundle.toString() + ')("worker", "");';
     // ---- app-frame.js
     (() => {
 // The app frame of the web App Hub (docs/web-hub.md §4): `app-frame.html`
@@ -4806,17 +5199,21 @@ function defineElement({ frameDocument, baseUrl, styleCss }) {
 // a different app. The hub page sends the package, the core, the kv snapshot
 // of this app and the refused capabilities in one `start` message; the frame
 // sends kv writes, clipboard and dialog requests back (`hub-storage.js`).
+// The core and the app run in a dedicated Worker (`app-worker.js`); this
+// document keeps only the DOM renderer and relays the host calls of the
+// Worker that need the page.
 
-const { PlinthApp, readPlnt, parseManifest } = __plinth_web;
+const { readPlnt, parseManifest } = __plinth_web;
 const { Tree, DomRenderer } = __dom_renderer;
 const { CHANNEL, frameKvStore } = __hub_storage;
+const { WorkerApp, startAppWorker } = __app_worker;
 
 const container = document.getElementById("app");
 const embedded = window.parent !== window;
 let parentOrigin = null;
 let started = false;
 let nextId = 1;
-let hub = null; // the `plinth:hub` copy of the Hub app (`FrameHub`), else null
+let app = null; // the `WorkerApp`: the app runs in its own Worker (app-worker.js)
 const pending = new Map(); // request id -> resolve
 
 function send(msg) {
@@ -4845,19 +5242,18 @@ async function start(msg) {
   const kvStore = frameKvStore(msg.kv, msg.quota, (m) => send(m));
   // For tests: which app this frame runs.
   document.body.dataset.appId = parseManifest(manifestText).id;
-  if (msg.hub) {
-    // Only the Hub app gets a snapshot. A web export (plinth.js) never
-    // does, so the bundle never loads this module.
-    const { FrameHub } = await import("./hub-host.js");
-    hub = new FrameHub(msg.hub, { send, ask });
-  }
-  const app = new PlinthApp();
+  // The core and the app run in a dedicated Worker (`app-worker.js`). In the
+  // bundle (plinth.js), `PLINTH_WORKER_SCRIPT` is the bundle itself as a
+  // classic script; else the Worker imports app-worker.js next to this page.
+  const bundleScript = typeof PLINTH_WORKER_SCRIPT === "string" ? PLINTH_WORKER_SCRIPT : null;
+  app = new WorkerApp(startAppWorker(new URL("app-worker.js", document.baseURI).href, bundleScript));
   const tree = new Tree();
   app.onCommit = (ops) => tree.apply(ops);
   await app.load(new Uint8Array(msg.core), appWasm, {
     log: (s) => console.log("[app]", s),
     manifestText,
     kvStore,
+    kvQuota: msg.quota,
     refused: new Set(Array.isArray(msg.refused) ? msg.refused : []),
     askDialog: (kind, message) => ask("dialog", { kind, message: String(message) }),
     clipboard: {
@@ -4870,10 +5266,14 @@ async function start(msg) {
     // plinth:files: the page keeps the files (its IndexedDB, one namespace
     // for this app) and checks the capability and the path again.
     files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
-    hub,
+    // Only the Hub app gets a `plinth:hub` snapshot; `FrameHub` runs on it
+    // in the Worker, and its messages go to the page through this frame.
+    hubSnapshot: msg.hub ?? null,
+    send,
+    ask,
   });
   new DomRenderer(tree, container, app, assets);
-  app.init([]);
+  await app.init([]);
   // For tests (web/test/run-a11y.mjs): how many kv entries the start message had.
   document.body.dataset.kvEntries = String(Object.keys(msg.kv ?? {}).length);
   // The content height, so that a parent page can size the iframe to it.
@@ -4909,12 +5309,8 @@ window.addEventListener("message", (event) => {
     const resolve = pending.get(msg.id);
     pending.delete(msg.id);
     resolve(msg.value ?? null);
-  } else if (msg.type === "hub-state" && hub && (parentOrigin === "*" || event.origin === parentOrigin)) {
-    try {
-      hub.applySnapshot({ state: msg.state });
-    } catch (err) {
-      console.error(err);
-    }
+  } else if (msg.type === "hub-state" && app && (parentOrigin === "*" || event.origin === parentOrigin)) {
+    app.applyHubState(msg.state);
   }
 });
 
@@ -4937,8 +5333,8 @@ else showError("This page runs one app for the web App Hub. Open the hub (hub.ht
   }
 
   if (mode === "page") __plinth_app.defineElement({ frameDocument, baseUrl, styleCss: STYLE_CSS });
-  return { PlinthApp: __plinth_web.PlinthApp, readPlnt: __plinth_web.readPlnt, parseManifest: __plinth_web.parseManifest, loadCore: __plinth_web.loadCore, linkApp: __plinth_web.linkApp, Tree: __dom_renderer.Tree, DomRenderer: __dom_renderer.DomRenderer, AppFrame: __frame_host.AppFrame, hostDialog: __frame_host.hostDialog, HubStore: __hub_storage.HubStore, base64Bytes: __plinth_app.base64Bytes, defaultCoreUrl: __plinth_app.defaultCoreUrl };
+  return { PlinthApp: __plinth_web.PlinthApp, WorkerApp: __app_worker.WorkerApp, readPlnt: __plinth_web.readPlnt, parseManifest: __plinth_web.parseManifest, loadCore: __plinth_web.loadCore, linkApp: __plinth_web.linkApp, Tree: __dom_renderer.Tree, DomRenderer: __dom_renderer.DomRenderer, AppFrame: __frame_host.AppFrame, hostDialog: __frame_host.hostDialog, HubStore: __hub_storage.HubStore, base64Bytes: __plinth_app.base64Bytes, defaultCoreUrl: __plinth_app.defaultCoreUrl };
 }
 
 const api = plinthBundle(typeof document === "undefined" ? "module" : "page", import.meta.url);
-export const { PlinthApp, readPlnt, parseManifest, loadCore, linkApp, Tree, DomRenderer, AppFrame, hostDialog, HubStore, base64Bytes, defaultCoreUrl } = api;
+export const { PlinthApp, WorkerApp, readPlnt, parseManifest, loadCore, linkApp, Tree, DomRenderer, AppFrame, hostDialog, HubStore, base64Bytes, defaultCoreUrl } = api;

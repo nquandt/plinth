@@ -599,10 +599,12 @@ async function checkBigList(cdpPort, base) {
       const { DomRenderer } = await import("/web/dom-renderer.js");
       const renderMs = [];
       const render = DomRenderer.prototype.render;
+      let onRender = null;
       DomRenderer.prototype.render = function () {
         const t = performance.now();
         render.call(this);
         renderMs.push(performance.now() - t);
+        onRender?.();
       };
       const times = [];
       const seen = new Set([row]);
@@ -610,10 +612,14 @@ async function checkBigList(cdpPort, base) {
         const target = rows()[4];
         seen.add(target);
         const t = performance.now();
+        // The app runs in a Worker: the commit comes back after the click.
+        const rendered = new Promise((res) => (onRender = res));
         target.querySelector("input[type=checkbox]").click();
+        await Promise.race([rendered, new Promise((res) => setTimeout(res, 5000))]);
+        onRender = null;
         times.push(performance.now() - t);
       }
-      await new Promise((res) => setTimeout(res, 0));
+      await new Promise((res) => setTimeout(res, 100));
       mo.disconnect();
       DomRenderer.prototype.render = render;
       seen.add(rows()[4]);
@@ -887,7 +893,10 @@ async function checkWebExport(cdpPort) {
         i.value = v; i.dispatchEvent(new Event("input", { bubbles: true })); };
       set("Title", "Exported note"); set("Body", "From the web export test");
     })()`);
-    await frame.eval(`[...document.querySelectorAll("#app button")].find((b) => b.textContent.trim() === "Add note").click()`);
+    // The app runs in a Worker: the commit that enables "Add note" comes after the input events.
+    const addNote = `[...document.querySelectorAll("#app button")].find((b) => b.textContent.trim() === "Add note")`;
+    await frame.waitFor(`${addNote} && !${addNote}.disabled ? true : null`, 5000);
+    await frame.eval(`${addNote}.click()`);
     await frame.waitFor(`document.getElementById("app").innerText.includes("Exported note") ? true : null`, 5000);
     await page.waitFor(`Object.keys(localStorage).some((k) => k.startsWith("plinth-hub:kv:dev.plinth.examples.notes:")) ? true : null`, 5000);
     const height = await page.eval(`document.querySelector("plinth-app > iframe").getBoundingClientRect().height`);
@@ -1183,8 +1192,11 @@ async function checkHub(cdpPort) {
     await waitRunning(ID("files-fixture"));
     const fixture = async (label, want) => {
       await frame.waitFor(`${button(label)} ? true : null`, 10000);
+      // The app runs in a Worker: wait for a new result, not the one of the last button.
+      const done = `(document.getElementById("app").innerText.match(/done:[^\\n]*/) ?? [""])[0]`;
+      const before = await frame.eval(done);
       await frame.eval(`${button(label)}.click()`);
-      await frame.waitFor(`document.getElementById("app").innerText.includes("done:") ? true : null`, 10000);
+      await frame.waitFor(`${done} && ${done} !== ${JSON.stringify(before)} ? true : null`, 10000).catch(() => {});
       const got = (await frame.eval(`document.getElementById("app").innerText`)).match(/done:[^\n]*/)[0];
       if (got !== want) throw new Error(`Files Fixture ${label}: ${got}, not ${want}`);
     };

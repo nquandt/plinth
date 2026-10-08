@@ -13,6 +13,7 @@ pub const FILES: &[(&str, &[u8])] = &[
     ("hub-integrity.js", include_bytes!("../../../web/hub-integrity.js")),
     ("app-frame.html", include_bytes!("../../../web/app-frame.html")),
     ("app-frame.js", include_bytes!("../../../web/app-frame.js")),
+    ("app-worker.js", include_bytes!("../../../web/app-worker.js")),
     ("frame-host.js", include_bytes!("../../../web/frame-host.js")),
     ("index.html", include_bytes!("../../../web/index.html")),
     ("plinth-web.js", include_bytes!("../../../web/plinth-web.js")),

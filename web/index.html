@@ -12,7 +12,8 @@
     </nav>
     <div id="app">Loading&hellip;</div>
     <script type="module">
-      import { PlinthApp, readPlnt } from "./plinth-web.js";
+      import { readPlnt, localStorageKvStore, parseManifest } from "./plinth-web.js";
+      import { WorkerApp, startAppWorker } from "./app-worker.js";
       import { Tree, DomRenderer } from "./dom-renderer.js";
 
       const container = document.getElementById("app");
@@ -43,13 +44,18 @@
         ]);
         const { appWasm, manifestText, assets } = await readPlnt(pltBytes);
 
-        const app = new PlinthApp();
+        // The app runs in its own Worker (app-worker.js).
+        const app = new WorkerApp(startAppWorker(new URL("./app-worker.js", import.meta.url).href));
         const tree = new Tree();
         app.onCommit = (ops) => tree.apply(ops);
-        await app.load(coreBytes, appWasm, { log: (s) => console.log("[app]", s), manifestText, storage: window.localStorage });
+        await app.load(coreBytes, appWasm, {
+          log: (s) => console.log("[app]", s),
+          manifestText,
+          kvStore: localStorageKvStore(window.localStorage, `plinth:${parseManifest(manifestText).id}:`),
+        });
 
         new DomRenderer(tree, container, app, assets);
-        app.init([]);
+        await app.init([]);
       }
 
       main().catch((err) => {

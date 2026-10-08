@@ -11,7 +11,8 @@
     <div id="app">Loading&hellip;</div>
     <pre id="result" style="display: none"></pre>
     <script type="module">
-      import { PlinthApp, readPlnt } from "../plinth-web.js";
+      import { readPlnt, localStorageKvStore, parseManifest } from "../plinth-web.js";
+      import { WorkerApp, startAppWorker } from "../app-worker.js";
       import { Tree, DomRenderer } from "../dom-renderer.js";
 
       const container = document.getElementById("app");
@@ -47,14 +48,19 @@
         const { appWasm, manifestText, assets } = await readPlnt(pltBytes);
 
         stage = "loading wasm";
-        const app = new PlinthApp();
+        // The app runs in its own Worker (app-worker.js).
+        const app = new WorkerApp(startAppWorker(new URL("../app-worker.js", import.meta.url).href));
         const tree = new Tree();
         app.onCommit = (ops) => tree.apply(ops);
-        await app.load(coreBytes, appWasm, { log: () => {}, manifestText, storage: window.localStorage });
+        await app.load(coreBytes, appWasm, {
+          log: () => {},
+          manifestText,
+          kvStore: localStorageKvStore(window.localStorage, `plinth:${parseManifest(manifestText).id}:`),
+        });
 
         stage = "init";
         new DomRenderer(tree, container, app, assets);
-        app.init([]);
+        await app.init([]);
 
         // Let a tick pass so the renderer's queued dialog open/close calls
         // settle before axe inspects the DOM. `requestAnimationFrame` is

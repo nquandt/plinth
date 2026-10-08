@@ -777,17 +777,17 @@ Open:
 
 | # | Area | What | Suggested fix |
 |---|---|---|---|
-| R1 | Web host | No time limit: an endless loop in an app blocks its frame (and the page, if the browser keeps the sandboxed frame in the same process). | Run the core in a dedicated Worker per app with a watchdog that ends the worker; the frame keeps only the DOM. Design below. Not implemented. |
+| R1 | Web host | No time limit: an endless loop in an app blocks its Worker, and the app does not answer. **Step 1 done (2026-10-07):** each app runs in its own dedicated Worker (`web/app-worker.js`); the frame keeps only the DOM and a proxy (`WorkerApp`). An endless loop no longer blocks the page or the frame document. | Step 2: the watchdog in `WorkerApp` that ends the Worker after 2 s in one call. Notes below ("R1 step 2"). |
 | R2 | Web host | **Fixed (2026-10-07).** `loadCore` caps the core's memory at 64 MiB (`capCoreMemory`, `MEMORY_LIMIT_PAGES`); a runaway allocation stops the app with "out of memory" (`web/test/run-stop.mjs`). | — |
 | R3 | Compiler | A sum of more than 1000 terms is `PL1000`; `tsc` accepts it. | Convert left-deep binary chains without recursion (an explicit stack in the parser, checker and codegen). Low: hand-written code does not get near the limit. |
 | R4 | Tests | The mutation test only changes valid programs, at the text level. | Add structure-aware changes (swap two expressions of the same kind, change a type annotation) and a nightly run with a large `PLINTH_FUZZ_ITERS`. |
 
-### R1/R2 design (2026-10-07; R2 implemented, R1 not implemented)
+### R1/R2 design (2026-10-07; R2 implemented, R1 step 1 implemented)
 
 Looked at giving the web host the desktop's two limits (2 s per `init`/`on-event` call,
-64 MiB memory, the same plain stop reasons). This is a bigger change than the rest of
-the web host gets in one pass (it moves where the core runs), so it stays a design note
-instead of a half-finished split. Nothing in this section is code yet.
+64 MiB memory, the same plain stop reasons). R2 is done. R1 step 1 (the Worker split)
+is done; see "R1 step 1, as built" below the table. R1 step 2 (the watchdog) is not
+done.
 
 **R1, the time limit.** The core must run off the document's main thread, because the
 main thread is the only place that can forcibly stop a stuck computation (`Worker.
@@ -840,6 +840,60 @@ target (for example a very old browser, or a page served with a strict Content S
 Policy that blocks blob: workers), the fallback is the current no-Worker code path,
 kept behind a feature check (`typeof Worker === "function"`), with no time limit and no
 memory cap — the same gap this item exists to close, so the fallback must stay rare.
+
+**R1 step 1, as built (2026-10-07).** `web/app-worker.js` holds both sides:
+`runWorker(scope)` (the Worker: it runs `PlinthApp`) and `WorkerApp` (the proxy in the
+document, with the surface of `PlinthApp`: `load`, `init`, `onEvent`, `onCommit`,
+`onStop`, `onError`, `stopped`). `startAppWorker` starts the Worker from a `blob:` URL:
+in the bundle (`plinth.js`, also the single-file export) the source is the bundle itself
+(`plinthBundle.toString()`, called with the mode `"worker"`), so no second file is
+necessary; elsewhere it is a small classic script that loads `app-worker.js` with
+`import()` and keeps the messages that come before the import ends (the web Hub serves
+the web files with CORS, so the sandboxed frame can import them). The Worker is always
+a classic script: headless Edge refuses a module Worker from a `blob:` URL in an opaque
+origin, but `import()` in a classic Worker works there. The browser
+paths (`app-frame.js`, so `<plinth-app>` and the web Hub; `index.html`;
+`test/a11y.html`) use the Worker. The Node tests keep `PlinthApp` in the same thread;
+`test/run-worker.mjs` runs both sides over a `MessageChannel`. There is no fallback with
+no Worker. How each import works now:
+
+- `ui.commit`: the op bytes go to the document as a transferred buffer
+  (`onCommitBytes`); the proxy decodes them.
+- `dev.log`, `error.report`: messages; the proxy calls `log`/`reportError` and `onError`.
+- `time.*` timers: in the Worker. `time.set-frame-timer`: the Worker sends
+  `frame-request`; the document calls `requestAnimationFrame` and sends the time back
+  (`frame`); `frame-cancel` stops it.
+- `store.kv`: a snapshot of the document's store goes to the Worker in `load`; the
+  Worker answers from it, applies the quota (`frameKvStore`, when the caller gives
+  `kvQuota`), and sends each write to the document's store.
+- `clipboard`: `write-text` is a message; `read-text` answers from the cache of the
+  Worker and asks the document for a new value.
+- `dialog`, `net.fetch`, `files.*`: `ask` messages; the proxy answers with the result
+  of the document's implementation (the same defaults as `PlinthApp`).
+- `hub.*`: `FrameHub` runs in the Worker on the snapshot; `hub-save`, `hub-launch` and
+  `hub-call` go out through the frame to the page; the page's `hub-state` comes in
+  through `WorkerApp.applyHubState`.
+- `init` returns a promise that resolves after the call (the Worker sends `done`).
+  Events and commits now cross a thread, so a commit comes after the event handler in
+  the document returns. Two checks in `run-a11y.mjs` clicked again before the commit
+  of the last input arrived; they now wait for it (a person cannot click that fast).
+  The big-list check now times the whole round trip until the render. The renderer
+  keeps the value of a two-way bound field in its
+  tree, so typing does not lose characters. One known edge case: an app that changes
+  the `value` of a field in its `change` handler (for example to upper case) can get a
+  late commit while the user types the next character.
+
+**R1 step 2 (not done).** What it needs:
+
+- The Worker sends `done` after each `on-event` too (today only after `init`).
+- `WorkerApp` starts a 2 s timer before it posts `init` or an event, and clears it at
+  `done`. Events are posted one after the other, so the timer runs for the oldest call
+  that has no `done` yet (a queue of start times).
+- At the time limit: `worker.terminate()`, `stopped` = "the app is not responding (time
+  limit reached)" (the desktop's words), `onStop`, and stop the frame loop.
+- Timer, frame and completion events also count as calls (as on the desktop).
+- A test: a fixture with an endless loop on a button (the stop fixture can get one),
+  in `run-worker.mjs` (a fake Worker with `terminate`) and in `checkStopBanner`.
 
 **R2, the memory cap.** The core's wasm memory is defined inside the core module itself
 (`(memory (export "memory") ...)`, no `maximum`); `plinth-web.js`'s `loadCore` just
