@@ -26,6 +26,17 @@ function Home() {
           status.set("v" + xs[3]);
         }}
       />
+      <Button
+        label="loop"
+        onPress={() => {
+          // Never ends: the host's time limit stops the app.
+          let n = 0;
+          while (status().length > 0) {
+            n = n + 1;
+          }
+          status.set("" + n);
+        }}
+      />
       <Button label="recurse" onPress={() => status.set("" + deep(0))} />
       <Button
         label="allocate"

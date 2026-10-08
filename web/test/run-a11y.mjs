@@ -854,7 +854,24 @@ async function checkStopBanner(cdpPort, base) {
     if (!stopped.includes("This app stopped") || !stopped.includes("array index out of bounds")) throw new Error(`stopped banner: ${stopped}`);
     const inert = await page.eval(`document.querySelector(".pl-screen > :not(.pl-host-banner)").inert`);
     if (!inert) throw new Error("the screen of a stopped app still takes input");
-    return stopped;
+
+    // The time limit (GAPS R1): an endless loop runs in the app's Worker;
+    // the page stays responsive, and after 2 s the watchdog ends the Worker
+    // and shows the desktop's reason.
+    await page.navigate(`${base}/web/index.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(`${base}/target/core.wasm`)}`);
+    await page.waitFor(`${button("loop")} ? true : null`, 30000);
+    const t0 = Date.now();
+    await page.eval(`${button("loop")}.click()`);
+    await sleep(500);
+    const t1 = Date.now();
+    const busy = await page.eval(`(() => { let n = 0; for (let i = 0; i < 1000; i++) n += i; return document.querySelector("#app button") ? n : null; })()`);
+    const evalMs = Date.now() - t1;
+    if (busy !== 499500 || evalMs > 1000) throw new Error(`the page did not answer while the app loops (${evalMs} ms)`);
+    const limited = await page.waitFor(banner, 10000);
+    const ms = Date.now() - t0;
+    if (!limited.includes("This app stopped") || !limited.includes("the app is not responding (time limit reached)")) throw new Error(`time limit banner: ${limited}`);
+    if (ms < 1900) throw new Error(`the time limit stopped the app after ${ms} ms, before 2 s`);
+    return `${stopped}; an endless loop: the page answered in ${evalMs} ms, stopped after ${ms} ms (${limited})`;
   } finally {
     await page.close();
   }

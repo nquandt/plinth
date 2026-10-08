@@ -777,17 +777,17 @@ Open:
 
 | # | Area | What | Suggested fix |
 |---|---|---|---|
-| R1 | Web host | No time limit: an endless loop in an app blocks its Worker, and the app does not answer. **Step 1 done (2026-10-07):** each app runs in its own dedicated Worker (`web/app-worker.js`); the frame keeps only the DOM and a proxy (`WorkerApp`). An endless loop no longer blocks the page or the frame document. | Step 2: the watchdog in `WorkerApp` that ends the Worker after 2 s in one call. Notes below ("R1 step 2"). |
+| R1 | Web host | **Fixed (2026-10-07).** Each app runs in its own dedicated Worker (`web/app-worker.js`, step 1), and the proxy in the document (`WorkerApp`) has a watchdog (step 2): a call that does not end in 2 s (`CALL_TIME_LIMIT_MS`) ends the Worker, and the app stops with "the app is not responding (time limit reached)", as on the desktop. The page stays responsive during the loop (`run-worker.mjs`, `checkStopBanner` in `run-a11y.mjs`). | — |
 | R2 | Web host | **Fixed (2026-10-07).** `loadCore` caps the core's memory at 64 MiB (`capCoreMemory`, `MEMORY_LIMIT_PAGES`); a runaway allocation stops the app with "out of memory" (`web/test/run-stop.mjs`). | — |
 | R3 | Compiler | A sum of more than 1000 terms is `PL1000`; `tsc` accepts it. | Convert left-deep binary chains without recursion (an explicit stack in the parser, checker and codegen). Low: hand-written code does not get near the limit. |
 | R4 | Tests | The mutation test only changes valid programs, at the text level. | Add structure-aware changes (swap two expressions of the same kind, change a type annotation) and a nightly run with a large `PLINTH_FUZZ_ITERS`. |
 
-### R1/R2 design (2026-10-07; R2 implemented, R1 step 1 implemented)
+### R1/R2 design (2026-10-07; R1 and R2 implemented)
 
 Looked at giving the web host the desktop's two limits (2 s per `init`/`on-event` call,
 64 MiB memory, the same plain stop reasons). R2 is done. R1 step 1 (the Worker split)
-is done; see "R1 step 1, as built" below the table. R1 step 2 (the watchdog) is not
-done.
+is done; see "R1 step 1, as built" below the table. R1 step 2 (the watchdog) is done;
+see "R1 step 2, as built".
 
 **R1, the time limit.** The core must run off the document's main thread, because the
 main thread is the only place that can forcibly stop a stuck computation (`Worker.
@@ -883,17 +883,31 @@ no Worker. How each import works now:
   the `value` of a field in its `change` handler (for example to upper case) can get a
   late commit while the user types the next character.
 
-**R1 step 2 (not done).** What it needs:
+**R1 step 2, as built (2026-10-07).**
 
-- The Worker sends `done` after each `on-event` too (today only after `init`).
-- `WorkerApp` starts a 2 s timer before it posts `init` or an event, and clears it at
-  `done`. Events are posted one after the other, so the timer runs for the oldest call
-  that has no `done` yet (a queue of start times).
-- At the time limit: `worker.terminate()`, `stopped` = "the app is not responding (time
-  limit reached)" (the desktop's words), `onStop`, and stop the frame loop.
-- Timer, frame and completion events also count as calls (as on the desktop).
-- A test: a fixture with an endless loop on a button (the stop fixture can get one),
-  in `run-worker.mjs` (a fake Worker with `terminate`) and in `checkStopBanner`.
+- `PlinthApp` calls `onCallStart`/`onCallEnd` around each call into the app (`init`,
+  and each event: UI, timer, frame, completion, lifecycle). In the Worker they post
+  `call` and `done`. So the Worker also tells the document about calls that start in
+  the Worker (timers, answers). A message that the Worker posts before an endless loop
+  still reaches the document. The calls do not overlap, so one timer is enough.
+- `WorkerApp` starts a timer of `CALL_TIME_LIMIT_MS` (2000, in `plinth-web.js` next to
+  `MEMORY_LIMIT_PAGES`; the option `timeLimitMs` changes it for tests) when it reads
+  `call`, and clears it at `done`. The time starts when the document reads `call`, so
+  a busy document makes the limit longer, never shorter. After the limit, a grace of
+  100 ms lets a `done` that already waits in the queue arrive first (the document can
+  be busy with a large commit of the same call).
+- At the limit: `worker.terminate()`, `stopped` = `TIME_LIMIT_REASON` ("the app is not
+  responding (time limit reached)", the desktop's words), the frame loop stops, the
+  answers to open host requests are dropped, an `init` that did not end resolves (so
+  the frame reports "started" and shows the banner), and `onStop`.
+- Tests: the stop fixture has a `loop` button. `run-worker.mjs` runs the Worker side in
+  a `worker_threads` thread with a 300 ms limit (the app stops after about 400 ms) and
+  checks that big-list's init (10,000 rows) is not stopped with the default limit.
+  `checkStopBanner` clicks `loop` in Edge: the page answers in about 1 ms during the
+  loop, and the banner shows the reason after about 2.1 s. The big-list load in Edge
+  (about 850 ms) is not stopped.
+- A dialog that the page shows for the app stays open after the stop; its answer goes
+  nowhere.
 
 **R2, the memory cap.** The core's wasm memory is defined inside the core module itself
 (`(memory (export "memory") ...)`, no `maximum`); `plinth-web.js`'s `loadCore` just

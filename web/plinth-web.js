@@ -25,6 +25,16 @@ export const INIT_RANDOM_SEED = 3;
 export const MEMORY_LIMIT_PAGES = 1024;
 
 /**
+ * The time limit of one call into an app (`init` or one event), the same as
+ * the desktop runner (`Limits`, 2 s). In a browser the app runs in a Worker
+ * (`app-worker.js`); the proxy ends the Worker at the limit.
+ */
+export const CALL_TIME_LIMIT_MS = 2000;
+
+/** The stop reason at the time limit: the desktop's words. */
+export const TIME_LIMIT_REASON = "the app is not responding (time limit reached)";
+
+/**
  * Returns a copy of a core module whose defined memory has a maximum of
  * `maxPages` (64 KiB pages; GAPS "R1/R2 design"). The core declares no
  * maximum; the desktop caps it in wasmtime instead. With the maximum, a
@@ -977,6 +987,13 @@ export class PlinthApp {
     this.onStop = null;
     /** `(message)` for each uncaught app error (core 1.10); the app keeps running. */
     this.onError = null;
+    /**
+     * `()` before and after each call into the app (`init` or one event,
+     * also timers, frames and answers). The Worker (`app-worker.js`) tells
+     * the watchdog in the document with them.
+     */
+    this.onCallStart = null;
+    this.onCallEnd = null;
     this._lastTrap = null;
   }
 
@@ -1067,6 +1084,7 @@ export class PlinthApp {
   _call(f) {
     if (this.stopped !== null) return;
     this._lastTrap = null;
+    this.onCallStart?.();
     try {
       f();
     } catch (err) {
@@ -1074,6 +1092,8 @@ export class PlinthApp {
       if (!this.onStop) throw err;
       console.error(`[plinth] the app stopped: ${this.stopped}`, err);
       this.onStop(this.stopped, err);
+    } finally {
+      this.onCallEnd?.();
     }
   }
 }

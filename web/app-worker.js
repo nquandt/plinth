@@ -5,9 +5,11 @@
 // module) and talks to the proxy only through `postMessage`.
 //
 // Why: a Worker is the only place where the page can stop a computation
-// that does not end (`Worker.terminate()`). Step 1 (this file) moves the
-// app into the Worker with no change in behavior. Step 2 adds the time
-// limit (a watchdog in the proxy).
+// that does not end (`Worker.terminate()`). The proxy has a watchdog: a
+// call into the app (`init` or one event, also timers, frames and answers)
+// that does not end in 2 s (`CALL_TIME_LIMIT_MS`, as on the desktop) ends
+// the Worker, and the app stops with "the app is not responding (time
+// limit reached)".
 //
 // The host imports that need the document cross the boundary as messages
 // (GAPS "R1/R2 design"):
@@ -32,7 +34,7 @@
 // No DOM code: `test/run-worker.mjs` runs both sides in Node over a
 // `MessageChannel`.
 
-import { PlinthApp, httpFetch, defaultAskDialog } from "./plinth-web.js";
+import { PlinthApp, httpFetch, defaultAskDialog, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON } from "./plinth-web.js";
 import { decodeOps } from "./protocol.js";
 import { frameKvStore } from "./hub-storage.js";
 import { FileSpace, memoryFileBackend } from "./files.js";
@@ -120,6 +122,10 @@ export function runWorker(scope) {
     app = new PlinthApp();
     app.onError = (text) => post({ t: "error", text });
     app.onStop = (reason, err) => post({ t: "stop", reason, message: String(err?.message ?? err) });
+    // The watchdog in the document (`WorkerApp`) times each call. A message
+    // posted before an endless loop still reaches the document.
+    app.onCallStart = () => post({ t: "call" });
+    app.onCallEnd = () => post({ t: "done" });
     await app.load(m.core, m.app, {
       manifestText: m.manifestText,
       kvStore: typeof m.kvQuota === "number" ? frameKvStore(m.kv, m.kvQuota, send) : cachedKvStore(m.kv, send),
@@ -159,7 +165,7 @@ export function runWorker(scope) {
         break;
       case "init":
         app?.init(m.records);
-        post({ t: "done" });
+        post({ t: "init-done" });
         break;
       case "event":
         app?.onEvent(m.event);
@@ -189,6 +195,9 @@ export function runWorker(scope) {
   };
 }
 
+/** The grace after the time limit (ms): see `WorkerApp._callStarted`. */
+const WATCHDOG_GRACE_MS = 100;
+
 /**
  * The document side: a proxy with the surface of `PlinthApp`. `worker` is
  * a `Worker` (`startAppWorker`) or anything with `postMessage`,
@@ -208,6 +217,10 @@ export class WorkerApp {
     this._loading = null; // { resolve, reject } while `load` runs
     this._inits = []; // resolves of the `init` calls, in order
     this._frame = null;
+    /** The time limit of one call (ms); `load` can change it (`opts.timeLimitMs`, tests). */
+    this.timeLimitMs = CALL_TIME_LIMIT_MS;
+    this._watchdog = null; // the timer of the open call, else null
+    this._dead = false; // the Worker was ended at the time limit
     worker.onmessage = (event) => this._receive(event.data);
     if (typeof worker.addEventListener === "function") {
       worker.addEventListener("error", (event) => {
@@ -228,11 +241,13 @@ export class WorkerApp {
    * `kvQuota` (characters; the Worker refuses a write over it, as
    * `frameKvStore`); `refused`; `log`; `reportError`; `askDialog`;
    * `clipboard`; `netFetch`; `files` (a `FileSpace`); `memoryLimitPages`;
+   * `timeLimitMs` (the time limit of one call; default `CALL_TIME_LIMIT_MS`);
    * for the Hub app: `hubSnapshot`, and `send(msg)`/`ask(type, fields)` to
    * the page for the `hub-*` messages.
    */
   load(coreBytes, appBytes, opts = {}) {
     this.opts = opts;
+    if (typeof opts.timeLimitMs === "number") this.timeLimitMs = opts.timeLimitMs;
     this.files = opts.files ?? new FileSpace(memoryFileBackend(opts.filesMap));
     this.clip =
       opts.clipboard ??
@@ -277,14 +292,59 @@ export class WorkerApp {
 
   /** Ends the Worker. */
   terminate() {
+    this._dead = true;
+    clearTimeout(this._watchdog);
+    this._watchdog = null;
+    this._cancelFrame();
     this.worker.terminate?.();
   }
 
   _post(msg) {
-    this.worker.postMessage(msg);
+    if (!this._dead) this.worker.postMessage(msg);
+  }
+
+  /**
+   * The watchdog (GAPS R1). The Worker sends `call` before each call into
+   * the app and `done` after it; the calls do not overlap. The time starts
+   * when the document reads `call`, so a busy document makes the limit
+   * longer, never shorter. At the limit, a short grace lets a `done` that
+   * already waits in the queue arrive first (the document can be busy with
+   * a large commit of the same call).
+   */
+  _callStarted() {
+    if (this._dead || this.stopped !== null) return;
+    clearTimeout(this._watchdog);
+    this._watchdog = setTimeout(() => {
+      this._watchdog = setTimeout(() => this._timeLimit(), WATCHDOG_GRACE_MS);
+    }, this.timeLimitMs);
+  }
+
+  _callEnded() {
+    clearTimeout(this._watchdog);
+    this._watchdog = null;
+  }
+
+  /** The call did not end in time: end the Worker and stop the app, as the desktop does. */
+  _timeLimit() {
+    this._watchdog = null;
+    if (this._dead || this.stopped !== null) return;
+    this.terminate();
+    this.stopped = TIME_LIMIT_REASON;
+    const err = new Error(TIME_LIMIT_REASON);
+    console.error(`[plinth] the app stopped: ${this.stopped}`);
+    // An `init` that did not end: its caller goes on, and shows the banner.
+    for (const resolve of this._inits.splice(0)) resolve();
+    this.onStop?.(this.stopped, err);
+  }
+
+  _cancelFrame() {
+    if (this._frame === null) return;
+    (globalThis.cancelAnimationFrame?.bind(globalThis) ?? clearTimeout)(this._frame);
+    this._frame = null;
   }
 
   _receive(m) {
+    if (this._dead) return;
     switch (m?.t) {
       case "commit":
         this.onCommit(decodeOps(m.bytes));
@@ -300,8 +360,14 @@ export class WorkerApp {
         this.stopped = m.reason;
         if (this.onStop) this.onStop(m.reason, new Error(m.message));
         break;
-      case "done":
+      case "init-done":
         this._inits.shift()?.();
+        break;
+      case "call":
+        this._callStarted();
+        break;
+      case "done":
+        this._callEnded();
         break;
       case "loaded":
         this._loading?.resolve();
@@ -324,10 +390,7 @@ export class WorkerApp {
         }
         break;
       case "frame-cancel":
-        if (this._frame !== null) {
-          (globalThis.cancelAnimationFrame?.bind(globalThis) ?? clearTimeout)(this._frame);
-          this._frame = null;
-        }
+        this._cancelFrame();
         break;
       case "send":
         this._send(m.msg);

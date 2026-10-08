@@ -45,8 +45,8 @@ Status words as in `docs/PRODUCTION.md`: **Done**, **Partial**, **Open**.
 |---|---|---|
 | Escape from the Wasm sandbox | wasmtime/wasmi and the browser enforce memory safety. The host links only the imports of `app.wit`. | Done (relies on the engines) |
 | An import that the host does not know | The host proves the app's capabilities from its imports; an unknown import fails at link time. | Done |
-| An endless loop or deep recursion freezes the host | Desktop: 2 s per call (epochs, fuel on wasmi), stack limit. Web: no limit yet. | Partial (web: R3) |
-| An app allocates all memory | Desktop: 64 MiB cap (`Limits`). Web: no cap yet. | Partial (web: R3) |
+| An endless loop or deep recursion freezes the host | Desktop: 2 s per call (epochs, fuel on wasmi), stack limit. Web: each app runs in its own Worker; a watchdog in the page ends the Worker after 2 s in one call (`web/app-worker.js`); the engine's stack limit. | Done |
+| An app allocates all memory | Desktop: 64 MiB cap (`Limits`). Web: the core's memory has a maximum of 64 MiB (`capCoreMemory`). | Done |
 | A malformed op stream or tree crashes the renderer | The UI tree checks each op; fuzz tests `hostile_ops.rs`, `hostile_render.rs`. | Done |
 | A trap in a host call | Denied calls return an error value; they never trap (SPEC §8.5). | Done |
 
@@ -104,6 +104,6 @@ Status words as in `docs/PRODUCTION.md`: **Done**, **Partial**, **Open**.
 2. **Granted `net:*` can send data out.** The consent screen shows it as a high risk. A host policy can refuse `net:*` (`docs/HUB.md` §7.5).
 3. **Unsigned packages run.** The Hub warns. A later policy can refuse them by default.
 4. **Web storage is in the page origin.** Code of the host page can read it.
-5. **No limits on the web host yet** (R3): an app can freeze its tab.
+5. **Web limits** (R3, done): the web host stops an app after 2 s in one call and at 64 MiB, as the desktop does. A dialog that the page shows for the app can stay open after the stop.
 6. **Pinned cores.** An app with `core = "pinned"` keeps a core with a known defect until the author ships an update. The Hub must tell the user (planned).
 7. **No third-party review yet** (S11).
