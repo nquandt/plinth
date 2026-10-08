@@ -7,7 +7,10 @@
 //! An offset is relative to the start of the function body (the byte after
 //! the body size, where the locals start), so it does not change when other
 //! functions move. The function key is the function index in the index
-//! space of the module that holds the section (imports included).
+//! space of the module that holds the section (imports included). To keep
+//! `app.wasm` small, the compiler writes only the entries where the code can
+//! stop (a call, a loop, `unreachable`, an integer division:
+//! `needed_entries`), and only line numbers (no columns).
 //!
 //! The host link step (`split::load_app`, `link::link`) copies the map into
 //! the linked core module with the indices and offsets of that module. The
@@ -407,6 +410,23 @@ mod tests {
         }
         assert!(SrcMap::decode(&[2]).is_err(), "an unknown version");
         assert!(SrcMap::decode(&[1, 0xff, 0xff, 0xff, 0xff, 0x0f]).is_err(), "a count larger than the bytes");
+    }
+
+    #[test]
+    fn needed_entries_keep_only_code_that_can_stop() {
+        use wasm_encoder::Instruction as I;
+        let mut f = wasm_encoder::Function::new(Vec::new());
+        for i in [I::I32Const(1), I::Drop, I::Call(0), I::I32Const(2), I::Drop, I::Loop(wasm_encoder::BlockType::Empty), I::End, I::End] {
+            f.instruction(&i);
+        }
+        let mut bytes = Vec::new();
+        wasm_encoder::Encode::encode(&f, &mut bytes);
+        let body = &bytes[1..]; // a short body: a one-byte size
+        // Line 1 has no call; line 2 has the call; line 3 nothing; line 2
+        // again has the loop, so it joins the first line-2 entry.
+        let entries = [(0, 1), (2, 2), (3, 3), (5, 2)];
+        assert_eq!(needed_entries(&entries, body).unwrap(), vec![(2, 2)]);
+        assert_eq!(instr_offsets(body).unwrap().len(), 8);
     }
 
     #[test]

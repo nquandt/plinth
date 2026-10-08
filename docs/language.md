@@ -330,15 +330,48 @@ Rules:
   and array callbacks (`map`, `forEach`, …).
 - **Runtime traps are not exceptions.** A read outside an array, a
   failed `as` cast, a `null` used as a number, and out-of-memory stop
-  the app. No `catch` gets them.
+  the app. No `catch` gets them. The host shows "This app stopped" with
+  the reason and the source place of the innermost app function, for
+  example `array index out of bounds (app/main.tsx:12)` (see "Source
+  places in errors").
 - **Uncaught exceptions.** An exception that no `catch` gets in an event
   handler, a timer, a host-call callback, an effect, a `computed` or a
   render slot goes to the host through `error.report` (core 1.10), for
-  example `Uncaught NotFound: no item 7`. The app keeps running. The
+  example `Uncaught NotFound: no item 7 (app/main.tsx:30)`, with the
+  place of the `throw`. The app keeps running. The
   signal changes before the `throw` stay. A `computed` or a slot that
   throws gives the zero value of its type. An uncaught exception in the
   start-up code (the top level of a module, or a screen component) is
   also reported, but then the app stops, because it has no complete UI.
+
+### Source places in errors
+
+A runtime error names the source file and the line (PRODUCTION L9):
+
+- **An uncaught exception** names the place of its `throw`:
+  `Uncaught Error: boom (app/main.tsx:12)`. The compiler puts the text
+  ` (app/main.tsx:12)` at each `throw` as a string literal, so this works
+  in every build and on every host. A `throw` again from a `catch`
+  gives the place of the second `throw`. The `message` of the error does
+  not change: only the report adds the place.
+- **A trap** (a read outside an array, a failed cast, out of memory, too
+  many nested calls, an endless loop) gives the reason first, then the
+  place of the innermost app function on the stack: `array index out of
+  bounds (app/lib.ts:3)`. A trap in the core (the bounds check of an
+  array read) shows the line of the app code that called the core.
+- The place comes from the source map: the custom section
+  `plinth-srcmap` of `app.wasm`. It holds the line of each part of the
+  code where the code can stop, and costs 3 % to 7 % of the app module.
+  The format is in `crates/plinth-link/src/srcmap.rs`.
+- `plinth build --release` removes the source map, because Binaryen
+  changes the code and the offsets would point to wrong lines. A release
+  build gives the plain reason for a trap, with no place. The place of
+  an uncaught `throw` stays.
+- The desktop host on wasmtime and the web host show the place. The
+  wasmi engine (iOS) gives no code offsets for a trap, so its reasons
+  have no place. On the web, the time limit stops the app's Worker, so
+  that reason has no place either. An app that a compiler before L9
+  built has no map and gives the plain reasons, as before.
 
 **Why generated code, not the Wasm exception-handling proposal.** The
 compiler does not use the Wasm `try`/`catch` instructions. It generates

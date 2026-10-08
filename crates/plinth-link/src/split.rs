@@ -537,7 +537,9 @@ pub fn load_app(rt: &[u8], rt_layout: &Layout, app: &[u8]) -> Result<AppCode> {
 /// so an offset maps through its instruction index.
 fn link_srcmap(map: &SrcMap, imported: u32, bodies: &[Vec<u8>], linked: &[(u32, wasm_encoder::Function)], remap: &[u32]) -> SrcMap {
     let defined = |f: u32| f.checked_sub(imported).map(|j| j as usize).filter(|j| *j < bodies.len() && *j < linked.len());
-    let mut cache: HashMap<u32, Option<(Vec<u32>, Vec<u32>)>> = HashMap::new();
+    // The instruction offsets of the app body and of the linked body.
+    type Offsets = Option<(Vec<u32>, Vec<u32>)>;
+    let mut cache: HashMap<u32, Offsets> = HashMap::new();
     map.map(
         |f| defined(f).and_then(|_| remap.get(f as usize).copied()),
         |f, off| {

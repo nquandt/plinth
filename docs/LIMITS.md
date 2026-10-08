@@ -22,7 +22,7 @@ Plinth is not ready for production apps. The current level is "before Preview".
 | No locale-aware formatting. Dates and numbers use English formats only. | L5 |
 | An expression or a nesting deeper than 1000 levels gives `PL1000`. | L6 |
 | No shared libraries between apps. Each app has its own copy of shared code. | L8 |
-| When an app stops with an error, the message gives the reason, but not the source file and line. | L9 |
+| A trap gives its source file and line only in a debug build (`plinth build` with no `--release`), on wasmtime and on the web. A release build, the wasmi engine and the web time limit give the reason with no place. The place is a line, with no column. An uncaught `Promise` rejection has no place. | L9 |
 
 ## User interface
 

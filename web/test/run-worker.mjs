@@ -105,14 +105,14 @@ function press(h, label, kind = ControlKind.button) {
   const status = () => nodes(h).find((n) => n.kind === ControlKind.text)?.text;
   press(h, "throw");
   await until(() => h.errors.length === 1, "the error report");
-  assert.deepEqual(h.errors, ["Uncaught Error: on purpose"]);
+  assert.deepEqual(h.errors, ["Uncaught Error: on purpose (app/main.tsx:19)"]);
   press(h, "ping");
   await until(() => status() === "pong 5", "the app keeps running after an error");
   assert.equal(h.app.stopped, null);
   press(h, "index");
   await until(() => h.stops.length === 1, "the stop");
-  assert.deepEqual(h.stops, ["array index out of bounds"]);
-  assert.equal(h.app.stopped, "array index out of bounds");
+  assert.deepEqual(h.stops, ["array index out of bounds (app/main.tsx:26)"]);
+  assert.equal(h.app.stopped, "array index out of bounds (app/main.tsx:26)");
   press(h, "ping");
   await new Promise((r) => setTimeout(r, 50));
   assert.equal(status(), "pong 5", "a stopped app is not called again");

@@ -122,6 +122,10 @@ fn release_build_is_smaller_and_behaves_the_same() {
         let release = app_module(&build(name, &dir.join(format!("{file}.release.plnt")), true));
         eprintln!("{name}: app {} B debug, {} B release", debug.len(), release.len());
         assert!(release.len() < debug.len(), "{name}: the release module is not smaller");
+        // The source map is in the debug build only: Binaryen changes the
+        // code, so a release build removes it (`optimize.rs`, PRODUCTION L9).
+        assert!(plinth_link::srcmap::find(&debug).is_some(), "{name}: the debug build has a source map");
+        assert!(plinth_link::srcmap::find(&release).is_none(), "{name}: the release build has a source map");
         // The core version that the app needs is the same.
         assert_eq!(plinth_link::split::runtime_field(&debug), plinth_link::split::runtime_field(&release));
         same_behavior(name, &debug, &release, 24);

@@ -30,6 +30,8 @@ No public release yet. The first release is a Preview for Windows and the web. `
 
 ### Changed
 
+- A runtime error names the source file and line (PRODUCTION L9). "This app stopped" gives the reason, then the place of the innermost app function: `array index out of bounds (app/main.tsx:12)`, on the desktop (wasmtime) and on the web. An uncaught exception names the place of its `throw`: `Uncaught Error: boom (app/main.tsx:12)`. The compiler writes a small source map (the custom section `plinth-srcmap`, 3 % to 7 % of `app.wasm`); `plinth build --release` removes it, so a release build gives the plain trap reason. Packages from an earlier compiler give the plain reasons, as before.
+
 - Core 1.12.0 is shipped and frozen. New core functions go into 1.13. The shipped file is in `cores/shipped/`.
 
 - Web host: each app runs in its own Worker (a step to the web time limit). A page that embeds Plinth with a Content-Security-Policy must also allow `worker-src blob:`.

@@ -1056,6 +1056,178 @@ function capCoreMemory(bytes, maxPages) {
   return u8s;
 }
 
+/** The custom section of an app module with its source map (docs/PRODUCTION.md L9). */
+const SRCMAP_SECTION = "plinth-srcmap";
+
+/**
+ * The function bodies of a raw wasm module, by function index (imports
+ * included): `[start, end)` of each body, after the body size. Also the
+ * content of the custom section `customName`, if the module has it.
+ * `null` for bytes that are not a valid module.
+ */
+function moduleBodies(bytes, customName) {
+  try {
+    const u8s = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    let pos = 8;
+    const u8 = () => {
+      if (pos >= u8s.length) throw new Error("the module ends early");
+      return u8s[pos++];
+    };
+    const leb = () => {
+      let result = 0,
+        shift = 0,
+        byte;
+      do {
+        byte = u8();
+        result += (byte & 0x7f) * 2 ** shift;
+        shift += 7;
+      } while (byte & 0x80);
+      return result;
+    };
+    const name = () => {
+      const len = leb();
+      pos += len;
+      return new TextDecoder().decode(u8s.subarray(pos - len, pos));
+    };
+    const out = { bodies: [], custom: null };
+    while (pos < u8s.length) {
+      const id = u8();
+      const len = leb();
+      const end = pos + len;
+      if (end > u8s.length) return null;
+      if (id === 0 && customName !== undefined && name() === customName) {
+        out.custom = u8s.subarray(pos, end);
+      } else if (id === 2) {
+        for (let n = leb(); n > 0; n--) {
+          name();
+          name();
+          const kind = u8();
+          if (kind === 0) {
+            leb();
+            out.bodies.push(null); // an imported function has no body
+          } else if (kind === 1 || kind === 2) {
+            if (kind === 1) u8(); // element type
+            const flags = u8();
+            leb();
+            if (flags & 1) leb();
+          } else if (kind === 3) {
+            u8();
+            u8();
+          } else return null;
+        }
+      } else if (id === 10) {
+        for (let n = leb(); n > 0; n--) {
+          const size = leb();
+          out.bodies.push([pos, pos + size]);
+          pos += size;
+        }
+      }
+      pos = end;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads a `plinth-srcmap` section (the format is in
+ * `crates/plinth-link/src/srcmap.rs`): `{ files, funcs }`, where `funcs`
+ * maps a function index to `{ file, entries: [[offset, line], ...] }`.
+ * `null` for bytes that are not valid: a bad map never stops an app.
+ */
+function decodeSrcMap(data) {
+  try {
+    let pos = 0;
+    const u8 = () => {
+      if (pos >= data.length) throw new Error("the source map ends early");
+      return data[pos++];
+    };
+    const leb = () => {
+      let result = 0,
+        shift = 0,
+        byte;
+      do {
+        byte = u8();
+        result += (byte & 0x7f) * 2 ** shift;
+        shift += 7;
+      } while (byte & 0x80);
+      return result;
+    };
+    const sleb = () => {
+      let result = 0,
+        shift = 0,
+        byte;
+      do {
+        byte = u8();
+        result += (byte & 0x7f) * 2 ** shift;
+        shift += 7;
+      } while (byte & 0x80);
+      return byte & 0x40 ? result - 2 ** shift : result;
+    };
+    if (u8() !== 1) return null;
+    const files = [];
+    for (let n = leb(); n > 0; n--) {
+      const len = leb();
+      if (pos + len > data.length) return null;
+      files.push(new TextDecoder().decode(data.subarray(pos, pos + len)));
+      pos += len;
+    }
+    const funcs = new Map();
+    let next = 0;
+    for (let n = leb(); n > 0; n--) {
+      const func = next + leb();
+      next = func + 1;
+      const file = files.length > 1 ? leb() : 0;
+      if (file >= files.length) return null;
+      const entries = [];
+      let off = 0,
+        line = 0;
+      for (let k = leb(); k > 0; k--) {
+        off += leb();
+        line += sleb();
+        entries.push([off, line]);
+      }
+      funcs.set(func, { file, entries });
+    }
+    return pos === data.length ? { files, funcs } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The source place (`app/main.tsx:12`) of the innermost app frame in the
+ * stack of a trap, or `null`. The engine writes a wasm frame as
+ * `wasm-function[N]:0xOFFSET` (OFFSET in the module). `app` and `core` are
+ * the results of `moduleBodies` for the app and the core module: a frame
+ * that fits a core body is a core frame, not an app frame.
+ */
+function trapPlace(stack, app, core) {
+  if (!app?.custom || typeof stack !== "string") return null;
+  const map = decodeSrcMap(app.custom);
+  if (!map) return null;
+  const fits = (m, n, off) => {
+    const b = m?.bodies[n];
+    return b ? off >= b[0] && off < b[1] : false;
+  };
+  for (const [, n, hex] of stack.matchAll(/wasm-function\[(\d+)\]:0x([0-9a-f]+)/gi)) {
+    const func = Number(n),
+      off = parseInt(hex, 16);
+    if (!fits(app, func, off) || fits(core, func, off)) continue;
+    const f = map.funcs.get(func);
+    if (!f) continue;
+    const rel = off - app.bodies[func][0];
+    let line = null;
+    for (const [o, l] of f.entries) {
+      if (o > rel) break;
+      line = l;
+    }
+    if (line !== null) return `${map.files[f.file]}:${line}`;
+  }
+  return null;
+}
+
 /** Reads the `plinth-rt`/`table` import's minimum size from a raw wasm module. */
 function readTableImportMin(bytes) {
   let pos = 8; // past the 8-byte wasm header
@@ -1966,7 +2138,8 @@ async function loadCore(coreWasmBytes, opts = {}) {
     (k) => instance.exports[k] instanceof WebAssembly.Table,
   );
   if (!tableExportName) throw new Error("the core does not export its function table (needs --export-table)");
-  return { instance, tableExportName };
+  // The bytes that run, for `trapPlace` (a frame in a core body is not an app frame).
+  return { instance, tableExportName, bytes: bytes instanceof WebAssembly.Module ? null : bytes };
 }
 
 /**
@@ -2039,6 +2212,8 @@ class PlinthApp {
     this.onCallStart = null;
     this.onCallEnd = null;
     this._lastTrap = null;
+    /** The raw app module, for the place of a trap (`trapPlace`); null for a compiled module. */
+    this._appBytes = null;
   }
 
   /**
@@ -2089,6 +2264,7 @@ class PlinthApp {
       onCommit: (ops) => this.onCommit(ops),
     });
     this.appInstance = await linkApp(this.core, appBytes);
+    this._appBytes = appBytes instanceof WebAssembly.Module ? null : appBytes;
     return this;
   }
 
@@ -2129,24 +2305,45 @@ class PlinthApp {
     if (this.stopped !== null) return;
     this._lastTrap = null;
     this.onCallStart?.();
+    // More stack frames (V8) than the default 10, so that a trap deep in
+    // the core still shows the innermost app frame (`trapPlace`).
+    const stackLimit = Error.stackTraceLimit;
+    Error.stackTraceLimit = 64;
     try {
       f();
     } catch (err) {
-      this.stopped = stopReason(err, this._lastTrap);
+      Error.stackTraceLimit = stackLimit;
+      this.stopped = stopReason(err, this._lastTrap, this._trapPlace(err));
       if (!this.onStop) throw err;
       console.error(`[plinth] the app stopped: ${this.stopped}`, err);
       this.onStop(this.stopped, err);
     } finally {
+      Error.stackTraceLimit = stackLimit;
       this.onCallEnd?.();
     }
+  }
+
+  /** The source place of a trap from the app's source map, or null (no map: an old package). */
+  _trapPlace(err) {
+    if (!this._appBytes) return null;
+    const app = moduleBodies(this._appBytes, SRCMAP_SECTION);
+    if (!app?.custom) return null;
+    return trapPlace(String(err?.stack ?? ""), app, this.core.bytes ? moduleBodies(this.core.bytes) : null);
   }
 }
 
 /**
  * A short, plain reason for a trap, the same words as the desktop host
- * (`stop_reason` in `plinth-runner-wasmtime`).
+ * (`stop_reason` in `plinth-runner-wasmtime`). With `place` (from
+ * `trapPlace`), the reason ends with it: "array index out of bounds
+ * (app/main.tsx:12)".
  */
-function stopReason(err, lastTrap) {
+function stopReason(err, lastTrap, place = null) {
+  const reason = plainReason(err, lastTrap);
+  return place ? `${reason} (${place})` : reason;
+}
+
+function plainReason(err, lastTrap) {
   if (lastTrap) return lastTrap;
   const msg = String(err?.message ?? err);
   if (err instanceof RangeError && /call stack/i.test(msg)) return "too many nested calls (stack overflow)";
@@ -2157,7 +2354,7 @@ function stopReason(err, lastTrap) {
   }
   return msg;
 }
-  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, readPlnt, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, defaultAskDialog, loadCore, linkApp, PlinthApp, stopReason };
+  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, SRCMAP_SECTION, moduleBodies, decodeSrcMap, trapPlace, readPlnt, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, defaultAskDialog, loadCore, linkApp, PlinthApp, stopReason };
   })();
 
   // ---- dom-renderer.js

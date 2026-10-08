@@ -7,6 +7,12 @@
 //! `check` makes sure that the module still has the contract of an app
 //! module (SPEC.md §10.4): the same imports, the same custom sections, and
 //! a link into the built-in core.
+//!
+//! The source map (`plinth-srcmap`, `docs/PRODUCTION.md` L9) is removed
+//! before the run, on purpose: it gives byte offsets of the code, and
+//! Binaryen changes the code, so a kept map would give wrong lines. A
+//! release app still names the place of an uncaught `throw` (that text is
+//! in the code), but a trap has the plain reason only.
 
 use anyhow::{Context as _, Result, bail, ensure};
 use std::collections::BTreeMap;
@@ -15,8 +21,9 @@ use wasmparser::{Parser, Payload, TypeRef};
 
 /// Optimizes the app module `app` for size and checks the result.
 pub fn optimize_app(app: &[u8]) -> Result<Vec<u8>> {
-    let out = run_wasm_opt(app)?;
-    check(app, &out).context("the optimized app module is not safe to use")?;
+    let app = plinth_link::srcmap::strip(app).context("remove the source map")?;
+    let out = run_wasm_opt(&app)?;
+    check(&app, &out).context("the optimized app module is not safe to use")?;
     Ok(out)
 }
 
@@ -102,6 +109,8 @@ fn check(before: &[u8], after: &[u8]) -> Result<()> {
     for (name, data) in &b.custom {
         ensure!(a.custom.get(name) == Some(data), "the custom section `{name}` is missing or changed");
     }
+    // No source map: its offsets are for the code before the optimizer.
+    ensure!(!a.custom.contains_key(plinth_link::srcmap::SECTION), "the module has a source map");
     // The optimizer may remove a function import that no code calls any
     // more. It must not add an import or change one: a host matches the
     // imports by name and type, and the web host grows the table by the

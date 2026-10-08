@@ -52,7 +52,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | L6 | Long expression chains (more than 1000 terms) | Beta | Open | GAPS R3. |
 | L7 | Smaller async code (promise machinery in the core) | 1.0 | Open | GAPS "Async code size". |
 | L8 | Libraries: share Plinth TS code between apps (`hub:<publisher>/<lib>`, `plinth.lock`) | 1.0 | Open | SPEC §12 "Libraries". Without them, each app copies code. |
-| L9 | Runtime errors name the source file and the line (source maps for stack traces) | Beta | Open | Today "This app stopped" gives a reason, not a source location. |
+| L9 | Runtime errors name the source file and the line (source maps for stack traces) | Beta | Done | 2026-10-08. The compiler writes the custom section `plinth-srcmap` into `app.wasm`: for each app function, the line of each code range where the code can stop (a call, a loop, `unreachable`, an integer division), as delta-encoded LEB128 (format: `crates/plinth-link/src/srcmap.rs`). The host link step moves it into the linked module. Desktop (wasmtime): the stop reason ends with the place of the innermost app frame, for example `array index out of bounds (app/lib.ts:3)`; the plain reason stays first. Web: the same, from the `wasm-function[N]:0xOFFSET` frames of the error stack (`trapPlace` in `web/plinth-web.js`). An uncaught `throw` names its place in all builds: `Uncaught Error: boom (app/main.tsx:12)` (a string literal at the `throw`, no new core function). Cost: 3 % to 7 % of `app.wasm` (counter 1,939 B + 91 B; hub 24,264 B + 1,490 B); all size budgets pass. Not done: `plinth build --release` removes the map on purpose (Binaryen changes the code, so the offsets would be wrong), so a release build gives the plain trap reason; wasmi gives no frame offsets, so no trap place there; the web time limit stops the Worker with no stack; lines only, no columns; an uncaught rejection of a `Promise` has no place. Tests: `crates/plinth-compiler/tests/errors.rs` (wasmtime and wasmi), `web/test/run-stop.mjs`, `web/test/run-worker.mjs`, `crates/plinth-cli/tests/release_build.rs`. |
 
 ## 4. Runtime and engines
 
@@ -216,12 +216,12 @@ Decisions of 2026-10-07:
 
 ## 16. Summary
 
-Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh` for the current count, and `bash scripts/production-status.sh --open Beta` for the list of open Beta items.
+Count on 2026-10-08, by gate and status. Run `bash scripts/production-status.sh` for the current count, and `bash scripts/production-status.sh --open Beta` for the list of open Beta items.
 
 | Gate | Done | Partial | Open or Decide |
 |---|---|---|---|
 | Preview | 26 | 0 | 0 |
-| Beta | 14 | 17 | 21 |
+| Beta | 16 | 16 | 20 |
 | 1.0 | 1 | 2 | 20 |
 | Later (after 1.0) | 0 | 0 | 1 |
 
@@ -231,7 +231,7 @@ Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh`
 
 1. T7, the core part: optimize the 1.13 core with `wasm-opt -Oz` when it is built.
 2. R6: performance budgets in the gate (done).
-3. L9: source locations in runtime errors.
+3. L9: source locations in runtime errors (done; release builds have no trap place).
 4. R4, Q4: wasmi in all suites and in CI.
 5. H4: the `store.sql` design and the first slice.
 6. U5, U6, U7: IME on the desktop, pointer gaps, system settings.
