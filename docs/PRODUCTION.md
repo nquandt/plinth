@@ -160,7 +160,7 @@ Production apps run code from many publishers. This area must be complete before
 | X2 | Reference: language, UI, host APIs | Preview | Done | `docs/language.md`, `docs/ui.md`, `docs/host-apis.md` |
 | X3 | A public docs website with search | Beta | Open | |
 | X4 | Guides: storage, network, updates, publishing, accessibility, performance | Beta | Done | `docs/guides/` (index `docs/guides/README.md`); each example checked with `plinth check`. |
-| X5 | A migration guide for each breaking change and each core minor | Beta | Open | |
+| X5 | A migration guide for each breaking change and each core minor | Beta | Done | `docs/migrations/` (the index and how to write a guide) and `docs/migrations/core-1.13.md` (app authors, host authors, users). `crates/plinth-link/tests/migration_guides.rs` fails when a core minor after 1.12 has no guide or the index does not list it. A breaking change gets its guide with the new major version (`docs/COMPATIBILITY.md` §6). |
 | X6 | `CHANGELOG.md` | Preview | Done | `CHANGELOG.md`. Add an entry for each change that authors or users see. |
 | X7 | Known limits page (what Plinth cannot do yet) | Preview | Done | `docs/LIMITS.md`. Update it when a limit goes away. |
 

@@ -8,6 +8,7 @@ No public release yet. The first release is a Preview for Windows and the web. `
 
 ### Added
 
+- Migration guides (`docs/migrations/`, PRODUCTION X5): one guide for each core minor, starting with `core-1.13.md`. A test fails when a new core minor has no guide.
 - License: MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`).
 - `docs/PRODUCTION.md`: the production readiness checklist.
 - `docs/LIMITS.md`: the known limits.

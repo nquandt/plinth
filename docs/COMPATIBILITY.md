@@ -68,7 +68,7 @@ A deprecation tells authors that an item goes away in the next major version. It
 1. **Mark it.** Write "Deprecated in X.Y: use Z" in the reference doc (`docs/ui.md`, `docs/host-apis.md`, `docs/language.md`), in the typings (`/** @deprecated use Z */` in `std/*.d.ts`, so the editor shows it), and in `CHANGELOG.md`.
 2. **Warn at build time.** The compiler gives a warning with its own code (a `PLW` code, `Severity::Warning`) and a help line that names the replacement. A warning never fails `plinth build`, unless the author asks for it (`--deny-warnings`, planned).
 3. **Keep it working.** A deprecated item works in every release of the same major version. Hosts and cores keep it.
-4. **Remove it only in a new major version,** with a migration guide (`docs/PRODUCTION.md` X5). Old apps keep running on the old core and the old host interfaces, which stay available (rule 4 in §2).
+4. **Remove it only in a new major version,** with a migration guide (`docs/migrations/`, `docs/PRODUCTION.md` X5). Old apps keep running on the old core and the old host interfaces, which stay available (rule 4 in §2).
 5. **Minimum time:** a deprecation is in at least one released minor version before the next major version.
 
 ## 7. Checks
@@ -83,4 +83,5 @@ A deprecation tells authors that an item goes away in the next major version. It
 | Hosts tolerate new manifest fields | A test that adds unknown fields at every level of a manifest, and unknown enum values; `plinth.toml` with the same is rejected | Done (`plinth-package` tests, §4) |
 | Hosts keep unknown entries | A package with an unknown entry reads, is signed and verifies; the entry is never an asset | Done (`plinth-package` tests, `run-hub-integrity.mjs`) |
 | A newer profile says "needs a newer Plinth" | `plinth/2` gives `NewerFormat`; a profile that is not valid stays an error | Done (`plinth-package`, `plinth-hub`, `run-hub-integrity.mjs`) |
+| Each core minor has a migration guide | `plinth-link/tests/migration_guides.rs` checks `docs/migrations/core-1.N.md` and its line in the index for each minor after 1.12 | Done |
 | Deprecation warnings | A golden test for each `PLW` code | Open (no deprecation yet) |
