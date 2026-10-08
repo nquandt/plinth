@@ -34,7 +34,7 @@
 // No DOM code: `test/run-worker.mjs` runs both sides in Node over a
 // `MessageChannel`.
 
-import { PlinthApp, httpFetch, defaultAskDialog, browserNotify, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON } from "./plinth-web.js";
+import { PlinthApp, httpFetch, defaultAskDialog, browserNotify, parseManifest, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON } from "./plinth-web.js";
 import { decodeOps } from "./protocol.js";
 import { frameKvStore } from "./hub-storage.js";
 import { FileSpace, memoryFileBackend } from "./files.js";
@@ -93,6 +93,23 @@ function cachedKvStore(snapshot, send) {
 }
 
 /**
+ * `plinth:app-info` (core 1.13, PRODUCTION.md D4): the data version on a
+ * single stored value (`initial`, from the document's `load` message),
+ * sending each write to the document (`cachedKvStore`'s idea, but for one
+ * value, since every app in a Worker has exactly one data version).
+ */
+function cachedDataVersionStore(initial, send) {
+  let version = initial ?? null;
+  return {
+    get: () => version,
+    set(_key, value) {
+      version = value;
+      send({ type: "data-version-set", version: value });
+    },
+  };
+}
+
+/**
  * The Worker side. `scope` is the global scope of the Worker (or one end
  * of a `MessageChannel` in a test): anything with `postMessage` and
  * `onmessage`.
@@ -129,6 +146,9 @@ export function runWorker(scope) {
     await app.load(m.core, m.app, {
       manifestText: m.manifestText,
       kvStore: typeof m.kvQuota === "number" ? frameKvStore(m.kv, m.kvQuota, send) : cachedKvStore(m.kv, send),
+      // plinth:app-info (core 1.13, PRODUCTION.md D4): the document sent the
+      // stored data version in `load` (`WorkerApp.load`); each write goes back.
+      dataVersionStore: cachedDataVersionStore(m.dataVersion, send),
       refused: new Set(m.refused ?? []),
       memoryLimitPages: m.memoryLimitPages,
       // plinth:locale (core 1.13): the page's locale; else the Worker's own.
@@ -249,7 +269,11 @@ export class WorkerApp {
    * `manifestText`; `kvStore` ({get,set,delete,keys}, the document's store:
    * the Worker gets a snapshot, and each write comes back to this store);
    * `kvQuota` (characters; the Worker refuses a write over it, as
-   * `frameKvStore`); `refused`; `log`; `reportError`; `askDialog`;
+   * `frameKvStore`); `dataVersionStore` ({get(key), set(key, value)}, core
+   * 1.13, PRODUCTION.md D4, `onUpgrade`: the document's store for the data
+   * version, the same shape as `plinth-web.js`'s default; the Worker gets
+   * the stored value at the start and sends back each write); `refused`;
+   * `log`; `reportError`; `askDialog`;
    * `clipboard`; `netFetch`; `files` (a `FileSpace`); `sql` (`{ call(kind,
    * statement, params) }`, the page's `store.sql` engine; none: an allowed
    * call answers "denied:unsupported"); `notify` (`{ show,
@@ -271,6 +295,12 @@ export class WorkerApp {
         : null);
     const kv = {};
     if (opts.kvStore) for (const k of opts.kvStore.keys()) kv[k] = opts.kvStore.get(k);
+    // `plinth:app-info` (core 1.13, PRODUCTION.md D4): the app id, so a
+    // write of the data version from the Worker (`data-version-set`) goes
+    // back to `opts.dataVersionStore` under the same key the store expects
+    // (the same id `PlinthApp.load` uses inside the Worker).
+    this._appId = opts.manifestText ? parseManifest(opts.manifestText).id : "";
+    const dataVersion = opts.dataVersionStore ? opts.dataVersionStore.get(this._appId) : null;
     return new Promise((resolve, reject) => {
       this._loading = { resolve: () => resolve(this), reject };
       this._post({
@@ -284,6 +314,7 @@ export class WorkerApp {
         hub: opts.hubSnapshot ?? null,
         memoryLimitPages: opts.memoryLimitPages,
         locale: opts.locale ?? null,
+        dataVersion,
       });
     });
   }
@@ -436,6 +467,9 @@ export class WorkerApp {
         break;
       case "kv-delete":
         o.kvStore?.delete(msg.key);
+        break;
+      case "data-version-set":
+        o.dataVersionStore?.set(this._appId, msg.version);
         break;
       case "clipboard-write":
         if (this.clip) Promise.resolve().then(() => this.clip.writeText(msg.text)).catch(() => {});

@@ -16,8 +16,9 @@ import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { PlinthApp, readPlnt } from "../plinth-web.js";
-import { memoryStorage } from "../hub-storage.js";
+import { PlinthApp, readPlnt, localStorageKvStore } from "../plinth-web.js";
+import { memoryStorage, HubStore, frameDataVersionStore, checkFrameMessage, startMessage } from "../hub-storage.js";
+import { runWorker, WorkerApp } from "../app-worker.js";
 import { Tree } from "../dom-renderer.js";
 import { ControlKind } from "../ui-api.js";
 
@@ -227,6 +228,82 @@ const APP_ID = "dev.plinth.test.upgrade-fixture";
   // The data version lives at a reserved prefix ("plinth-data-version:"),
   // never at the app's own kv prefix ("plinth:<id>:").
   assert.equal(storage.getItem(`plinth:${APP_ID}:data-version`), null);
+}
+
+// -- Through the Worker (`WorkerApp`): the data version survives a reload --
+// `WorkerApp.load`'s `opts.dataVersionStore` carries the stored value into
+// the Worker's `load` message and writes each change back (app-worker.js),
+// the same round trip `opts.kvStore` does for `store.kv`. Two `WorkerApp`
+// instances over the SAME `dataVersionStore` is a reload of the page: the
+// second one must see what the first one stored.
+async function startWorker(dataVersionStore, plnt) {
+  const { appWasm, manifestText } = await readPlnt(plnt);
+  const { port1, port2 } = new MessageChannel();
+  runWorker(port1);
+  const app = new WorkerApp(port2);
+  const tree = new Tree();
+  app.onCommit = (ops) => tree.apply(ops);
+  const errors = [];
+  app.onError = (s) => errors.push(s);
+  await app.load(core, appWasm, { manifestText, dataVersionStore, log: () => {}, reportError: () => {} });
+  await app.init([]);
+  return { app, tree, errors, close: () => (port1.close(), port2.close()) };
+}
+
+{
+  const dataVersionStore = localStorageKvStore(memoryStorage(), "plinth-data-version:");
+
+  let h = await startWorker(dataVersionStore, build(APP_ID, "1.0.0", appSource({ async: false, throws: false, rejects: false })));
+  assert.equal(text(h.tree), "none 0");
+  // `data-version-set` is a fire-and-forget message; give it a turn to land.
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(dataVersionStore.get(APP_ID), "1.0.0");
+  h.close();
+
+  // The "reload": a second `WorkerApp`, the same store, a newer version.
+  h = await startWorker(dataVersionStore, build(APP_ID, "1.1.0", appSource({ async: false, throws: false, rejects: false })));
+  assert.equal(text(h.tree), "1.0.0 1", "the Worker saw the pending upgrade after the reload");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(dataVersionStore.get(APP_ID), "1.1.0");
+  h.close();
+}
+
+// -- Through the web App Hub's frame storage (hub-storage.js), no DOM -------
+// `startMessage` sends the hub page's stored data version to the frame;
+// `frameDataVersionStore` answers it at once and sends each write back as
+// a `data-version-set` message, the same idea as `frameKvStore` for kv;
+// the page applies it with `HubStore.setDataVersion` (never under the kv
+// prefix, `HubStore.kvClear` removes it too).
+{
+  const appId = "com.example.hub-upgrade";
+  const store = new HubStore(memoryStorage());
+  assert.equal(store.dataVersion(appId), null);
+
+  // The page's own `onUpgrade`-equivalent bookkeeping: first start.
+  const start1 = startMessage(store, appId, { pkg: new ArrayBuffer(0), core: new ArrayBuffer(0), refused: new Set() });
+  assert.equal(start1.dataVersion, null);
+  const sent1 = [];
+  const frameStore1 = frameDataVersionStore(start1.dataVersion, (m) => sent1.push(m));
+  assert.equal(frameStore1.get(), null);
+  frameStore1.set(appId, "1.0.0"); // `finishStart` on the frame side
+  assert.deepEqual(sent1.map((m) => [m.type, m.version]), [["data-version-set", "1.0.0"]]);
+  for (const m of sent1) {
+    const checked = checkFrameMessage(m);
+    assert.ok(checked, `a valid frame message: ${JSON.stringify(m)}`);
+    assert.equal(checked.type, "data-version-set");
+    store.setDataVersion(appId, checked.version);
+  }
+  assert.equal(store.dataVersion(appId), "1.0.0");
+
+  // A second "start" (an upgrade to 1.1.0): the frame gets 1.0.0 back.
+  const start2 = startMessage(store, appId, { pkg: new ArrayBuffer(0), core: new ArrayBuffer(0), refused: new Set() });
+  assert.equal(start2.dataVersion, "1.0.0");
+
+  // `kvClear` (an uninstall) removes the data version along with the kv data.
+  store.kvSet(appId, "k", "v");
+  store.kvClear(appId);
+  assert.equal(store.dataVersion(appId), null);
+  assert.deepEqual(store.kvSnapshot(appId), {});
 }
 
 console.log("run-upgrade: all checks passed");

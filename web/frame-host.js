@@ -174,6 +174,11 @@ export class AppFrame {
       if (this.allowed("store.kv")) applyKvMessage(store, appId, msg, this.opts.quota);
       return;
     }
+    // plinth:app-info (core 1.13, PRODUCTION.md D4): no capability gate.
+    if (msg.type === "data-version-set") {
+      store.setDataVersion(appId, msg.version);
+      return;
+    }
     switch (msg.type) {
       case "ready": {
         if (this.sent) return;

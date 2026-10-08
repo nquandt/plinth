@@ -5224,6 +5224,13 @@ function grantsKey(id) {
   return `${PREFIX}grants:${norm(id)}`;
 }
 
+// `plinth:app-info` (core 1.13, PRODUCTION.md D4, onUpgrade): the data
+// version of each app, next to its kv data but under its own key (never
+// "kv:<id>:", so it can never collide with an app's own kv keys).
+function dataVersionKey(id) {
+  return `${PREFIX}dv:${norm(id)}`;
+}
+
 /** The size that counts against the quota for one entry. */
 function entrySize(key, value) {
   return key.length + value.length;
@@ -5307,6 +5314,17 @@ class HubStore {
   kvClear(id) {
     const prefix = kvPrefix(id);
     for (const k of storageKeys(this.storage)) if (k.startsWith(prefix)) this.storage.removeItem(k);
+    this.storage.removeItem(dataVersionKey(id));
+  }
+
+  /** `plinth:app-info` (core 1.13, PRODUCTION.md D4): the stored data version of `id`, or null. */
+  dataVersion(id) {
+    return this.storage.getItem(dataVersionKey(id));
+  }
+
+  /** Stores `version` as the data version of `id`. */
+  setDataVersion(id, version) {
+    this.storage.setItem(dataVersionKey(id), version);
   }
 
   /** The stored grant record of `id`, or null. */
@@ -5407,6 +5425,26 @@ function frameKvStore(snapshot, quota, send) {
   };
 }
 
+/**
+ * The data version store of an app in its frame (the `dataVersionStore`
+ * that `plinth-web.js`'s `PlinthApp.load` and `app-worker.js`'s
+ * `WorkerApp.load` expect: `{get(key), set(key, value)}`, core 1.13,
+ * PRODUCTION.md D4): answers `initial` (the value `startMessage` sent) at
+ * once, and calls `send(message)` for a write, same idea as `frameKvStore`.
+ */
+function frameDataVersionStore(initial, send) {
+  let version = initial ?? null;
+  return {
+    get() {
+      return version;
+    },
+    set(_key, value) {
+      version = value;
+      send({ channel: CHANNEL, type: "data-version-set", version: value });
+    },
+  };
+}
+
 // -- Messages ----------------------------------------------------------------
 
 const FRAME_TYPES = {
@@ -5415,6 +5453,8 @@ const FRAME_TYPES = {
   failed: { message: "string" },
   "kv-set": { key: "string", value: "string" },
   "kv-delete": { key: "string" },
+  // plinth:app-info (core 1.13): the frame's own data version changed.
+  "data-version-set": { version: "string" },
   "clipboard-write": { text: "string" },
   "clipboard-read": { id: "number" },
   dialog: { id: "number", kind: "string", message: "string" },
@@ -5509,9 +5549,21 @@ function applyKvMessage(store, id, msg, quota = KV_QUOTA) {
  * `plinth:hub` snapshot (`HubHost.snapshot()`), else null.
  */
 function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA, hub = null }) {
-  return { channel: CHANNEL, type: "start", pkg, core, kv: store.kvSnapshot(id), quota, refused: [...refused], hub };
+  return {
+    channel: CHANNEL,
+    type: "start",
+    pkg,
+    core,
+    kv: store.kvSnapshot(id),
+    quota,
+    refused: [...refused],
+    hub,
+    // plinth:app-info (core 1.13, PRODUCTION.md D4): no capability gate, as
+    // for plinth:locale, so this goes out even when store.kv is refused.
+    dataVersion: store.dataVersion(id),
+  };
 }
-  return { KV_QUOTA, MAX_KEY, MAX_NOTIFY_TEXT, CHANNEL, entrySize, memoryStorage, HubStore, frameKvStore, checkFrameMessage, applyKvMessage, startMessage };
+  return { KV_QUOTA, MAX_KEY, MAX_NOTIFY_TEXT, CHANNEL, entrySize, memoryStorage, HubStore, frameKvStore, frameDataVersionStore, checkFrameMessage, applyKvMessage, startMessage };
   })();
 
   // ---- app-worker.js
@@ -5552,7 +5604,7 @@ function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA, hub = n
 // No DOM code: `test/run-worker.mjs` runs both sides in Node over a
 // `MessageChannel`.
 
-const { PlinthApp, httpFetch, defaultAskDialog, browserNotify, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON } = __plinth_web;
+const { PlinthApp, httpFetch, defaultAskDialog, browserNotify, parseManifest, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON } = __plinth_web;
 const { decodeOps } = __protocol;
 const { frameKvStore } = __hub_storage;
 const { FileSpace, memoryFileBackend } = __files;
@@ -5611,6 +5663,23 @@ function cachedKvStore(snapshot, send) {
 }
 
 /**
+ * `plinth:app-info` (core 1.13, PRODUCTION.md D4): the data version on a
+ * single stored value (`initial`, from the document's `load` message),
+ * sending each write to the document (`cachedKvStore`'s idea, but for one
+ * value, since every app in a Worker has exactly one data version).
+ */
+function cachedDataVersionStore(initial, send) {
+  let version = initial ?? null;
+  return {
+    get: () => version,
+    set(_key, value) {
+      version = value;
+      send({ type: "data-version-set", version: value });
+    },
+  };
+}
+
+/**
  * The Worker side. `scope` is the global scope of the Worker (or one end
  * of a `MessageChannel` in a test): anything with `postMessage` and
  * `onmessage`.
@@ -5647,6 +5716,9 @@ function runWorker(scope) {
     await app.load(m.core, m.app, {
       manifestText: m.manifestText,
       kvStore: typeof m.kvQuota === "number" ? frameKvStore(m.kv, m.kvQuota, send) : cachedKvStore(m.kv, send),
+      // plinth:app-info (core 1.13, PRODUCTION.md D4): the document sent the
+      // stored data version in `load` (`WorkerApp.load`); each write goes back.
+      dataVersionStore: cachedDataVersionStore(m.dataVersion, send),
       refused: new Set(m.refused ?? []),
       memoryLimitPages: m.memoryLimitPages,
       // plinth:locale (core 1.13): the page's locale; else the Worker's own.
@@ -5767,7 +5839,11 @@ class WorkerApp {
    * `manifestText`; `kvStore` ({get,set,delete,keys}, the document's store:
    * the Worker gets a snapshot, and each write comes back to this store);
    * `kvQuota` (characters; the Worker refuses a write over it, as
-   * `frameKvStore`); `refused`; `log`; `reportError`; `askDialog`;
+   * `frameKvStore`); `dataVersionStore` ({get(key), set(key, value)}, core
+   * 1.13, PRODUCTION.md D4, `onUpgrade`: the document's store for the data
+   * version, the same shape as `plinth-web.js`'s default; the Worker gets
+   * the stored value at the start and sends back each write); `refused`;
+   * `log`; `reportError`; `askDialog`;
    * `clipboard`; `netFetch`; `files` (a `FileSpace`); `sql` (`{ call(kind,
    * statement, params) }`, the page's `store.sql` engine; none: an allowed
    * call answers "denied:unsupported"); `notify` (`{ show,
@@ -5789,6 +5865,12 @@ class WorkerApp {
         : null);
     const kv = {};
     if (opts.kvStore) for (const k of opts.kvStore.keys()) kv[k] = opts.kvStore.get(k);
+    // `plinth:app-info` (core 1.13, PRODUCTION.md D4): the app id, so a
+    // write of the data version from the Worker (`data-version-set`) goes
+    // back to `opts.dataVersionStore` under the same key the store expects
+    // (the same id `PlinthApp.load` uses inside the Worker).
+    this._appId = opts.manifestText ? parseManifest(opts.manifestText).id : "";
+    const dataVersion = opts.dataVersionStore ? opts.dataVersionStore.get(this._appId) : null;
     return new Promise((resolve, reject) => {
       this._loading = { resolve: () => resolve(this), reject };
       this._post({
@@ -5802,6 +5884,7 @@ class WorkerApp {
         hub: opts.hubSnapshot ?? null,
         memoryLimitPages: opts.memoryLimitPages,
         locale: opts.locale ?? null,
+        dataVersion,
       });
     });
   }
@@ -5954,6 +6037,9 @@ class WorkerApp {
         break;
       case "kv-delete":
         o.kvStore?.delete(msg.key);
+        break;
+      case "data-version-set":
+        o.dataVersionStore?.set(this._appId, msg.version);
         break;
       case "clipboard-write":
         if (this.clip) Promise.resolve().then(() => this.clip.writeText(msg.text)).catch(() => {});
@@ -6168,6 +6254,11 @@ class AppFrame {
     const { appId, store } = this.opts;
     if (msg.type === "kv-set" || msg.type === "kv-delete") {
       if (this.allowed("store.kv")) applyKvMessage(store, appId, msg, this.opts.quota);
+      return;
+    }
+    // plinth:app-info (core 1.13, PRODUCTION.md D4): no capability gate.
+    if (msg.type === "data-version-set") {
+      store.setDataVersion(appId, msg.version);
       return;
     }
     switch (msg.type) {
@@ -6539,7 +6630,7 @@ function defineElement({ frameDocument, baseUrl, styleCss }) {
 
 const { readPlnt, parseManifest, normalizeLocale, pageLocale } = __plinth_web;
 const { Tree, DomRenderer } = __dom_renderer;
-const { CHANNEL, frameKvStore } = __hub_storage;
+const { CHANNEL, frameKvStore, frameDataVersionStore } = __hub_storage;
 const { WorkerApp, startAppWorker } = __app_worker;
 
 const container = document.getElementById("app");
@@ -6575,6 +6666,9 @@ function showError(text) {
 async function start(msg) {
   const { appWasm, manifestText, assets } = await readPlnt(new Uint8Array(msg.pkg));
   const kvStore = frameKvStore(msg.kv, msg.quota, (m) => send(m));
+  // plinth:app-info (core 1.13, PRODUCTION.md D4): the data version the
+  // hub page sent in `start`, carried the same way as the kv snapshot.
+  const dataVersionStore = frameDataVersionStore(msg.dataVersion, (m) => send(m));
   // For tests: which app this frame runs.
   document.body.dataset.appId = parseManifest(manifestText).id;
   // The core and the app run in a dedicated Worker (`app-worker.js`). In the
@@ -6592,6 +6686,7 @@ async function start(msg) {
     log: (s) => console.log("[app]", s),
     manifestText,
     kvStore,
+    dataVersionStore,
     kvQuota: msg.quota,
     refused: new Set(Array.isArray(msg.refused) ? msg.refused : []),
     askDialog: (kind, message) => ask("dialog", { kind, message: String(message) }),
