@@ -72,6 +72,10 @@ pub mod code {
     /// `arr.sort()` with a numeric element and no comparator: JS compares
     /// the elements' string forms, which is almost never what was meant.
     pub const SORT_DEFAULT_COMPARE: &str = "PL2025";
+    /// A warning: the statement of a `store.sql` call is not a string
+    /// literal or a `const` (`docs/SQL.md` §3). Building a statement from
+    /// strings is the usual cause of SQL injection; use `?` parameters.
+    pub const SQL_DYNAMIC: &str = "PL2026";
     // 3xxx: types.
     pub const TYPE_MISMATCH: &str = "PL3001";
     pub const UNKNOWN_NAME: &str = "PL3002";

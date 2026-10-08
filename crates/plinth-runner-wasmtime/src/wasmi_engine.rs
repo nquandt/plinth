@@ -11,8 +11,8 @@
 //! lives once, in `lib.rs`.
 //!
 //! Every interface is wired: `ui`, `dev`, `error`, `time`, `store`,
-//! `clipboard`, `dialog`, `notify`, `net`, `files` and `hub` (SPEC.md §9.2
-//! step 2).
+//! `clipboard`, `dialog`, `notify`, `net`, `files`, `sql` and `hub` (SPEC.md
+//! §9.2 step 2).
 //!
 //! wasmi 2 is a register-machine interpreter (it compiles Wasm to its own
 //! register-based bytecode ahead of a call, not a tree-walking
@@ -34,6 +34,7 @@ use crate::bindings::plinth::app::dev::Host as DevHost;
 use crate::bindings::plinth::app::dialog::Host as DialogHost;
 use crate::bindings::plinth::app::error::{DeniedReason as WitDeniedReason, Host as ErrorHost, HostError};
 use crate::bindings::plinth::app::files::Host as FilesHost;
+use crate::bindings::plinth::app::sql::Host as SqlHost;
 use crate::bindings::plinth::app::hub::Host as HubHost;
 use crate::bindings::plinth::app::net::Host as NetHost;
 use crate::bindings::plinth::app::notify::Host as NotifyHost;
@@ -525,6 +526,17 @@ fn register_imports(linker: &mut Linker<HostState>) -> Result<()> {
         let path = read_string(&mut caller, ptr, len)?;
         Ok(FilesHost::remove(caller.data_mut(), path) as i32)
     })?;
+    // store.sql (core 1.13): `run(kind, statement, params)`. The `u8` kind is
+    // an `i32` in the core ABI.
+    linker.func_wrap(
+        "plinth:app/sql@1.0.0",
+        "run",
+        |mut caller: Caller<HostState>, kind: i32, s_ptr: i32, s_len: i32, p_ptr: i32, p_len: i32| -> Result<i32, WasmiError> {
+            let statement = read_string(&mut caller, s_ptr, s_len)?;
+            let params = read_string(&mut caller, p_ptr, p_len)?;
+            Ok(SqlHost::run(caller.data_mut(), kind as u8, statement, params) as i32)
+        },
+    )?;
 
     register_hub_imports(linker)?;
     Ok(())

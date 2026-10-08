@@ -1701,6 +1701,16 @@ function hostImports(
     run.then((result) => completeRequest?.(id, result));
     return id;
   }
+  // store.sql (core 1.13, docs/SQL.md): the same request id and
+  // `[ok, int, text, error]` completion as `net.fetch`. The web engine is
+  // step 3 of docs/SQL.md §7; until then an allowed call answers
+  // "denied:unsupported" (a denied call never traps).
+  function openSql() {
+    const id = nextRequest++;
+    const reason = capReason("store.sql") ?? DeniedReason.unsupported;
+    Promise.resolve().then(() => completeRequest?.(id, [false, 0, "", deniedText(reason)]));
+    return id;
+  }
   function mem() {
     return new DataView(getExports().memory.buffer);
   }
@@ -2011,6 +2021,13 @@ function hostImports(
       },
       remove(ptr, len) {
         return openFiles("remove", readString(ptr, len), null);
+      },
+    },
+    // Core 1.13: run(kind, statement(ptr, len), params(ptr, len)) returns
+    // the request id directly.
+    "plinth:app/sql@1.0.0": {
+      run(_kind, _sPtr, _sLen, _pPtr, _pLen) {
+        return openSql();
       },
     },
     "plinth:app/clipboard@1.0.0": {

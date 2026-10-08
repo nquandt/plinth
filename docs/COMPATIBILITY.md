@@ -33,7 +33,7 @@ Status of this file: first version, 2026-10-07.
 - The package stays `plinth:app@1.0.0` for all of major version 1. The import names of a core contain this version, so a change of it breaks every old core.
 - Each new function, interface, type or enum case comes with a new core minor version, and `rt_abi::ADDED_IN` records which minor added the core functions that use it (HANDOFF §6).
 - Do not change the parameters, the results or the meaning of an existing function. Do not add a field to an existing record, or a case to an existing variant or enum that an old core reads: in the component model, that changes the type. Add a new function with the new type instead (for example `fetch2`).
-- A host supplies every function of every interface that any supported core imports. A capability that a host cannot give answers `denied(unsupported)`; it does not leave the import out.
+- A host supplies every function of every interface that any supported core imports. A capability that a host cannot give answers `denied(unsupported)`; it does not leave the import out. Example: core 1.13 (not shipped yet) adds the interface `sql` (`docs/SQL.md`). The web host supplies `sql.run` and answers `denied:unsupported` until it has a SQL engine.
 - Removal is only possible in a new major version (`plinth:app@2.0.0`).
 
 ## 4. The `.plnt` container and the manifest (C4)

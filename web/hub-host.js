@@ -32,6 +32,7 @@ import { checkPackage } from "./hub-integrity.js";
 const CAPABILITIES = {
   "store.kv": { risk: "low", description: "save data on this device" },
   "files.private": { risk: "low", description: "save files on this device" },
+  "store.sql": { risk: "low", description: "keep a database on this device" },
   "clipboard.write": { risk: "low", description: "write to the clipboard" },
   "clipboard.read": { risk: "medium", description: "read the clipboard" },
   notify: { risk: "medium", description: "show notifications" },

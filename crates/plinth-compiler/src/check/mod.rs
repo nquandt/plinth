@@ -7,6 +7,7 @@ mod asyncfn;
 mod expr;
 mod promises;
 mod regexps;
+mod sql;
 mod jsx;
 pub mod stdlib;
 mod stmt;
@@ -152,6 +153,9 @@ pub enum StdObj {
     Navigate,
     /// `kv` from `plinth:store` (SPEC.md §8.5, capability `store.kv`).
     Kv,
+    /// `sql` from `plinth:store` (core 1.13, `docs/SQL.md`, capability
+    /// `store.sql`): `exec`, `query`, `batch`, `migrate`.
+    Sql,
     /// `JSON` from `plinth:core` (SPEC.md §4.7): `stringify`/`parse`.
     Json,
 }
@@ -246,8 +250,12 @@ pub struct Checker<'d> {
     /// The generated `JSON.stringify` (`true`) and `JSON.parse` (`false`)
     /// function of each struct type, made at the first use. A function, not
     /// inline code, so that a recursive type (`interface Node { kids:
-    /// Node[] }`) works.
-    json_funcs: HashMap<(bool, types::StructId), FuncId>,
+    /// Node[] }`) works. The third part of the key is `json_int_bools`.
+    json_funcs: HashMap<(bool, types::StructId, bool), FuncId>,
+    /// Set while the checker builds the row decoder of `sql.query<T>`
+    /// (`check/sql.rs`): a `boolean` field also reads the numbers 0 and 1,
+    /// because SQLite stores a boolean as an integer (`docs/SQL.md` §3).
+    json_int_bools: bool,
     /// Struct types whose `JSON.parse` placeholder (`json_default`) is in
     /// progress, to stop at a recursive field.
     json_default_stack: Vec<types::StructId>,
@@ -367,6 +375,7 @@ pub fn check_ex(modules: &[ModuleSrc], main: usize, diags: &mut Vec<Diagnostic>,
         resolving_interface: HashSet::new(),
         anon_structs: HashMap::new(),
         json_funcs: HashMap::new(),
+        json_int_bools: false,
         json_default_stack: Vec::new(),
         navigations: Vec::new(),
         app_seen: false,

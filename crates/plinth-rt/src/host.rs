@@ -495,6 +495,22 @@ pub fn files_call(callable: Callable, op: i32, path: i32, text: i32) {
     }
 }
 
+/// `store.sql` (core 1.13, `docs/SQL.md`): one ABI function for the WIT
+/// call `sql.run`. `kind` is 0 `exec`, 1 `query`, 2 `batch`, 3 `migrate`;
+/// `statement` is the statement (empty for `batch` and `migrate`) and
+/// `params` the JSON text that the compiler made. The completion is the same
+/// 4-element list as `net.fetch`, so the compiler's wrapper closure reads it
+/// with `net_result_*`. The host checks the capability.
+pub fn sql_call(callable: Callable, kind: i32, statement: i32, params: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let statement = strings::as_str(statement as u32);
+        let params = strings::as_str(params as u32);
+        let id = host::sql::run(kind as u8, statement, params);
+        register_request(id, callable);
+    }
+}
+
 /// The last denial reason for `plinth:notify`'s `cancel`, as the string
 /// `notify.lastError()` returns, or `None` if the last `cancel` was not
 /// denied. A denied `show` reports its reason in its completion instead.

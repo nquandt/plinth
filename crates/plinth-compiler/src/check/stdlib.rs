@@ -51,7 +51,7 @@ pub const TIME_NAMES: &[&str] = &[
     "parseDate",
     "DateParts",
 ];
-pub const STORE_NAMES: &[&str] = &["kv"];
+pub const STORE_NAMES: &[&str] = &["kv", "sql"];
 pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
 pub const DIALOG_NAMES: &[&str] = &["alert", "confirm", "prompt"];
 pub const NET_NAMES: &[&str] = &["fetch", "Response", "FetchOptions"];
@@ -113,6 +113,8 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
         }),
         StdModule::Store => Some(match name {
             "kv" => Binding::StdObj(StdObj::Kv),
+            // Core 1.13 (docs/SQL.md); the calls are in `check/sql.rs`.
+            "sql" => Binding::StdObj(StdObj::Sql),
             _ => return None,
         }),
         StdModule::Clipboard => Some(match name {
@@ -913,7 +915,7 @@ impl Checker<'_> {
         self.prog.funcs[fid as usize].body = body;
         let ft = crate::types::FuncType { params: Vec::new(), required: 0, ret: Type::Void };
         let wrapper = TExpr::new(TExprKind::Closure(fid), Type::Func(std::rc::Rc::new(ft)), span);
-        let call = TExpr::new(TExprKind::FilesCall(op, Box::new(path), Box::new(text), Box::new(wrapper)), Type::Void, span);
+        let call = TExpr::new(TExprKind::HostCall("files_call", op, Box::new(path), Box::new(text), Box::new(wrapper)), Type::Void, span);
         match result {
             None => call,
             Some((pv, p, info)) => {
@@ -1233,6 +1235,7 @@ impl Checker<'_> {
                     }
                 }
             }
+            StdObj::Sql => self.sql_call(prop, prop_span, type_args, args, span),
             StdObj::Json => match prop {
                 "stringify" => {
                     if args.len() != 1 {

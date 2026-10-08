@@ -33,6 +33,11 @@ pub const NET_LOCAL: &str = "net.local";
 /// item 3, §3). Low risk: the space belongs to this app only, like the kv
 /// store, so it is granted with no question.
 pub const FILES_PRIVATE: &str = "files.private";
+/// `store.sql`: the app's own SQL database (core 1.13, `docs/SQL.md` §4
+/// rule 6). Low risk: the database belongs to this app only, like the kv
+/// store and the private files, the host derives its location, and the app
+/// cannot name another file. So it is granted with no question.
+pub const STORE_SQL: &str = "store.sql";
 /// `plinth:notify` (core 1.12, `docs/PRODUCTION.md` H3): system
 /// notifications outside the app window. Medium risk: a notification can
 /// show at any time, also while the user works in another app, so it is
@@ -74,6 +79,7 @@ pub struct CapabilityInfo {
 pub const CAPABILITIES: &[CapabilityInfo] = &[
     CapabilityInfo { name: STORE_KV, risk: Risk::Low, description: "save data on this device" },
     CapabilityInfo { name: FILES_PRIVATE, risk: Risk::Low, description: "save files on this device" },
+    CapabilityInfo { name: STORE_SQL, risk: Risk::Low, description: "keep a database on this device" },
     CapabilityInfo { name: CLIPBOARD_WRITE, risk: Risk::Low, description: "write to the clipboard" },
     CapabilityInfo { name: CLIPBOARD_READ, risk: Risk::Medium, description: "read the clipboard" },
     CapabilityInfo { name: NOTIFY, risk: Risk::Medium, description: "show notifications" },
@@ -98,6 +104,7 @@ pub const FUNCTION_CAPABILITIES: &[(&str, &str)] = &[
     ("kv_delete", STORE_KV),
     ("kv_keys", STORE_KV),
     ("files_call", FILES_PRIVATE),
+    ("sql_call", STORE_SQL),
     ("clipboard_write_text", CLIPBOARD_WRITE),
     ("clipboard_read_text", CLIPBOARD_READ),
     // `kv_last_error` and `clipboard_last_error` read a local, harmless

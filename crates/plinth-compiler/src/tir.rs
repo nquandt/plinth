@@ -337,11 +337,14 @@ pub enum TExprKind {
     /// built (`check/stdlib.rs`) that decodes the completion result into a
     /// `Response` and calls the app's `done` (SPEC.md §8.4, §8.5, §11).
     NetFetchCall(Box<TExpr>, Box<TExpr>, Box<TExpr>, Box<TExpr>, Box<TExpr>),
-    /// `plinth:files` (core 1.11): `(op, path, text, wrapper)`. `op` is
-    /// the `files_call` operation code; `text` is a nullable string (only
-    /// `write` uses it). `wrapper` is a synthetic 0-arg closure that reads
-    /// the completion with `net_result_*` (`check/stdlib.rs`).
-    FilesCall(i32, Box<TExpr>, Box<TExpr>, Box<TExpr>),
+    /// A host call with an operation code and two strings that finishes
+    /// through a completion: `(runtime function, op, a, b, wrapper)`.
+    /// `plinth:files` (core 1.11) is `files_call` with `(op, path, text)`;
+    /// `text` is a nullable string (only `write` uses it). `store.sql`
+    /// (core 1.13) is `sql_call` with `(kind, statement, params)`.
+    /// `wrapper` is a synthetic 0-arg closure that reads the completion with
+    /// `net_result_*` (`check/stdlib.rs`, `check/sql.rs`).
+    HostCall(&'static str, i32, Box<TExpr>, Box<TExpr>, Box<TExpr>),
     /// `plinth:notify` `show` (core 1.12): `(title, body, tag, wrapper)`.
     /// `body` and `tag` are nullable strings. `wrapper` is a synthetic 0-arg
     /// closure that reads the completion with `net_result_*`

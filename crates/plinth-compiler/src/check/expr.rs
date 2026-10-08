@@ -3222,14 +3222,16 @@ impl Checker<'_> {
     /// uses the runtime's JSON cursor). Made once per type; the map entry
     /// exists before the body is built, so a recursive type calls itself.
     fn json_func(&mut self, stringify: bool, sid: crate::types::StructId, span: Span) -> FuncId {
-        if let Some(fid) = self.json_funcs.get(&(stringify, sid)) {
+        let int_bools = self.json_int_bools && !stringify;
+        if let Some(fid) = self.json_funcs.get(&(stringify, sid, int_bools)) {
             return *fid;
         }
         let ty = Type::Struct(sid);
         let ret = if stringify { Type::String } else { ty.clone() };
-        let name = format!("$json_{}_{sid}", if stringify { "stringify" } else { "parse" });
+        let kind = if stringify { "stringify" } else if int_bools { "sql_row" } else { "parse" };
+        let name = format!("$json_{kind}_{sid}");
         let fid = self.prog.new_func(FuncDef { name, kind: FuncKind::TopLevel, params: Vec::new(), ret: ret.clone(), body: Vec::new(), span });
-        self.json_funcs.insert((stringify, sid), fid);
+        self.json_funcs.insert((stringify, sid, int_bools), fid);
         let saved = std::mem::replace(
             &mut self.fx,
             FnCx { func: fid, scopes: vec![Scope::default()], loops: Vec::new(), switches: 0, ret: Some(ret), inferred: None, reactive: ReactiveCtx::Callback, is_async: false },
@@ -3447,6 +3449,7 @@ impl Checker<'_> {
         match ty {
             Type::Number => TExpr::new(TExprKind::Rt("json_read_num", Vec::new()), Type::Number, span),
             Type::Int => TExpr::new(TExprKind::Rt("json_read_int", Vec::new()), Type::Int, span),
+            Type::Bool if self.json_int_bools => self.json_decode_int_bool(span),
             Type::Bool => TExpr::new(TExprKind::Rt("json_read_bool", Vec::new()), Type::Bool, span),
             Type::String => TExpr::new(TExprKind::Rt("json_read_str", Vec::new()), Type::String, span),
             Type::StrLits(lits) => self.json_decode_str_lits(lits.clone(), span),
@@ -3474,6 +3477,37 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
         }
+    }
+
+    /// A `boolean` of a `sql.query<T>` row (`json_int_bools`): the number 0
+    /// or 1 (SQLite stores a boolean as an integer), or `true`/`false`.
+    /// Another number fails the parse.
+    fn json_decode_int_bool(&mut self, span: Span) -> TExpr {
+        let kind = TExpr::new(TExprKind::Rt("json_peek_kind", Vec::new()), Type::Int, span);
+        // `json.rs` KIND_NUM.
+        let num_kind = TExpr::new(TExprKind::Num(2.0), Type::Int, span);
+        let is_num = TExpr::new(TExprKind::Cmp(CmpOp::Eq, EqKind::I32, bx(kind), bx(num_kind)), Type::Bool, span);
+        let n = self.temp(Type::Number);
+        let n_r = TExpr::new(TExprKind::Var(n), Type::Number, span);
+        let eq = |v: f64| {
+            TExpr::new(TExprKind::Cmp(CmpOp::Eq, EqKind::F64, bx(n_r.clone()), bx(TExpr::new(TExprKind::Num(v), Type::Number, span))), Type::Bool, span)
+        };
+        let zero_or_one = TExpr::new(TExprKind::Or(bx(eq(0.0)), bx(eq(1.0))), Type::Bool, span);
+        let not_bool = TExpr::new(TExprKind::Not(bx(zero_or_one)), Type::Bool, span);
+        let fail_call = TExpr::new(TExprKind::Rt("json_fail", Vec::new()), Type::Void, span);
+        let from_num = TExpr::new(
+            TExprKind::Block(
+                vec![
+                    TStmt::Let(n, Some(TExpr::new(TExprKind::Rt("json_read_num", Vec::new()), Type::Number, span))),
+                    TStmt::If(not_bool, vec![TStmt::Expr(fail_call)], Vec::new()),
+                ],
+                bx(eq(1.0)),
+            ),
+            Type::Bool,
+            span,
+        );
+        let from_bool = TExpr::new(TExprKind::Rt("json_read_bool", Vec::new()), Type::Bool, span);
+        TExpr::new(TExprKind::Cond(bx(is_num), bx(from_num), bx(from_bool)), Type::Bool, span)
     }
 
     fn json_decode_str_lits(&mut self, lits: Rc<[String]>, span: Span) -> TExpr {

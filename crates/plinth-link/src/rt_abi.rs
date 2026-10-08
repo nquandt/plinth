@@ -216,6 +216,8 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("notify_show", &[I32, I32, I32, I32, I32], &[]),
     ("notify_cancel", &[I32], &[]),
     ("notify_last_error", &[], &[I32]),
+    // -- store.sql (core 1.13, docs/SQL.md) -----------------------------------
+    ("sql_call", &[I32, I32, I32, I32, I32], &[]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -325,13 +327,15 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("notify_show", 12),
     ("notify_cancel", 12),
     ("notify_last_error", 12),
+    // store.sql (docs/SQL.md): the first function of core 1.13.
+    ("sql_call", 13),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).
 pub fn added_in(name: &str) -> u32 {
     ADDED_IN.iter().find(|(n, _)| *n == name).map_or(0, |(_, m)| *m)
 }
-pub const CORE_MINOR: u32 = 12;
+pub const CORE_MINOR: u32 = 13;
 
 /// The highest minor version that is shipped (frozen). A shipped minor gets
 /// no new function: the next function goes into `SHIPPED_MINOR + 1` and

@@ -1,0 +1,4 @@
+app/main.tsx(4,10): warning PL2026: this SQL statement is not a string literal or a `const`
+  sql.exec("DELETE FROM " + table);
+           ^^^^^^^^^^^^^^^^^^^^^^
+  help: give values as `?` parameters; a statement built from strings can let SQL injection in

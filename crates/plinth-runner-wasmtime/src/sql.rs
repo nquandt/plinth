@@ -59,9 +59,8 @@ use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// The capability of the SQL store (SPEC.md §11). Step 2 adds it to
-/// `plinth_link::capabilities` and checks it.
-pub const STORE_SQL: &str = "store.sql";
+/// The capability of the SQL store (SPEC.md §11), from the shared map.
+pub use plinth_link::capabilities::STORE_SQL;
 
 /// The file name of the database in the app's database folder.
 pub const FILE_NAME: &str = "store.sqlite";
@@ -497,7 +496,8 @@ fn success(int: i32, text: String) -> Value {
     Value::List(vec![Value::Bool(true), Value::Int(int), Value::Str(text), Value::Null])
 }
 
-fn failure(error: String) -> Value {
+/// A failed completion result: `[false, 0, "", error]`.
+pub(crate) fn failure(error: String) -> Value {
     Value::List(vec![Value::Bool(false), Value::Int(0), Value::Str(String::new()), Value::Str(error)])
 }
 

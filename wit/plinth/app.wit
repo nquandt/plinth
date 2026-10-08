@@ -268,6 +268,29 @@ interface hub {
   update: func(id: string) -> u32;
 }
 
+/// The SQL store of the app (core 1.13, `docs/SQL.md`; capability:
+/// `store.sql`, Low risk). Every app has one SQLite database; the host
+/// derives its location from the app identity, and the app cannot name a
+/// file. Every call returns a request id at once; the result arrives later
+/// through a `completion` event (SPEC.md §8.4) as a 4-element list, the same
+/// shape as `net.fetch`: `ok` (bool), an s32 (the number of changes for
+/// `exec`, the new version for `migrate`, else 0), `text` (string) and
+/// `error` (string, or null when `ok`). A SQL error completes with `error` =
+/// `"sql: <message>"`; a denied call completes with `error` =
+/// `"denied:<reason>"`. A call never traps.
+interface sql {
+  /// Runs one call. `kind` is 0 `exec`, 1 `query`, 2 `batch` or 3
+  /// `migrate`. For `exec` and `query`, `statement` is one statement with `?`
+  /// parameters and `params` is a JSON array of the parameters (numbers,
+  /// strings, booleans and nulls). For `batch`, `params` is a JSON array of
+  /// `{"sql": string, "params": array}`; for `migrate`, a JSON array of
+  /// statements; `statement` is not used. `text` is
+  /// `{"changes":n,"lastInsertId":n}` for `exec`, a JSON array of row
+  /// objects for `query`, `null` for `batch` and the new version for
+  /// `migrate`. An unknown `kind` completes with an error.
+  run: func(kind: u8, statement: string, params: string) -> u32;
+}
+
 world app {
   import ui;
   import dev;
@@ -279,6 +302,7 @@ world app {
   import net;
   import hub;
   import files;
+  import sql;
 
   /// Builds the initial tree.
   export init: func(args: list<u8>);

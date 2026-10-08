@@ -38,7 +38,7 @@ extern crate alloc;
 #[cfg(target_arch = "wasm32")]
 #[used]
 #[unsafe(link_section = "plinth-core")]
-static CORE_VERSION: [u8; 6] = *b"1.12.0";
+static CORE_VERSION: [u8; 6] = *b"1.13.0";
 
 #[cfg(target_arch = "wasm32")]
 mod allocator;
@@ -668,6 +668,10 @@ abi! {
     }
     fn __plinth_rt_notify_cancel(tag: i32) { host::notify_cancel(tag) }
     fn __plinth_rt_notify_last_error() -> i32 { host::notify_last_error() }
+    // -- store.sql (core 1.13, docs/SQL.md) ------------------------------------
+    fn __plinth_rt_sql_call(thunk: i32, env: i32, kind: i32, statement: i32, params: i32) {
+        host::sql_call(Callable { thunk: thunk as u32, env: env as u32 }, kind, statement, params)
+    }
 
     // -- plinth:time date/time additions (SPEC.md §8.5, docs/GAPS.md gap #5) --
     fn __plinth_rt_tz_offset_minutes(ms: f64) -> f64 { host::timezone_offset(ms as i64) as f64 }

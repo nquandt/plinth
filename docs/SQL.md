@@ -2,7 +2,7 @@
 
 This document is the design of `store.sql`: a SQL database for each app. It is checklist item H4 in `docs/PRODUCTION.md`. The owner decided on 2026-10-07 that Plinth gives apps a SQL store (`docs/STORAGE.md` ST-Q1).
 
-Status: design draft, 2026-10-08. Step 1 of §7 (the desktop engine) is built: `crates/plinth-runner-wasmtime/src/sql.rs`, with unit tests. No app can call it yet (step 2).
+Status: 2026-10-08. Steps 1 and 2 of §7 are done: apps call `store.sql` on the desktop host, on wasmtime and on wasmi (core 1.13). The web host does not have it yet (step 3); there each call rejects with `Error("denied:unsupported")`.
 
 ## 1. Goals
 
@@ -60,7 +60,11 @@ await sql.batch([
 
 **Parameters and values.** A parameter is `number`, `string`, `boolean` (stored as 0 or 1) or `null`. A column value is a number, a string or `null`; `T` can name a `boolean` field, which reads 0 and 1. Binary data (`BLOB`) is not in the first version (SQL-Q3).
 
-**Statements.** The statement is always a string with `?` parameters. The compiler gives a warning when the statement argument is not a string literal or a `const` (string building is the usual cause of SQL injection; a dynamic table name is the rare good reason).
+**Statements.** The statement is always a string with `?` parameters. The compiler gives warning `PL2026` when the statement argument is not a string literal or a `const` (string building is the usual cause of SQL injection; a dynamic table name is the rare good reason). The check also applies to each statement in an array literal of `batch` and `migrate`. The compiler cannot see the statements of an array value (for example steps made in a loop), so it does not check them.
+
+**Parameters in the compiler.** In an array literal, each parameter is checked alone, so one call can mix the types: `[title, 1, true, null]`. An array value must have one parameter type as its element type (for example `string[]` or `(number | null)[]`), because the language has no union of `number`, `string` and `boolean`. The steps of `batch` are an array literal of `{ sql, params? }` objects, or an array value of an object type with `sql: string` and an optional `params` array.
+
+**Rows in the compiler.** `T` of `query<T>` is an object type (or `Map<string, V>`). The row decoder is the generated decoder of `JSON.parse<T>`, with one change: a `boolean` field reads the numbers 0 and 1 (another number fails), and also `true` and `false`.
 
 **Errors.** A SQL error (a syntax error, a constraint, a busy database) rejects the promise with `Error("sql: <message>")`. A denied call rejects with `Error("denied:<reason>")`, as `files` does. A call never traps.
 
@@ -82,7 +86,8 @@ await sql.batch([
 Core 1.12 is shipped and frozen, so this feature is in **core 1.13**.
 
 - WIT: a new interface `sql` with one call `run(kind: u8, statement: string, params: string) -> u32` (a request id). `params` and the result are JSON text. The completion uses the existing 4-field result list (`ok`, an int, `text`, `error`).
-- Core 1.13: the functions that start a call and read its completion, as `files` has. The decoding of rows into `T` uses the JSON decoder that the compiler already generates for `JSON.parse<T>`, so the core gets no SQL-specific decoder.
+- Core 1.13: one new function, `sql_call(thunk, env, kind, statement, params)`, that starts a call (as `files_call` does for `files`). The completion is read with the existing `net_result_*` functions. The decoding of rows into `T` uses the JSON decoder that the compiler already generates for `JSON.parse<T>`, so the core gets no SQL-specific decoder.
+- Every host must supply the WIT import `sql.run`, because the core imports it. The web host (`web/plinth-web.js`) answers `denied:unsupported` until step 3.
 - The compiler: the `sql` module in `std/store.d.ts`, the generic `query<T>` lowering to the typed JSON decoder, the warning of §3, and the capability.
 
 ## 6. Sync and backup
@@ -92,7 +97,7 @@ The database is one file in the private space. When the sync engine (`docs/STORA
 ## 7. Steps
 
 1. **Done.** The desktop engine: `rusqlite` in the runner's `HostState` on a worker thread, the authorizer, the limits, and unit tests (`crates/plinth-runner-wasmtime/src/sql.rs`). The module comment gives the JSON shapes of the calls.
-2. WIT, core 1.13, the compiler module and `query<T>`; tests on wasmtime and wasmi.
+2. **Done.** WIT `sql.run`, core 1.13 (`sql_call`), the capability `store.sql` (Low), the host import on wasmtime and wasmi, `std/store.d.ts`, the compiler (`crates/plinth-compiler/src/check/sql.rs`, the 0/1 booleans in the row decoder, warning `PL2026`), and `crates/plinth-compiler/tests/sql.rs` on both engines. The web host has a stub that answers `denied:unsupported`.
 3. The web engine: SQLite Wasm with OPFS in a Worker of the parent page, the bridge messages, and Node and Edge tests. The same SQL test file runs on both hosts and compares the results.
 4. The notes app (VALIDATION V2) uses it for its index and search (SQLite FTS5).
 5. Docs: `docs/host-apis.md`, `docs/guides/storage.md`, `docs/LIMITS.md`, `docs/PRODUCTION.md` H4.

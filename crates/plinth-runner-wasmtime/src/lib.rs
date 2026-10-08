@@ -618,8 +618,6 @@ impl bindings::plinth::app::net::Host for HostState {
 impl HostState {
     /// The `store.sql` database, made at the first call. `None` if the
     /// guest has no private space.
-    // Step 2 of docs/SQL.md §7 connects this to the `sql` import of the WIT.
-    #[allow(dead_code)]
     fn sql_store(&mut self) -> Option<&sql::SqlStore> {
         if self.sql.is_none() {
             let dir = sql::database_dir(self.files.root()?);
@@ -631,6 +629,33 @@ impl HostState {
     fn files_call(&mut self, op: files::Op) -> u32 {
         let id = self.requests.open();
         self.files.submit(&self.policy, id, op, &self.net_results);
+        id
+    }
+}
+
+/// `store.sql` (core 1.13, `docs/SQL.md`). The capability check comes
+/// first; a denied call, an unknown `kind` and a guest with no private
+/// space complete at once with an error, and never trap.
+impl bindings::plinth::app::sql::Host for HostState {
+    fn run(&mut self, kind: u8, statement: String, params: String) -> u32 {
+        let id = self.requests.open();
+        let results = self.net_results.clone();
+        let answer = match self.policy.check(sql::STORE_SQL) {
+            Err(reason) => Some(denied_text(reason).to_owned()),
+            Ok(()) => match sql::Op::from_kind(kind, statement, params) {
+                None => Some(format!("sql: unknown call kind {kind}")),
+                Some(op) => match self.sql_store() {
+                    None => Some(denied_text(DeniedReason::Unsupported).to_owned()),
+                    Some(store) => {
+                        store.submit(id, op, &results);
+                        None
+                    }
+                },
+            },
+        };
+        if let Some(error) = answer {
+            results.lock().unwrap().push((id, sql::failure(error)));
+        }
         id
     }
 }
