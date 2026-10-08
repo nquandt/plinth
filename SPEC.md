@@ -201,7 +201,7 @@ The compiler rejects these features, and each one has a clear error message and 
 | Module | Contents |
 |---|---|
 | `plinth:core` | `int`, `Math`, `JSON` (typed `parse<T>` with a schema, and `stringify`), string helpers, `console.log` (dev only) |
-| `plinth:ui` | Control components (§6.3), `signal`, `computed`, `effect`, `navigate`, `app()` entry |
+| `plinth:ui` | Control components (§6.3), `signal`, `computed`, `effect`, `navigate`, `app()` entry, `onMount`, `onUpgrade(fromVersion)` (core 1.13: runs once at start when the stored data version is lower than the app version, §8.5) |
 | `plinth:store` | key-value store, simple SQL (SQLite) — capability `store.kv`, `store.sql` |
 | `plinth:fs` | user-picked file tokens — capability `fs.pick` |
 | `plinth:files` | text files in the app's private space (core 1.11, docs/STORAGE.md) — capability `files.private` |
@@ -573,7 +573,8 @@ The `kind`, `prop`, `event`, and enum ids are generated from one table in `wit/p
 - Calls that can block (net, file dialogs, large reads) return a `request: u32` at once and finish through a `completion` event. Synchronous calls are permitted only when they are guaranteed fast (clock, locale, kv get from cache).
 - Every call checks the capability policy (§11). A denied call returns `error.denied(reason)` and never traps.
 - **Status (M2):** `wit/plinth/app.wit` has the interfaces `error` (`host-error`, `denied-reason`), `time` (`now`, `monotonic-now`, `set-timer`, `cancel-timer`), `store` (`kv-get`, `kv-set`, `kv-delete`, `kv-keys`) and `clipboard` (`write-text`, `read-text`). All of these calls are synchronous. The host fires timers with the `timer` event. The desktop host wakes at the next timer deadline (and at least each 15 ms, for net results) and fires every due timer. A late repeating timer does not catch up missed ticks. Frame timers (core 1.12) fire in the display frame, not on this loop. The kv store is a JSON file at `%APPDATA%\plinth\apps\<id>\kv.json`.
-- **Status (2026-10-08):** `wit/plinth/app.wit` is the full list. It also has `dialog`, `notify`, `net`, `files`, `hub`, `sql` and `locale`, and the snapshot test `wit_append_only` keeps it append-only. `docs/host-apis.md` gives the behavior and the tests of each interface on each host. `docs/migrations/` lists what each core minor added.
+- **Status (2026-10-08):** `wit/plinth/app.wit` is the full list. It also has `dialog`, `notify`, `net`, `files`, `hub`, `sql`, `locale` and `app-info`, and the snapshot test `wit_append_only` keeps it append-only. `docs/host-apis.md` gives the behavior and the tests of each interface on each host. `docs/migrations/` lists what each core minor added.
+- **`app-info` (core 1.13, 2026-10-08):** the host stores a data version for each app, with the app's data. `data-version` returns it only when an upgrade is pending (it is lower than the manifest version); then the guest claims the upgrade. `mark-data-version` stores the manifest version. After a successful `init`, the host stores the manifest version unless the guest claimed the upgrade. A downgrade never lowers the stored version. `onUpgrade` in `plinth:ui` is built on these two calls; `docs/migrations/core-1.13.md` §3 has the full host rule.
 
 ---
 
