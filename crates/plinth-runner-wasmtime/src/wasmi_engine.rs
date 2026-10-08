@@ -24,8 +24,8 @@
 //! epoch-interruption primitive like wasmtime, but `Config::consume_fuel`
 //! charges a fuel unit per executed Wasm instruction (roughly), and
 //! `Store::set_fuel`/`get_fuel` read and refill it. `FUEL_PER_MS` converts
-//! `Limits::call_timeout` to a fuel budget; `new_engine`'s doc comment
-//! says how it was measured. The memory cap reuses `crate::Limiter`,
+//! `Limits::call_timeout` to a fuel budget; its doc comment says how it
+//! was measured. The memory cap reuses `crate::Limiter`,
 //! through `wasmi_core::ResourceLimiter` (the same trait `wasmi::
 //! ResourceLimiter` re-exports).
 
@@ -52,16 +52,21 @@ use wasmi::{Caller, Config, Engine, Error as WasmiError, Extern, Linker, Memory,
 
 /// Fuel per millisecond of `Limits::call_timeout` (SPEC.md §9.2 step 3).
 ///
-/// Measured on the owner's PC, release build, a tight `i32` add-and-branch
-/// loop compiled from `.wat` straight to wasmi (no plinth-rt in between):
-/// 2,000,000,000 iterations took 6.68 s and used 20,000,000,238 fuel, so
-/// ~3,000,000 fuel/ms for that loop. A real app's bytecode (calls, memory
-/// loads/stores through plinth-rt's own interpreter) is heavier per
-/// instruction than that loop, so this constant is set lower, to trip the
-/// time limit sooner rather than later on real app code: trading a closer
-/// wall-clock match for the simple loop against never running substantially
-/// longer than `call_timeout` on typical app code.
-const FUEL_PER_MS: u64 = 150_000;
+/// Measured with `tests/perf.rs` `engines_speed` (release build, the
+/// owner's PC, 2026-10-08; `docs/GAPS.md` "wasmi engine"): real app work
+/// uses 0.93 to 3.4 million fuel per ms. A 10,000-row List `init`, a Pong
+/// frame, a Cells edit, strings, calls and a sort use 0.93 to 1.6 million;
+/// a collection 2.3 million; a tight arithmetic loop 3.4 million. With 2
+/// million, the 2 s limit stops a call after 1.2 s (the tight loop) to 4.3 s
+/// (the sort), and after 2.5 s or more for usual UI work. Thus the limit
+/// does not stop usual app work early, and it is in a 2x band of 2 s.
+///
+/// Fuel counts guest work, not time, so the budget is the same in each
+/// build. A debug build of this crate runs wasmi about 100 times slower
+/// (5,600 to 12,800 fuel per ms), so there a call can run for minutes
+/// before it stops. Tests that hit the limit on purpose use a short
+/// `call_timeout` on wasmi (`tests/errors.rs`).
+const FUEL_PER_MS: u64 = 2_000_000;
 
 /// Builds the wasmi engine, with fuel metering on (the call time limit,
 /// SPEC.md §9.2 step 3; `FUEL_PER_MS` turns `Limits::call_timeout` into a
@@ -84,6 +89,9 @@ pub struct WasmiGuest {
     /// `FUEL_PER_MS`), set fresh before each call the same way the
     /// wasmtime path resets its epoch deadline.
     fuel_budget: u64,
+    /// The fuel that the last `init`/`on-event` call used (for the
+    /// calibration of `FUEL_PER_MS`, `docs/GAPS.md` "wasmi engine").
+    pub(crate) last_fuel_used: u64,
     /// Set after a trap. A trapped instance is never called again.
     pub(crate) poisoned: bool,
 }
@@ -148,7 +156,7 @@ pub fn load(
         .map_err(anyhow::Error::from)
         .context("the core module has no cabi_realloc export")?;
 
-    Ok(WasmiGuest { store, memory, init_fn, on_event_fn, cabi_realloc, fuel_budget, poisoned: false })
+    Ok(WasmiGuest { store, memory, init_fn, on_event_fn, cabi_realloc, fuel_budget, last_fuel_used: 0, poisoned: false })
 }
 
 /// Calls `init` or `on-event` with `bytes` as its `list<u8>` argument: the
@@ -161,7 +169,9 @@ pub fn call(g: &mut WasmiGuest, export: &str, bytes: &[u8]) -> Result<()> {
     let ptr = g.cabi_realloc.call(&mut g.store, (0, 0, 1, bytes.len().max(1) as i32)).map_err(anyhow::Error::from)?;
     g.memory.write(&mut g.store, ptr as usize, bytes).map_err(|e| anyhow::anyhow!("write the guest buffer: {e:#}"))?;
     let f = if export == "init" { &g.init_fn } else { &g.on_event_fn };
-    f.call(&mut g.store, (ptr, bytes.len() as i32)).map_err(anyhow::Error::from)
+    let result = f.call(&mut g.store, (ptr, bytes.len() as i32)).map_err(anyhow::Error::from);
+    g.last_fuel_used = g.fuel_budget - g.store.get_fuel().unwrap_or(0);
+    result
 }
 
 /// A short, plain reason for a failed guest call, the wasmi twin of

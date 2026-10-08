@@ -77,13 +77,15 @@ fn timer_and_kv_round_trip() {
     }
     assert_eq!(text_of(&tree), "waiting", "before the timer fires");
 
-    // No timer is due yet.
-    assert!(guest.next_timer_deadline().is_some(), "setTimeout should have scheduled a timer");
-    let commits = guest.fire_due_timers(Instant::now()).unwrap();
-    assert!(commits.is_empty(), "the timer is not due for 10ms yet");
+    // No timer is due yet. The check uses the deadline, not the clock: on
+    // the wasmi interpreter in a debug build, `init` can take more than
+    // the 10 ms of the timer after `setTimeout`.
+    let deadline = guest.next_timer_deadline().expect("setTimeout should have scheduled a timer");
+    let commits = guest.fire_due_timers(deadline - Duration::from_millis(1)).unwrap();
+    assert!(commits.is_empty(), "the timer is not due before its deadline");
 
     // Fire it after its deadline.
-    let commits = guest.fire_due_timers(Instant::now() + Duration::from_millis(20)).unwrap();
+    let commits = guest.fire_due_timers(deadline + Duration::from_millis(10)).unwrap();
     for log in guest.take_logs() {
         eprintln!("guest: {log}");
     }

@@ -5,6 +5,7 @@
 #   bash scripts/ci-local.sh nogui   # no GUI host tests (Linux and macOS CI)
 #   bash scripts/ci-local.sh full --shoot   # also the headless screenshot tests (needs a GPU; local only)
 #   bash scripts/ci-local.sh deny    # only the dependency audit (Linux CI; also part of full)
+#   bash scripts/ci-local.sh wasmi   # the app suites on the wasmi engine (PRODUCTION Q4; about 6 min warm)
 #
 # Run it from the repository root. It stops at the first failure.
 # Test crates run one at a time: on Windows, linking several large test
@@ -47,7 +48,32 @@ deny_check() {
   end
 }
 
+# The compiler suites that run apps, on the wasmi interpreter (the iOS engine,
+# `PLINTH_ENGINE=wasmi`; docs/GAPS.md "wasmi engine"). Not here, because a
+# debug build of wasmi is about 100 times slower than wasmtime: `lang` (about
+# 12 min), `sevenguis` (about 6 min), `monkey`, `budgets` (the 10,000-row
+# example) and `perf` (a bench). Run them by hand with the same command.
+wasmi_suites=(files hub_api hub_ui net notify async async_await apps e2e errors hostapi
+  capabilities collections grid hotreload regions robustness list_diff link_spike split gc_stress)
+
+wasmi_check() {
+  step "cargo test -p plinth-runner-wasmtime --features wasmi"
+  cargo test -p plinth-runner-wasmtime --features wasmi
+  end
+  step "PLINTH_ENGINE=wasmi cargo test -p plinth-compiler (app suites)"
+  local args=()
+  for t in "${wasmi_suites[@]}"; do args+=(--test "$t"); done
+  PLINTH_ENGINE=wasmi cargo test -p plinth-compiler --features plinth-runner-wasmtime/wasmi "${args[@]}"
+  end
+}
+
 case "$mode" in
+  wasmi)
+    wasmi_check
+    echo
+    echo "ci-local: all checks passed (wasmi)"
+    exit 0
+    ;;
   full)
     deny_check
     crates=("${common[@]}" "${gui[@]}")
@@ -64,7 +90,7 @@ case "$mode" in
     end
     crates=("${common[@]}")
     ;;
-  *) echo "usage: $0 full|nogui|deny [--shoot]" >&2; exit 2 ;;
+  *) echo "usage: $0 full|nogui|deny|wasmi [--shoot]" >&2; exit 2 ;;
 esac
 
 for crate in "${crates[@]}"; do

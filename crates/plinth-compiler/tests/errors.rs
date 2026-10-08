@@ -417,7 +417,16 @@ fn start_limited(runner: &Runner, main: &str, limits: Limits) -> (Guest, Tree) {
     (guest, tree)
 }
 
-const SHORT: Limits = Limits { memory_bytes: 16 << 20, call_timeout: std::time::Duration::from_millis(300) };
+/// The limits of the limit tests: 16 MiB and 300 ms. On wasmi
+/// (`PLINTH_ENGINE=wasmi`) the time limit is fuel, and fuel counts guest
+/// work: 300 ms is about 300 ms of work in a release build, but a debug
+/// build of wasmi is about 100 times slower, so an endless loop would run
+/// for about 50 s. Thus the limit is 20 ms on wasmi (a few seconds in a
+/// debug build; docs/GAPS.md "wasmi engine").
+fn short() -> Limits {
+    let ms = if std::env::var("PLINTH_ENGINE").as_deref() == Ok("wasmi") { 20 } else { 300 };
+    Limits { memory_bytes: 16 << 20, call_timeout: std::time::Duration::from_millis(ms) }
+}
 
 /// Checks that the guest stopped with an error that contains `want`, that
 /// a later call fails at once, and that a second app on the same runner
@@ -432,7 +441,7 @@ fn assert_stops(runner: &Runner, mut guest: Guest, mut tree: Tree, want: &str) {
     assert!(t.elapsed() < std::time::Duration::from_secs(10), "took {:?}", t.elapsed());
     let e = press(&mut guest, &mut tree, "ping").expect_err("a stopped app is not called again");
     assert!(format!("{e:#}").contains("stopped earlier"), "{e:#}");
-    let (mut other, mut other_tree) = start_limited(runner, &limit_app(""), SHORT);
+    let (mut other, mut other_tree) = start_limited(runner, &limit_app(""), short());
     press(&mut other, &mut other_tree, "ping").unwrap();
     assert_eq!(text(&other_tree), "pong");
 }
@@ -440,7 +449,7 @@ fn assert_stops(runner: &Runner, mut guest: Guest, mut tree: Tree, want: &str) {
 #[test]
 fn an_endless_loop_hits_the_time_limit() {
     let runner = Runner::new().unwrap();
-    let (guest, tree) = start_limited(&runner, &limit_app("let i = 0; while (i >= 0) { i = i + 1; }"), SHORT);
+    let (guest, tree) = start_limited(&runner, &limit_app("let i = 0; while (i >= 0) { i = i + 1; }"), short());
     assert_stops(&runner, guest, tree, &with_place("not responding (time limit reached)", "app/main.tsx:6"));
 }
 
@@ -448,7 +457,7 @@ fn an_endless_loop_hits_the_time_limit() {
 fn an_endless_loop_at_start_hits_the_time_limit() {
     let runner = Runner::new().unwrap();
     let main = show("function spin(): number { let i = 0; while (i >= 0) { i = i + 1; } return i; }\nconst x = spin();", "", "\"\" + x");
-    let mut guest = runner.load(&compile(&main).component, SHORT).unwrap();
+    let mut guest = runner.load(&compile(&main).component, short()).unwrap();
     let e = guest.init(&[]).expect_err("init must fail");
     assert!(format!("{e:#}").contains("not responding"), "{e:#}");
 }
@@ -460,7 +469,7 @@ fn endless_recursion_overflows_the_stack_and_stops_the_app() {
         "const m = signal",
         "function deep(n: number): number { return deep(n + 1) + 1; }\nconst m = signal",
     );
-    let (guest, tree) = start_limited(&runner, &main, SHORT);
+    let (guest, tree) = start_limited(&runner, &main, short());
     assert_stops(&runner, guest, tree, &with_place("too many nested calls (stack overflow)", "app/main.tsx:2"));
 }
 
@@ -472,7 +481,7 @@ fn endless_allocation_hits_the_memory_limit() {
         &limit_app("const keep: string[][] = []; while (keep.length >= 0) { keep.push([\"aaaaaaaaaaaaaaaa\" + keep.length]); }"),
         // A long time limit: this test is about the memory cap, and an
         // interpreter (the wasmi runner for iOS) fills memory slowly.
-        Limits { call_timeout: std::time::Duration::from_secs(30), ..SHORT },
+        Limits { call_timeout: std::time::Duration::from_secs(30), ..short() },
     );
     // The guest fails to grow its memory: wasm `memory.grow` returns -1 and
     // the runtime traps (out of memory), before the time limit.

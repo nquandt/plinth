@@ -50,7 +50,7 @@ Plinth is not ready for production apps. The current level is "before Preview".
 
 | Limit | Item |
 |---|---|
-| The `wasmi` engine (for iOS) is experimental. | R4 |
+| The `wasmi` engine (for iOS) is 7 to 11 times slower than wasmtime (release build). Its time limit counts work (fuel), not time: a call stops after 1.2 s to 4.3 s of work, not after exactly 2 s. | R4 |
 
 ## Updates
 

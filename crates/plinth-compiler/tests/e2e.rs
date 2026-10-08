@@ -157,7 +157,11 @@ fn counter_behaves_like_m0() {
     let mut times: Vec<Duration> = (0..200).map(|_| h.fire(inc, event::PRESS, Value::Null)).collect();
     times.sort();
     eprintln!("round trip: median {:?}, max {:?}", times[100], times[199]);
-    assert!(times[100] < Duration::from_millis(1));
+    // The wasmi interpreter (`PLINTH_ENGINE=wasmi`) is slower than
+    // wasmtime and cannot reach 1 ms in a debug build (about 2.5 ms on
+    // 2026-10-08, docs/GAPS.md "wasmi engine"): it gets its own bound.
+    let bound = if std::env::var("PLINTH_ENGINE").as_deref() == Ok("wasmi") { 10 } else { 1 };
+    assert!(times[100] < Duration::from_millis(bound), "round trip median {:?}", times[100]);
     assert_eq!(h.text_of(value), "200");
 }
 

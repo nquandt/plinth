@@ -66,6 +66,38 @@ jobs:
         shell: bash
         run: bash scripts/ci-local.sh full
 
+  # The app suites on the wasmi interpreter, the iOS engine (PRODUCTION Q4,
+  # `ci-local.sh wasmi`, about 6 min with a warm build). Only on a push to
+  # master and by hand, not on each pull request: the runner is the owner's
+  # PC. It runs after the Windows job on the same persistent runner, so it
+  # uses the warm build output and does not run at the same time.
+  wasmi:
+    name: Windows (wasmi engine)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    needs: windows
+    runs-on: [self-hosted, Windows, plinth]
+    steps:
+      - name: Checkout plinth
+        uses: actions/checkout@v4
+        with:
+          path: plinth
+          clean: false
+      - name: Checkout gpui-ce (sibling, pinned commit)
+        uses: actions/checkout@v4
+        with:
+          repository: nquandt/gpui-ce
+          ref: ${{ env.GPUI_CE_COMMIT }}
+          path: gpui-ce
+          clean: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: scripts/ci-local.sh wasmi
+        working-directory: plinth
+        shell: bash
+        run: bash scripts/ci-local.sh wasmi
+
   linux:
     name: Linux (no GUI)
     if: github.event_name != 'schedule'
