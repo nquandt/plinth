@@ -176,6 +176,11 @@ impl Checker<'_> {
             ExprKind::NewPromise(type_args, args) => self.new_promise_expr(type_args, args, expected, span),
             ExprKind::InstanceOf(obj, name, name_span) => self.instance_of(obj, name, *name_span, span),
             ExprKind::As(inner, type_ann, cast_span) => self.as_cast(inner, type_ann, *cast_span),
+            ExprKind::Regex(pattern, flags) => {
+                let p = TExpr::new(TExprKind::Str(pattern.clone()), Type::String, span);
+                let f = TExpr::new(TExprKind::Str(flags.clone()), Type::String, span);
+                self.regex_new(p, f, span)
+            }
             ExprKind::Await(inner) => {
                 if !self.fx.is_async {
                     self.err_help(code::ASYNC, span, "`await` is only allowed in an `async` function", "mark the function `async`");
@@ -472,6 +477,21 @@ impl Checker<'_> {
                 );
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
+            Type::RegExp => match prop {
+                "source" => TExpr::new(TExprKind::Rt("regex_source", vec![o]), Type::String, span),
+                "flags" => TExpr::new(TExprKind::Rt("regex_flags", vec![o]), Type::String, span),
+                "global" => {
+                    let b = TExpr::new(TExprKind::Rt("regex_global", vec![o]), Type::Bool, span);
+                    TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(b)), Type::Bool, span)
+                }
+                "lastIndex" => TExpr::new(TExprKind::Rt("regex_get_last_index", vec![o]), Type::Number, span),
+                _ => {
+                    let msg = format!("`RegExp` has no property `{prop}`");
+                    let help = "the properties are: source, flags, global, lastIndex";
+                    self.err_help(code::NO_PROPERTY, prop_span, msg, help);
+                    TExpr::new(TExprKind::Null, Type::Error, span)
+                }
+            },
             Type::Error => TExpr::new(TExprKind::Null, Type::Error, span),
             other => {
                 let msg = format!("`{}` has no property `{prop}`", self.show(&other));
@@ -627,8 +647,48 @@ impl Checker<'_> {
         TExpr::new(TExprKind::Call(fid, targs), ft.ret.clone(), span)
     }
 
+    /// `new RegExp(pattern, flags?)` (PRODUCTION.md L4 step 2): a dynamic
+    /// pattern can be invalid at run time (unlike a `/.../` literal,
+    /// validated at compile time), so this compiles to
+    /// `{ let h = regex_compile(p, f); if (h == 0) throw ...; h }` — a
+    /// catchable `SyntaxError`-like `Error`, built from the plain `If`/
+    /// `Throw`/`Block` machinery `try`/`catch` already has, with no new
+    /// codegen needed.
+    fn regex_new(&mut self, pattern: TExpr, flags: TExpr, span: Span) -> TExpr {
+        let h = self.temp(Type::RegExp);
+        let h_read = TExpr::new(TExprKind::Var(h), Type::RegExp, span);
+        let compiled = TExpr::new(TExprKind::Rt("regex_compile", vec![pattern, flags]), Type::RegExp, span);
+        let is_bad = TExpr::new(TExprKind::IsNull(bx(h_read.clone())), Type::Bool, span);
+        let msg = TExpr::new(TExprKind::Rt("regex_last_error", vec![]), Type::String, span);
+        let err_val = self.new_error(msg);
+        let guard = TStmt::If(is_bad, vec![TStmt::Throw(err_val)], Vec::new());
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(h, Some(compiled)), guard], bx(h_read)), Type::RegExp, span)
+    }
+
+    fn new_regexp(&mut self, args: &[Expr], span: Span) -> TExpr {
+        if args.is_empty() || args.len() > 2 {
+            self.err(code::ARG_COUNT, span, "`new RegExp(pattern, flags?)` takes 1 or 2 arguments");
+            for a in args {
+                self.expr(a, None);
+            }
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        let pattern = self.str_arg(args, 0, span);
+        let flags = match args.get(1) {
+            Some(a) => {
+                let te = self.expr(a, Some(&Type::String));
+                self.coerce(te, &Type::String)
+            }
+            None => TExpr::new(TExprKind::Str(String::new()), Type::String, span),
+        };
+        self.regex_new(pattern, flags, span)
+    }
+
     /// `new C(args)`: calls the class's lowered constructor function.
     fn new_instance(&mut self, name: &str, args: &[Expr], span: Span) -> TExpr {
+        if name == "RegExp" {
+            return self.new_regexp(args, span);
+        }
         let sid = match self.lookup(name) {
             Some(Binding::Type(Type::Struct(sid))) if self.classes.contains_key(&sid) => sid,
             Some(Binding::Type(_)) => {
@@ -939,6 +999,7 @@ impl Checker<'_> {
                 }
             },
             Type::String | Type::StrLits(_) => self.string_method(o, prop, prop_span, args, span),
+            Type::RegExp => self.regexp_method(o, prop, prop_span, args, span),
             Type::Number => match prop {
                 "toFixed" => {
                     let d = match args.first() {
@@ -1093,6 +1154,54 @@ impl Checker<'_> {
             }
             _ => {
                 self.err(code::NO_PROPERTY, prop_span, format!("`string` has no method `{prop}` in Plinth TS"));
+                TExpr::new(TExprKind::Null, Type::Error, span)
+            }
+        }
+    }
+
+    /// `r.test(s)` / `r.exec(s)` (PRODUCTION.md L4 step 2). `exec`'s
+    /// result is `{ groups: (string | null)[]; index: number } | null`:
+    /// group 0 (the whole match) is `groups[0]`, named groups are not
+    /// exposed yet (document limitation — step 3/a later step), and there
+    /// is no bracket-indexable `RegExpExecArray` shape, only `.groups`.
+    fn regexp_method(&mut self, o: TExpr, prop: &str, prop_span: Span, args: &[Expr], span: Span) -> TExpr {
+        let b = |e: TExpr| TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(e)), Type::Bool, span);
+        match prop {
+            "test" => {
+                let s = self.str_arg(args, 0, span);
+                b(TExpr::new(TExprKind::Rt("regex_test", vec![o, s]), Type::Bool, span))
+            }
+            "exec" => {
+                let s = self.str_arg(args, 0, span);
+                let elem_ty = Type::String.nullable();
+                let arr_ty = Type::Array(Box::new(elem_ty)).nullable();
+                let av = self.temp(arr_ty.clone());
+                let arr_read = TExpr::new(TExprKind::Var(av), arr_ty.clone(), span);
+                let call = TExpr::new(TExprKind::Rt("regex_exec", vec![o, s]), arr_ty.clone(), span);
+                let is_null = TExpr::new(TExprKind::IsNull(bx(arr_read.clone())), Type::Bool, span);
+                let non_null_arr_ty = Type::Array(Box::new(Type::String.nullable()));
+                let sid = match self.anon_struct(vec![
+                    Field { name: "groups".into(), ty: non_null_arr_ty.clone(), optional: false },
+                    Field { name: "index".into(), ty: Type::Number, optional: false },
+                ]) {
+                    Type::Struct(id) => id,
+                    _ => unreachable!("anon_struct always returns Type::Struct"),
+                };
+                let groups_val = TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(arr_read.clone())), non_null_arr_ty, span);
+                let index_val = TExpr::new(TExprKind::Rt("regex_last_match_index", vec![]), Type::Number, span);
+                let built = TExpr::new(TExprKind::StructLit(sid, vec![groups_val, index_val]), Type::Struct(sid), span);
+                let result_ty = self.nullable(Type::Struct(sid), span);
+                let built = self.coerce(built, &result_ty);
+                let null_v = TExpr::new(TExprKind::Null, Type::Null, span);
+                let null_v = self.coerce(null_v, &result_ty);
+                let cond = TExpr::new(TExprKind::Cond(bx(is_null), bx(null_v), bx(built)), result_ty.clone(), span);
+                TExpr::new(TExprKind::Block(vec![TStmt::Let(av, Some(call))], bx(cond)), result_ty, span)
+            }
+            _ => {
+                self.err(code::NO_PROPERTY, prop_span, format!("`RegExp` has no method `{prop}`"));
+                for a in args {
+                    self.expr(a, None);
+                }
                 TExpr::new(TExprKind::Null, Type::Error, span)
             }
         }
@@ -2959,6 +3068,37 @@ impl Checker<'_> {
     }
 
     fn assign(&mut self, op: Option<BinOp>, target: &Expr, value: &Expr, span: Span) -> TExpr {
+        // `r.lastIndex = n` (PRODUCTION.md L4 step 2): `RegExp` has no
+        // GC fields at all (see `plinth-rt/src/regexp.rs`), so this isn't
+        // a `Place` store; it is an `Rt` call that writes the host-side
+        // table entry for the handle. Checking the object's type without
+        // evaluating it twice needs it to be a plain variable (by far the
+        // common case, `r.lastIndex = 0`); anything else (e.g. a call
+        // that returns a fresh `RegExp`) falls through to the generic
+        // "cannot assign to a property" error below.
+        if op.is_none() {
+            if let ExprKind::Member { obj, prop, optional: false, .. } = &target.kind {
+                if prop == "lastIndex" {
+                    if let ExprKind::Ident(name) = &obj.kind {
+                        if let Some(Binding::Var(v)) = self.lookup(name) {
+                            if self.prog.vars[v as usize].ty == Type::RegExp {
+                                let o = TExpr::new(TExprKind::Var(v), Type::RegExp, obj.span);
+                                let v_e = self.expr(value, Some(&Type::Number));
+                                let v_e = self.coerce(v_e, &Type::Number);
+                                let tmp = self.temp(Type::Number);
+                                let v_read = TExpr::new(TExprKind::Var(tmp), Type::Number, span);
+                                let set = TExpr::new(TExprKind::Rt("regex_set_last_index", vec![o, v_read.clone()]), Type::Void, span);
+                                return TExpr::new(
+                                    TExprKind::Block(vec![TStmt::Let(tmp, Some(v_e)), TStmt::Expr(set)], bx(v_read)),
+                                    Type::Number,
+                                    span,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let Some((place, ty)) = self.place(target) else {
             self.expr(value, None);
             return TExpr::new(TExprKind::Null, Type::Error, span);

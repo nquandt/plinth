@@ -41,6 +41,15 @@ pub enum Type {
     Map(Box<Type>, Box<Type>),
     /// `Set<T>`: a 1-field struct holding a keys array, the same way.
     Set(Box<Type>),
+    /// `RegExp` (PRODUCTION.md L4, step 2). At run time it is a reference
+    /// to a tiny GC box (`gc::T_REGEXP`) that itself holds the opaque
+    /// handle into a host-side table of compiled patterns
+    /// (`plinth-rt/src/regexp.rs`); the box has no children to trace, but
+    /// the GC frees it like any other unreachable object, and
+    /// `gc::collect`'s sweep then drops the matching table entry. This
+    /// makes a `RegExp` collectable: a literal re-evaluated on every
+    /// render/event does not leak (HANDOFF.md §6).
+    RegExp,
     /// The type of an expression with an error. It is compatible with all
     /// types, so one error does not cause more.
     Error,
@@ -88,6 +97,7 @@ impl Type {
             | Type::Struct(_)
             | Type::Func(_)
             | Type::Union(_)
+            | Type::RegExp
             | Type::Map(..)
             | Type::Set(_) => Repr::Ref,
             Type::Void => Repr::Void,
@@ -192,6 +202,7 @@ impl fmt::Display for Display<'_> {
             }
             Type::Map(k, v) => write!(f, "Map<{}, {}>", sub(k), sub(v)),
             Type::Set(t) => write!(f, "Set<{}>", sub(t)),
+            Type::RegExp => write!(f, "RegExp"),
             Type::Error => write!(f, "<error>"),
         }
     }

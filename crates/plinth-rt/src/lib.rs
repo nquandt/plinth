@@ -50,6 +50,8 @@ mod host;
 mod json;
 mod random;
 mod reactive;
+mod regex;
+mod regexp;
 pub mod strings;
 mod ui;
 
@@ -682,6 +684,24 @@ abi! {
             None => 0,
         }
     }
+
+    // -- RegExp (core 1.12, PRODUCTION.md L4 step 2) --------------------------
+    // A `RegExp` value is a GC reference (a `T_REGEXP` box wrapping a
+    // handle into `regexp.rs`'s own table — see that module's docs); `0`
+    // is "no pattern", as it is "no ref" elsewhere, and a collected box
+    // frees its table entry via `gc::collect`'s sweep.
+    fn __plinth_rt_regex_compile(pattern: i32, flags: i32) -> i32 {
+        regexp::compile(strings::as_str(ptr(pattern)), strings::as_str(ptr(flags)))
+    }
+    fn __plinth_rt_regex_last_error() -> i32 { strings::from_str(&regexp::last_error()) as i32 }
+    fn __plinth_rt_regex_source(handle: i32) -> i32 { strings::from_str(&regexp::source(handle)) as i32 }
+    fn __plinth_rt_regex_flags(handle: i32) -> i32 { strings::from_str(&regexp::flags(handle)) as i32 }
+    fn __plinth_rt_regex_global(handle: i32) -> i32 { regexp::global(handle) as i32 }
+    fn __plinth_rt_regex_get_last_index(handle: i32) -> f64 { regexp::get_last_index(handle) }
+    fn __plinth_rt_regex_set_last_index(handle: i32, v: f64) { regexp::set_last_index(handle, v) }
+    fn __plinth_rt_regex_test(handle: i32, input: i32) -> i32 { regexp::test(handle, ptr(input)) as i32 }
+    fn __plinth_rt_regex_exec(handle: i32, input: i32) -> i32 { regexp::exec(handle, ptr(input)) as i32 }
+    fn __plinth_rt_regex_last_match_index() -> f64 { regexp::last_match_index() }
 }
 
 // Hot reload (SPEC.md §13): a dev-only ABI function, not declared with the

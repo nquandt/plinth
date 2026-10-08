@@ -1295,8 +1295,13 @@ impl Cx<'_> {
             }
             E::AwaitExpression(a) => ExprKind::Await(Box::new(self.expr(&a.argument)?)),
             E::RegExpLiteral(r) => {
-                self.err(code::REGEX, r.span, "regular expressions are not supported");
-                return None;
+                let pattern = r.regex.pattern.text.as_str().to_string();
+                let flags = r.regex.flags.to_string();
+                if let Err(e) = crate::regex_syntax::validate(&pattern, &flags) {
+                    self.err(code::REGEX, r.span, format!("invalid regular expression: {}", e.message()));
+                    return None;
+                }
+                ExprKind::Regex(pattern, flags)
             }
             E::BigIntLiteral(b) => {
                 self.err(code::BIGINT, b.span, "BigInt is not supported");

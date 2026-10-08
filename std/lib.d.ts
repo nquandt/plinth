@@ -176,7 +176,40 @@ interface Function {}
 interface CallableFunction extends Function {}
 interface NewableFunction extends Function {}
 interface Object {}
-interface RegExp {}
+/**
+ * A compiled pattern (PRODUCTION.md L4 step 2): a `/pattern/flags` literal,
+ * or `new RegExp(pattern, flags?)`. Supported flags are `g`, `i`, `m` and
+ * `s`. Like `Map`/`Set` above, `test`/`exec`/the properties are checked
+ * and run directly by the compiler and runtime
+ * (`plinth-compiler/src/check/expr.rs::regexp_method`), not by a body
+ * written here — this declaration is documentation for editors, kept in
+ * sync by hand.
+ */
+declare class RegExp {
+  constructor(pattern: string, flags?: string);
+  /** The pattern text, without the slashes or flags. */
+  readonly source: string;
+  /** The flag letters, in the order given. */
+  readonly flags: string;
+  /** Whether the `g` flag was given. */
+  readonly global: boolean;
+  /**
+   * Where the next `g` search starts (UTF-16 code units, like `string`
+   * indices elsewhere). Read and reset automatically by `test`/`exec` on a
+   * `g` pattern; writable directly too.
+   */
+  lastIndex: number;
+  /** Whether `s` contains a match, advancing `lastIndex` if `g` is set. */
+  test(s: string): boolean;
+  /**
+   * The first match at or after `lastIndex` (from 0 if not `g`), or
+   * `null`. `groups` holds the whole match at `[0]` then each capture
+   * group (`null` if that group did not take part); named groups are not
+   * exposed yet. There is no bracket indexing (`result[0]`) in this step
+   * — use `result.groups[0]`.
+   */
+  exec(s: string): { groups: (string | null)[]; index: number } | null;
+}
 interface IArguments {}
 interface TemplateStringsArray extends ReadonlyArray<string> {}
 

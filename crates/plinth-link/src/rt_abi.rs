@@ -193,6 +193,17 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("on_cleanup", &[I32, I32], &[]),
     ("app_active", &[], &[I32]),
     ("on_mount", &[I32, I32], &[]),
+    // -- RegExp (core 1.12, PRODUCTION.md L4 step 2) --------------------------
+    ("regex_compile", &[I32, I32], &[I32]),
+    ("regex_last_error", &[], &[I32]),
+    ("regex_source", &[I32], &[I32]),
+    ("regex_flags", &[I32], &[I32]),
+    ("regex_global", &[I32], &[I32]),
+    ("regex_get_last_index", &[I32], &[F64]),
+    ("regex_set_last_index", &[I32, F64], &[]),
+    ("regex_test", &[I32, I32], &[I32]),
+    ("regex_exec", &[I32, I32], &[I32]),
+    ("regex_last_match_index", &[], &[F64]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -281,6 +292,16 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     // Not shipped, so this later addition goes into 1.12 too (see
     // `CORE_MINOR` below).
     ("on_mount", 12),
+    ("regex_compile", 12),
+    ("regex_last_error", 12),
+    ("regex_source", 12),
+    ("regex_flags", 12),
+    ("regex_global", 12),
+    ("regex_get_last_index", 12),
+    ("regex_set_last_index", 12),
+    ("regex_test", 12),
+    ("regex_exec", 12),
+    ("regex_last_match_index", 12),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).

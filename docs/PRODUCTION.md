@@ -47,7 +47,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | L1 | Core TypeScript subset: unions, narrowing, generics, classes, `Map`/`Set`, tuples, destructuring, JSON, `try`/`catch`, `async`/`await`, Promise API | Preview | Done | HANDOFF §2 "Compiler", `tests/language*` (171 cases) |
 | L2 | Every rejected feature gives a diagnostic with a golden test | Preview | Done | `plinth-compiler/tests/golden.rs` (SPEC M3 exit) |
 | L3 | The compiler never panics or overflows its stack on any input | Preview | Done | `tests/robustness.rs`, `PL1000`, `stacker` |
-| L4 | Regular expressions (`RegExp`) | Beta | Open | GAPS "Larger items". Most real apps need them for validation and parsing. |
+| L4 | Regular expressions (`RegExp`) | Beta | Partial | Linear-time matcher in the core (`plinth-rt/src/regex.rs`), literals, `new RegExp`, `test`, `exec`, collectable objects (`tests/lang.rs` `regexp_*`), `docs/language.md` "Regular expressions". Next: `String.match/matchAll/replace/split/search` with a `RegExp`. |
 | L5 | Locale-aware text: number, date and plural formatting (`plinth:locale`) | Beta | Open | `docs/I18N.md` §3.3 (steps 1–2). |
 | L6 | Long expression chains (more than 1000 terms) | Beta | Open | GAPS R3. |
 | L7 | Smaller async code (promise machinery in the core) | 1.0 | Open | GAPS "Async code size". |

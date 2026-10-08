@@ -973,6 +973,7 @@ impl Checker<'_> {
             }
             "JSX.Element" => return Type::Element,
             "int" => return Type::Int,
+            "RegExp" => return Type::RegExp,
             "any" | "unknown" | "object" | "Object" => {
                 self.err(code::ANY, span, format!("`{name}` is not allowed"));
                 return Type::Error;

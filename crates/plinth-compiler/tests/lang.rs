@@ -3127,3 +3127,219 @@ fn a_required_prop_still_rejects_null_for_number_and_bool() {
     );
     assert_eq!(codes(&main.replace("import {", "import { Slider,")), ["PL3001"]);
 }
+
+// -- RegExp (PRODUCTION.md L4, step 2) --------------------------------------
+
+#[test]
+fn regex_literal_test_and_exec_with_captures_and_index() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const r = /(\d+)-(\d+)/;
+  const t = r.test("ab 12-34 cd");
+  const m = r.exec("ab 12-34 cd");
+  const p0 = m === null ? null : m.groups[0];
+  const p1 = m === null ? null : m.groups[1];
+  const p2 = m === null ? null : m.groups[2];
+  const whole = p0 === null ? "null" : p0;
+  const g1 = p1 === null ? "null" : p1;
+  const g2 = p2 === null ? "null" : p2;
+  const idx = m === null ? -1 : m.index;
+  const out = "" + t + "," + whole + "," + g1 + "," + g2 + "," + idx;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "true,12-34,12,34,3");
+}
+
+#[test]
+fn regex_new_constructor_matches_literal() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const r = new RegExp("a+", "i");
+  const out = "" + r.test("AAA") + "," + r.source + "," + r.flags + "," + r.global;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "true,a+,i,false");
+}
+
+#[test]
+fn regex_exec_unmatched_group_is_null() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const r = /(a)|(b)/;
+  const m = r.exec("b");
+  const p1 = m === null ? null : m.groups[1];
+  const p2 = m === null ? null : m.groups[2];
+  const g1 = p1 === null ? "null" : p1;
+  const g2 = p2 === null ? "null" : p2;
+  const out = g1 + "," + g2;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "null,b");
+}
+
+#[test]
+fn regex_global_flag_advances_and_resets_last_index() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const r = /a/g;
+  const s = "aaa";
+  const r1 = r.test(s); const l1 = r.lastIndex;
+  const r2 = r.test(s); const l2 = r.lastIndex;
+  const r3 = r.test(s); const l3 = r.lastIndex;
+  const r4 = r.test(s); const l4 = r.lastIndex;
+  const out = r1 + "," + l1 + "," + r2 + "," + l2 + "," + r3 + "," + l3 + "," + r4 + "," + l4;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "true,1,true,2,true,3,false,0");
+}
+
+#[test]
+fn regex_non_global_test_ignores_last_index() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const r = /a/;
+  const t1 = r.test("a");
+  const t2 = r.test("a");
+  const out = "" + t1 + "," + t2 + "," + r.lastIndex;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "true,true,0");
+}
+
+#[test]
+fn regex_new_with_bad_dynamic_pattern_throws_a_catchable_error() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  let out = "no error";
+  try {
+    const r = new RegExp("a{2,1}");
+    out = "no error";
+  } catch (e) {
+    out = "caught: " + e.message;
+  }
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    let text = text_of(&tree, ControlKind::Text);
+    assert!(text.starts_with("caught: invalid regular expression"), "got: {text}");
+}
+
+#[test]
+fn regex_pathological_pattern_does_not_hang() {
+    // A backtracking engine takes exponential time on this; the Pike VM
+    // behind `RegExp` (plinth-rt/src/regex.rs) is linear, so this must
+    // finish well inside the test harness's normal call timeout.
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+function Home() {
+  const r = /(a+)+$/;
+  let s = "";
+  for (let i = 0; i < 30; i = i + 1) { s = s + "a"; }
+  const noMatch = r.test(s + "b");
+  const yesMatch = r.test(s);
+  const out = "" + noMatch + "," + yesMatch;
+  return <Screen title="Home"><Text>{out}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "false,true");
+}
+
+/// RegExp objects are collectable (no handle leak): each press compiles
+/// and drops 200 regexes, literals and `new RegExp`. The second half of
+/// the run must not grow the memory more than the monkey test allows
+/// (`tests/monkey.rs`).
+#[test]
+fn regexp_objects_are_collected() {
+    let main = r#"import { app, Screen, Text, Button, signal } from "plinth:ui";
+const count = signal(0);
+function Home() {
+  return (
+    <Screen title="Home">
+      <Text>{"n" + count()}</Text>
+      <Button label="Run" onPress={() => {
+        let n = 0;
+        for (let i = 0; i < 100; i++) {
+          if (/a(b+)c/g.test("xxabbbc" + i)) { n++; }
+          const r = new RegExp("item" + i + "-(\\d+)", "g");
+          const m = r.exec("item" + i + "-42");
+          if (m !== null) { n++; }
+        }
+        count.set(n);
+      }} />
+    </Screen>
+  );
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        assert!(tree.apply(&commit).unwrap().is_empty());
+    }
+    let button = {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        loop {
+            let id = stack.pop().expect("no Button found");
+            let node = tree.get(id).unwrap();
+            if node.kind == Some(ControlKind::Button) {
+                break id;
+            }
+            stack.extend(node.children.iter());
+        }
+    };
+    let handler = tree.get(button).unwrap().handler(event::PRESS).unwrap();
+    let mut half = 0;
+    let presses: usize = std::env::var("REGEXP_PRESSES").ok().and_then(|v| v.parse().ok()).unwrap_or(120);
+    for i in 0..presses {
+        if i == presses / 2 {
+            half = guest.memory_bytes();
+        }
+        if std::env::var("REGEXP_TRACE").is_ok() && i % 20 == 0 {
+            eprintln!("press {i}: {} KiB", guest.memory_bytes() >> 10);
+        }
+        let mut w = Writer::new();
+        w.event(&Event::Ui { handler, event: event::PRESS, value: Value::Null });
+        for commit in guest.on_event(w.as_bytes()).unwrap() {
+            assert!(tree.apply(&commit).unwrap().is_empty());
+        }
+    }
+    let end = guest.memory_bytes();
+    assert!(texts_in(&tree).contains(&"n200".to_string()), "{:?}", texts_in(&tree));
+    let allowed = half + (half / 4).max(256 << 10);
+    eprintln!("regexp memory: {} KiB at half, {} KiB at end", half >> 10, end >> 10);
+    assert!(end <= allowed, "memory grew from {} KiB to {} KiB in the second half: RegExp objects leak", half >> 10, end >> 10);
+}
+

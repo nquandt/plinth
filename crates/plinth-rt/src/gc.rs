@@ -32,6 +32,14 @@ pub const T_ARR_I32: u32 = 2;
 pub const T_ARR_REF: u32 = 3;
 pub const T_CLOSURE: u32 = 4;
 pub const T_BOX_F64: u32 = 5;
+/// A `RegExp` value (PRODUCTION.md L4 step 2): a tiny GC box holding, at
+/// offset 8, the `i32` handle into `regexp.rs`'s host-side compiled-pattern
+/// table. It has no children to trace, but when the GC frees one (nothing
+/// reachable points to it any more) it must tell `regexp.rs` to drop the
+/// matching table entry too — otherwise every `RegExp` ever created (in
+/// particular, a literal re-evaluated on every render/event) leaks its
+/// `Program` forever. See `collect` below.
+pub const T_REGEXP: u32 = 6;
 pub const FIRST_USER_TYPE: u32 = 16;
 
 pub const HEADER: u32 = 8;
@@ -172,6 +180,7 @@ fn object_size(h: &Heap, ptr: u32) -> usize {
         T_ARR_F64 | T_ARR_I32 | T_ARR_REF => 24,
         T_CLOSURE => 16,
         T_BOX_F64 => 16,
+        T_REGEXP => 16,
         t => h.types[(t - FIRST_USER_TYPE) as usize].size as usize,
     }
 }
@@ -197,7 +206,7 @@ pub fn collect(runtime_roots: impl FnOnce(&mut dyn FnMut(u32))) {
             }
             unsafe { store_u32(p + 4, flags | MARK) };
             match type_of(p) {
-                T_STRING | T_ARR_F64 | T_ARR_I32 | T_BOX_F64 => {}
+                T_STRING | T_ARR_F64 | T_ARR_I32 | T_BOX_F64 | T_REGEXP => {}
                 T_ARR_REF => {
                     let (len, data) = unsafe { (load_u32(p + 8), load_u32(p + 16)) };
                     for i in 0..len {
@@ -233,6 +242,9 @@ pub fn collect(runtime_roots: impl FnOnce(&mut dyn FnMut(u32))) {
                 if matches!(type_of(p), T_ARR_F64 | T_ARR_I32 | T_ARR_REF) {
                     crate::arrays::poison_data(p);
                     crate::arrays::free_data(p);
+                }
+                if type_of(p) == T_REGEXP {
+                    crate::regexp::release(unsafe { load_u32(p + 8) } as i32);
                 }
                 let size = object_size(h, p);
                 poison(p, size);

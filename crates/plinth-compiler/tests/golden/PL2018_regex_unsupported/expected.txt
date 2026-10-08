@@ -1,0 +1,3 @@
+app/main.tsx(2,29): error PL2018: invalid regular expression: lookaround (`(?=` `(?!` `(?<=` `(?<!`) and backreferences (a backslash followed by a digit) are not supported yet
+  function Home() { const r = /(?=a)/; return <Screen title="Home" />; }
+                              ^^^^^^^

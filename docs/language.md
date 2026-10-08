@@ -379,6 +379,30 @@ native exceptions. When every target runner supports one version of the
 proposal, a later compiler can change to it without a change to the
 language.
 
+## Regular expressions
+
+Plinth supports a subset of JavaScript regular expressions (core 1.12). The same matcher runs on every host, because it is part of the core.
+
+```ts
+const date = /(\d{4})-(\d{2})-(\d{2})/;
+const m = date.exec("Due 2026-10-07");
+if (m !== null) {
+  const year = m.groups[1]; // "2026"
+  const at = m.index;       // 4
+}
+const word = new RegExp("^" + prefix + "\\w*", "i"); // a dynamic pattern
+if (word.test(input)) { /* ... */ }
+```
+
+- **Syntax:** literal characters, `.`, classes `[...]` with ranges and `^`, the escapes `\d \w \s \D \W \S \b \B \n \t \r \f \v` and escaped punctuation, anchors `^ $`, groups `( )`, non-capturing groups `(?: )`, named groups `(?<name> )`, alternation `|`, and the quantifiers `* + ? {n} {n,} {n,m}` with their lazy forms.
+- **Flags:** `g`, `i`, `m`, `s`. Another flag is an error.
+- **Not supported:** lookahead and lookbehind (`(?=`, `(?!`, `(?<=`, `(?<!`) and backreferences (`\1`). A literal with one of these is the compile error `PL2018`; `new RegExp` with one throws an `Error` that the app can catch.
+- **Members:** `test(s)`, `exec(s)`, `source`, `flags`, `global`, `lastIndex` (read and write; with `g`, `test` and `exec` start at `lastIndex` and move it).
+- **`exec` result:** `{ groups: (string | null)[]; index: number } | null`. `groups[0]` is the whole match; an unmatched group is `null`. There is no `result[0]` indexing and no object of named groups yet: use `groups[i]`.
+- **Speed:** the matcher is a Pike VM. Its time is linear in the length of the input for every pattern, so a pattern such as `(a+)+$` cannot freeze the app.
+- **Differences from JavaScript:** `\d \w \s`, word boundaries and the `i` flag use ASCII only. `.` without `s` excludes only `\n` and `\r`. Indexes are UTF-16 units, as in JavaScript.
+- **Not yet:** `String` methods that take a regular expression (`match`, `matchAll`, `replace`, `split`, `search`).
+
 ## Rejected features, and why
 
 The compiler rejects these, each with a clear error and a suggested fix:
@@ -555,7 +579,7 @@ Codes are grouped by range:
 | Range | Meaning |
 |---|---|
 | `PL1000`–`PL1007` | Modules and the closed world (SPEC.md §4.1): parse errors, the import graph (bare imports, missing modules, cycles), unknown std modules, a missing `app/main.tsx`, and undeclared capabilities (SPEC.md §11). |
-| `PL2000`–`PL2024` | Rejected language features (SPEC.md §4.4): TypeScript/JavaScript syntax Plinth does not support yet or ever — `any`, classes (restricted subset), `this`, non-null assertions, type assertions, `for…in`, `delete`, generators and `await` in a `case` value, a typed or destructured `catch` variable, computed member access, advanced types, namespaces, `var`, user generics, getters/setters, labels, regular expressions, `BigInt`, non-reactive signal reads, unbound methods, and the class `extends`/`super`/`override` rules. |
+| `PL2000`–`PL2024` | Rejected language features (SPEC.md §4.4): TypeScript/JavaScript syntax Plinth does not support yet or ever — `any`, classes (restricted subset), `this`, non-null assertions, type assertions, `for…in`, `delete`, generators and `await` in a `case` value, a typed or destructured `catch` variable, computed member access, advanced types, namespaces, `var`, user generics, getters/setters, labels, invalid or unsupported regular expressions (`PL2018`), `BigInt`, non-reactive signal reads, unbound methods, and the class `extends`/`super`/`override` rules. |
 | `PL3000`–`PL3013` | Types (SPEC.md §4, §4.3): the structural type checker — mismatches, unknown names/types, missing properties or fields, uncallable values, wrong argument counts, uninferable types, assigning to `const`, nullability, duplicate definitions, and missing `return`s. (`PL3011`, struct layout, is reserved but not emitted by any check today.) |
 | `PL4000`–`PL4009` | JSX and the UI API (SPEC.md §6, §7.2): unknown controls, props, and children; missing required props; bad two-way bindings; the `app({...})` config; `navigate` targets; and image assets (missing, or an empty `alt`). |
 

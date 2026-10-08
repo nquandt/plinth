@@ -11,6 +11,7 @@ pub mod diag;
 pub mod driver;
 pub mod lower;
 pub mod parse;
+pub mod regex_syntax;
 pub mod tir;
 pub mod types;
 

@@ -335,6 +335,10 @@ pub enum ExprKind {
     As(Box<Expr>, TypeAnn, Span),
     /// `await e` (SPEC.md §4.5), only inside an `async` function.
     Await(Box<Expr>),
+    /// `/pattern/flags` (PRODUCTION.md L4, step 2). The pattern and flags
+    /// are validated at parse time (`parse.rs`), the same way a template
+    /// literal or number literal is checked eagerly.
+    Regex(String, String),
 }
 
 #[derive(Debug, Clone)]
