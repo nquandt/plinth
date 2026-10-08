@@ -302,6 +302,16 @@ fn value_for(rng: &mut Rng, tree: &Tree, id: NodeId, ev: u16) -> Value {
         event::POINTER_DOWN | event::POINTER_MOVE | event::POINTER_UP | event::CONTEXT_MENU => {
             Value::List(vec![Value::Number(rng.below(400) as f64), Value::Number(rng.below(300) as f64)])
         }
+        // UI API 1.13: a drop gives `[value, x, y]`; a reorder `[from, to]` (indexes of the rows).
+        event::DROP => Value::List(vec![
+            Value::Str(["", "a", "card"][rng.below(3)].to_owned()),
+            Value::Number(rng.below(400) as f64),
+            Value::Number(rng.below(300) as f64),
+        ]),
+        event::REORDER => {
+            let rows = n.children.len().max(1);
+            Value::List(vec![Value::Int(rng.below(rows) as i32), Value::Int(rng.below(rows) as i32)])
+        }
         _ => Value::Null,
     }
 }

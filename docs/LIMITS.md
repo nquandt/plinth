@@ -29,7 +29,7 @@ Plinth is not ready for production apps. The current level is "before Preview".
 | Limit | Item |
 |---|---|
 | No translations of app strings and no right-to-left layout. | U8, U9 |
-| No context menu (secondary button), no drag and drop between controls, and no modal overlay that blocks the pointer on the desktop. | U6 |
+| No drag and drop between apps or with the operating system (files, text). Drag and drop inside one app works (UI API 1.13). | U6, GAPS G4 |
 | IME composition (for example Chinese or Japanese input) is not tested on the desktop host. The web host uses the browser's input fields. | U5 |
 | The app does not follow all system settings yet: high contrast, text scale and reduced motion. | U7 |
 | The desktop accessibility tree is not checked with a screen reader yet (Narrator, VoiceOver, Orca). On the desktop, a text field has its name on the group around it, not on the text input itself. | U3 |

@@ -1,0 +1,4 @@
+id = "dev.plinth.test.dnd-fixture"
+name = "Drag and Drop Fixture"
+version = "0.1.0"
+publisher = "plinth"

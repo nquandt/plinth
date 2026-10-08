@@ -276,7 +276,7 @@ fn circle_drawer_draws_where_clicked() {
     assert!(label.starts_with("Drawing with 3 circles"), "three clicks on empty canvas, one in a circle: {label}");
 
     // UI API 1.13: a right-click on a circle opens its menu at the pointer;
-    // "Adjust diameter..." opens the sheet.
+    // "Adjust diameter..." opens the dialog with the slider (GAPS 7G-7).
     let p = point(px((b.x0 / scale + 200.0 * k) as f32), px((b.y0 / scale + 150.0 * k) as f32));
     cx.update_window(handle, |_, window, cx| {
         window.dispatch_event(
@@ -305,7 +305,11 @@ fn circle_drawer_draws_where_clicked() {
     .unwrap();
     cx.run_until_parked();
     assert!(node(&mut cx, Role::Menu, "Circle").is_none(), "the menu closes");
-    assert!(node(&mut cx, Role::Dialog, "Adjust diameter").is_some(), "the action opens the sheet");
+    assert!(node(&mut cx, Role::Dialog, "Adjust diameter").is_some(), "the action opens the dialog");
+    assert!(node(&mut cx, Role::Slider, "Diameter").is_some(), "the dialog holds the slider");
+    let shots = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/shots");
+    std::fs::create_dir_all(&shots).unwrap();
+    cx.capture_screenshot(window.into()).expect("render the dialog").save(shots.join("circle-drawer-dialog.png")).expect("write the screenshot");
     let (label, _) = drawing(&mut cx);
     assert!(label.starts_with("Drawing with 3 circles"), "the clicks on the menu add no circle: {label}");
     cx.update_window(handle, |_, window, cx| window.dispatch_keystroke(gpui::Keystroke::parse("escape").unwrap(), cx)).unwrap();

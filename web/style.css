@@ -497,6 +497,56 @@ body {
   padding: 20px;
   max-width: 480px;
 }
+/* A Dialog: the message, a small form (UI API 1.13), the actions. */
+.pl-dialog-message {
+  margin: 0 0 12px;
+  color: var(--pl-muted);
+}
+.pl-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.pl-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Drag and drop in one app (UI API 1.13). The host draws the drop target
+   and the line where a row goes. */
+.pl-draggable {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.pl-dragging {
+  opacity: 0.5;
+}
+.pl-drag-ghost {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  padding: 4px 12px;
+  border: 1px solid var(--pl-accent);
+  border-radius: 6px;
+  background: var(--pl-surface);
+  color: var(--pl-text);
+  font-size: 0.85rem;
+  opacity: 0.9;
+}
+.pl-drop-over {
+  background: var(--pl-selected) !important;
+  outline: 2px solid var(--pl-accent);
+  outline-offset: -2px;
+}
+.pl-drop-before {
+  box-shadow: inset 0 2px 0 var(--pl-accent);
+}
+.pl-drop-after {
+  box-shadow: inset 0 -2px 0 var(--pl-accent);
+}
 .pl-menu {
   position: relative;
   display: inline-block;

@@ -866,6 +866,11 @@ export class DomRenderer {
     container.addEventListener("keydown", (ev) => {
       if (!isMenuKey(ev) && !["Shift", "Control", "Alt", "Meta"].includes(ev.key)) this.contextAt = null;
     }, true);
+    // UI API 1.13: drag and drop in the app, and a polite live region that
+    // tells assistive technology what a drag did.
+    this.live = el("div", "pl-sr-only", { role: "status", "aria-live": "polite" });
+    this.refocus = null;
+    this.dragDrop(container);
     tree.onChange = () => this.render();
     app.onStop = (reason) => this.showStopped(reason);
     app.onError = (message) => this.showError(message);
@@ -1046,6 +1051,13 @@ export class DomRenderer {
     }
     if (v.place) v.place(children);
     else reconcile(v.slot, children.map((c) => c.el));
+    // A reorder moves the focused row in the DOM, and a move takes the
+    // focus away: give it back (UI API 1.13, Alt+Up and Alt+Down).
+    const back = this.refocus;
+    if (back && v.el.contains(back) && back.ownerDocument.activeElement !== back) {
+      this.refocus = null;
+      back.focus();
+    }
     // A List with no rows (only an EmptyState, or nothing) is not a list
     // for assistive technology: role="list" needs listitem children.
     if (v.kind === ControlKind.list) {
@@ -1060,8 +1072,8 @@ export class DomRenderer {
   /** The nav bar, the shown screen and the page title. */
   renderShell(navChanged) {
     const t = this.tree;
-    if (this.main.parentNode !== this.container) {
-      this.container.replaceChildren(this.nav, this.main);
+    if (this.main.parentNode !== this.container || this.live.parentNode !== this.container) {
+      this.container.replaceChildren(this.nav, this.main, this.live);
     }
     if (navChanged) {
       this.nav.hidden = t.primaryScreens.length === 0;
@@ -1122,7 +1134,7 @@ export class DomRenderer {
       // A Toggle is a switch, as on the desktop (AccessKit `Switch`).
       case "toggle": return this.checkView("pl-toggle", "pl-toggle-label", "switch");
       case "checkbox": return this.checkView("pl-checkbox-field", "pl-checkbox-label");
-      case "list": return this.containerView(el("div", "pl-list", { role: "list" }));
+      case "list": return this.listView();
       case "row": return this.rowView();
       case "group": return this.containerView(el("div", "pl-group"));
       case "empty": return this.emptyView();
@@ -1179,6 +1191,8 @@ export class DomRenderer {
    */
   pointerEvents(e, getId, pxPerUnit) {
     const has = (code) => this.node(getId())?.listeners.get(code) !== undefined;
+    // UI API 1.13: the element can take a drop (`dragDrop`) when it has `onDrop`.
+    e._plDrop = { getId, pxPerUnit };
     const send = (code, ev) => {
       if (!has(code)) return;
       const r = e.getBoundingClientRect();
@@ -1233,6 +1247,251 @@ export class DomRenderer {
     for (const close of [...this.appMenus]) close(false);
   }
 
+  /** Tells assistive technology `text` (the polite live region, UI API 1.13). */
+  announce(text) {
+    this.live.textContent = text;
+  }
+
+  /** Whether node `n` is a row of a `List` with `onReorder` (UI API 1.13). */
+  inReorderList(n) {
+    const p = n ? this.node(n.parent) : null;
+    return !!p && p.kind === ControlKind.list && p.listeners.get(Event.reorder) !== undefined;
+  }
+
+  /**
+   * The drag source `e` (a view element) offers: `{ id, label, value }` for
+   * an element with `dragValue`, or null. `label` names it in messages.
+   */
+  static dragSource(e, getId, labelProp) {
+    e._plDrag = (r) => {
+      const n = r.node(getId());
+      const value = n?.props.get(Prop.dragValue);
+      if (typeof value !== "string" || r.inReorderList(n)) return null;
+      return { id: n.id, label: n.props.get(labelProp) ?? value, value };
+    };
+  }
+
+  /**
+   * UI API 1.13: drag and drop inside the app, with pointer events (not the
+   * HTML drag-and-drop API: it does not work with a finger, and it shows
+   * the browser's own drag image). One listener on the container finds the
+   * drag source: an element with `dragValue` (`_plDrag`), or a row of a
+   * `List` with `onReorder` (`_plList`). A mouse or a pen starts the drag
+   * with a move of 4 px or more after the press. A finger starts it with a
+   * move after a long press (400 ms); a move before that scrolls the page,
+   * and a long press with no move gives the context menu when the finger
+   * goes up. `document.elementFromPoint` finds the drop target: a
+   * modal `<dialog>` makes the rest of the page inert, so no element under
+   * it takes a drop. Escape stops the drag.
+   */
+  dragDrop(container) {
+    const doc = container.ownerDocument;
+    const win = doc.defaultView;
+    let pending = null; // { src, payload, x0, y0, pointerId, touch, armed, timer, ctx }
+    let drag = null; // { src, payload, ghost, target }
+    let replaying = false;
+    const clearTarget = () => {
+      const t = drag?.target;
+      if (t) t.el.classList.remove("pl-drop-over", "pl-drop-before", "pl-drop-after");
+      if (drag) drag.target = null;
+    };
+    const end = () => {
+      if (pending?.timer) win.clearTimeout(pending.timer);
+      pending = null;
+      if (!drag) return;
+      clearTarget();
+      drag.ghost.remove();
+      drag.src.classList.remove("pl-dragging");
+      drag = null;
+    };
+    /** The source of a press on `target`: the innermost draggable element. */
+    const sourceOf = (target) => {
+      for (let e = target; e && e !== container; e = e.parentElement) {
+        const own = e._plDrag?.(this);
+        if (own) return { src: e, payload: own };
+        const list = e.parentElement?._plList;
+        if (list) {
+          const ln = this.node(list());
+          if (ln && ln.listeners.get(Event.reorder) !== undefined) {
+            const from = [...e.parentElement.children].indexOf(e);
+            const n = this.node(Number(e.dataset.plId));
+            const value = n?.props.get(Prop.dragValue);
+            const label = n?.props.get(Prop.title) ?? n?.props.get(Prop.label) ?? (typeof value === "string" ? value : "item");
+            return { src: e, payload: { id: n?.id ?? 0, label, value: typeof value === "string" ? value : null, list: ln.id, listEl: e.parentElement, from } };
+          }
+        }
+      }
+      return null;
+    };
+    /** The drop target under the viewport point (x, y), or null. */
+    const targetAt = (x, y) => {
+      const p = drag.payload;
+      for (let e = doc.elementFromPoint(x, y); e && e !== container; e = e.parentElement) {
+        if (p.list && e.parentElement === p.listEl) {
+          const to = [...p.listEl.children].indexOf(e);
+          return to === p.from || to < 0 ? null : { kind: "reorder", el: e, to };
+        }
+        const d = e._plDrop;
+        if (d && p.value !== null) {
+          const n = this.node(d.getId());
+          if (n && n.listeners.get(Event.drop) !== undefined && n.id !== p.id) return { kind: "drop", el: e, ...d };
+        }
+      }
+      return null;
+    };
+    const start = (ev) => {
+      const { src, payload } = pending;
+      const ghost = el("div", "pl-drag-ghost", { "aria-hidden": "true" });
+      ghost.textContent = payload.label;
+      // A modal dialog is in the top layer: the ghost goes in it, else under it.
+      (src.closest("dialog[open]") ?? container).appendChild(ghost);
+      src.classList.add("pl-dragging");
+      if (pending.timer) win.clearTimeout(pending.timer);
+      pending = null;
+      drag = { src, payload, ghost, target: null, pointerId: ev.pointerId };
+      this.announce(`Dragging ${payload.label}`);
+      move(ev);
+    };
+    const move = (ev) => {
+      // The last point: the release of a finger can come with no position.
+      drag.at = { x: ev.clientX, y: ev.clientY };
+      drag.ghost.style.left = `${ev.clientX + 8}px`;
+      drag.ghost.style.top = `${ev.clientY + 8}px`;
+      const t = targetAt(ev.clientX, ev.clientY);
+      if (t?.el === drag.target?.el && t?.to === drag.target?.to) return;
+      clearTarget();
+      drag.target = t;
+      if (!t) return;
+      if (t.kind === "drop") t.el.classList.add("pl-drop-over");
+      else t.el.classList.add(t.to > drag.payload.from ? "pl-drop-after" : "pl-drop-before");
+    };
+    const drop = () => {
+      const { payload, at } = drag;
+      const t = targetAt(at.x, at.y);
+      if (t?.kind === "reorder") {
+        const count = payload.listEl.children.length;
+        this.announce(`Moved ${payload.label} to position ${t.to + 1} of ${count}`);
+        this.fire(payload.list, Event.reorder, [payload.from, t.to]);
+      } else if (t?.kind === "drop") {
+        const r = t.el.getBoundingClientRect();
+        const k = Math.max(t.pxPerUnit(r), Number.EPSILON);
+        this.announce(`Dropped ${payload.label}`);
+        this.fire(t.getId(), Event.drop, [payload.value, (at.x - r.left) / k, (at.y - r.top) / k]);
+      }
+      // The press and the release make a click on the source: not a press.
+      const stop = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+      };
+      win.addEventListener("click", stop, { capture: true, once: true });
+      win.setTimeout(() => win.removeEventListener("click", stop, { capture: true }), 0);
+      end();
+    };
+    container.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0 || !ev.isPrimary || drag) return;
+      end();
+      // A press in a field or a slider is the field's.
+      if (ev.target.closest?.("input, textarea, select, [contenteditable]")) return;
+      const found = sourceOf(ev.target);
+      if (!found) return;
+      const touch = ev.pointerType === "touch";
+      pending = { ...found, x0: ev.clientX, y0: ev.clientY, pointerId: ev.pointerId, touch, armed: !touch, timer: 0, ctx: null };
+      if (touch) {
+        pending.timer = win.setTimeout(() => {
+          if (pending) pending.armed = true;
+        }, 400);
+      }
+    }, true);
+    doc.addEventListener("pointermove", (ev) => {
+      if (drag) {
+        if (ev.pointerId === drag.pointerId) move(ev);
+        return;
+      }
+      if (!pending || ev.pointerId !== pending.pointerId) return;
+      const dist = Math.hypot(ev.clientX - pending.x0, ev.clientY - pending.y0);
+      if (!pending.armed) {
+        // A finger that moves before the long press scrolls the page.
+        if (dist > 8) end();
+        return;
+      }
+      if (dist >= 4) start(ev);
+    });
+    doc.addEventListener("pointerup", (ev) => {
+      if (drag) {
+        if (ev.pointerId === drag.pointerId) drop();
+        return;
+      }
+      if (pending && ev.pointerId !== pending.pointerId) return;
+      const ctx = pending?.ctx;
+      end();
+      // A long press with no move: the context menu that waited.
+      if (ctx) {
+        replaying = true;
+        try {
+          ctx.target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: ctx.x, clientY: ctx.y }));
+        } finally {
+          replaying = false;
+        }
+      }
+    });
+    doc.addEventListener("pointercancel", end);
+    // While a finger holds a drag source after a long press, the page does not scroll.
+    doc.addEventListener("touchmove", (ev) => {
+      if (drag || pending?.armed) ev.preventDefault();
+    }, { passive: false });
+    // A long press on a drag source (the browser's `contextmenu` on
+    // Android): the drag can start. The context menu waits for the release.
+    container.addEventListener("contextmenu", (ev) => {
+      if (replaying || !pending?.touch) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      pending.armed = true;
+      pending.ctx = { target: ev.target, x: ev.clientX, y: ev.clientY };
+    }, true);
+    doc.addEventListener("keydown", (ev) => {
+      if (drag && ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.announce("Drag canceled");
+        end();
+      }
+    }, true);
+  }
+
+  /**
+   * A `List`. With `onReorder` (UI API 1.13), Alt+Up and Alt+Down on a row
+   * (or on a control in it) move the row; a drag of a row onto another row
+   * moves it too (`dragDrop`).
+   */
+  listView() {
+    const e = el("div", "pl-list", { role: "list" });
+    let id = 0;
+    e._plList = () => id;
+    e.addEventListener("keydown", (ev) => {
+      if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey || (ev.key !== "ArrowUp" && ev.key !== "ArrowDown")) return;
+      if (this.node(id)?.listeners.get(Event.reorder) === undefined) return;
+      const rows = [...e.children];
+      const from = rows.findIndex((r) => r.contains(ev.target));
+      if (from < 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const to = ev.key === "ArrowUp" ? from - 1 : from + 1;
+      if (to < 0 || to >= rows.length) return;
+      this.refocus = ev.target;
+      const n = this.node(Number(rows[from].dataset.plId));
+      const label = n?.props.get(Prop.title) ?? n?.props.get(Prop.label) ?? "item";
+      this.announce(`Moved ${label} to position ${to + 1} of ${rows.length}`);
+      this.fire(id, Event.reorder, [from, to]);
+    });
+    return {
+      el: e,
+      slot: e,
+      update: (n) => {
+        id = n.id;
+      },
+    };
+  }
+
   /** A box with a pointer-move handler takes touch moves itself (no page scroll on a drag). */
   static touchAction(n) {
     return n.listeners.get(Event.pointerMove) !== undefined ? "none" : null;
@@ -1258,6 +1517,7 @@ export class DomRenderer {
     e.addEventListener("keydown", key(Event.keyDown));
     e.addEventListener("keyup", key(Event.keyUp));
     this.pointerEvents(e, () => id, () => UNIT);
+    if (kname !== "scroll") DomRenderer.dragSource(e, () => id, Prop.label);
     if (kname === "pressable") {
       const press = () => {
         if (!disabled) this.fire(id, Event.press);
@@ -1299,6 +1559,7 @@ export class DomRenderer {
           setAttr(e, "aria-label", label);
           setAttr(e, "tabindex", kname === "scroll" || keys ? "0" : null);
         }
+        e.classList.toggle("pl-draggable", kname !== "scroll" && typeof n.props.get(Prop.dragValue) === "string");
       },
     };
   }
@@ -1569,8 +1830,9 @@ export class DomRenderer {
       e.preventDefault();
       this.fire(id, Event.press);
     });
-    // UI API 1.13: onContextMenu, in spacing units from the row's corner.
+    // UI API 1.13: onContextMenu and onDrop, in spacing units from the row's corner.
     this.pointerEvents(row, () => id, () => UNIT);
+    DomRenderer.dragSource(row, () => id, Prop.title);
     return {
       el: row,
       slot: actions,
@@ -1581,7 +1843,11 @@ export class DomRenderer {
         setOptionalText(trailing, n.props.get(Prop.trailing));
         const canPress = n.listeners.get(Event.press) !== undefined;
         row.classList.toggle("pl-row-pressable", canPress);
-        setAttr(row, "tabindex", canPress || n.listeners.get(Event.contextMenu) !== undefined ? "0" : null);
+        // A row of a list that the user can reorder is a tab stop (Alt+Up and Alt+Down, UI API 1.13).
+        const reorder = this.inReorderList(n);
+        setAttr(row, "tabindex", canPress || reorder || n.listeners.get(Event.contextMenu) !== undefined ? "0" : null);
+        setAttr(row, "aria-keyshortcuts", reorder ? "Alt+ArrowUp Alt+ArrowDown" : null);
+        row.classList.toggle("pl-draggable", reorder || typeof n.props.get(Prop.dragValue) === "string");
         // The selected row of its list (UI API 1.8). `aria-selected` is not
         // allowed on a listitem; `aria-current` is.
         const selected = !!n.props.get(Prop.selected);
@@ -2006,6 +2272,11 @@ export class DomRenderer {
   overlayView(kname) {
     const dialog = el("dialog", `pl-${kname}`);
     const title = dialog.appendChild(el("h2", "pl-title"));
+    // A Dialog: the message, then its children (a small form, UI API 1.13),
+    // then its actions in a row.
+    const message = kname === "dialog" ? dialog.appendChild(el("p", "pl-dialog-message")) : null;
+    const body = kname === "dialog" ? dialog.appendChild(el("div", "pl-dialog-body")) : null;
+    const actions = kname === "dialog" ? dialog.appendChild(el("div", "pl-dialog-actions")) : null;
     let id = 0;
     const closedByUser = () => {
       const n = this.node(id);
@@ -2018,7 +2289,11 @@ export class DomRenderer {
     const sync = (dialog._plSync = () => {
       const open = !!this.node(id)?.props.get(Prop.value);
       if (!dialog.isConnected) return;
-      if (open && !dialog.open) dialog.showModal();
+      if (open && !dialog.open) {
+        dialog.showModal();
+        // A Dialog with a form: the focus goes to the first field.
+        body?.querySelector("input, textarea, select, button, [tabindex]")?.focus();
+      }
       if (!open && dialog.open) dialog.close();
     });
     return {
@@ -2027,9 +2302,18 @@ export class DomRenderer {
       update: (n) => {
         id = n.id;
         setOptionalText(title, n.props.get(Prop.title));
+        if (message) setOptionalText(message, n.props.get(Prop.message));
         // After the element is in the document (showModal needs that).
         queueMicrotask(sync);
       },
+      place:
+        kname === "dialog"
+          ? (children) => {
+              reconcile(body, children.filter((c) => c.kind !== ControlKind.action).map((c) => c.el));
+              reconcile(actions, children.filter((c) => c.kind === ControlKind.action).map((c) => c.el));
+              body.hidden = body.children.length === 0;
+            }
+          : undefined,
     };
   }
 

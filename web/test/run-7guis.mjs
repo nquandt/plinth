@@ -264,7 +264,10 @@ async function circleDrawer() {
   const slider = h.labeled(ControlKind.slider, "Diameter");
   h.send(slider, Event.change, 70);
   assert.equal(radius(), 35);
-  h.press("Done");
+  // The slider is in a Dialog (UI API 1.13, GAPS 7G-7); "Done" is its action.
+  const dialog = h.one(ControlKind.dialog);
+  assert.equal(slider.parent, dialog.id, "the slider is a child of the dialog");
+  h.send(h.labeled(ControlKind.action, "Done"), Event.press, null);
   h.press("Undo");
   assert.equal(radius(), 15, "one undo step for the whole adjustment");
   h.press("Undo");

@@ -94,6 +94,52 @@ function Home() {
     assert_eq!(codes(&bad), ["PL3001", "PL4002"]);
 }
 
+/// UI API 1.13 (PRODUCTION U6 part 2): `dragValue` on `Box`, `Pressable`
+/// and `Row`; `onDrop(value, x, y)` on boxes, `Canvas` and `Row`;
+/// `onReorder(from, to)` on `List`; children and `onClose` in `Dialog`.
+#[test]
+fn drag_and_drop_and_dialog_children() {
+    let good = r#"import { app, Screen, Box, Pressable, Scroll, Canvas, List, Row, Dialog, Action, Slider, TextField, signal } from "plinth:ui";
+function Home() {
+  const items = signal(["a", "b"]);
+  const open = signal(false);
+  const size = signal(1);
+  const name = signal("");
+  const log = signal("");
+  return <Screen title="Home">
+    <Box label="Card" dragValue="card" width={10} height={10} />
+    <Pressable label="Item" role="button" onPress={() => {}} dragValue={items()[0]} />
+    <Box label="Column" onDrop={(v, x, y) => log.set(`${v.toUpperCase()} ${x + y}`)} />
+    <Scroll label="Inbox" onDrop={(v: string) => log.set(v)} />
+    <Canvas label="Board" viewWidth={10} viewHeight={10} shapes={[]} onDrop={(v, x) => log.set(`${v} ${x}`)} />
+    <List items={items()} key={(s) => s} onReorder={(from, to) => log.set(`${from} ${to}`)}
+          row={(s) => <Row title={s} dragValue={s} onDrop={(v) => log.set(v)} />} />
+    <Dialog open={open} title="Size" message="Pick one." onClose={() => open.set(false)} actions={[<Action label="OK" onPress={() => {}} />]}>
+      <Slider label="Size" value={size} min={0} max={10} />
+      <TextField label="Name" value={name} />
+    </Dialog>
+  </Screen>;
+}"#
+    .to_owned()
+        + APP;
+    assert_eq!(codes(&good), Vec::<&str>::new());
+
+    // A number parameter for the drag value, a number drag value, no
+    // `dragValue` on a Scroll, no `onReorder` on a Grid.
+    let bad = r#"import { app, Screen, Box, Scroll, Grid, Text } from "plinth:ui";
+function Home() {
+  return <Screen title="Home">
+    <Box onDrop={(v: number) => {}} />
+    <Box dragValue={1} />
+    <Scroll dragValue="x" />
+    <Grid items={["a"]} key={(s) => s} cell={(s) => <Text>{s}</Text>} onReorder={() => {}} />
+  </Screen>;
+}"#
+    .to_owned()
+        + APP;
+    assert_eq!(codes(&bad), ["PL3001", "PL3001", "PL4002", "PL4002"]);
+}
+
 #[test]
 fn checkbox_and_text_area() {
     // Good usage: both controls check clean.

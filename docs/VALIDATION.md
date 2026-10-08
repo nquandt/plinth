@@ -48,7 +48,7 @@ The flagship app is a notes app, in the style of a small Obsidian or Notion. It 
 | Text editing | Cursor, selection, IME, clipboard, undo, in a long text | `TextArea` is plain text. Rich text (bold, headings, lists, links) needs a design: a `RichText` control with a document model, or Markdown with a preview. This is the largest design question in V2. |
 | Navigation | Nested notes (folders or links), back and forward, deep links | Stack navigation exists. Arguments for `navigate.push` (SPEC.md M2 status). `plinth://` links into a note. |
 | Search | Full-text search that updates while the user types | Done for plain text (2026-10-08): `examples/notes` searches with SQLite FTS5 in `store.sql` (a prefix search on each word). With 1,000 notes a search takes about 2 ms to 10 ms (desktop, debug build) and 1 ms to 5 ms (web, Node); `crates/plinth-compiler/tests/notes.rs`, `web/test/run-notes.mjs`. To check: a few thousand notes, and long notes. |
-| Reorder | Drag and drop of notes and blocks | **No drag and drop in the UI API.** Design it as intent (a `reorderable` list), not as pixels. |
+| Reorder | Drag and drop of notes and blocks | Done in the UI API (UI API 1.13, PRODUCTION U6): `List` `onReorder(from, to)` (a drag, or Alt+Up/Down), `dragValue` and `onDrop`; `examples/todo` moves its tasks. `examples/notes` does not use it yet (its list is sorted by the last change). |
 | Persistence | Offline storage; state survives a restart | Done (2026-10-08): `examples/notes` keeps its notes in `store.sql` (`docs/SQL.md`), and the tests check that the notes stay for the next run. Old notes in `store.kv` move into the database one time. To check: the 50 KB note in the exit criteria. |
 | Shortcuts | Keyboard shortcuts for commands | `Action.shortcut` is not built (SPEC.md §6.3). |
 
@@ -88,7 +88,7 @@ Fill in this section as the apps are done.
 | 7GUIs 3 Flight booker | 125 (107) | 2388 B (4170 B) | 30 ms | 2.2 ms | 1152 KiB | Return date hidden, not disabled (GAPS 7G-1). 30 lines are a `DD.MM.YYYY` parser (7G-4). |
 | 7GUIs 4 Timer | 46 (33) | 1490 B (2006 B) | 22 ms | 2.4 ms | 1152 KiB | |
 | 7GUIs 5 CRUD | 120 (98) | 2489 B (4409 B) | 28 ms | 2.8 ms | 1152 KiB | Selection shown with `trailing` (7G-2). |
-| 7GUIs 6 Circle drawer | 220 (200) | 2916 B (5537 B) | not measured | not measured | not measured | The slider in a `Sheet` (7G-7). Pointer events (UI API 1.12), outlines and the right-click menu (UI API 1.13, 7G-6). |
+| 7GUIs 6 Circle drawer | 220 (200) | 2916 B (5537 B) | not measured | not measured | not measured | The slider in a `Dialog` (UI API 1.13, 7G-7; before, a `Sheet`). Pointer events (UI API 1.12), outlines and the right-click menu (UI API 1.13, 7G-6). |
 | 7GUIs 7 Cells | 497 (440) | 6 KiB (12624 B) | 445 ms debug | not measured | not measured | A formula field, not edit in place (GAPS 7G-11). One edit 2 ms, at most 4 text ops. A scroll frame on the desktop (release): 8.6 ms, 12.4 ms with AccessKit (was 85.6 ms before the scroll culling, GAPS 7G-12). |
 
 How these numbers were measured (2026-10-06, Windows, one machine):

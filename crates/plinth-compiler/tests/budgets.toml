@@ -30,7 +30,7 @@
 "quotes" = 2786
 "settings-gallery" = 4078
 "timer" = 2511
-"todo" = 5673
+"todo" = 6750
 "utility" = 10428
 
 # The core, bytes. Recorded, not a limit (SPEC.md §5.5); a change over 10 % prints a note.
