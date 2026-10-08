@@ -63,7 +63,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | R3 | Web limits: a time limit (Worker and watchdog) and a memory cap | Beta | Done | Memory cap: `capCoreMemory` (`web/test/run-stop.mjs`). Time limit: each app runs in its own Worker, and a watchdog ends it after 2 s in one call (`web/app-worker.js`; `web/test/run-worker.mjs`, `checkStopBanner` in `run-a11y.mjs`). |
 | R4 | wasmi engine passes all suites (monkey, async, files, hub, net) and runs in CI | Beta | Partial | HANDOFF §10 item 1 (a)–(d) |
 | R5 | Engine-free host state crate (no wasmtime dependency for iOS) | 1.0 | Open | HANDOFF §10 item 1 (e). Needed for iOS (PR-Q1). |
-| R6 | Performance budgets in the gate: start time, frame cost, memory per app, `.plnt` size | Beta | Partial | `frame_cost.rs`, counter size guard in `tests/e2e.rs`. Next: write the budgets in a doc and fail the gate when an example exceeds them. |
+| R6 | Performance budgets in the gate: start time, frame cost, memory per app, `.plnt` size | Beta | Done | `crates/plinth-compiler/tests/budgets.rs` with `tests/budgets.toml` (in `ci-local.sh full` and `nogui`): `app.wasm` size of each example, memory after `init` and after 300 UI events, start time (load and init) for five examples; the core size is recorded, not limited (SPEC.md §5.5). Frame cost of each example: `crates/plinth-shoot/tests/frame_cost.rs` with `tests/frame_budgets.toml` (`--shoot`). Bless with `PLINTH_BLESS=1`. Budgets and measurements: `docs/guides/performance.md` §9. |
 | R7 | Nested flex layout is linear (gpui-ce fix) | Beta | Open | GAPS F1; HANDOFF §10 item 3 |
 
 ## 5. UI and accessibility
@@ -230,7 +230,7 @@ Count on 2026-10-07, by gate and status. Run `bash scripts/production-status.sh`
 **The next level is Beta.** Start with the items that the owner and the code do not block:
 
 1. T7, the core part: optimize the 1.13 core with `wasm-opt -Oz` when it is built.
-2. R6: performance budgets in the gate.
+2. R6: performance budgets in the gate (done).
 3. L9: source locations in runtime errors.
 4. R4, Q4: wasmi in all suites and in CI.
 5. H4: the `store.sql` design and the first slice.

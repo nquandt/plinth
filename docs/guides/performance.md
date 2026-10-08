@@ -150,3 +150,50 @@ Measurements over the 26 example apps (2026-10-07, Binaryen 116):
 The speed does not change in a measurable way: most of the work is in the core, not in the app code. `-O2` and `-O3` gave larger modules than `-Oz` (-12.8 % and -12.2 %), and Binaryen 133 gave the same sizes as Binaryen 116 to within 40 B in total.
 
 The core is not optimized by `--release`: the host supplies it, and a change of its bytes is a new core build. `-Oz` makes the 1.12 core 14 % smaller (131,188 B to 112,696 B; gzip 50,970 B to 48,452 B). Core 1.12 is shipped and frozen, so this step is planned for core 1.13 (`docs/PRODUCTION.md` T7).
+
+## 9. Performance budgets (for Plinth contributors)
+
+The gate makes sure that a change to Plinth does not make the examples larger or slower without a decision (`docs/PRODUCTION.md` R6). A test fails when a value goes over its budget. The failure message gives the metric, the budget, the value, and the command that writes new budgets.
+
+| Metric | What is measured | Budget | Test | Runs in |
+|---|---|---|---|---|
+| `app_size` | `app.wasm` of each example (debug build, no `--release`), bytes | Measured value + 10 % | `crates/plinth-compiler/tests/budgets.rs` | `ci-local.sh full` and `nogui` |
+| `memory` | Guest linear memory after `init`, and after 300 fixed UI events, for `counter`, `todo`, `budget`, `hub`, `big-list` | Measured value + 10 %, up to a full 64 KiB page | same | same |
+| `start_ms` | `Runner::load` (the engine compiles the core and the app) and `init` to the first commit, separately, for the same five examples, debug build | 3 x the median at bless time; at least 100 ms (load) and 10 ms (init) | same | same |
+| `core_size` | The core: raw (`target/rt`) and linked | No budget: the runtime has no size limit (SPEC.md §5.5). A change of more than 10 % prints a note. | same | same |
+| `frame_ms` | Median `Window::draw` time of each example at 1000 x 800, debug build | 3 x the median at bless time; at least 20 ms | `crates/plinth-shoot/tests/frame_cost.rs` | `ci-local.sh full --shoot` |
+
+The budgets are in `crates/plinth-compiler/tests/budgets.toml` and `crates/plinth-shoot/tests/frame_budgets.toml`. Do not edit these files by hand.
+
+Sizes and memory are deterministic: the same source gives the same value each time. Their budgets are tight. Timings change from run to run, and other builds on the same machine make them slower. The timing tests:
+
+- take 5 rounds that go through the apps in turn (interleaved), and use the median, not one sample;
+- run the tests of `budgets.rs` one at a time, so that a compile does not slow a sample;
+- use a budget of 3 times the median and a lowest budget. A timing budget finds a large regression (for example, an app that builds its UI two times), not a small one.
+
+The timing budgets are absolute times on the machine that ran bless. A much slower machine can need new budgets. On a GitHub-hosted runner (the macOS CI job, `RUNNER_ENVIRONMENT=github-hosted`), the test prints the start times and does not check them. The size and memory budgets apply on all machines. A release build of the tests (`cargo test --release`) is faster and passes the debug budgets. The frame budgets apply only to a debug build.
+
+### Update a budget
+
+When a change makes a value larger and you agree with the change:
+
+```sh
+PLINTH_BLESS=1 cargo test -p plinth-compiler --test budgets
+PLINTH_BLESS=1 cargo test -p plinth-shoot --test frame_cost every_example
+```
+
+Bless writes new budgets from the values of this run and prints each change (`old -> new`). Read the diff, and commit the budget file with the change that caused it. Bless the timings on a machine that does no other builds at that time.
+
+When a value is much smaller than its budget (a size or a memory value at less than 75 % of the budget that bless would write now), the test prints a note. Bless to make the budget tighter.
+
+Measured on 2026-10-08 (Windows, debug build, 3 runs; the spread is the range of the medians):
+
+| Example | `app.wasm` | Memory after init | After 300 events | Load | Init | Frame |
+|---|---|---|---|---|---|---|
+| `counter` | 1,939 B | 1,152 KiB | 1,152 KiB | 300–316 ms | 0.1 ms | 4.2–4.3 ms |
+| `todo` | 5,157 B | 1,152 KiB | 1,216 KiB | 290–304 ms | 0.2 ms | 11.8 ms |
+| `budget` | 15,124 B | 1,152 KiB | 1,216 KiB | 419–467 ms | 0.5–0.6 ms | 28.1 ms |
+| `hub` | 24,264 B | 1,152 KiB | 1,344 KiB | 470–520 ms | 0.4 ms | 8.6 ms |
+| `big-list` | 3,923 B | 22,720 KiB | 22,720 KiB | 296–315 ms | 74–76 ms | 21.6–22.2 ms |
+
+The core: 131,188 B raw, 68,432 B linked. The slowest frame is `7guis/cells` (5,666 nodes): 83.1–83.8 ms.

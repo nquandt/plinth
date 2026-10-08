@@ -3,7 +3,9 @@
 //! test draws 20 frames after a warm-up and prints the median and the
 //! maximum of `Window::draw`. A frame of a normal screen must stay far
 //! below the 8 ms of a 120 Hz display; the test fails above a generous
-//! limit, so that a large regression shows.
+//! limit, so that a large regression shows. In a debug build, each example
+//! also has its own budget in `tests/frame_budgets.toml` (see
+//! `check_frame_budgets`; `PLINTH_BLESS=1` writes it).
 //!
 //! `PLINTH_FRAME_APP=<part of a name>` measures only matching apps.
 
@@ -114,6 +116,71 @@ fn every_example_draws_a_frame_fast() {
     for (name, _, median, _) in &rows {
         assert!(*median < limit, "{name}: median frame {median:.1} ms (limit {limit} ms)");
     }
+    if cfg!(debug_assertions) {
+        check_frame_budgets(&rows.iter().map(|(name, _, median, _)| (name.clone(), *median)).collect::<Vec<_>>());
+    }
+}
+
+/// A frame budget is this multiple of the median at bless time.
+const FRAME_FACTOR: f64 = 3.0;
+/// The lowest frame budget, in ms: a short frame is mostly noise.
+const FRAME_FLOOR_MS: f64 = 20.0;
+
+fn frame_budgets_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/frame_budgets.toml")
+}
+
+/// The per-example frame budgets of a debug build (`docs/PRODUCTION.md` R6,
+/// `docs/guides/performance.md` §9), in `tests/frame_budgets.toml`. The
+/// budget is `FRAME_FACTOR` times the median frame at bless time (at least
+/// `FRAME_FLOOR_MS`): frame times are noisy, so it catches a large
+/// regression of one example, not a small one. `PLINTH_BLESS=1` writes the
+/// budgets of the measured examples and prints the diff.
+fn check_frame_budgets(medians: &[(String, f64)]) {
+    let text = std::fs::read_to_string(frame_budgets_path()).unwrap_or_default();
+    let mut budgets: std::collections::BTreeMap<String, u64> = text
+        .parse::<toml::Table>()
+        .expect("tests/frame_budgets.toml is not valid TOML")
+        .get("frame_ms")
+        .and_then(|t| t.as_table())
+        .map(|t| t.iter().filter_map(|(k, v)| Some((k.clone(), v.as_integer()? as u64))).collect())
+        .unwrap_or_default();
+    if std::env::var("PLINTH_BLESS").is_ok_and(|v| v == "1") {
+        eprintln!("bless [frame_ms]:");
+        for (name, median) in medians {
+            let new = (median * FRAME_FACTOR).max(FRAME_FLOOR_MS).ceil() as u64;
+            let old = budgets.insert(name.clone(), new);
+            if old != Some(new) {
+                eprintln!("  {name}: {} -> {new}", old.map_or("(none)".to_owned(), |v| v.to_string()));
+            }
+        }
+        let mut out = String::from(
+            "# Frame budgets of the desktop renderer (docs/PRODUCTION.md R6, docs/guides/performance.md §9).\n\
+             # Checked by crates/plinth-shoot/tests/frame_cost.rs (`ci-local.sh full --shoot`), debug build only.\n\
+             # Median Window::draw time at 1000 x 800, ms. Budget = 3 x the median at bless time, at least 20 ms.\n\
+             # Do not edit by hand: run\n\
+             #   PLINTH_BLESS=1 cargo test -p plinth-shoot --test frame_cost every_example\n\
+             \n[frame_ms]\n",
+        );
+        for (k, v) in &budgets {
+            out.push_str(&format!("{} = {v}\n", toml::Value::String(k.clone())));
+        }
+        std::fs::write(frame_budgets_path(), out).unwrap();
+        return;
+    }
+    let mut failures = Vec::new();
+    for (name, median) in medians {
+        match budgets.get(name) {
+            None => failures.push(format!("frame_ms.{name}: no budget (median {median:.1} ms)")),
+            Some(b) if *median > *b as f64 => failures.push(format!("frame_ms.{name}: median frame {median:.1} ms is over the budget {b} ms")),
+            Some(_) => {}
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "frame budget exceeded:\n  {}\nIf the change is intended, run `PLINTH_BLESS=1 cargo test -p plinth-shoot --test frame_cost every_example` and commit tests/frame_budgets.toml (docs/guides/performance.md §9).",
+        failures.join("\n  ")
+    );
 }
 
 /// The cost of one control: a screen with five of the same control, for the

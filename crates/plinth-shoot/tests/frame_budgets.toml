@@ -1,0 +1,33 @@
+# Frame budgets of the desktop renderer (docs/PRODUCTION.md R6, docs/guides/performance.md §9).
+# Checked by crates/plinth-shoot/tests/frame_cost.rs (`ci-local.sh full --shoot`), debug build only.
+# Median Window::draw time at 1000 x 800, ms. Budget = 3 x the median at bless time, at least 20 ms.
+# Do not edit by hand: run
+#   PLINTH_BLESS=1 cargo test -p plinth-shoot --test frame_cost every_example
+
+[frame_ms]
+"7guis/cells" = 247
+"7guis/circle-drawer" = 20
+"7guis/counter" = 20
+"7guis/crud" = 37
+"7guis/flight-booker" = 25
+"7guis/temperature" = 20
+"7guis/timer" = 20
+"big-list" = 67
+"budget" = 86
+"calculator" = 36
+"contacts" = 35
+"counter" = 20
+"dialogs" = 20
+"files-demo" = 26
+"gallery" = 20
+"gc-torture" = 90
+"hub" = 26
+"notes" = 47
+"notify-demo" = 20
+"pong" = 25
+"primitives" = 62
+"quotes" = 20
+"settings-gallery" = 126
+"timer" = 20
+"todo" = 36
+"utility" = 51

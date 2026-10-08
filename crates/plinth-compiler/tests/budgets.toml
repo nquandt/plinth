@@ -1,0 +1,65 @@
+# Performance budgets (docs/PRODUCTION.md R6, docs/guides/performance.md §9).
+# Checked by crates/plinth-compiler/tests/budgets.rs in the gate.
+# Do not edit by hand: run
+#   PLINTH_BLESS=1 cargo test -p plinth-compiler --test budgets
+# and commit the result with the change that caused it.
+
+# app.wasm of each example, debug build, bytes. Budget = measured + 10 %.
+[app_size]
+"7guis/cells" = 13932
+"7guis/circle-drawer" = 6134
+"7guis/counter" = 1408
+"7guis/crud" = 4827
+"7guis/flight-booker" = 4575
+"7guis/temperature" = 2375
+"7guis/timer" = 2232
+"big-list" = 4316
+"budget" = 16637
+"calculator" = 5412
+"contacts" = 6532
+"counter" = 2133
+"dialogs" = 6266
+"files-demo" = 8776
+"gallery" = 1489
+"gc-torture" = 4303
+"hub" = 26691
+"notes" = 9466
+"notify-demo" = 4363
+"pong" = 11978
+"primitives" = 7508
+"quotes" = 2786
+"settings-gallery" = 4078
+"timer" = 2511
+"todo" = 5673
+"utility" = 10428
+
+# The core, bytes. Recorded, not a limit (SPEC.md §5.5); a change over 10 % prints a note.
+[core_size]
+"linked" = 68432
+"raw" = 131188
+
+# Guest linear memory after init and after 300 fixed UI events, bytes. Budget = measured + 10 %, up to a 64 KiB page.
+[memory]
+"big-list.events" = 25624576
+"big-list.init" = 25624576
+"budget.events" = 1376256
+"budget.init" = 1310720
+"counter.events" = 1310720
+"counter.init" = 1310720
+"hub.events" = 1572864
+"hub.init" = 1310720
+"todo.events" = 1376256
+"todo.init" = 1310720
+
+# Start time, ms, debug build: <app>.load = Runner::load (the engine compiles core + app), <app>.init = init to the first commit. Budget = 3 x the median at bless time, at least 100 ms (load) and 10 ms (init).
+[start_ms]
+"big-list.init" = 228
+"big-list.load" = 939
+"budget.init" = 10
+"budget.load" = 1359
+"counter.init" = 10
+"counter.load" = 900
+"hub.init" = 10
+"hub.load" = 1413
+"todo.init" = 10
+"todo.load" = 924
