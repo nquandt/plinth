@@ -143,6 +143,16 @@ pub fn select_patch(cores: &[Core], need: Need) -> Option<&Core> {
     cores.iter().filter(|c| c.version.0 == need.0 && c.version.1 == need.1).max_by_key(|c| c.version.2)
 }
 
+/// The minor version that `patch` keeps to: the one the app was built
+/// with (`core-built`), or the lowest one it needs. A `core-built` of
+/// another major version, or lower than the need, is ignored.
+pub fn patch_minor(need: Need, built: Option<&str>) -> Need {
+    match built.and_then(parse_version) {
+        Some((major, minor, _)) if major == need.0 && minor >= need.1 => (major, minor),
+        _ => need,
+    }
+}
+
 /// The core under the `pinned` policy: the exact core build the app was
 /// built with, by digest.
 pub fn select_pinned<'a>(cores: &'a [Core], digest: &str) -> Option<&'a Core> {
@@ -195,12 +205,15 @@ pub fn link_app(app: &[u8]) -> Result<Vec<u8>> {
 /// since an old manifest with no `core` field also means `follow`),
 /// links the app into it, and returns a component that is ready to run.
 /// `pinned_digest` is the digest the app's manifest recorded at build
-/// time; it is ignored for the other policies.
-pub fn link_app_with_policy(app: &[u8], policy: &str, pinned_digest: Option<&str>) -> Result<Vec<u8>> {
+/// time; it is ignored for the other policies. `built` is the manifest's
+/// `core-built` (the core version the app was built with): under `patch`
+/// the host takes only patches of that minor version. Without it (an old
+/// manifest), `patch` uses the lowest core the app needs.
+pub fn link_app_with_policy(app: &[u8], policy: &str, pinned_digest: Option<&str>, built: Option<&str>) -> Result<Vec<u8>> {
     let need = split::app_core_version(app).context("app.wasm does not name its core (no `plinth-core` section)")?;
     let cores = installed();
     let core = match policy {
-        "patch" => select_patch(&cores, need),
+        "patch" => select_patch(&cores, patch_minor(need, built)),
         "pinned" => {
             let Some(digest) = pinned_digest else {
                 bail!("the app's `core = \"pinned\"` policy needs a digest in its manifest, but none is recorded");
@@ -264,6 +277,18 @@ mod core_version_tests {
         // An app built against 1.5 takes only 1.5.x patches, never 1.6.
         assert_eq!(select_patch(&cores, (1, 5)).map(|c| c.version), Some((1, 5, 3)));
         assert!(select_patch(&cores, (1, 7)).is_none());
+    }
+
+    #[test]
+    fn patch_keeps_to_the_minor_the_app_was_built_with() {
+        // An app that needs 1.0 but was built with 1.5.2 takes 1.5.x only.
+        assert_eq!(patch_minor((1, 0), Some("1.5.2")), (1, 5));
+        // An old manifest with no `core-built`: the lowest need.
+        assert_eq!(patch_minor((1, 0), None), (1, 0));
+        // A value of another major, a lower minor, or garbage is ignored.
+        assert_eq!(patch_minor((1, 3), Some("2.0.0")), (1, 3));
+        assert_eq!(patch_minor((1, 3), Some("1.2.0")), (1, 3));
+        assert_eq!(patch_minor((1, 3), Some("x")), (1, 3));
     }
 
     #[test]

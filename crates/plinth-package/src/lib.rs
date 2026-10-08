@@ -301,6 +301,13 @@ pub struct Manifest {
     /// for a manifest written before this field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core_digest: Option<String>,
+    /// For `core = "patch"`: the version (`MAJOR.MINOR.PATCH`) of the core
+    /// build the app was built with. The host takes only patches of this
+    /// minor version. `None` for the other policies and for a manifest
+    /// written before this field existed (the host then uses the lowest
+    /// core the app needs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_built: Option<String>,
     /// The author's update feed configuration (`docs/UPDATES.md` §8 step
     /// 2), carried from `plinth.toml`'s `[updates]` unchanged. `None`
     /// means no updates: a manifest written before this field existed,
@@ -415,6 +422,7 @@ impl ProjectConfig {
                 CorePolicy::Pinned => core_digest.map(str::to_owned),
                 _ => None,
             },
+            core_built: None,
         }
     }
 }

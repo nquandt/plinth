@@ -465,7 +465,13 @@ fn build_package(dir: &Path, out: Option<PathBuf>, sign: bool) -> Result<Option<
     // build this compile used, so a host can find the exact match later
     // (SPEC.md §10.5).
     let core_digest = plinth_compiler::cores::digest_hex(plinth_compiler::link::runtime());
-    let manifest = b.config.manifest_with_core_digest(plinth_protocol::UI_API_VERSION, &b.runtime, b.accent, &b.app, Some(&core_digest));
+    let mut manifest = b.config.manifest_with_core_digest(plinth_protocol::UI_API_VERSION, &b.runtime, b.accent, &b.app, Some(&core_digest));
+    // For `core = "patch"`, the manifest records the version of the core
+    // this compile used: the host takes only patches of its minor version
+    // (SPEC.md §10.5).
+    if b.config.core == plinth_package::CorePolicy::Patch {
+        manifest.core_built = plinth_link::cores::core_version(plinth_compiler::link::runtime()).map(plinth_link::cores::format_version);
+    }
     let assets: Vec<(String, Vec<u8>)> = read_assets(dir).into_iter().map(|(name, bytes)| (format!("assets/{name}"), bytes)).collect();
     let mut pkg = Package::new(manifest, b.app, assets);
     if sign {

@@ -34,10 +34,10 @@ Your app module names the lowest core that it needs (the manifest field `runtime
 | `core` | The host links your app into | Use it when |
 |---|---|---|
 | `follow` (the default) | The newest core of the same major version, with a minor version that is not lower than the one your app needs. The highest patch of that minor. | Almost always. Core fixes reach your users with no action from you. |
-| `patch` | Only a core with the same `MAJOR.MINOR` as the lowest core that your app needs. The highest patch. | You want bug fixes, but no new minor version. |
+| `patch` | Only a core with the same `MAJOR.MINOR` as the core that built your app (`core-built` in `manifest.toml`). The highest patch. | You want bug fixes, but no new minor version. |
 | `pinned` | Only the exact core build that `plinth build` used, by its SHA-256 digest (the manifest field `core-digest`). | Your app depends on the exact behavior of one core build. |
 
-> **CAUTION:** `patch` uses the minor version that your app *needs*, not the newest core on your computer. A small app can need core `1.0` while the host has only core `1.12`. Then the app does not link: the host and `plinth registry build` say "the app needs core 1.0 (policy `patch`)". Read `runtime` in `manifest.toml` in your built package (a `.plnt` file is a zip file) before you choose `patch`.
+> **NOTE:** a package built before `core-built` existed has no such field. For it, `patch` uses the lowest core that the app needs, which can be older than any core on the host. Build the app again to record `core-built`.
 
 If the host has no matching core, the app does not start, and the message tells the user which core to install (`plinth core install <core.wasm>`).
 

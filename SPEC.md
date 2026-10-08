@@ -733,7 +733,7 @@ A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version i
 - A host keeps more than one core, as a version manager (for example `nvm`) does: the core that it was built with, and the cores in its cores directory (`%LOCALAPPDATA%\plinth\cores\<major>.<minor>.<patch>\core.wasm` on Windows, `$XDG_DATA_HOME/plinth/cores/...` on other systems, or `PLINTH_CORES_DIR`). A core directory from before patch versions (`<major>.<minor>\core.wasm`) still loads: the directory name is cosmetic, and the version comes from the file's own section.
 - **Selection.** For each app, the host picks the core with the same major version as the app needs, then, under the author's policy:
   - `follow` (the default, and the only behavior before this section): the highest minor version that is not lower than the app's, then the highest patch version.
-  - `patch`: only patches of the exact minor version the app was built with, the highest patch.
+  - `patch`: only patches of the exact minor version the app was built with, the highest patch. The manifest records that version in `core-built` (for example `"1.12.0"`); a manifest without it falls back to the lowest core the app needs.
   - `pinned`: the exact core build the app was built with, matched by digest. If it is not installed, the host names the missing core (version and digest) instead of substituting another build.
 
   If there is no matching core, the host tells the user which core to install.

@@ -1022,6 +1022,9 @@ two `wasmi_core::extract_core_module` unit tests) and the default-engine
 - `scripts/ci-local.sh full` was run once at the end of this pass with the
   default engine (wasmtime); see the commit log for the result.
 
-## Core policy `patch` (found 2026-10-07, open)
+## Core policy `patch` (found 2026-10-07, fixed 2026-10-07)
+
+**Fixed:** the manifest records `core-built` (the build core version) for `core = "patch"`; `cores::patch_minor` selects on its minor version and falls back to the need for an old manifest. Checked with `plinth registry build` on an app that needs 1.0 and was built with 1.12.0 (the old code refuses it; the new code links it).
+
 
 `core = "patch"` must mean "only patches of the minor version that the app was built with" (SPEC §10.5, `docs/getting-started.md` §7.1). `cores::select_patch` uses `need.1`, the lowest minor that the app *needs* (from its imports), not the minor that built it, and the manifest does not record the build core for this policy. So a small app that needs core 1.0 but was built with core 1.12 does not link on a host that has only 1.12: `plinth registry build` fails with "the app needs core 1.0 (policy `patch`)". Fix: record the build core version in the manifest for `patch` (as `core-digest` does for `pinned`; an optional field, `docs/COMPATIBILITY.md` §4), select on it, and fall back to `need` for a manifest without it. Add a test with an app that needs 1.0 and was built with 1.12. `docs/guides/updates.md` has a caution until the fix.

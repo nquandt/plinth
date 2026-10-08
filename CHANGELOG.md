@@ -32,6 +32,10 @@ No public release yet. The first release is a Preview for Windows and the web. `
 
 - Regular expressions: literals, `new RegExp`, `test`, `exec`, `lastIndex`, the flags `g i m s`, with a linear-time matcher in the core (core 1.12). `docs/language.md` "Regular expressions" lists the subset.
 
+### Fixed
+
+- `core = "patch"` now keeps an app on patches of the core minor version that built it. Before, it used the lowest core the app needs, so a small app built with core 1.12 did not link on a host with only 1.12. The manifest records `core-built`.
+
 ### Security
 
 - Web host: a time limit of 2 s for each call into an app, as on the desktop. An endless loop no longer freezes the page: the app's Worker ends, and the app shows "This app stopped" with "the app is not responding (time limit reached)".

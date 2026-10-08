@@ -84,7 +84,7 @@ fn incoming_packages(folder: &Path) -> Result<Vec<PathBuf>> {
 /// steps 1-3).
 fn add_package(folder: &Path, bytes: &[u8], report: &mut Report) -> Result<()> {
     let pkg = plinth_package::Package::read(bytes).map_err(|e| plinth_package::read_error(e, "not a valid .plnt package"))?;
-    plinth_link::cores::link_app_with_policy(&pkg.component, &pkg.manifest.core, pkg.manifest.core_digest.as_deref())
+    plinth_link::cores::link_app_with_policy(&pkg.component, &pkg.manifest.core, pkg.manifest.core_digest.as_deref(), pkg.manifest.core_built.as_deref())
         .context("the package does not link against an installed core")?;
     // A signature that does not check out is refused; an unsigned package
     // is still allowed (`docs/HUB.md` §6.1, draft-1 registries keep
