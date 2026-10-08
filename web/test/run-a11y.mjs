@@ -1205,7 +1205,8 @@ async function checkHub(cdpPort) {
       throw new Error(`the Hub app does not show the refused grant:\n${await appText()}`);
     });
 
-    // Notes: its kv data stays in the hub page, under its own namespace.
+    // Notes: its notes are in its store.sql database (OPFS of the hub page),
+    // and it writes nothing to kv.
     await openApp("Notes");
     await waitRunning(ID("notes"));
     await frame.waitFor(`document.body.dataset.kvEntries === "0" ? true : null`, 5000);
@@ -1217,7 +1218,6 @@ async function checkHub(cdpPort) {
     await frame.eval(`${button("Add note")}.click()`);
     await frame.waitFor(`document.getElementById("app").innerText.includes("Isolated note") ? true : null`, 5000);
     const keysOf = (id) => `Object.keys(localStorage).filter((k) => k.startsWith("plinth-hub:kv:${id}:"))`;
-    await page.waitFor(`${keysOf(ID("notes"))}.length > 0 ? true : null`, 5000);
     await closeApp();
 
     // Budget: its frame gets none of the notes data.
@@ -1229,18 +1229,18 @@ async function checkHub(cdpPort) {
     if ((await frame.eval(`document.getElementById("app").innerText`)).includes("Isolated note")) throw new Error("budget shows the note of notes");
     await closeApp();
 
-    // Notes again: the note is there (the page sends the snapshot).
+    // Notes again: the note is there (the page keeps the database).
     await openApp("Notes");
     await frame.waitFor(`document.getElementById("app").innerText.includes("Isolated note") ? true : null`, 10000);
     await closeApp();
 
-    // The Hub app turns store.kv off for notes: notes runs and reads nothing.
-    await hub.eval(`[...document.querySelectorAll("#app label.pl-toggle")].find((l) => l.textContent.includes("Allow: Save data on this device")).querySelector("input").click()`);
+    // The Hub app turns store.sql off for notes: notes runs and reads nothing.
+    await hub.eval(`[...document.querySelectorAll("#app label.pl-toggle")].find((l) => l.textContent.includes("Allow: Keep a database on this device")).querySelector("input").click()`);
     await hub.waitFor(`document.getElementById("app").innerText.includes("Not allowed") ? true : null`, 5000);
     await click(button("Open"), "Open button");
     await waitRunning(ID("notes"));
     await frame.waitFor(`document.querySelector("#app button") ? true : null`, 10000);
-    if ((await frame.eval(`document.getElementById("app").innerText`)).includes("Isolated note")) throw new Error("notes reads its data with store.kv denied");
+    if ((await frame.eval(`document.getElementById("app").innerText`)).includes("Isolated note")) throw new Error("notes reads its data with store.sql denied");
     await closeApp();
 
     // plinth:files: Files saves a file; the page keeps it in its IndexedDB,

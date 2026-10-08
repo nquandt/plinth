@@ -2,7 +2,7 @@
 
 This document is the design of `store.sql`: a SQL database for each app. It is checklist item H4 in `docs/PRODUCTION.md`. The owner decided on 2026-10-07 that Plinth gives apps a SQL store (`docs/STORAGE.md` ST-Q1).
 
-Status: 2026-10-08. Steps 1, 2 and 3 of §7 are done: apps call `store.sql` on the desktop host (wasmtime and wasmi, core 1.13) and on the web host (the official SQLite Wasm build in a Worker of the page, with OPFS). §9 gives the differences of the web engine. A web export (`plinth build --target web`) does not have it yet: there each call rejects with `Error("denied:unsupported")`.
+Status: 2026-10-08. Steps 1, 2, 3 and 4 of §7 are done: apps call `store.sql` on the desktop host (wasmtime and wasmi, core 1.13) and on the web host (the official SQLite Wasm build in a Worker of the page, with OPFS), and `examples/notes` keeps its notes and its search index in it. §9 gives the differences of the web engine. A web export (`plinth build --target web`) does not have it yet: there each call rejects with `Error("denied:unsupported")`.
 
 ## 1. Goals
 
@@ -99,7 +99,11 @@ The database is one file in the private space. When the sync engine (`docs/STORA
 1. **Done.** The desktop engine: `rusqlite` in the runner's `HostState` on a worker thread, the authorizer, the limits, and unit tests (`crates/plinth-runner-wasmtime/src/sql.rs`). The module comment gives the JSON shapes of the calls.
 2. **Done.** WIT `sql.run`, core 1.13 (`sql_call`), the capability `store.sql` (Low), the host import on wasmtime and wasmi, `std/store.d.ts`, the compiler (`crates/plinth-compiler/src/check/sql.rs`, the 0/1 booleans in the row decoder, warning `PL2026`), and `crates/plinth-compiler/tests/sql.rs` on both engines. The web host has a stub that answers `denied:unsupported`.
 3. **Done.** The web engine (`web/sql.js`, `web/sql-worker.js`): SQLite Wasm 3.53.4 with `opfs-sahpool` in a Worker of the parent page, the same authorizer, limits and error texts as the desktop, and the bridge message `sql-run`. The shared case file `crates/plinth-compiler/tests/sql_cases.txt` runs on both hosts (`tests/sql.rs` and `web/test/run-sql.mjs`), and the results must be the same text. `web/test/run-sql.mjs` also runs the cases of the desktop unit tests on the web engine. `web/test/run-a11y.mjs` (by hand, Edge) runs a fixture app in the web App Hub: the data stays in OPFS after a reload of the page.
-4. The notes app (VALIDATION V2) uses it for its index and search (SQLite FTS5).
+4. **Done.** The notes app (`examples/notes`, VALIDATION V2) keeps its notes in a table and searches them with SQLite FTS5:
+   - `app/storage.ts`: the table `notes`, the FTS5 table `notes_fts` (external content, kept in step by three triggers), and a change counter `changed` for the sort by the last change. The search box gives a prefix search on each word: each word becomes an FTS5 string with `*` (a `"` in it is doubled), so a quote or an FTS5 operator (`*`, `-`, `AND`, `NEAR(`, `^`) is text, never syntax.
+   - On the first run after the change, the app moves the notes of an older build from `store.kv` (one JSON value) into the empty table in one `batch`, and then removes the kv key. For this, the app keeps `store.kv` in its capabilities.
+   - Tests: `crates/plinth-compiler/tests/notes.rs` (desktop) and `web/test/run-notes.mjs` (web): add, edit, delete, search, the next run, the kv move, search text with quotes and operators, and 1,000 notes. With 1,000 notes, a search takes about 2 ms to 10 ms on the desktop (debug build) and 1 ms to 5 ms on the web (Node), from the change of the search text to the new list.
+   - Two defects were found and fixed: `JSON.stringify` of a large array or map ran out of memory (the collector does not run during a call, and each part made a longer copy of the text; now the parts are joined one time), and on the web host a `kv.get` after a memory growth wrote to a detached buffer.
 5. Docs: `docs/host-apis.md`, `docs/guides/storage.md`, `docs/LIMITS.md`, `docs/PRODUCTION.md` H4.
 
 ## 8. Open questions

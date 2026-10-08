@@ -40,14 +40,14 @@ fn compile_counter(id: &str, version: &str) -> Vec<u8> {
 fn compile_notes(id: &str, version: &str) -> Vec<u8> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/notes");
     let fs = plinth_compiler::driver::DiskFs { root };
-    let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &["store.kv".to_string()]).expect("compile");
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &["store.sql".to_string(), "store.kv".to_string()]).expect("compile");
     let artifact = artifact.unwrap_or_else(|| {
         let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
         panic!("notes has errors:\n{}", diags.join("\n"))
     });
     let component = artifact.app;
     let cfg = plinth_package::ProjectConfig::parse(&format!(
-        "id = \"{id}\"\nname = \"Notes\"\nversion = \"{version}\"\npublisher = \"me\"\n\n[[capabilities]]\nname = \"store.kv\"\nrationale = \"Save notes on this device.\"\n"
+        "id = \"{id}\"\nname = \"Notes\"\nversion = \"{version}\"\npublisher = \"me\"\n\n[[capabilities]]\nname = \"store.sql\"\nrationale = \"Save notes on this device.\"\n\n[[capabilities]]\nname = \"store.kv\"\nrationale = \"Move old notes.\"\n"
     ))
     .unwrap();
     let manifest = cfg.manifest("1.0", "plinth-rt/1.0", None, &component);

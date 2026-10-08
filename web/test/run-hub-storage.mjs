@@ -7,12 +7,14 @@
 //    write as a message, and applies the quota; the parent applies the
 //    messages and gets the same data.
 // 3. The parent refuses messages that are not valid.
-// 4. Notes runs with the frame kv store (as in the frame): a note goes
-//    through the messages into the parent store, and a second run starts
-//    from the new snapshot and shows the note. With `store.kv` refused,
-//    notes runs, and its kv calls answer "denied" (no trap, nothing stored).
+// 4. A notes app that keeps its notes in kv (`web/test/fixtures/kv-fixture`;
+//    `examples/notes` uses `store.sql` now) runs with the frame kv store (as
+//    in the frame): a note goes through the messages into the parent store,
+//    and a second run starts from the new snapshot and shows the note. With
+//    `store.kv` refused, the app runs, and its kv calls answer "denied" (no
+//    trap, nothing stored).
 //
-// Build first: target/debug/plinth build examples/notes; plinth core export target/core.wasm
+// Build first: target/debug/plinth build web/test/fixtures/kv-fixture; plinth core export target/core.wasm
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -182,10 +184,10 @@ async function runNotes(coreBytes, appWasm, manifestText, kvStore, refused = new
 }
 
 async function notesThroughTheProtocol() {
-  const pltBytes = new Uint8Array(readFileSync(path.join(root, "examples/notes/dist/notes.plnt")));
+  const pltBytes = new Uint8Array(readFileSync(path.join(root, "web/test/fixtures/kv-fixture/dist/kv-fixture.plnt")));
   const coreBytes = new Uint8Array(readFileSync(path.join(root, "target/core.wasm")));
   const { appWasm, manifestText } = await readPlnt(pltBytes);
-  const id = "dev.plinth.examples.notes";
+  const id = "dev.plinth.test.kv-fixture";
   const store = new HubStore(memoryStorage(), memoryStorage());
   store.kvSet("dev.plinth.examples.budget", "secret", "of budget");
 

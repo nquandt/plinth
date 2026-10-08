@@ -378,3 +378,46 @@ fn wrong_calls_are_compile_errors() {
         ["PL1007"]
     );
 }
+
+#[test]
+fn a_batch_of_1000_steps_from_an_array_value() {
+    // The notes example moves 1,000 old notes in one batch (docs/SQL.md §7 step 4).
+    let body = r#"
+  await sql.migrate(["CREATE TABLE t (id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL)"]);
+  const steps: { sql: string; params: string[] }[] = [];
+  for (let i = 0; i < 1000; i += 1) {
+    steps.push({ sql: "INSERT INTO t (title, body) VALUES (?, ?)", params: [`Note ${i}`, `topic${i % 50} and some more words for the body of note ${i}`] });
+  }
+  await sql.batch(steps);
+  const rows = await sql.query<{ n: number }>("SELECT count(*) AS n FROM t");
+  return "" + rows[0].n;
+"#;
+    assert_eq!(run_once("batch1000", "", body), "1000");
+}
+
+#[test]
+fn json_stringify_of_a_large_array_or_map_does_not_run_out_of_memory() {
+    // The collector does not run during a call. `JSON.stringify` of an array
+    // or a map joins its parts one time: before, it added each part to a
+    // longer string, and a text of about 100 KB went over the 64 MiB limit.
+    let body = r#"
+  const steps: { sql: string; params: string[] }[] = [];
+  const m = new Map<string, string>();
+  for (let i = 0; i < 2000; i += 1) {
+    steps.push({ sql: "INSERT INTO t (title, body) VALUES (?, ?)", params: [`Note ${i}`, `topic${i % 50} and some more words for the body of note ${i}`] });
+    m.set(`key ${i}`, `some value text for the entry number ${i}`);
+  }
+  const text = JSON.stringify(steps);
+  const back = JSON.parse<{ sql: string; params: string[] }[]>(text);
+  const mapText = JSON.stringify(m);
+  if (back === null) return "null";
+  return text.length + ":" + back.length + ":" + back[1999].params[0] + ":" + mapText.length + ":" + mapText.slice(0, 40);
+"#;
+    let r = run_once("stringify2000", "", body);
+    let parts: Vec<&str> = r.split(':').collect();
+    assert!(parts[0].parse::<usize>().unwrap() > 200_000, "{r}");
+    assert_eq!(parts[1], "2000", "{r}");
+    assert_eq!(parts[2], "Note 1999", "{r}");
+    assert!(parts[3].parse::<usize>().unwrap() > 100_000, "{r}");
+    assert_eq!(&r[r.find(":{").unwrap() + 1..], r#"{"key 0":"some value text for the entry "#, "{r}");
+}

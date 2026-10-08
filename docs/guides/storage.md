@@ -110,7 +110,7 @@ function Home() {
 export default app({ screens: { home: { title: "Storage", component: Home } } });
 ```
 
-More examples: `examples/notes/app/storage.ts` (kv with JSON), `examples/files-demo` (files).
+More examples: `examples/notes/app/storage.ts` (`store.sql` with a full-text search, and a one-time move of old kv data), `examples/files-demo` (files).
 
 ## 4. Rules for each API
 

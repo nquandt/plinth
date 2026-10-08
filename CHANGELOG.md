@@ -30,6 +30,7 @@ No public release yet. The first release is a Preview for Windows and the web. `
 - `store.sql`, step 1 (`docs/SQL.md` §7, PRODUCTION H4): the desktop runner has a SQLite engine for each app (`<app id>+sql/store.sqlite`, next to the private space so that `plinth:files` cannot reach it; `rusqlite` with the bundled SQLite and FTS5). It has `exec`, `query`, `batch` and `migrate` on a worker thread, an authorizer (no `ATTACH`, no extensions, only safe `PRAGMA`s), a 2 s statement limit, a 256 MiB quota and a 16 MiB result limit. Apps cannot call it yet: the API comes with core 1.13 (step 2).
 - `store.sql`, step 2 (core 1.13, capability `store.sql`, Low risk): `import { sql } from "plinth:store"` gives `sql.exec(statement, params?)`, `sql.query<T>(statement, params?)`, `sql.batch(steps)` and `sql.migrate(steps)`, each a `Promise`. `query<T>` decodes the rows into `T` (a `boolean` field reads 0 and 1); a row that does not match `T` rejects the promise. A SQL error rejects with `Error("sql: ...")`. The compiler gives warning `PL2026` for a statement that is not a string literal or a `const`. Desktop (wasmtime and wasmi) only; the web host answers `denied:unsupported` until step 3.
 - `store.sql`, step 3 (web host): the page runs the official SQLite Wasm build (3.53.4, `web/vendor/sqlite-wasm/`) in its own Worker with OPFS (`opfs-sahpool`), one database for each app id. The app's calls go over the frame bridge (`sql-run`). The authorizer, the limits and the error texts are the same as on the desktop; `docs/SQL.md` §9 lists the differences (for example, without OPFS the database is in memory). The web App Hub and `web/index.html` have it; a web export does not have it yet.
+- `store.sql`, step 4: `examples/notes` keeps its notes in a SQL table and searches them with SQLite FTS5. The search is a prefix search on each word ("mil" finds "milk"), and a quote or an FTS5 operator in the search text is plain text. The list shows the last change first. On the first run, the app moves the notes of an older version from `store.kv` into the database and removes the old key.
 - Core 1.13 starts (not shipped): it adds `sql_call`. An app that uses `store.sql` needs core 1.13; other apps still run on core 1.12.
 
 ### Changed
@@ -46,6 +47,8 @@ No public release yet. The first release is a Preview for Windows and the web. `
 
 ### Fixed
 
+- `JSON.stringify` of a large array or map (about 100 KB of text, for example 1,000 notes) no longer stops the app with "out of memory". The memory now grows with the length of the text, not with its square.
+- Web host: a `kv.get` (and other host calls that give back a string) after the app's memory grew no longer fails with "Cannot perform DataView.prototype.setUint32 on a detached ArrayBuffer".
 - `store.sql` on the desktop: the keys of a row are always in column order. Before, the order changed with the build (sorted, or in column order when another crate turned on the `preserve_order` feature of `serde_json`). A `query<Map<string, V>>` row now has the column order on every host.
 - `core = "patch"` now keeps an app on patches of the core minor version that built it. Before, it used the lowest core the app needs, so a small app built with core 1.12 did not link on a host with only 1.12. The manifest records `core-built`.
 

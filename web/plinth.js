@@ -1770,15 +1770,20 @@ function hostImports(
     v.setUint8(retptr + 5, reason);
   }
   // Ok(option<string>): tag@0=0, option-tag@4 (0=none,1=some), string ptr@8/len@12 if some.
+  //
+  // Each writer allocates (`cabi_realloc`) BEFORE it makes its `DataView`:
+  // an allocation can grow the memory, and growth detaches the old buffer.
   function writeOkOptionString(retptr, value) {
-    const v = mem();
-    v.setUint8(retptr, 0);
     if (value === null || value === undefined) {
+      const v = mem();
+      v.setUint8(retptr, 0);
       v.setUint8(retptr + 4, 0);
       return;
     }
-    v.setUint8(retptr + 4, 1);
     const { ptr, len } = writeString(value);
+    const v = mem();
+    v.setUint8(retptr, 0);
+    v.setUint8(retptr + 4, 1);
     v.setUint32(retptr + 8, ptr, true);
     v.setUint32(retptr + 12, len, true);
   }
@@ -1786,22 +1791,23 @@ function hostImports(
   // "some" case minus the option tag: a plain string's natural alignment is
   // already 4, so there is no extra tag byte to skip).
   function writeOkString(retptr, value) {
+    const { ptr, len } = writeString(value);
     const v = mem();
     v.setUint8(retptr, 0);
-    const { ptr, len } = writeString(value);
     v.setUint32(retptr + 4, ptr, true);
     v.setUint32(retptr + 8, len, true);
   }
   // Ok(list<string>): tag@0=0, list ptr@4/len@8; each element is (ptr: i32, len: i32).
   function writeOkStringList(retptr, values) {
-    const v = mem();
-    v.setUint8(retptr, 0);
     const arrPtr = alloc(Math.max(values.length, 1) * 8);
     for (let i = 0; i < values.length; i++) {
       const { ptr, len } = writeString(values[i]);
+      const v = mem();
       v.setUint32(arrPtr + i * 8, ptr, true);
       v.setUint32(arrPtr + i * 8 + 4, len, true);
     }
+    const v = mem();
+    v.setUint8(retptr, 0);
     v.setUint32(retptr + 4, arrPtr, true);
     v.setUint32(retptr + 8, values.length, true);
   }

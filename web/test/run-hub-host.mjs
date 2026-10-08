@@ -175,9 +175,18 @@ async function main() {
     assert.equal(notes.signer, "");
     assert.equal(notes.version, "0.1.0");
     assert.deepEqual(notes.capabilities, [
-      { name: "store.kv", risk: "low", description: "save data on this device", rationale: "Save your notes on this device.", decided: true, allowed: true, byDefault: true },
+      { name: "store.sql", risk: "low", description: "keep a database on this device", rationale: "Save your notes on this device and search them.", decided: true, allowed: true, byDefault: true },
+      {
+        name: "store.kv",
+        risk: "low",
+        description: "save data on this device",
+        rationale: "Move the notes that an older version of this app saved into the new database, one time.",
+        decided: true,
+        allowed: true,
+        byDefault: true,
+      },
     ]);
-    assert.deepEqual(notes.versions, [{ version: "0.1.0", signer: "", capabilities: ["store.kv"] }]);
+    assert.deepEqual(notes.versions, [{ version: "0.1.0", signer: "", capabilities: ["store.sql", "store.kv"] }]);
     assert.throws(() => host.appInfoJson("dev.plinth.hub"), /not in the library/, "the Hub app is not in its own library");
 
     // Consent: clipboard.read (medium) needs a decision, clipboard.write (low) does not.

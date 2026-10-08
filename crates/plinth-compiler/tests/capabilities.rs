@@ -12,13 +12,13 @@ fn example(name: &str) -> plinth_compiler::driver::DiskFs {
 }
 
 #[test]
-fn the_notes_app_reaches_exactly_store_kv() {
+fn the_notes_app_reaches_exactly_store_sql_and_store_kv() {
     let fs = example("notes");
-    let caps = vec!["store.kv".to_string()];
+    let caps = vec!["store.sql".to_string(), "store.kv".to_string()];
     let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &caps).expect("compile");
     let art = artifact.unwrap_or_else(|| panic!("notes has errors: {:?}", front.diags));
     let reachable = split::reachable_capabilities(&art.app).unwrap();
-    assert_eq!(reachable, ["store.kv".to_string()].into_iter().collect());
+    assert_eq!(reachable, ["store.sql".to_string(), "store.kv".to_string()].into_iter().collect());
 }
 
 #[test]
@@ -33,13 +33,13 @@ fn the_counter_app_reaches_no_capability() {
 #[test]
 fn a_manifest_without_store_kv_is_refused_at_load() {
     let fs = example("notes");
-    let caps = vec!["store.kv".to_string()];
+    let caps = vec!["store.sql".to_string(), "store.kv".to_string()];
     let (_, artifact) = plinth_compiler::compile_with_capabilities(&fs, &caps).expect("compile");
     let art = artifact.expect("notes compiles");
 
     // The app reaches `store.kv`, but a hand-edited manifest declares
-    // nothing: the load-time check must refuse it (`docs/HUB.md` §7.1).
-    let err = format!("{:#}", split::check_capabilities(&art.app, &[]).unwrap_err());
+    // only `store.sql`: the load-time check must refuse it (`docs/HUB.md` §7.1).
+    let err = format!("{:#}", split::check_capabilities(&art.app, &["store.sql".to_string()]).unwrap_err());
     assert!(err.contains("store.kv"), "error should name the missing capability: {err}");
 
     // With the capability declared, the check passes and the app links.

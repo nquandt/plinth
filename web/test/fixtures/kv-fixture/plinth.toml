@@ -1,0 +1,8 @@
+id = "dev.plinth.test.kv-fixture"
+name = "KV Fixture"
+version = "0.1.0"
+publisher = "plinth"
+
+[[capabilities]]
+name = "store.kv"
+rationale = "Test fixture: keeps notes as one JSON value (web/test/run-hub-storage.mjs)."

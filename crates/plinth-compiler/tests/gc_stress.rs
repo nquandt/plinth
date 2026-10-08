@@ -9,6 +9,7 @@
 
 use plinth_compiler::driver::DiskFs;
 use plinth_protocol::{ControlKind, Event, NodeId, Value, Writer, event, prop};
+use plinth_runner_wasmtime::files::{DEFAULT_QUOTA, Files};
 use plinth_runner_wasmtime::{Guest, Limits, Runner};
 use plinth_ui::tree::{Node, Tree};
 use std::path::PathBuf;
@@ -43,8 +44,17 @@ impl Harness {
     /// Starts the guest with GC stress mode on: it collects after `init`
     /// and after every `on-event` for the rest of this instance's life.
     fn start_stress(bytes: &[u8]) -> Self {
+        Self::start_stress_with(bytes, None)
+    }
+
+    /// `space`: a private space for `plinth:files` and `store.sql` (the
+    /// notes app keeps its notes in `store.sql`).
+    fn start_stress_with(bytes: &[u8], space: Option<&std::path::Path>) -> Self {
         let runner = Runner::new().unwrap();
         let mut guest = runner.load(bytes, Limits::default()).unwrap();
+        if let Some(space) = space {
+            guest.set_files(Files::open(space.to_path_buf(), DEFAULT_QUOTA));
+        }
         let mut tree = Tree::new();
         let commits = guest.init(&plinth_protocol::init_arg::one(plinth_protocol::init_arg::GC_STRESS, &[]));
         for log in guest.take_logs() {
@@ -68,6 +78,21 @@ impl Harness {
         for commit in commits.unwrap() {
             let errors = self.tree.apply(&commit).unwrap();
             assert!(errors.is_empty(), "op errors: {errors:?}");
+        }
+    }
+
+    /// Delivers the answers of `store.sql` until `done` is true.
+    fn wait(&mut self, what: &str, done: impl Fn(&Self) -> bool) {
+        let start = Instant::now();
+        while !done(self) {
+            for (id, result) in self.guest.poll_net_results() {
+                for commit in self.guest.answer_dialog(id, result).unwrap() {
+                    let errors = self.tree.apply(&commit).unwrap();
+                    assert!(errors.is_empty(), "op errors: {errors:?}");
+                }
+            }
+            assert!(start.elapsed() < std::time::Duration::from_secs(30), "{what}: timed out, rows {:?}", self.row_titles());
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
 
@@ -165,15 +190,18 @@ fn todo_under_stress() {
 #[test]
 fn notes_under_stress() {
     let art = build("notes");
-    let mut h = Harness::start_stress(&art.component);
-    let before = h.row_titles().len();
+    let space = std::env::temp_dir().join(format!("plinth-gc-stress-notes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&space);
+    let mut h = Harness::start_stress_with(&art.component, Some(&space));
+    h.wait("the first notes", |h| h.row_titles().len() == 3);
 
     let fields = h.find(ControlKind::TextField, |n| n.str_prop(prop::PLACEHOLDER) == Some("Note title"));
     let title = fields[0];
     h.tree.set_local_prop(title, prop::VALUE, "Groceries".into());
     h.fire(title, event::CHANGE, "Groceries".into());
     h.fire(h.label("Add note"), event::PRESS, Value::Null);
-    assert_eq!(h.row_titles().len(), before + 1);
+    h.wait("add", |h| h.row_titles().len() == 4);
+    assert_eq!(h.row_titles()[0], "Groceries");
 
     let row = h.find(ControlKind::Row, |n| n.str_prop(prop::TITLE) == Some("Groceries"))[0];
     h.fire(row, event::PRESS, Value::Null);
@@ -182,13 +210,18 @@ fn notes_under_stress() {
     let row = h.find(ControlKind::Row, |n| n.str_prop(prop::TITLE) == Some("Groceries"))[0];
     let delete = h.tree.get(row).unwrap().children[0];
     h.fire(delete, event::PRESS, Value::Null);
-    assert_eq!(h.row_titles().len(), before);
     assert!(h.find(ControlKind::Section, |n| n.str_prop(prop::TITLE) == Some("Edit note")).is_empty());
+    h.wait("delete", |h| h.row_titles().len() == 3);
 
     let search = h.one(ControlKind::TextField, |n| n.str_prop(prop::LABEL) == Some("Search"));
+    h.tree.set_local_prop(search, prop::VALUE, "mil".into());
+    h.fire(search, event::CHANGE, "mil".into());
+    h.wait("search", |h| h.row_titles() == ["Shopping list"]);
     h.tree.set_local_prop(search, prop::VALUE, "zzzz-no-match".into());
     h.fire(search, event::CHANGE, "zzzz-no-match".into());
-    assert!(h.row_titles().is_empty());
+    h.wait("no match", |h| h.row_titles().is_empty());
+    drop(h);
+    let _ = std::fs::remove_dir_all(&space);
 }
 
 #[test]

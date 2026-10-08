@@ -1,6 +1,7 @@
 import { signal, Screen, Section, TextField, Button, Text, List, Row, Empty } from "plinth:ui";
 import {
   notes,
+  status,
   query,
   filteredNotes,
   selected,
@@ -64,7 +65,7 @@ export default function Notes() {
         <Button label="Add note" role="primary" onPress={submit} disabled={draftTitle().trim() === ""} />
       </Section>
       <Section title="All notes">
-        <Text tone="muted">{`${filteredNotes().length} of ${notes().length} notes`}</Text>
+        <Text tone="muted">{status() !== "" ? status() : `${filteredNotes().length} of ${notes().length} notes`}</Text>
         <List
           items={filteredNotes()}
           key={(n) => n.id}

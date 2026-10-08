@@ -3317,8 +3317,7 @@ impl Checker<'_> {
         let len_r = TExpr::new(TExprKind::Var(len_v), Type::Number, span);
         let i_v = self.temp(Type::Number);
         let i_r = TExpr::new(TExprKind::Var(i_v), Type::Number, span);
-        let acc_v = self.temp(Type::String);
-        let acc_r = TExpr::new(TExprKind::Var(acc_v), Type::String, span);
+        let acc_v = self.temp(Type::Array(Box::new(Type::String)));
 
         let elem = self.arr_get_at(arr_r, i_r.clone(), elem_ty.clone(), span);
         let elem_str = self.json_stringify_value(elem, span);
@@ -3334,12 +3333,12 @@ impl Checker<'_> {
 
         let open = TExpr::new(TExprKind::Str("[".into()), Type::String, span);
         let close = TExpr::new(TExprKind::Str("]".into()), Type::String, span);
-        let result = TExpr::new(TExprKind::Concat(bx(acc_r), bx(close)), Type::String, span);
+        let result = self.json_parts_end(acc_v, close, span);
         let body = vec![
             TStmt::Let(arr_v, Some(value)),
             TStmt::Let(len_v, Some(len)),
             TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
-            TStmt::Let(acc_v, Some(open)),
+            TStmt::Let(acc_v, Some(TExpr::new(TExprKind::ArrayLit(vec![(false, open)]), Type::Array(Box::new(Type::String)), span))),
             loop_stmt,
         ];
         TExpr::new(TExprKind::Block(body, bx(result)), Type::String, span)
@@ -3358,8 +3357,7 @@ impl Checker<'_> {
         let len_r = TExpr::new(TExprKind::Var(len_v), Type::Number, span);
         let i_v = self.temp(Type::Number);
         let i_r = TExpr::new(TExprKind::Var(i_v), Type::Number, span);
-        let acc_v = self.temp(Type::String);
-        let acc_r = TExpr::new(TExprKind::Var(acc_v), Type::String, span);
+        let acc_v = self.temp(Type::Array(Box::new(Type::String)));
 
         let key = self.arr_get_at(keys, i_r.clone(), Type::String, span);
         let key_str = TExpr::new(TExprKind::Rt("json_quote_str", vec![key]), Type::String, span);
@@ -3383,22 +3381,34 @@ impl Checker<'_> {
 
         let open = TExpr::new(TExprKind::Str("{".into()), Type::String, span);
         let close = TExpr::new(TExprKind::Str("}".into()), Type::String, span);
-        let result = TExpr::new(TExprKind::Concat(bx(acc_r), bx(close)), Type::String, span);
+        let result = self.json_parts_end(acc_v, close, span);
         let body = vec![
             TStmt::Let(obj_v, Some(value)),
             TStmt::Let(len_v, Some(len)),
             TStmt::Let(i_v, Some(TExpr::new(TExprKind::Num(0.0), Type::Number, span))),
-            TStmt::Let(acc_v, Some(open)),
+            TStmt::Let(acc_v, Some(TExpr::new(TExprKind::ArrayLit(vec![(false, open)]), Type::Array(Box::new(Type::String)), span))),
             loop_stmt,
         ];
         TExpr::new(TExprKind::Block(body, bx(result)), Type::String, span)
     }
 
-    /// `acc = acc + piece;`
-    fn json_append(&self, acc_v: VarId, piece: TExpr, span: Span) -> TStmt {
-        let acc_r = TExpr::new(TExprKind::Var(acc_v), Type::String, span);
-        let sum = TExpr::new(TExprKind::Concat(bx(acc_r), bx(piece)), Type::String, span);
-        TStmt::Expr(TExpr::new(TExprKind::Assign(Place::Var(acc_v), bx(sum)), Type::String, span))
+    /// `parts.push(piece);` The text of an array or a map is a list of
+    /// parts, joined one time at the end (`json_parts_end`). The collector
+    /// does not run during a call (`plinth-rt/src/gc.rs`), so `acc = acc +
+    /// piece` in the loop kept each longer copy until the call ended: the
+    /// memory grew with the square of the text length, and a text of about
+    /// 100 KB (1,000 notes) went over the 64 MiB limit.
+    fn json_append(&self, parts_v: VarId, piece: TExpr, span: Span) -> TStmt {
+        let parts = TExpr::new(TExprKind::Var(parts_v), Type::Array(Box::new(Type::String)), span);
+        self.arr_push_discard(parts, piece, span)
+    }
+
+    /// `parts.join("") + close`
+    fn json_parts_end(&self, parts_v: VarId, close: TExpr, span: Span) -> TExpr {
+        let parts = TExpr::new(TExprKind::Var(parts_v), Type::Array(Box::new(Type::String)), span);
+        let empty = TExpr::new(TExprKind::Str(String::new()), Type::String, span);
+        let joined = TExpr::new(TExprKind::Rt("arr_join", vec![parts, empty]), Type::String, span);
+        TExpr::new(TExprKind::Concat(bx(joined), bx(close)), Type::String, span)
     }
 
     // -- JSON.parse<T> (plinth:core, SPEC.md §4.7) -------------------------

@@ -47,9 +47,9 @@ The flagship app is a notes app, in the style of a small Obsidian or Notion. It 
 |---|---|---|
 | Text editing | Cursor, selection, IME, clipboard, undo, in a long text | `TextArea` is plain text. Rich text (bold, headings, lists, links) needs a design: a `RichText` control with a document model, or Markdown with a preview. This is the largest design question in V2. |
 | Navigation | Nested notes (folders or links), back and forward, deep links | Stack navigation exists. Arguments for `navigate.push` (SPEC.md M2 status). `plinth://` links into a note. |
-| Search | Full-text search that updates while the user types | Performance of string search in the runtime on a few thousand notes. |
+| Search | Full-text search that updates while the user types | Done for plain text (2026-10-08): `examples/notes` searches with SQLite FTS5 in `store.sql` (a prefix search on each word). With 1,000 notes a search takes about 2 ms to 10 ms (desktop, debug build) and 1 ms to 5 ms (web, Node); `crates/plinth-compiler/tests/notes.rs`, `web/test/run-notes.mjs`. To check: a few thousand notes, and long notes. |
 | Reorder | Drag and drop of notes and blocks | **No drag and drop in the UI API.** Design it as intent (a `reorderable` list), not as pixels. |
-| Persistence | Offline storage; state survives a restart | `store.kv` only. Size limits; a `store.sql` capability (SPEC.md §11) may be necessary. |
+| Persistence | Offline storage; state survives a restart | Done (2026-10-08): `examples/notes` keeps its notes in `store.sql` (`docs/SQL.md`), and the tests check that the notes stay for the next run. Old notes in `store.kv` move into the database one time. To check: the 50 KB note in the exit criteria. |
 | Shortcuts | Keyboard shortcuts for commands | `Action.shortcut` is not built (SPEC.md §6.3). |
 
 **Exit criteria for V2:** a person can write, find and organize 1,000 notes for a day without a defect that loses data. Typing in a 50 KB note has no visible delay on the desktop or the web. Every gap above has a decision in `docs/GAPS.md` or in the SPEC.

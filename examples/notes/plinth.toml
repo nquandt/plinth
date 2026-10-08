@@ -4,5 +4,9 @@ version = "0.1.0"
 publisher = "plinth"
 
 [[capabilities]]
+name = "store.sql"
+rationale = "Save your notes on this device and search them."
+
+[[capabilities]]
 name = "store.kv"
-rationale = "Save your notes on this device."
+rationale = "Move the notes that an older version of this app saved into the new database, one time."

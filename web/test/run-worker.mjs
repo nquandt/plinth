@@ -3,7 +3,8 @@
 // over a `MessageChannel`, as they do over a real `Worker` in the browser.
 // It checks that the proxy keeps the behavior of `PlinthApp`: commits,
 // events, uncaught errors and stop reasons, `store.kv` through the
-// snapshot and the writes to the document, and frame timers driven by the
+// snapshot and the writes to the document, `store.sql` requests to the
+// document, and frame timers driven by the
 // document. The time limit (the watchdog) runs the Worker side in a real
 // thread (`worker_threads`), because an endless loop must not block the
 // test. run-a11y.mjs checks a real Worker in headless Edge.
@@ -22,6 +23,8 @@ import { Worker as ThreadWorker } from "node:worker_threads";
 import { readPlnt, mapKvStore, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON } from "../plinth-web.js";
 import { runWorker, WorkerApp } from "../app-worker.js";
 import { Tree } from "../dom-renderer.js";
+import sqliteInit from "../vendor/sqlite-wasm/sqlite3.mjs";
+import { startSqlEngine, sqliteModuleOptions, localSqlHost, HEAP_LIMIT } from "../sql.js";
 import { ControlKind, Event, Prop } from "../ui-api.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -119,22 +122,20 @@ function press(h, label, kind = ControlKind.button) {
 }
 
 // store.kv: the Worker answers from the snapshot; each write comes back to
-// the document's store, and a second app starts from it.
+// the document's store. Notes reads the old kv value of an older build,
+// moves the notes into store.sql (the `sql-run` requests go to the
+// document), and removes the key; a second app starts from both stores.
 {
-  const map = new Map();
-  const h = await start("examples/notes/dist/notes.plnt", { kvStore: mapKvStore(map) });
-  const change = (label, value) => {
-    const n = nodes(h).find((n) => n.props.get(Prop.label) === label && n.listeners.has(Event.change));
-    assert.ok(n, `a field labelled ${label}`);
-    h.app.onEvent({ kind: "ui", handler: n.listeners.get(Event.change), event: Event.change, value });
-  };
-  change("Title", "Groceries");
-  change("Body", "Bananas");
-  press(h, "Add note");
-  await until(() => map.size > 0, "the kv write reaches the document");
-  const h2 = await start("examples/notes/dist/notes.plnt", { kvStore: mapKvStore(map) });
+  globalThis.sqlite3ApiConfig = { warn: () => {}, log: () => {}, debug: () => {}, error: () => {} };
+  const sqlHost = localSqlHost(await startSqlEngine(sqliteInit, sqliteModuleOptions(readFileSync(path.join(root, "web/vendor/sqlite-wasm/sqlite3.wasm")), HEAP_LIMIT), {}));
+  const map = new Map([["notes", JSON.stringify([{ id: 1, title: "Groceries", body: "Bananas" }])]]);
+  const opts = () => ({ kvStore: mapKvStore(map), sql: sqlHost.space("dev.plinth.examples.notes") });
   const all = (h) => nodes(h).flatMap((n) => [n.text ?? "", ...[...n.props.values()].filter((v) => typeof v === "string")]).join(" | ");
-  assert.ok(all(h2).includes("Groceries"), `the second app reads the note: ${all(h2)}`);
+  const h = await start("examples/notes/dist/notes.plnt", opts());
+  await until(() => !map.has("notes"), "the kv remove reaches the document");
+  await until(() => all(h).includes("Groceries"), "the moved note");
+  const h2 = await start("examples/notes/dist/notes.plnt", opts());
+  await until(() => all(h2).includes("Groceries"), "the second app reads the note");
 }
 
 // Frame timers: the Worker asks the document for each frame.
