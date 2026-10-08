@@ -233,6 +233,12 @@ fn visit_expr(e: &TExpr, f: &mut dyn FnMut(&TExpr)) {
             go(text);
             go(cb);
         }
+        TExprKind::NotifyShow(title, body, tag, cb) => {
+            go(title);
+            go(body);
+            go(tag);
+            go(cb);
+        }
         TExprKind::NetFetchCall(url, method, headers, body, cb) => {
             go(url);
             go(method);
@@ -486,6 +492,14 @@ impl Cx<'_> {
                 let f = self.expr(*f);
                 let thunk = thunk_of(&f);
                 TExprKind::Rt("files_call", vec![thunk, f, i32c(op), path, text])
+            }
+            TExprKind::NotifyShow(title, body, tag, f) => {
+                let title = self.expr(*title);
+                let body = self.expr(*body);
+                let tag = self.expr(*tag);
+                let f = self.expr(*f);
+                let thunk = thunk_of(&f);
+                TExprKind::Rt("notify_show", vec![thunk, f, title, body, tag])
             }
             TExprKind::Navigate(name) => {
                 let idx = self.prog.screens.iter().position(|s| s.name == name).unwrap_or(0);
