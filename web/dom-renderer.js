@@ -381,6 +381,12 @@ export function partialRule(kind, propId, text, cls) {
   return Array.isArray(sel) ? `${sel[0]} { ${sel[1]} { ${decls} } }` : `${sel} { ${decls} }`;
 }
 
+/** The menu key or Shift+F10: a context menu for the focused element (UI API 1.13). */
+export function isMenuKey(ev) {
+  if (ev.ctrlKey || ev.altKey || ev.metaKey) return false;
+  return (ev.key === "ContextMenu" && !ev.shiftKey) || (ev.key === "F10" && ev.shiftKey);
+}
+
 /** The Plinth name of a browser key (UI API 1.9), the same names as the desktop (`primitives::key_name`); null for other keys. */
 export function keyName(key) {
   const named = {
@@ -846,6 +852,20 @@ export class DomRenderer {
     this.banner.hidden = true;
     this.errors = [];
     this.stoppedReason = null;
+    // UI API 1.13: the viewport point of the last context-menu event (an app
+    // menu that opens next shows there), the time of the last menu key, and
+    // the close functions of the open app menus.
+    this.contextAt = null;
+    this.menuKeyAt = -Infinity;
+    this.appMenus = new Set();
+    // A press of the main button or another key ends the context: a menu
+    // that the app opens later shows where it is in the layout.
+    container.addEventListener("pointerdown", (ev) => {
+      if (ev.button === 0) this.contextAt = null;
+    }, true);
+    container.addEventListener("keydown", (ev) => {
+      if (!isMenuKey(ev) && !["Shift", "Control", "Alt", "Meta"].includes(ev.key)) this.contextAt = null;
+    }, true);
     tree.onChange = () => this.render();
     app.onStop = (reason) => this.showStopped(reason);
     app.onError = (message) => this.showError(message);
@@ -1178,6 +1198,39 @@ export class DomRenderer {
     e.addEventListener("pointerup", (ev) => {
       if (ev.button === 0) send(Event.pointerUp, ev);
     });
+    // UI API 1.13: a secondary click, or a long press on a touch screen (the
+    // browser's `contextmenu` event). The browser's own menu shows only when
+    // the app has no handler. Only the innermost element gets the event.
+    e.addEventListener("contextmenu", (ev) => {
+      if (!has(Event.contextMenu)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      // The menu key or Shift+F10 sent the event already (below).
+      if (performance.now() - this.menuKeyAt < 1000) {
+        this.menuKeyAt = -Infinity;
+        return;
+      }
+      this.closeAppMenus();
+      this.contextAt = { x: ev.clientX, y: ev.clientY };
+      send(Event.contextMenu, ev);
+    });
+    // The menu key or Shift+F10 on the focused element: its center.
+    e.addEventListener("keydown", (ev) => {
+      if (ev.target !== e || !has(Event.contextMenu) || !isMenuKey(ev)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.menuKeyAt = performance.now();
+      this.closeAppMenus();
+      const r = e.getBoundingClientRect();
+      const k = Math.max(pxPerUnit(r), Number.EPSILON);
+      this.contextAt = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      this.fire(getId(), Event.contextMenu, [r.width / 2 / k, r.height / 2 / k]);
+    });
+  }
+
+  /** Closes the open app menus (`Menu` with `open`, UI API 1.13); each tells the app. */
+  closeAppMenus() {
+    for (const close of [...this.appMenus]) close(false);
   }
 
   /** A box with a pointer-move handler takes touch moves itself (no page scroll on a drag). */
@@ -1240,7 +1293,8 @@ export class DomRenderer {
           e.classList.toggle("pl-pressable-plain", !colorVar(n.props.get(Prop.bg)?.enum) && !n.props.get(Prop.hover));
           e.classList.toggle("pl-pressable-own-hover", !!n.props.get(Prop.hover));
         } else {
-          const keys = n.listeners.get(Event.keyDown) !== undefined || n.listeners.get(Event.keyUp) !== undefined;
+          const keys =
+            n.listeners.get(Event.keyDown) !== undefined || n.listeners.get(Event.keyUp) !== undefined || n.listeners.get(Event.contextMenu) !== undefined;
           setAttr(e, "role", label ? "group" : null);
           setAttr(e, "aria-label", label);
           setAttr(e, "tabindex", kname === "scroll" || keys ? "0" : null);
@@ -1271,6 +1325,8 @@ export class DomRenderer {
         const vh = Math.max(1, n.props.get(Prop.viewHeight) ?? 100);
         setAttr(svg, "viewBox", `0 0 ${vw} ${vh}`);
         setAttr(svg, "aria-label", n.props.get(Prop.label) ?? null);
+        // A canvas with `onContextMenu` is a tab stop (the menu key).
+        setAttr(svg, "tabindex", n.listeners.get(Event.contextMenu) !== undefined ? "0" : null);
         const css = {};
         const w = sizeOf(n.props, Prop.width, Prop.widthFraction);
         css.width = w ?? "100%";
@@ -1513,6 +1569,8 @@ export class DomRenderer {
       e.preventDefault();
       this.fire(id, Event.press);
     });
+    // UI API 1.13: onContextMenu, in spacing units from the row's corner.
+    this.pointerEvents(row, () => id, () => UNIT);
     return {
       el: row,
       slot: actions,
@@ -1523,7 +1581,7 @@ export class DomRenderer {
         setOptionalText(trailing, n.props.get(Prop.trailing));
         const canPress = n.listeners.get(Event.press) !== undefined;
         row.classList.toggle("pl-row-pressable", canPress);
-        setAttr(row, "tabindex", canPress ? "0" : null);
+        setAttr(row, "tabindex", canPress || n.listeners.get(Event.contextMenu) !== undefined ? "0" : null);
         // The selected row of its list (UI API 1.8). `aria-selected` is not
         // allowed on a listitem; `aria-current` is.
         const selected = !!n.props.get(Prop.selected);
@@ -1976,21 +2034,61 @@ export class DomRenderer {
   }
 
   /** `Menu` is an anchored popover (SPEC.md §6.3): a label button and its
-   * `action` children as menu items. */
+   * `action` children as menu items. With `open` (`value`, UI API 1.13) the
+   * app opens it: no button, and it shows at the point of the context-menu
+   * event that opened it (`contextAt`), else where it is in the layout. */
   menuView() {
     const wrap = el("div", "pl-menu");
     const trigger = wrap.appendChild(el("button", "pl-menu-trigger", { "aria-haspopup": "menu", "aria-expanded": "false" }));
     const popover = wrap.appendChild(el("div", "pl-menu-popover", { role: "menu" }));
     popover.hidden = true;
+    let id = 0;
+    let appMenu = false;
+    let back = null; // the focus before an app menu opened
     const items = () => [...popover.children];
     const onDocClick = (e) => {
       if (!wrap.contains(e.target)) closeMenu(false);
     };
-    const closeMenu = (focusTrigger = true) => {
+    const hide = () => {
       popover.hidden = true;
       trigger.setAttribute("aria-expanded", "false");
       document.removeEventListener("click", onDocClick);
-      if (focusTrigger) trigger.focus();
+      this.appMenus.delete(closeMenu);
+    };
+    const closeMenu = (focusTrigger = true) => {
+      if (popover.hidden) return;
+      hide();
+      if (!appMenu) {
+        if (focusTrigger) trigger.focus();
+        return;
+      }
+      // The user closed an app menu: `open` becomes false, then `change` and `close`.
+      if (focusTrigger && back?.isConnected) back.focus();
+      back = null;
+      if (this.node(id)?.props.get(Prop.value)) {
+        this.sendChange(id, false);
+        this.fire(id, Event.close);
+      }
+    };
+    const openAppMenu = () => {
+      back = document.activeElement;
+      const at = this.contextAt;
+      this.contextAt = null;
+      popover.style.position = at ? "fixed" : "";
+      popover.style.left = at ? `${at.x}px` : "";
+      popover.style.top = at ? `${at.y}px` : "";
+      popover.hidden = false;
+      if (at) {
+        // Keep the menu in the window.
+        const r = popover.getBoundingClientRect();
+        const view = popover.ownerDocument.documentElement;
+        if (r.right > view.clientWidth) popover.style.left = `${Math.max(0, view.clientWidth - r.width)}px`;
+        if (r.bottom > view.clientHeight) popover.style.top = `${Math.max(0, view.clientHeight - r.height)}px`;
+      }
+      this.appMenus.add(closeMenu);
+      document.addEventListener("click", onDocClick);
+      // After `place` puts the items in.
+      queueMicrotask(() => items()[0]?.focus());
     };
     // An item's own click (the Action) runs first, then this closes the menu.
     popover.addEventListener("click", (e) => {
@@ -2001,6 +2099,7 @@ export class DomRenderer {
       const i = all.indexOf(document.activeElement);
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopPropagation();
         closeMenu();
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -2023,7 +2122,23 @@ export class DomRenderer {
     });
     return {
       el: wrap,
-      update: (n) => setText(trigger, n.props.get(Prop.label) ?? ""),
+      update: (n) => {
+        id = n.id;
+        const label = n.props.get(Prop.label) ?? "";
+        setText(trigger, label);
+        setAttr(popover, "aria-label", label || null);
+        appMenu = n.props.has(Prop.value);
+        trigger.hidden = appMenu;
+        if (!appMenu) return;
+        const open = !!n.props.get(Prop.value);
+        if (open && popover.hidden) openAppMenu();
+        if (!open && !popover.hidden) {
+          // The app closed it.
+          hide();
+          if (back?.isConnected && popover.contains(document.activeElement)) back.focus();
+          back = null;
+        }
+      },
       place: (children) => {
         const actions = children.filter((c) => c.kind === ControlKind.action);
         for (const a of actions) {

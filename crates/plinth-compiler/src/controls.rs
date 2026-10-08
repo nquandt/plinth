@@ -25,8 +25,9 @@ pub enum PropTy {
     CallbackBool,
     /// `(value: number) => void`
     CallbackNum,
-    /// `(x: number, y: number) => void` (UI API 1.12 pointer events; the
-    /// event value is the list `[x, y]`, core 1.12 spreads it).
+    /// `(x: number, y: number) => void` (UI API 1.12 pointer events and
+    /// the 1.13 `onContextMenu`; the event value is the list `[x, y]`, core
+    /// 1.12 spreads it).
     CallbackPoint,
     /// `Signal<string> | string`
     ValueStr,
@@ -335,6 +336,8 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("onPress", T::Callback0, false, Ev(event::PRESS)),
             p("trailing", T::Str, false, P(prop::TRAILING)),
             p("selected", T::Bool, false, P(prop::SELECTED)),
+            // UI API 1.13: (x, y) in spacing units from the row's top-left corner.
+            p("onContextMenu", T::CallbackPoint, false, Ev(event::CONTEXT_MENU)),
         ],
         children: ChildKind::Nodes,
     },
@@ -462,7 +465,15 @@ pub const CONTROLS: &[ControlSpec] = &[
     ControlSpec {
         name: "Menu",
         kind: ControlKind::Menu,
-        props: &[p("label", T::Str, true, P(prop::LABEL)), p("actions", T::ActionList, true, Target::List)],
+        props: &[
+            p("label", T::Str, true, P(prop::LABEL)),
+            p("actions", T::ActionList, true, Target::List),
+            // UI API 1.13: an app-opened menu (a context menu). With `open`,
+            // the menu has no button; it shows at the point of the last
+            // context-menu event, or where it is in the layout.
+            p("open", T::ValueBool, false, Target::Value),
+            p("onClose", T::Callback0, false, Ev(event::CLOSE)),
+        ],
         children: ChildKind::Nodes,
     },
     ControlSpec {
@@ -551,6 +562,7 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("onPointerDown", T::CallbackPoint, false, Ev(event::POINTER_DOWN)),
             p("onPointerMove", T::CallbackPoint, false, Ev(event::POINTER_MOVE)),
             p("onPointerUp", T::CallbackPoint, false, Ev(event::POINTER_UP)),
+            p("onContextMenu", T::CallbackPoint, false, Ev(event::CONTEXT_MENU)),
         ],
         children: ChildKind::Nodes,
     },
@@ -586,6 +598,7 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("onPointerDown", T::CallbackPoint, false, Ev(event::POINTER_DOWN)),
             p("onPointerMove", T::CallbackPoint, false, Ev(event::POINTER_MOVE)),
             p("onPointerUp", T::CallbackPoint, false, Ev(event::POINTER_UP)),
+            p("onContextMenu", T::CallbackPoint, false, Ev(event::CONTEXT_MENU)),
         ],
         children: ChildKind::Nodes,
     },
@@ -603,6 +616,7 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("onPointerDown", T::CallbackPoint, false, Ev(event::POINTER_DOWN)),
             p("onPointerMove", T::CallbackPoint, false, Ev(event::POINTER_MOVE)),
             p("onPointerUp", T::CallbackPoint, false, Ev(event::POINTER_UP)),
+            p("onContextMenu", T::CallbackPoint, false, Ev(event::CONTEXT_MENU)),
         ],
         children: ChildKind::None,
     },
@@ -616,6 +630,7 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("onPointerDown", T::CallbackPoint, false, Ev(event::POINTER_DOWN)),
             p("onPointerMove", T::CallbackPoint, false, Ev(event::POINTER_MOVE)),
             p("onPointerUp", T::CallbackPoint, false, Ev(event::POINTER_UP)),
+            p("onContextMenu", T::CallbackPoint, false, Ev(event::CONTEXT_MENU)),
         ],
         children: ChildKind::Nodes,
     },

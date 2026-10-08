@@ -2,7 +2,7 @@
 
 Status: not shipped yet. Core 1.12 is the newest shipped core (`rt_abi::SHIPPED_MINOR`). Items can still be added to 1.13 until it ships.
 
-Core 1.13 adds the SQL store (`store.sql`, `docs/SQL.md`), a hash table for `Map` and `Set`, and the module `plinth:locale` (`docs/I18N.md` §4 steps 1 and 2). Nothing is removed or changed. Every app that runs on core 1.12 runs on core 1.13 with the same behavior.
+Core 1.13 adds the SQL store (`store.sql`, `docs/SQL.md`), a hash table for `Map` and `Set`, and the module `plinth:locale` (`docs/I18N.md` §4 steps 1 and 2). UI API 1.13, which comes with it, adds context menus. Nothing is removed or changed. Every app that runs on core 1.12 runs on core 1.13 with the same behavior.
 
 ## 1. What is new
 
@@ -22,6 +22,8 @@ Core 1.13 adds the SQL store (`store.sql`, `docs/SQL.md`), a hash table for `Map
 | `plinth:app/locale` `format-number(value: f64, options: string) -> string`, `format-date(ms: f64, options: string) -> string`, `plural-category(value: f64, kind: string) -> string`, `format-list(items: string, kind: string) -> string`, `compare(a: string, b: string) -> s32` | Host interface (`wit/plinth/app.wit`) | Synchronous. No capability. `options` is a JSON object and `items` is a JSON array of strings. |
 | `formatNumber`, `formatDate`, `pluralCategory`, `formatList`, `compare` and the types `NumberFormatOptions`, `DateFormatOptions`, `PluralCategory`, `PluralType`, `ListType` in `plinth:locale` | Plinth TS module (`std/locale.d.ts`) | Numbers, dates, plural categories, lists and collation in the locale of the app. |
 | Merge sort for `Array.prototype.sort` | Compiler output | No core function. A sort of 10,000 numbers took 560 ms, and now takes 5 ms. The sort stays stable, with the same order. |
+| `context-menu` event, id 12 | UI API 1.13 event (`wit/plinth/ui-api.toml`) | Value `[x, y]`, as the pointer events. `onContextMenu(x, y)` on `Box`, `Pressable`, `Scroll`, `Canvas` and `Row`. No core function: the core 1.12 functions `arg_at_f64` and `arg_at_i32` pass the two numbers. |
+| `open` and `onClose` on `Menu` | UI API 1.13 props (`value`, id 4, and the event `close`, id 6) | No new id. A `Menu` with `value` has no button; the host shows it at the point of the last context-menu event. |
 
 ## 2. App authors
 
@@ -50,6 +52,8 @@ To use the SQL store:
 3. If the app keeps a list in `kv` today, move the data one time on the first run. `examples/notes/app/storage.ts` shows how: it reads the old `kv` value, writes the rows in one `sql.batch`, and then removes the `kv` key.
 4. Keep `store.kv` in `plinth.toml` while the app moves old data. Its rationale tells the user why.
 
+To use a context menu (UI API 1.13), give an element `onContextMenu` and open a `Menu` with `open` in the handler (`docs/ui.md` "Context menus"). It needs no core 1.13: an app that uses it still declares the core it declared before. A host with an older UI API never sends the event and shows the `Menu` as a button, so keep a second path to the same actions (a button or a keyboard key).
+
 To use the locale, import `locale` and `direction` from `plinth:locale` (`docs/host-apis.md` "plinth:locale"). No capability is necessary. Read them in the UI, in a `computed` value or in an `effect`, so that the app follows a change of the locale.
 
 To format in the locale, import `formatNumber`, `formatDate`, `pluralCategory`, `formatList` or `compare` from `plinth:locale`. Write the options as an object literal at the call. `formatDate` of `plinth:time` does not change: it keeps its pattern and its English names. A file that uses both imports one with another name.
@@ -70,6 +74,14 @@ For `plinth:app/locale`:
 - A host with a SQL engine follows `docs/SQL.md` §4: the authorizer, the time limit, the quota, the result limit, and the error texts of `crates/plinth-runner-wasmtime/src/sql.rs`. `crates/plinth-compiler/tests/sql_cases.txt` has the shared cases; the desktop and the web host both pass them.
 - The host checks the capability `store.sql` before the call, as for `plinth:files`.
 - The hosts in this repo do all of this: the desktop host (wasmtime and wasmi), the web host, the web Hub and the folder form of a web export. A single-file web export answers `denied:unsupported`.
+
+For UI API 1.13 (context menus), a host must:
+
+- Send `context-menu` with `[x, y]` (the units of the pointer events) for a secondary click, for the menu key and for Shift+F10 on the focused element (`x` and `y` are its center), and on a touch screen for a long press when the platform has one. Send it only to the innermost element with a handler. Make an element with a handler a tab stop.
+- Show a `Menu` that has a `value` prop with no button. When `value` becomes true right after a context-menu event, show it at the point of that event; else show it where it is in the layout. Give the focus to its first action. When the user closes it, set `value` to false in the host tree, then send `change` (false) and `close`. Give the focus back.
+- Keep pointer input away from the elements under a modal layer (`Sheet`, `Dialog`, host dialogs).
+
+The desktop host (`crates/plinth-ui/src/render.rs`) and the web host (`web/dom-renderer.js`) do all of this.
 
 ## 4. Users
 

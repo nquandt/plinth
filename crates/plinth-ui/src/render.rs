@@ -6,7 +6,7 @@ use crate::theme::{Tokens, WidthClass, icon_glyph, with_alpha};
 use crate::tree::{Node, Tree};
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FocusHandle, Focusable, FontWeight, Hsla, Image, ImageFormat,
-    DispatchPhase, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
+    DispatchPhase, Hitbox, HitboxBehavior, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
     Point, Render, SharedString, Stateful, Subscription, Window, anchored, canvas, deferred, div, img, prelude::*, px,
 };
 use std::cell::Cell;
@@ -177,6 +177,18 @@ enum Modal {
     Overlay(NodeId),
 }
 
+/// A pointer position as an event value `[x, y]` (UI API 1.12): from the
+/// top-left corner of `bounds`, in units of `scale` pixels.
+fn point_value(p: Point<Pixels>, bounds: Bounds<Pixels>, scale: f32) -> Value {
+    let x = f32::from(p.x - bounds.origin.x) / scale;
+    let y = f32::from(p.y - bounds.origin.y) / scale;
+    Value::List(vec![Value::Number(f64::from(x)), Value::Number(f64::from(y))])
+}
+
+/// The bounds and the unit scale of each element with a pointer layer,
+/// by node id (`PlinthRoot::painted_bounds`).
+type PaintedBounds = Rc<std::cell::RefCell<HashMap<NodeId, (Bounds<Pixels>, f32)>>>;
+
 /// The width of the focus ring, in pixels. The web host draws a 2 px
 /// outline in the accent color (`web/style.css`, `:focus-visible`).
 const FOCUS_RING: f32 = 2.0;
@@ -340,6 +352,15 @@ pub struct PlinthRoot {
     /// opened (given back when it closes).
     last_modal: Option<Modal>,
     focus_before_modal: Option<FocusHandle>,
+    /// The bounds and the unit scale of each element with a pointer layer,
+    /// from the last paint: the menu key gives the center (UI API 1.13).
+    painted_bounds: PaintedBounds,
+    /// The window position of the context-menu event just sent (UI API
+    /// 1.13). A `Menu` that the app opens before the next frame shows there.
+    context_point: Option<Point<Pixels>>,
+    /// The open `Menu`s with an `open` prop (UI API 1.13), with the point
+    /// where each shows (`None`: where it is in the layout).
+    menu_at: HashMap<NodeId, Option<Point<Pixels>>>,
 }
 
 impl PlinthRoot {
@@ -388,6 +409,9 @@ impl PlinthRoot {
             modal_focus: cx.focus_handle(),
             last_modal: None,
             focus_before_modal: None,
+            painted_bounds: Rc::new(std::cell::RefCell::new(HashMap::new())),
+            context_point: None,
+            menu_at: HashMap::new(),
         };
         root.apply_commits(initial_commits);
         root.sync_dialog(cx);
@@ -423,6 +447,9 @@ impl PlinthRoot {
             modal_focus: cx.focus_handle(),
             last_modal: None,
             focus_before_modal: None,
+            painted_bounds: Rc::new(std::cell::RefCell::new(HashMap::new())),
+            context_point: None,
+            menu_at: HashMap::new(),
         }
     }
 
@@ -457,6 +484,7 @@ impl PlinthRoot {
         self.fields.clear();
         self.stopped = None;
         self.open_menus.clear();
+        self.menu_at.clear();
         self.confirm = None;
         self.dialog = None;
         match init {
@@ -961,6 +989,8 @@ impl PlinthRoot {
         Some(
             div()
                 .id("dialog-backdrop")
+                // A modal layer: no pointer input reaches the controls under it.
+                .occlude()
                 .absolute()
                 .inset_0()
                 .flex()
@@ -1146,6 +1176,8 @@ impl Render for PlinthRoot {
             self.focused_once = true;
             window.focus(&self.focus, cx);
         }
+        self.sync_app_menus(window, cx);
+        self.painted_bounds.borrow_mut().clear();
         if let Some(h) = self.pending_focus.take() {
             window.focus(&h, cx);
         }
@@ -1556,7 +1588,7 @@ impl PlinthRoot {
             .child(bar.child(more))
             .when(open, |d| {
                 d.child(
-                    deferred(anchored().snap_to_window().child(self.render_menu_panel(overflow, t, cx))).priority(1),
+                    deferred(anchored().snap_to_window().child(self.render_menu_panel(overflow, t, cx).aria_label("More actions"))).priority(1),
                 )
             })
             .into_any_element()
@@ -1565,10 +1597,12 @@ impl PlinthRoot {
     /// The floating panel of a `<Menu>` or the screen-toolbar overflow: an
     /// anchored, deferred popover (SPEC.md §6.3) so it floats below its
     /// trigger, above other content, instead of pushing the layout down.
-    fn render_menu_panel(&self, actions: &[NodeId], t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+    fn render_menu_panel(&self, actions: &[NodeId], t: &Tokens, cx: &mut Context<Self>) -> Stateful<gpui::Div> {
         div()
             .id("menu-panel")
             .role(accesskit::Role::Menu)
+            // The pointer does not reach the elements under the panel.
+            .occlude()
             .flex()
             .flex_col()
             .gap_1()
@@ -1585,7 +1619,6 @@ impl PlinthRoot {
                 let around = (actions[(i + n - 1) % n], actions[(i + 1) % n]);
                 self.tree.get(id).map(|node| self.render_action_item(node, t, Some(around), cx))
             }))
-            .into_any_element()
     }
 
     /// A trigger of a popover (a `Menu`, the toolbar overflow): a tab stop
@@ -1725,7 +1758,9 @@ impl PlinthRoot {
         let vh = node.prop(prop::VIEW_HEIGHT).and_then(Value::as_int).unwrap_or(100) as f32;
         let shapes = crate::canvas::parse(node.str_prop(prop::SHAPES).unwrap_or(""));
         let style = self.primitive_style(node);
-        let mut d = crate::canvas::render(u64::from(node.id), label, vw, vh, shapes, t).children(self.pointer_layer(node, Some(vw), cx));
+        let d = crate::canvas::render(u64::from(node.id), label, vw, vh, shapes, t).children(self.pointer_layer(node, Some(vw), cx));
+        // A canvas with `onContextMenu` is a tab stop (the menu key).
+        let mut d = self.key_handlers(d, node, t, cx);
         if let Some(w) = primitives::size(&style, prop::WIDTH, prop::WIDTH_FRACTION) {
             d = d.w(w).flex_shrink_0();
         }
@@ -1852,10 +1887,11 @@ impl PlinthRoot {
     fn key_handlers<E: StatefulInteractiveElement + Styled>(&self, d: E, node: &Node, t: &Tokens, cx: &mut Context<Self>) -> E {
         let down = node.handler(event::KEY_DOWN).filter(|_| self.stopped.is_none());
         let up = node.handler(event::KEY_UP).filter(|_| self.stopped.is_none());
-        if down.is_none() && up.is_none() {
+        let context = node.handler(event::CONTEXT_MENU).filter(|_| self.stopped.is_none());
+        if down.is_none() && up.is_none() && context.is_none() {
             return d;
         }
-        let mut d = self.focus_style(d.tab_index(0), node, t);
+        let mut d = self.context_keys(self.focus_style(d.tab_index(0), node, t), node, cx);
         if let Some(h) = down {
             d = d.on_key_down(cx.listener(move |this, ev: &KeyDownEvent, _, cx| {
                 if ev.is_held {
@@ -1893,36 +1929,38 @@ impl PlinthRoot {
         }
     }
 
-    /// The pointer events of `node` (UI API 1.12) as a full-size layer that
-    /// adds mouse listeners when it paints, when it knows the bounds of the
-    /// element. `view_width` is the view width of a `Canvas` (the position
-    /// is in view units); `None` gives spacing units (a box). `None` if the
-    /// node has no pointer handler.
+    /// The pointer events of `node` (UI API 1.12) and its context-menu
+    /// event (UI API 1.13) as a full-size layer that adds mouse listeners
+    /// when it paints, when it knows the bounds of the element.
+    /// `view_width` is the view width of a `Canvas` (the position is in
+    /// view units); `None` gives spacing units (a box). `None` if the node
+    /// has no pointer handler.
     fn pointer_layer(&self, node: &Node, view_width: Option<f32>, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.stopped.is_some() {
             return None;
         }
-        let handlers = [event::POINTER_DOWN, event::POINTER_MOVE, event::POINTER_UP].map(|ev| node.handler(ev));
+        let handlers = [event::POINTER_DOWN, event::POINTER_MOVE, event::POINTER_UP, event::CONTEXT_MENU].map(|ev| node.handler(ev));
         if handlers.iter().all(Option::is_none) {
             return None;
         }
-        let [down, moved, up] = handlers;
+        let [down, moved, up, context] = handlers;
         let entity = cx.entity().downgrade();
         let owner = self.pointer_owner.clone();
+        let painted = self.painted_bounds.clone();
         let id = node.id;
+        // The layer's hitbox: a modal layer or a menu over the element hides
+        // it from the pointer (GAPS G4), as it hides a button under it.
         let layer = canvas(
-            |_, _, _| (),
-            move |bounds: Bounds<Pixels>, _, window, _| {
+            |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            move |bounds: Bounds<Pixels>, hitbox: Hitbox, window, _| {
                 let scale = match view_width {
                     Some(vw) => f32::from(bounds.size.width) / vw.max(1.0),
                     None => primitives::UNIT,
                 }
                 .max(f32::EPSILON);
-                let at = move |p: Point<Pixels>| {
-                    let x = f32::from(p.x - bounds.origin.x) / scale;
-                    let y = f32::from(p.y - bounds.origin.y) / scale;
-                    Value::List(vec![Value::Number(f64::from(x)), Value::Number(f64::from(y))])
-                };
+                // For the menu key: the center of the element (`context_keys`).
+                painted.borrow_mut().insert(id, (bounds, scale));
+                let at = move |p: Point<Pixels>| point_value(p, bounds, scale);
                 let send = {
                     let entity = entity.clone();
                     move |h: u32, ev: u16, value: Value, cx: &mut gpui::App| {
@@ -1930,27 +1968,39 @@ impl PlinthRoot {
                     }
                 };
                 {
-                    let (owner, send) = (owner.clone(), send.clone());
-                    window.on_mouse_event(move |ev: &MouseDownEvent, phase, _, cx| {
-                        if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left || !bounds.contains(&ev.position) {
+                    let (owner, send, hitbox, entity) = (owner.clone(), send.clone(), hitbox.clone(), entity.clone());
+                    window.on_mouse_event(move |ev: &MouseDownEvent, phase, window, cx| {
+                        if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
                             return;
                         }
-                        owner.set(Some(id));
-                        if let Some(h) = down {
-                            send(h, event::POINTER_DOWN, at(ev.position), cx);
+                        match ev.button {
+                            MouseButton::Left => {
+                                owner.set(Some(id));
+                                if let Some(h) = down {
+                                    send(h, event::POINTER_DOWN, at(ev.position), cx);
+                                }
+                            }
+                            // A secondary click: only the innermost element gets it.
+                            MouseButton::Right => {
+                                if let Some(h) = context {
+                                    cx.stop_propagation();
+                                    let _ = entity.update(cx, |this, cx| this.context_menu(h, ev.position, at(ev.position), cx));
+                                }
+                            }
+                            _ => {}
                         }
                     });
                 }
                 {
-                    let (owner, send) = (owner.clone(), send.clone());
-                    window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
+                    let (owner, send, hitbox) = (owner.clone(), send.clone(), hitbox.clone());
+                    window.on_mouse_event(move |ev: &MouseMoveEvent, phase, window, cx| {
                         let Some(h) = moved else { return };
-                        if phase == DispatchPhase::Bubble && (owner.get() == Some(id) || bounds.contains(&ev.position)) {
+                        if phase == DispatchPhase::Bubble && (owner.get() == Some(id) || hitbox.is_hovered(window)) {
                             send(h, event::POINTER_MOVE, at(ev.position), cx);
                         }
                     });
                 }
-                window.on_mouse_event(move |ev: &MouseUpEvent, phase, _, cx| {
+                window.on_mouse_event(move |ev: &MouseUpEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left {
                         return;
                     }
@@ -1959,7 +2009,7 @@ impl PlinthRoot {
                         owner.set(None);
                     }
                     if let Some(h) = up
-                        && (owned || bounds.contains(&ev.position))
+                        && (owned || hitbox.is_hovered(window))
                     {
                         send(h, event::POINTER_UP, at(ev.position), cx);
                     }
@@ -1967,6 +2017,43 @@ impl PlinthRoot {
             },
         );
         Some(layer.absolute().top_0().left_0().size_full().into_any_element())
+    }
+
+    /// Sends a context-menu event (UI API 1.13) to the handler `h`. `at` is
+    /// the window position: a `Menu` that the app opens in the handler shows
+    /// there. An open menu closes first.
+    fn context_menu(&mut self, h: u32, at: Point<Pixels>, value: Value, cx: &mut Context<Self>) {
+        self.close_menus_now(cx);
+        self.context_point = Some(at);
+        self.fire(h, event::CONTEXT_MENU, value, cx);
+    }
+
+    /// The menu key and Shift+F10 on a focused element with a context-menu
+    /// handler (UI API 1.13): the event gets the center of the element, and
+    /// a menu that the app opens shows there. The element is a tab stop.
+    fn context_keys<E: InteractiveElement>(&self, d: E, node: &Node, cx: &mut Context<Self>) -> E {
+        let Some(h) = node.handler(event::CONTEXT_MENU).filter(|_| self.stopped.is_none()) else { return d };
+        let id = node.id;
+        d.on_key_down(cx.listener(move |this, ev: &KeyDownEvent, _, cx| {
+            let k = &ev.keystroke;
+            let menu_key = (k.key == "menu" && !k.modifiers.modified())
+                || (k.key == "f10" && k.modifiers.shift && !k.modifiers.control && !k.modifiers.alt && !k.modifiers.platform);
+            if !menu_key || ev.is_held {
+                return;
+            }
+            cx.stop_propagation();
+            let painted = this.painted_bounds.borrow().get(&id).copied();
+            match painted {
+                Some((bounds, scale)) => {
+                    let center = bounds.center();
+                    this.context_menu(h, center, point_value(center, bounds, scale), cx);
+                }
+                None => {
+                    this.close_menus_now(cx);
+                    this.fire(h, event::CONTEXT_MENU, Value::List(vec![Value::Number(0.0), Value::Number(0.0)]), cx);
+                }
+            }
+        }))
     }
 
     /// A layout box. Without a label it is a plain container for AccessKit;
@@ -2531,6 +2618,15 @@ impl PlinthRoot {
             )
             .when_some(trailing, |d, tr| d.child(div().flex_none().text_sm().text_color(t.text_muted).child(tr)))
             .child(div().flex().flex_none().items_center().gap_2().children(self.render_children(node, t, cx)));
+        // UI API 1.13: a secondary click, or the menu key on the focused row.
+        let row_el = match node.handler(event::CONTEXT_MENU).filter(|_| self.stopped.is_none()) {
+            Some(_) => {
+                let d = row_el.relative().children(self.pointer_layer(node, None, cx));
+                let d = if handler.is_none() { inset_focus_ring(d.tab_index(0), t.accent) } else { d };
+                self.context_keys(d, node, cx)
+            }
+            None => row_el,
+        };
         let accent = t.accent;
         let row_el = match handler {
             Some(h) => inset_focus_ring(keyboard_activatable(
@@ -3672,6 +3768,98 @@ impl PlinthRoot {
 
     // -- UI API 1.2 structure --
 
+    /// The `Menu`s with an `open` prop (UI API 1.13) in the current screen:
+    /// the id, the `open` value and the first action.
+    fn app_menus(&self, root: NodeId) -> Vec<(NodeId, bool, Option<NodeId>)> {
+        let mut found = Vec::new();
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            let Some(node) = self.tree.get(id) else { continue };
+            if node.kind == Some(ControlKind::Menu) {
+                if let Some(open) = node.prop(prop::VALUE) {
+                    found.push((id, open.as_bool().unwrap_or(false), node.children.first().copied()));
+                }
+                continue;
+            }
+            stack.extend(node.children.iter().copied());
+        }
+        found
+    }
+
+    /// Follows the `open` prop of the app's menus (UI API 1.13), once a
+    /// frame. A menu that the app opened shows at the point of the
+    /// context-menu event just before (else where it is in the layout) and
+    /// takes the focus; one that the app closed gives the focus back. A
+    /// menu that the user closed (Escape, a click outside, an action) tells
+    /// the app after this frame.
+    fn sync_app_menus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let point = self.context_point.take();
+        let menus = match self.tree.current_root() {
+            Some(root) if self.stopped.is_none() => self.app_menus(root.id),
+            _ => Vec::new(),
+        };
+        let present: HashSet<NodeId> = menus.iter().map(|m| m.0).collect();
+        let gone: Vec<NodeId> = self.menu_at.keys().copied().filter(|id| !present.contains(id)).collect();
+        for id in gone {
+            self.menu_at.remove(&id);
+            self.open_menus.remove(&id);
+        }
+        for (id, open, first) in menus {
+            let shown = self.menu_at.contains_key(&id);
+            if open && !shown {
+                // Other menus and popovers close (the app menus tell the app).
+                self.open_menus.retain(|m| self.menu_at.contains_key(m));
+                self.open_menus.insert(id);
+                self.menu_at.insert(id, point);
+                // Escape gives the focus back to where it was (the trigger slot).
+                let back = window.focused(cx).unwrap_or_else(|| self.focus.clone());
+                self.focus_handles.borrow_mut().insert((id, part::TRIGGER), back);
+                self.pending_focus = first.map(|f| self.kept_focus(f, part::ITEM, cx));
+                cx.notify();
+            } else if !open && shown {
+                self.menu_at.remove(&id);
+                if self.open_menus.remove(&id)
+                    && let Some(h) = self.focus_handles.borrow().get(&(id, part::TRIGGER))
+                {
+                    self.pending_focus = Some(h.clone());
+                }
+                cx.notify();
+            } else if open && !self.open_menus.contains(&id) {
+                cx.defer_in(window, move |this, _, cx| this.app_menu_closed(id, cx));
+            }
+        }
+    }
+
+    /// Closes the open menus and popovers now; the app menus tell the app.
+    fn close_menus_now(&mut self, cx: &mut Context<Self>) {
+        self.date_cursor.clear();
+        for id in std::mem::take(&mut self.open_menus) {
+            self.app_menu_closed(id, cx);
+        }
+    }
+
+    /// An app menu (UI API 1.13) that the user closed: `open` becomes
+    /// false, as a bound signal, then `change` and `close` go to the app.
+    fn app_menu_closed(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        if self.menu_at.remove(&id).is_none() {
+            return;
+        }
+        self.open_menus.remove(&id);
+        let Some(node) = self.tree.get(id) else { return };
+        if !node.bool_prop(prop::VALUE) {
+            return;
+        }
+        let (change, close) = (node.handler(event::CHANGE), node.handler(event::CLOSE));
+        self.tree.set_local_prop(id, prop::VALUE, Value::Bool(false));
+        if let Some(h) = change {
+            self.fire(h, event::CHANGE, Value::Bool(false), cx);
+        }
+        if let Some(h) = close {
+            self.fire(h, event::CLOSE, Value::Null, cx);
+        }
+        cx.notify();
+    }
+
     fn toggle_menu(&mut self, id: NodeId) {
         if !self.open_menus.remove(&id) {
             self.open_menus.clear();
@@ -3742,6 +3930,7 @@ impl PlinthRoot {
         Some(
             div()
                 .id("confirm-backdrop")
+                .occlude()
                 .absolute()
                 .inset_0()
                 .flex()
@@ -3824,6 +4013,7 @@ impl PlinthRoot {
             .child(div().flex().justify_end().gap_2().children(actions.into_iter().map(|a| self.render_action_item(a, t, None, cx))));
         div()
             .id(eid("dialog-backdrop", id))
+            .occlude()
             .absolute()
             .inset_0()
             .flex()
@@ -3872,6 +4062,7 @@ impl PlinthRoot {
             .children(children);
         let backdrop = div()
             .id(eid("sheet-backdrop", id))
+            .occlude()
             .absolute()
             .inset_0()
             .bg(t.backdrop)
@@ -3927,6 +4118,22 @@ impl PlinthRoot {
         let open = self.open_menus.contains(&id);
         let actions: Vec<NodeId> = node.children.clone();
         let first = actions.first().copied();
+        // UI API 1.13: a menu with `open` has no button. It shows at the
+        // point of the context-menu event that opened it (`sync_app_menus`),
+        // else where it is in the layout.
+        if node.prop(prop::VALUE).is_some() {
+            let at = self.menu_at.get(&id).copied().flatten();
+            return div()
+                .when(open, |d| {
+                    let panel = self.render_menu_panel(&actions, t, cx).aria_label(label);
+                    let place = match at {
+                        Some(p) => anchored().position(p),
+                        None => anchored(),
+                    };
+                    d.child(deferred(place.snap_to_window().child(panel)).priority(1))
+                })
+                .into_any_element();
+        }
         div()
             .flex()
             .flex_col()
@@ -3944,7 +4151,7 @@ impl PlinthRoot {
                     .rounded_md()
                     .bg(t.surface_alt)
                     .text_sm()
-                    .child(label)
+                    .child(label.clone())
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
                         this.toggle_menu_focus(id, first, cx);
@@ -3952,7 +4159,7 @@ impl PlinthRoot {
                     .map(|d| self.menu_trigger(d, id, first, t, cx)),
             )
             .when(open, |d| {
-                d.child(deferred(anchored().snap_to_window().child(self.render_menu_panel(&actions, t, cx))).priority(1))
+                d.child(deferred(anchored().snap_to_window().child(self.render_menu_panel(&actions, t, cx).aria_label(label))).priority(1))
             })
             .into_any_element()
     }

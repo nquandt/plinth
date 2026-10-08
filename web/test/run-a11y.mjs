@@ -344,6 +344,7 @@ async function main() {
       ["Level 2 primitives: layout and keyboard (primitives)", checkPrimitives],
       ["absolute boxes and held keys (pong)", checkPong],
       ["canvas pointer positions (7GUIs circle drawer)", checkCircleDrawer],
+      ["context menu at the pointer, Shift+F10, a modal blocks the pointer (circle drawer)", checkContextMenu],
       ["host banners: an uncaught error, then a stopped app (stop-fixture)", checkStopBanner],
     ]) {
       console.log(`== ${name} ==`);
@@ -833,6 +834,97 @@ async function checkCircleDrawer(cdpPort, base) {
     const got = await page.waitFor(`(() => { const c = ${svg}.querySelector("circle"); return c ? { cx: +c.getAttribute("cx"), cy: +c.getAttribute("cy") } : null; })()`, 3000);
     if (Math.abs(got.cx - want.cx) > 1 || Math.abs(got.cy - want.cy) > 1) throw new Error(`the circle is at ${JSON.stringify(got)}, not ${JSON.stringify(want)}`);
     return `a click at ${Math.round(box.w / 4)} px drew a circle at view x ${got.cx.toFixed(1)}`;
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * UI API 1.13 (PRODUCTION U6): a right-click on a circle of the circle
+ * drawer fires `onContextMenu`; the browser's menu is prevented only where
+ * the app handles the event; the app's `Menu` opens at the pointer with the
+ * focus on its first item, and Escape closes it. Shift+F10 on the focused
+ * canvas opens it at the center. While the modal `Sheet` is open, a click
+ * and a right-click on the canvas do nothing (GAPS G4).
+ */
+async function checkContextMenu(cdpPort, base) {
+  const svg = `document.querySelector('#app svg.pl-canvas')`;
+  const popover = `document.querySelector('#app .pl-menu-popover')`;
+  const page = await openApp(cdpPort, base, "7guis/circle-drawer", svg);
+  try {
+    const box = await page.eval(`(() => { const r = ${svg}.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`);
+    const mouse = async (button, dx, dy) => {
+      const x = box.x + dx;
+      const y = box.y + dy;
+      await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+      await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, buttons: button === "left" ? 1 : 2, clickCount: 1 });
+      await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, buttons: 0, clickCount: 1 });
+    };
+    const outlines = `${svg}.querySelectorAll("circle[style*=stroke]").length`;
+    // Was the browser's menu prevented? Recorded after the app's listener ran.
+    await page.eval(`(() => { window.__ctx = []; window.addEventListener("contextmenu", (e) => setTimeout(() => window.__ctx.push(e.defaultPrevented)), true); })()`);
+    const lastCtx = async () => {
+      await sleep(100);
+      return page.eval(`window.__ctx[window.__ctx.length - 1]`);
+    };
+
+    // A circle, then a right-click on it.
+    await mouse("left", box.w / 2, box.h / 2);
+    await page.waitFor(`${outlines} === 1 ? true : null`, 3000);
+    await mouse("right", box.w / 2 + 3, box.h / 2 + 2);
+    await page.waitFor(`${popover} && !${popover}.hidden ? true : null`, 3000).catch(() => {
+      throw new Error("a right-click on a circle did not open the menu");
+    });
+    if ((await lastCtx()) !== true) throw new Error("the browser menu was not prevented on the canvas");
+    const at = await page.eval(`(() => { const r = ${popover}.getBoundingClientRect(); return { x: r.left, y: r.top }; })()`);
+    if (Math.abs(at.x - (box.x + box.w / 2 + 3)) > 1.5 || Math.abs(at.y - (box.y + box.h / 2 + 2)) > 1.5) {
+      throw new Error(`the menu is at ${JSON.stringify(at)}, not at the pointer`);
+    }
+    await page.waitFor(`document.activeElement?.textContent === "Adjust diameter..." ? true : null`, 3000).catch(() => {
+      throw new Error("the open menu does not have the focus on its first item");
+    });
+    if ((await page.eval(outlines)) !== 1) throw new Error("the right-click drew a circle");
+    await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    await page.waitFor(`${popover}.hidden ? true : null`, 3000);
+
+    // A right-click where the app has no handler: the browser's menu stays.
+    const heading = await page.eval(`(() => { const r = document.querySelector('#app h1, #app h2').getBoundingClientRect(); return { x: r.left + 4, y: r.top + r.height / 2 }; })()`);
+    await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: heading.x, y: heading.y, button: "right", buttons: 2, clickCount: 1 });
+    await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: heading.x, y: heading.y, button: "right", buttons: 0, clickCount: 1 });
+    if ((await lastCtx()) !== false) throw new Error("the browser menu was prevented where the app has no handler");
+    await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+
+    // Shift+F10 on the focused canvas: the menu at its center (the selected circle).
+    await page.eval(`${svg}.focus()`);
+    await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "F10", code: "F10", windowsVirtualKeyCode: 121, modifiers: 8 });
+    await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "F10", code: "F10", windowsVirtualKeyCode: 121, modifiers: 8 });
+    await page.waitFor(`${popover} && !${popover}.hidden ? true : null`, 3000).catch(() => {
+      throw new Error("Shift+F10 on the canvas did not open the menu");
+    });
+    const center = await page.eval(`(() => { const r = ${popover}.getBoundingClientRect(); return { x: r.left, y: r.top }; })()`);
+    // The focus can scroll the page: measure the canvas again.
+    const now = await page.eval(`(() => { const r = ${svg}.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    if (Math.abs(center.x - now.x) > 1.5 || Math.abs(center.y - now.y) > 1.5) {
+      throw new Error(`Shift+F10 put the menu at ${JSON.stringify(center)}, not at the center of the canvas ${JSON.stringify(now)}`);
+    }
+    await page.waitFor(`document.activeElement?.textContent === "Adjust diameter..." ? true : null`, 3000);
+    // Enter on the item opens the modal sheet.
+    await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: String.fromCharCode(13) });
+    await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    await page.waitFor(`document.querySelector('#app dialog[open]') ? true : null`, 3000).catch(() => {
+      throw new Error("the menu item did not open the sheet");
+    });
+    if (!(await page.eval(`${popover}.hidden`))) throw new Error("the menu did not close after its action");
+
+    // The modal sheet blocks the pointer to the canvas under it.
+    Object.assign(box, await page.eval(`(() => { const r = ${svg}.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`));
+    await mouse("left", 20, 20);
+    await mouse("right", box.w / 2, box.h / 2);
+    await sleep(300);
+    if ((await page.eval(outlines)) !== 1) throw new Error("a click under the modal sheet drew a circle");
+    if (!(await page.eval(`${popover}.hidden`))) throw new Error("a right-click under the modal sheet opened the menu");
+    return "a right-click and Shift+F10 open the menu at the point; the browser menu stays where there is no handler; the modal sheet blocks the pointer";
   } finally {
     await page.close();
   }

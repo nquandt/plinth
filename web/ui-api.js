@@ -123,6 +123,7 @@ export const Event = {
   "pointerDown": 9,
   "pointerMove": 10,
   "pointerUp": 11,
+  "contextMenu": 12,
 };
 
 export const EnumButtonRole = {

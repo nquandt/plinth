@@ -5,9 +5,14 @@
 # constants from it. Never reuse or renumber an id inside one major version.
 
 version = "1.13"
-# UI API 1.13: no new ids. Canvas shapes `strokeRect` (kind "R") and
-# `strokeCircle` (kind "C"): outlines with a line width. A host that does not
-# know a kind skips the shape.
+# UI API 1.13: Canvas shapes `strokeRect` (kind "R") and `strokeCircle`
+# (kind "C"): outlines with a line width. A host that does not know a kind
+# skips the shape. The event `context-menu` on Box, Pressable, Scroll, Canvas
+# and Row (value `[x, y]`, as the pointer events). `Menu` takes `value` (the
+# `open` prop, bound both ways) and `close`: an open menu with a `value` has
+# no button of its own and shows at the point of the last context-menu event
+# (docs/ui.md "Context menus"). A host that does not know the event never
+# sends it.
 # UI API 1.12: the pointer events `pointer-down`, `pointer-move`, `pointer-up`
 # on Box, Pressable, Scroll and Canvas. Their value is a list `[x, y]`; the
 # core (1.12) passes the items as the callback's arguments.
@@ -55,7 +60,7 @@ canvas = 34        # UI API 1.10: shapes in a view space that scales to the box 
 title = 1        # string
 subtitle = 2     # string
 label = 3        # string
-value = 4        # string (text-field, tabs) | bool (toggle, sheet/dialog "open")
+value = 4        # string (text-field, tabs) | bool (toggle, sheet/dialog/menu "open")
 placeholder = 5  # string
 role = 6         # enum button-role
 style = 7        # enum text-style
@@ -143,12 +148,13 @@ shapes = 79            # string: shapes joined with U+001E; each shape is fields
 press = 1        # value: null
 change = 2       # value: the new value
 submit = 3       # value: the current value
-close = 6        # value: null (sheet onClose; UI API 1.2)
+close = 6        # value: null (sheet onClose; UI API 1.2; menu onClose, UI API 1.13)
 key-down = 7     # value: the key name (UI API 1.9, Level 2 boxes; no repeats)
 key-up = 8       # value: the key name (UI API 1.9)
 pointer-down = 9 # value: [x, y] in the element (UI API 1.12): spacing units on a box, view units on a Canvas
 pointer-move = 10 # value: [x, y]; also outside the element while the button is down after a pointer-down in it
 pointer-up = 11  # value: [x, y]; to the element that got the pointer-down
+context-menu = 12 # value: [x, y] in the element (UI API 1.13): a secondary click, a long press, or the menu key or Shift+F10 on the focused element (its center)
 
 [enums.button-role]
 default = 0

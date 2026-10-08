@@ -79,14 +79,14 @@ is not listed in `primary` is reachable only through `push`.
 | `Tabs` | `items: string[]`, `value: Signal<string> \| string`, `onChange?` | In-screen segmented tabs. |
 | `Sheet` | `open: Signal<boolean> \| boolean`, `title`, `onClose?`, `children?` | Modal: a bottom sheet on a narrow window, a side panel or dialog on a wide one. |
 | `Dialog` | `open: Signal<boolean> \| boolean`, `title`, `message?`, `actions: Element[]` | An alert or confirmation built from your UI, as opposed to the host-owned `plinth:dialog` module (see [host-apis.md](host-apis.md)). |
-| `Menu` | `label`, `actions: Element[]` | An anchored popover menu. |
+| `Menu` | `label`, `actions: Element[]`, `open?: Signal<boolean> \| boolean`, `onClose?` | An anchored popover menu. With `open` (UI API 1.13), the app opens it: it has no button, and it shows at the point of a context-menu event. See "Context menus". |
 
 ## Collections
 
 | Control | Props | Notes |
 |---|---|---|
 | `List<T>` | **items: T[]**, **key: (item: T) => string \| number**, **row: (item: T) => Element**, `empty?` | Virtualized, keyed. `empty` shows when `items` is empty. |
-| `Row` | **title**, `subtitle?`, `icon?: IconName`, `onPress?`, `trailing?: string`, `children?` | The standard list row. |
+| `Row` | **title**, `subtitle?`, `icon?: IconName`, `onPress?`, `trailing?: string`, `selected?`, `onContextMenu?: (x, y) => void`, `children?` | The standard list row. `onContextMenu` (UI API 1.13) gets the position in spacing units. |
 | `Grid<T>` | **items: T[]**, **key**, **cell: (item: T) => Element**, `empty?` | Like `List`, with a responsive column count instead of one row per item (2, 3, or 4 columns, by width class). |
 
 ## Content
@@ -299,7 +299,12 @@ the default, or `"row"`), `wrap`, `gap`, `padding`, `paddingX`, `paddingY`,
   mouse, a pen or a finger. After a pointer-down in the element, it also
   gets the moves outside it and the pointer-up, so a drag works. On the
   web, a box with `onPointerMove` takes touch moves itself (no page scroll).
-  `examples/pong` aims the paddle with a drag on the court.
+  `examples/pong` aims the paddle with a drag on the court. A pointer
+  event does not go to an element under a `Sheet`, a `Dialog` or an open
+  menu panel.
+- **Context menu (UI API 1.13).** `onContextMenu` on `Box`, `Pressable`,
+  `Scroll`, `Canvas` and `Row` gets `(x, y)` in the same units as the
+  pointer events. See "Context menus".
 - The runtime gives a `Pressable` its hover and disabled states.
 - **Partial styles (UI API 1.7).** `hover`, `active` and `focus` (on `Box`,
   `Pressable`, `Scroll`) and `compact`, `regular`, `wide` (also on `Span`)
@@ -342,8 +347,41 @@ import { Canvas, rect, circle, line, canvasText } from "plinth:ui";
   a variable, a `computed` or a `.map()` result; a signal read in it makes
   the drawing update.
 - `label` is required: the canvas is one image for assistive technology.
-- Pointer events (UI API 1.12) give positions in view units: see Level 2
-  "Pointer". `examples/7guis/circle-drawer` uses them.
+- Pointer events (UI API 1.12) and `onContextMenu` (UI API 1.13) give
+  positions in view units: see Level 2 "Pointer". A canvas with
+  `onContextMenu` is a tab stop. `examples/7guis/circle-drawer` uses them.
+
+### Context menus (UI API 1.13)
+
+```tsx
+const menu = signal(false);
+
+<Canvas label="Drawing" viewWidth={400} viewHeight={300} shapes={shapes()}
+        onContextMenu={(x, y) => { select(x, y); menu.set(true); }} />
+<Menu label="Circle" open={menu}
+      actions={[<Action label="Adjust diameter..." onPress={adjust} />]} />
+```
+
+- `onContextMenu(x, y)` runs for a secondary (right) click, for a long
+  press on a touch screen (web: when the browser sends `contextmenu`; the
+  browsers on Android do, Safari on iOS does not), and for the menu key or
+  Shift+F10 while the element has the focus. For a key, `x` and `y` are the
+  center of the element. An element with `onContextMenu` is a tab stop.
+- Only the innermost element with a handler gets the event. On the web,
+  the browser's own menu shows only where the app has no handler.
+- A `Menu` with `open` has no button. Set `open` to true in the
+  `onContextMenu` handler: the menu then shows at the point of the event
+  (for a key, the center of the element). A `Menu` that the app opens at
+  another time shows where it is in the layout.
+- The open menu has the focus on its first action. Up and Down move,
+  Enter and Space press, Escape closes it. Escape, a click outside it, or an
+  action closes it: `open` becomes false (a signal is set) and `onClose`
+  runs. Then the focus goes back to where it was.
+- A click outside the menu also goes to the element under the pointer, as
+  in a browser. If that is not what you want, check in the handler that the
+  menu is closed (`examples/7guis/circle-drawer` does).
+- A host that does not know UI API 1.13 does not send the event and shows
+  the `Menu` as a button.
 - Not built yet: paths and curves, images.
 
 ## Layout rules the runtime owns
@@ -382,7 +420,9 @@ import { Canvas, rect, circle, line, canvasText } from "plinth:ui";
   `docs/guides/accessibility.md` lists all the keys.
 - `Menu` and the toolbar overflow use AccessKit roles `menu` and
   `menu item`; they close on an outside click, Escape, or after an
-  action runs.
+  action runs. The menu key and Shift+F10 run `onContextMenu` on the
+  focused element (UI API 1.13).
+- A `Sheet` or a `Dialog` blocks the pointer to the controls under it.
 
 ## Versioning
 

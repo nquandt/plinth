@@ -149,6 +149,8 @@ export declare function Row(props: {
   children?: Children;
   /** This row is the selected one of its list (shown, and told to assistive technology). */
   selected?: boolean;
+  /** A secondary click, a long press, or the menu key on the focused row (UI API 1.13). `x` and `y` are spacing units from the row's top-left corner. */
+  onContextMenu?: (x: number, y: number) => void;
 }): Element;
 
 export declare function Empty(props: { title: string; message?: string }): Element;
@@ -252,7 +254,20 @@ export declare function Dialog(props: {
   actions: Element[];
 }): Element;
 
-export declare function Menu(props: { label: string; actions: Element[] }): Element;
+/**
+ * A menu of actions. Without `open`, it is a button that opens the menu
+ * under it. With `open` (UI API 1.13), the app opens it: it has no button,
+ * and it shows at the point of the context-menu event that opened it (set
+ * `open` in an `onContextMenu` handler), else where it is in the layout.
+ * Escape, a click outside, or an action closes it; a signal then becomes
+ * false and `onClose` runs.
+ */
+export declare function Menu(props: {
+  label: string;
+  actions: Element[];
+  open?: Signal<boolean> | boolean;
+  onClose?: () => void;
+}): Element;
 
 /** Like `List`, with a responsive column count instead of one row per item. */
 export declare function Grid<T>(props: {
@@ -413,6 +428,14 @@ interface PointerHandlers {
   onPointerDown?: (x: number, y: number) => void;
   onPointerMove?: (x: number, y: number) => void;
   onPointerUp?: (x: number, y: number) => void;
+  /**
+   * A context menu request (UI API 1.13): a secondary (right) click, a long
+   * press on a touch screen, or the menu key or Shift+F10 while the element
+   * has the focus (then `x` and `y` are its center). An element with this
+   * handler is a tab stop. Open a `Menu` with `open` here to show it at the
+   * point.
+   */
+  onContextMenu?: (x: number, y: number) => void;
 }
 
 /** A layout box. `label` names it as a group for assistive technology. */

@@ -1,21 +1,24 @@
 // 7GUIs task 6, Circle Drawer (https://eugenkiss.github.io/7guis/tasks#circle).
 //
 // Click on an empty part of the canvas to draw a circle there. The circle
-// under the pointer is selected and filled. "Adjust diameter" opens a sheet
+// under the pointer is selected and filled. A right-click on a circle (or
+// the menu key or Shift+F10 on the focused canvas, for the selected circle)
+// opens a menu at the pointer with "Adjust diameter...". It opens a sheet
 // with a slider that changes the selected circle at once; closing the sheet
-// is one undo step. Undo and Redo go back and forward.
+// is one undo step. The "Adjust diameter" button does the same from the
+// keyboard. Undo and Redo go back and forward.
 //
-// Differences from the task (docs/GAPS.md "7GUIs task 6"): there is no
-// right-click context menu, so "Adjust diameter" is a button; and a Dialog
-// cannot hold a slider, so the slider is in a Sheet.
+// A difference from the task (docs/GAPS.md "7GUIs task 6"): a Dialog cannot
+// hold a slider, so the slider is in a Sheet.
 import { Math } from "plinth:core";
-import { app, signal, Screen, Section, Group, Button, Canvas, Sheet, Slider, Text, rect, circle, strokeCircle, Shape } from "plinth:ui";
+import { app, signal, Screen, Section, Group, Button, Canvas, Menu, Action, Sheet, Slider, Text, rect, circle, strokeCircle, Shape } from "plinth:ui";
 import {
   VIEW_W,
   VIEW_H,
   MIN_DIAMETER,
   MAX_DIAMETER,
   circles,
+  circleAt,
   selected,
   selectedId,
   canUndo,
@@ -32,6 +35,8 @@ import {
 function CircleDrawer() {
   const adjusting = signal(false);
   const diameter = signal(0);
+  // The context menu of a circle (UI API 1.13).
+  const menuOpen = signal(false);
 
   const shapes = (): Shape[] => {
     const out: Shape[] = [rect(0, 0, VIEW_W, VIEW_H, "surface.alt")];
@@ -58,6 +63,18 @@ function CircleDrawer() {
     adjusting.set(false);
     endAdjust();
   };
+  // A right-click selects the circle under the pointer; the menu opens for
+  // the selected circle. The menu key gives the center of the canvas, so it
+  // opens the menu for the selected circle.
+  const contextMenu = (x: number, y: number) => {
+    const hit = circleAt(x, y);
+    if (hit !== null) {
+      selectedId.set(hit.id);
+    }
+    if (selected() !== null) {
+      menuOpen.set(true);
+    }
+  };
 
   return (
     <Screen title="Circle Drawer">
@@ -72,9 +89,20 @@ function CircleDrawer() {
           viewWidth={VIEW_W}
           viewHeight={VIEW_H}
           shapes={shapes()}
-          onPointerDown={click}
-          onPointerMove={hover}
+          onPointerDown={(x, y) => {
+            // A click outside the open menu only closes it.
+            if (!menuOpen()) {
+              click(x, y);
+            }
+          }}
+          onPointerMove={(x, y) => {
+            if (!menuOpen()) {
+              hover(x, y);
+            }
+          }}
+          onContextMenu={contextMenu}
         />
+        <Menu label="Circle" open={menuOpen} actions={[<Action label="Adjust diameter..." onPress={openAdjust} />]} />
         <Text>{selected() === null ? "No circle selected" : `Selected: diameter ${Math.round(selected()?.d ?? 0)}`}</Text>
       </Section>
       <Sheet open={adjusting} title="Adjust diameter" onClose={closeAdjust}>

@@ -289,7 +289,7 @@ fn value_for(rng: &mut Rng, tree: &Tree, id: NodeId, ev: u16) -> Value {
     let n = tree.get(id).unwrap();
     match ev {
         event::CHANGE | event::SUBMIT => match n.kind {
-            Some(ControlKind::Toggle | ControlKind::Checkbox | ControlKind::Sheet | ControlKind::Dialog) => Value::Bool(rng.below(2) == 1),
+            Some(ControlKind::Toggle | ControlKind::Checkbox | ControlKind::Sheet | ControlKind::Dialog | ControlKind::Menu) => Value::Bool(rng.below(2) == 1),
             Some(ControlKind::Slider | ControlKind::NumberField) => Value::Number([0.0, 1.0, 5.5, 50.0][rng.below(4)]),
             Some(ControlKind::Picker | ControlKind::Tabs) => {
                 let list = n.str_prop(prop::OPTIONS).or(n.str_prop(prop::ITEMS)).unwrap_or("");
@@ -299,7 +299,7 @@ fn value_for(rng: &mut Rng, tree: &Tree, id: NodeId, ev: u16) -> Value {
             _ => Value::Str(["", "a", "Hello", "42", "x y z"][rng.below(5)].to_owned()),
         },
         event::KEY_DOWN | event::KEY_UP => Value::Str(["ArrowUp", "ArrowDown", "Enter", "a"][rng.below(4)].to_owned()),
-        event::POINTER_DOWN | event::POINTER_MOVE | event::POINTER_UP => {
+        event::POINTER_DOWN | event::POINTER_MOVE | event::POINTER_UP | event::CONTEXT_MENU => {
             Value::List(vec![Value::Number(rng.below(400) as f64), Value::Number(rng.below(300) as f64)])
         }
         _ => Value::Null,

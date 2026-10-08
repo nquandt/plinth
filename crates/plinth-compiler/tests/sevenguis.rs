@@ -477,6 +477,35 @@ fn circle_drawer_draws_adjusts_and_undoes() {
     h.fire(canvas, event::POINTER_DOWN, at(300.0, 60.0));
     assert!(h.disabled("Redo"));
     assert_eq!(outlines(&h).len(), 3);
+
+    // UI API 1.13: a right-click on a circle selects it and opens the menu
+    // (an app menu: `open` is the `value` prop); its action opens the sheet.
+    let menu = h.labeled(ControlKind::Menu, "Circle");
+    assert_eq!(h.node(menu).prop(prop::VALUE), Some(&Value::Bool(false)), "the menu has `open` and is closed");
+    h.fire(canvas, event::POINTER_MOVE, at(10.0, 10.0));
+    assert_eq!(status(&h), "No circle selected");
+    h.fire(canvas, event::CONTEXT_MENU, at(5.0, 5.0));
+    assert!(!h.node(menu).bool_prop(prop::VALUE), "no menu on empty canvas with no selection");
+    h.fire(canvas, event::CONTEXT_MENU, at(102.0, 98.0));
+    assert!(h.node(menu).bool_prop(prop::VALUE), "the menu opens on a circle");
+    assert_eq!(filled(&h), [(100.0, 100.0)], "the right-click selects the circle");
+    // While the menu is open, the pointer does not change the selection or add circles.
+    h.fire(canvas, event::POINTER_MOVE, at(10.0, 10.0));
+    h.fire(canvas, event::POINTER_DOWN, at(10.0, 10.0));
+    assert_eq!(filled(&h), [(100.0, 100.0)]);
+    assert_eq!(outlines(&h).len(), 3);
+    // The user closes it (Escape or a click outside), as a host does: `open`
+    // false in the tree, then `change` (and `close`, which the app does not use).
+    h.tree.set_local_prop(menu, prop::VALUE, Value::Bool(false));
+    h.fire(menu, event::CHANGE, Value::Bool(false));
+    assert!(h.node(menu).handler(event::CLOSE).is_none());
+    // The menu key on the canvas (its center) opens it for the selected circle.
+    h.fire(canvas, event::CONTEXT_MENU, at(200.0, 150.0));
+    assert!(h.node(menu).bool_prop(prop::VALUE));
+    let adjust = h.labeled(ControlKind::Action, "Adjust diameter...");
+    h.fire(adjust, event::PRESS, Value::Null);
+    let sheet = h.one(ControlKind::Sheet, |_| true);
+    assert!(h.node(sheet).bool_prop(prop::VALUE), "the action opens the diameter sheet");
 }
 
 /// 7GUIs task 7: formulas, references and ranges, change propagation that

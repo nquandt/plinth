@@ -14,6 +14,7 @@ Level 1 controls (`Button`, `TextField`, `Toggle`, `List`, `Row`, `Dialog` and t
   - Text fields take typing. Tab leaves a `TextArea`; it does not type a tab character.
   - The arrow keys choose the option before or after in a `Picker` and a `Tabs` (the focus follows), and Home and End choose the first and the last. Arrow keys, Home, End, PageUp and PageDown move a `Slider`. Up and Down step a `NumberField`. In the open `DatePicker`, the arrow keys move the day, PageUp and PageDown the month, and Enter picks the day. Up and Down move in an open `Menu`.
   - An open `Menu` or `DatePicker` has the focus; Escape closes it and gives the focus back to its trigger.
+  - The menu key or Shift+F10 on the focused element runs its `onContextMenu` (UI API 1.13), with the center of the element as the position. An element with `onContextMenu` is a tab stop. A `Menu` that the app opens there has the focus, and Escape gives the focus back to the element. If you open a context menu with a right-click, also give a keyboard path: the menu key does it, and a visible button is better (`examples/7guis/circle-drawer` has both).
   - A `Sheet`, a `Dialog` and the host dialogs take the focus when they open and keep it: Tab and Shift+Tab stay in them. Escape closes them (also from a text field in them), and the focus goes back to the control that had it before.
 - **Visible focus.** The control with the keyboard focus has a ring in the accent color (2 px). On the web, it is the `:focus-visible` outline.
 - **Images.** `Image` needs an `alt` text that is not empty (`PL4009`).

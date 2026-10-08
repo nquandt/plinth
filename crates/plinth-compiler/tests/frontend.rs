@@ -61,6 +61,39 @@ fn jsx_errors() {
     assert_eq!(codes(&main), ["PL4002", "PL4003"]);
 }
 
+/// UI API 1.13: `onContextMenu` (x, y) on boxes, `Canvas` and `Row`, and a
+/// `Menu` that the app opens with `open` (a signal binds both ways).
+#[test]
+fn context_menu_and_app_menu() {
+    let good = r#"import { app, Screen, Box, Canvas, List, Row, Menu, Action, signal } from "plinth:ui";
+function Home() {
+  const open = signal(false);
+  const items = ["a", "b"];
+  return <Screen title="Home">
+    <Box label="Pad" width={10} height={10} onContextMenu={(x, y) => open.set(x > y)} />
+    <Canvas label="Sketch" viewWidth={10} viewHeight={10} shapes={[]} onContextMenu={(x: number) => open.set(x > 1)} />
+    <List items={items} key={(s) => s} row={(s) => <Row title={s} onContextMenu={() => open.set(true)} />} />
+    <Menu label="Item" open={open} onClose={() => open.set(false)} actions={[<Action label="Rename" onPress={() => {}} />]} />
+    <Menu label="More" open={true} actions={[<Action label="Copy" onPress={() => {}} />]} />
+  </Screen>;
+}"#
+    .to_owned()
+        + APP;
+    assert_eq!(codes(&good), Vec::<&str>::new());
+
+    // A callback with a string parameter, and an unknown prop on a Button.
+    let bad = r#"import { app, Screen, Box, Button } from "plinth:ui";
+function Home() {
+  return <Screen title="Home">
+    <Box onContextMenu={(x: string) => {}} />
+    <Button label="b" onPress={() => {}} onContextMenu={() => {}} />
+  </Screen>;
+}"#
+    .to_owned()
+        + APP;
+    assert_eq!(codes(&bad), ["PL3001", "PL4002"]);
+}
+
 #[test]
 fn checkbox_and_text_area() {
     // Good usage: both controls check clean.

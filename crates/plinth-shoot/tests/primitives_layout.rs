@@ -275,6 +275,42 @@ fn circle_drawer_draws_where_clicked() {
     let (label, _) = drawing(&mut cx);
     assert!(label.starts_with("Drawing with 3 circles"), "three clicks on empty canvas, one in a circle: {label}");
 
+    // UI API 1.13: a right-click on a circle opens its menu at the pointer;
+    // "Adjust diameter..." opens the sheet.
+    let p = point(px((b.x0 / scale + 200.0 * k) as f32), px((b.y0 / scale + 150.0 * k) as f32));
+    cx.update_window(handle, |_, window, cx| {
+        window.dispatch_event(
+            PlatformInput::MouseDown(MouseDownEvent { position: p, modifiers: Default::default(), button: MouseButton::Right, click_count: 1, first_mouse: false }),
+            cx,
+        );
+        window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { position: p, modifiers: Default::default(), button: MouseButton::Right, click_count: 1 }), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let node = |cx: &mut HeadlessAppContext, role: Role, name: &str| {
+        let tree = cx.update(|cx| window.update(cx, |_, window, _| window.a11y_tree().cloned())).unwrap().unwrap();
+        tree.nodes.iter().find(|(_, n)| n.role() == role && n.label() == Some(name)).and_then(|(_, n)| n.bounds())
+    };
+    let menu = node(&mut cx, Role::Menu, "Circle").expect("the circle menu is open");
+    assert!((menu.x0 / scale - f64::from(f32::from(p.x))).abs() <= 1.0, "the menu is at the pointer");
+    let item = node(&mut cx, Role::MenuItem, "Adjust diameter...").expect("the menu item");
+    let at = point(px(((item.x0 + item.x1) / 2.0 / scale) as f32), px(((item.y0 + item.y1) / 2.0 / scale) as f32));
+    cx.update_window(handle, |_, window, cx| {
+        window.dispatch_event(
+            PlatformInput::MouseDown(MouseDownEvent { position: at, modifiers: Default::default(), button: MouseButton::Left, click_count: 1, first_mouse: false }),
+            cx,
+        );
+        window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { position: at, modifiers: Default::default(), button: MouseButton::Left, click_count: 1 }), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(node(&mut cx, Role::Menu, "Circle").is_none(), "the menu closes");
+    assert!(node(&mut cx, Role::Dialog, "Adjust diameter").is_some(), "the action opens the sheet");
+    let (label, _) = drawing(&mut cx);
+    assert!(label.starts_with("Drawing with 3 circles"), "the clicks on the menu add no circle: {label}");
+    cx.update_window(handle, |_, window, cx| window.dispatch_keystroke(gpui::Keystroke::parse("escape").unwrap(), cx)).unwrap();
+    cx.run_until_parked();
+
     let shots = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/shots");
     std::fs::create_dir_all(&shots).unwrap();
     let image = cx.capture_screenshot(window.into()).expect("render the circle drawer");
