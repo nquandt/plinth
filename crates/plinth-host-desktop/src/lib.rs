@@ -15,6 +15,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
 pub mod consent;
+pub mod notify;
 pub mod updater;
 
 pub use plinth_runner_wasmtime::files::Owner;
@@ -333,6 +334,7 @@ pub fn start_with_policy_and_hub(
     match loaded {
         Ok(mut guest) => {
             guest.set_files(private_files(owner, app_id));
+            guest.set_notify(notify::system_notify(app_id));
             // Hot reload (SPEC.md §13): `args` is the previous instance's
             // signal snapshot, or empty on the first start. A release
             // build of the app ignores it (it never registered anything).

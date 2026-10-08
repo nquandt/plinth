@@ -1,0 +1,4 @@
+app/main.tsx(3,1): error PL1007: this call needs the `notify` capability, which `plinth.toml` does not declare
+  show({ title: "Done" });
+  ^^^^^^^^^^^^^^^^^^^^^^^
+  help: add `[[capabilities]]` with `name = "notify"` and a `rationale` to plinth.toml (SPEC.md §11)

@@ -30,6 +30,7 @@ pub enum StdModule {
     Net,
     Hub,
     Files,
+    Notify,
 }
 
 impl StdModule {
@@ -44,6 +45,7 @@ impl StdModule {
             "plinth:net" => Some(StdModule::Net),
             "plinth:hub" => Some(StdModule::Hub),
             "plinth:files" => Some(StdModule::Files),
+            "plinth:notify" => Some(StdModule::Notify),
             _ => None,
         }
     }
@@ -125,6 +127,10 @@ pub enum StdFn {
     FilesList,
     FilesStat,
     FilesRemove,
+    /// `plinth:notify` (core 1.12, `docs/PRODUCTION.md` H3).
+    NotifyShow,
+    NotifyCancel,
+    NotifyLastError,
     /// `rect`, `circle`, `line`, `canvasText` from `plinth:ui` (UI API 1.10):
     /// each makes one encoded `Shape` string for `Canvas.shapes`.
     ShapeRect,

@@ -1,0 +1,8 @@
+id = "dev.plinth.examples.notify-demo"
+name = "Reminder"
+version = "0.1.0"
+publisher = "plinth"
+
+[[capabilities]]
+name = "notify"
+rationale = "Remind you with a notification when the time is up."

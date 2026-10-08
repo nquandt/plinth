@@ -56,6 +56,7 @@ pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
 pub const DIALOG_NAMES: &[&str] = &["alert", "confirm", "prompt"];
 pub const NET_NAMES: &[&str] = &["fetch", "Response", "FetchOptions"];
 pub const FILES_NAMES: &[&str] = &["read", "write", "list", "stat", "remove", "FileEntry"];
+pub const NOTIFY_NAMES: &[&str] = &["show", "cancel", "lastError", "NotifyOptions", "NotifyResult"];
 pub const HUB_NAMES: &[&str] = &[
     "listApps",
     "launch",
@@ -81,8 +82,13 @@ pub const HUB_NAMES: &[&str] = &[
 /// `capabilities` module, `docs/HUB.md` §12.3) rather than a duplicated
 /// list here.
 pub use plinth_link::capabilities::{
-    CLIPBOARD_READ as CAP_CLIPBOARD_READ, CLIPBOARD_WRITE as CAP_CLIPBOARD_WRITE, FILES_PRIVATE as CAP_FILES_PRIVATE, HUB_MANAGE as CAP_HUB_MANAGE, STORE_KV as CAP_STORE_KV,
+    CLIPBOARD_READ as CAP_CLIPBOARD_READ, CLIPBOARD_WRITE as CAP_CLIPBOARD_WRITE, FILES_PRIVATE as CAP_FILES_PRIVATE, HUB_MANAGE as CAP_HUB_MANAGE, NOTIFY as CAP_NOTIFY, STORE_KV as CAP_STORE_KV,
 };
+
+/// `NotifyResult`: what a `show` promise resolves with.
+fn notify_result_type() -> Type {
+    Type::str_lits(["shown", "unsupported"].iter().map(|s| s.to_string()).collect())
+}
 
 pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
     match m {
@@ -140,6 +146,16 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             // Shaped structurally, like `net`'s `Response` (the editor's
             // type comes from `files.d.ts`).
             "FileEntry" => Binding::Type(Type::Error),
+            _ => return None,
+        }),
+        StdModule::Notify => Some(match name {
+            "show" => Binding::Std(StdFn::NotifyShow),
+            "cancel" => Binding::Std(StdFn::NotifyCancel),
+            "lastError" => Binding::Std(StdFn::NotifyLastError),
+            // `NotifyOptions` is an object literal at the call (like
+            // `fetch`'s options); the editor's type comes from `notify.d.ts`.
+            "NotifyOptions" => Binding::Type(Type::Error),
+            "NotifyResult" => Binding::Type(notify_result_type()),
             _ => return None,
         }),
         StdModule::Hub => Some(match name {
@@ -716,6 +732,22 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Rt(rt_fn, vec![key]), Type::Void, span)
             }
             StdFn::FilesRead | StdFn::FilesWrite | StdFn::FilesList | StdFn::FilesStat | StdFn::FilesRemove => self.files_call(f, args, span),
+            StdFn::NotifyShow => self.notify_show_call(args, span),
+            StdFn::NotifyCancel => {
+                self.require_capability(CAP_NOTIFY, span);
+                if !one_arg(self, "cancel") {
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let tag = self.expr_with(&args[0], &Type::String);
+                let tag = self.coerce(tag, &Type::String);
+                TExpr::new(TExprKind::Rt("notify_cancel", vec![tag]), Type::Void, span)
+            }
+            StdFn::NotifyLastError => {
+                if !args.is_empty() {
+                    self.err(code::ARG_COUNT, span, "`lastError` takes no arguments");
+                }
+                TExpr::new(TExprKind::Rt("notify_last_error", Vec::new()), Type::String.nullable(), span)
+            }
             StdFn::HubSearch | StdFn::HubInstall | StdFn::HubCheckUpdates | StdFn::HubUpdate => {
                 self.require_capability(CAP_HUB_MANAGE, span);
                 let (name, rt_fn, what) = match f {
@@ -889,6 +921,107 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Block(vec![TStmt::Let(pv, Some(self.new_promise(&info, span))), TStmt::Expr(call)], Box::new(p)), pty, span)
             }
         }
+    }
+
+    /// `plinth:notify` `show(options)` (core 1.12, `docs/PRODUCTION.md` H3).
+    /// `options` is an object literal with `title` and the optional `body`
+    /// and `tag`. Returns a `Promise<NotifyResult>` that resolves with
+    /// `"shown"` or `"unsupported"`, and rejects with an `Error` whose
+    /// message is `"denied:<reason>"`. The wrapper closure reads the
+    /// completion list with `net_result_*`, as for `plinth:files`.
+    fn notify_show_call(&mut self, args: &[Expr], span: Span) -> TExpr {
+        self.require_capability(CAP_NOTIFY, span);
+        if args.len() != 1 {
+            self.err(code::ARG_COUNT, span, "`show` takes one argument: `{ title, body?, tag? }`");
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        let none = || TExpr::new(TExprKind::Null, Type::String.nullable(), span);
+        let (mut title, mut body, mut tag) = (None, None, None);
+        match &args[0].kind {
+            ExprKind::Object(props) => {
+                for p in props {
+                    let ObjProp::Field(name, value, fspan) = p else {
+                        self.err(code::UNSUPPORTED, args[0].span, "`show`'s options cannot use a spread");
+                        continue;
+                    };
+                    match name.as_str() {
+                        "title" => {
+                            let te = self.expr_with(value, &Type::String);
+                            title = Some(self.coerce(te, &Type::String));
+                        }
+                        "body" | "tag" => {
+                            let te = self.expr_with(value, &Type::String.nullable());
+                            let te = Some(self.coerce(te, &Type::String.nullable()));
+                            if name == "body" {
+                                body = te;
+                            } else {
+                                tag = te;
+                            }
+                        }
+                        _ => self.err_help(
+                            code::NO_PROPERTY,
+                            *fspan,
+                            format!("notify options has no `{name}` property"),
+                            "use `title`, `body` or `tag`",
+                        ),
+                    }
+                }
+                if title.is_none() {
+                    self.err_help(code::ARG_COUNT, args[0].span, "`show` needs a `title`", "write `show({ title: \"Done\" })`");
+                }
+            }
+            _ => {
+                self.err_help(
+                    code::UNSUPPORTED,
+                    args[0].span,
+                    "`show`'s options must be an object literal",
+                    "write `show({ title: \"Done\", body: \"...\" })`",
+                );
+            }
+        }
+        let title = title.unwrap_or_else(|| TExpr::new(TExprKind::Str(String::new()), Type::String, span));
+        let body = body.unwrap_or_else(none);
+        let tag = tag.unwrap_or_else(none);
+
+        // The wrapper: `e = error; t = text; if e == null resolve(t) else
+        // reject(Error(e))`.
+        let value_ty = notify_result_type();
+        let fid = self.prog.new_func(FuncDef {
+            name: "<notify_show_done>".into(),
+            kind: FuncKind::Closure,
+            params: Vec::new(),
+            ret: Type::Void,
+            body: Vec::new(),
+            span,
+        });
+        let e_ty = Type::String.nullable();
+        let ev = self.temp(e_ty.clone());
+        let tv = self.temp(value_ty.clone());
+        let e = TExpr::new(TExprKind::Var(ev), e_ty.clone(), span);
+        let t = TExpr::new(TExprKind::Var(tv), value_ty.clone(), span);
+        let info = self.promise_info(&value_ty);
+        let pty = Type::Struct(info.sid);
+        let pv = self.temp(pty.clone());
+        let p = TExpr::new(TExprKind::Var(pv), pty.clone(), span);
+        let (_, reject) = self.promise_then_reject();
+        let resolve = TStmt::Expr(TExpr::new(TExprKind::Call(info.resolve, vec![p.clone(), t]), Type::Void, span));
+        let err = self.new_error(e.clone());
+        let base = self.as_base(p.clone());
+        let reject = TStmt::Expr(TExpr::new(TExprKind::Call(reject, vec![base, err]), Type::Void, span));
+        let is_null = TExpr::new(TExprKind::IsNull(Box::new(e)), Type::Bool, span);
+        // The host sends only `"shown"` or `"unsupported"` as `text`, so the
+        // string is read with the literal union type directly.
+        let body_stmts = vec![
+            TStmt::Let(ev, Some(TExpr::new(TExprKind::Rt("net_result_error", Vec::new()), e_ty, span))),
+            TStmt::Let(tv, Some(TExpr::new(TExprKind::Rt("net_result_text", Vec::new()), value_ty, span))),
+            TStmt::If(is_null, vec![resolve], vec![reject]),
+        ];
+        super::asyncfn::reown(&mut self.prog, &body_stmts, fid, None);
+        self.prog.funcs[fid as usize].body = body_stmts;
+        let ft = crate::types::FuncType { params: Vec::new(), required: 0, ret: Type::Void };
+        let wrapper = TExpr::new(TExprKind::Closure(fid), Type::Func(std::rc::Rc::new(ft)), span);
+        let call = TExpr::new(TExprKind::NotifyShow(Box::new(title), Box::new(body), Box::new(tag), Box::new(wrapper)), Type::Void, span);
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(pv, Some(self.new_promise(&info, span))), TStmt::Expr(call)], Box::new(p)), pty, span)
     }
 
     /// `fetch`'s `options`: `null`, or an object literal with optional

@@ -342,6 +342,11 @@ pub enum TExprKind {
     /// `write` uses it). `wrapper` is a synthetic 0-arg closure that reads
     /// the completion with `net_result_*` (`check/stdlib.rs`).
     FilesCall(i32, Box<TExpr>, Box<TExpr>, Box<TExpr>),
+    /// `plinth:notify` `show` (core 1.12): `(title, body, tag, wrapper)`.
+    /// `body` and `tag` are nullable strings. `wrapper` is a synthetic 0-arg
+    /// closure that reads the completion with `net_result_*`
+    /// (`check/stdlib.rs`).
+    NotifyShow(Box<TExpr>, Box<TExpr>, Box<TExpr>, Box<TExpr>),
 
     // -- Forms that only `lower` makes. ------------------------------------
     /// The table index of the thunk adapter for a closure signature.
