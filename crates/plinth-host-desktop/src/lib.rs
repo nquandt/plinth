@@ -280,6 +280,10 @@ impl GuestPort for WasmGuest {
     fn take_errors(&mut self) -> Vec<String> {
         self.guest.take_errors()
     }
+
+    fn refresh_locale(&mut self) -> bool {
+        self.guest.refresh_locale()
+    }
 }
 
 fn print_logs(guest: &mut Guest) {

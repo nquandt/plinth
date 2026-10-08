@@ -1,0 +1,4 @@
+id = "dev.plinth.test.locale-fixture"
+name = "Locale Fixture"
+version = "0.1.0"
+publisher = "plinth"

@@ -131,7 +131,10 @@ fn is_dynamic(e: &TExpr) -> bool {
                 | TExprKind::SignalGet(_)
                 | TExprKind::ComputedGet(_)
                 | TExprKind::ArrayHof { .. }
-                | TExprKind::Rt("sig_get_f64" | "sig_get_i32" | "comp_get_f64" | "comp_get_i32", _)
+                | TExprKind::Rt(
+                    "sig_get_f64" | "sig_get_i32" | "comp_get_f64" | "comp_get_i32" | "app_active" | "locale_tag" | "locale_direction",
+                    _
+                )
         ) {
             dynamic = true;
         }

@@ -157,6 +157,19 @@ fn active_signal() -> reactive::RId {
     ACTIVE.get()
 }
 
+/// The signal behind `locale()` and `direction()` (core 1.13, `docs/I18N.md`
+/// §3.1): a counter that the `lifecycle` event with kind `LOCALE` increments.
+/// The value itself comes from the host at each read; a read of this signal
+/// first makes the computed value or the effect run again after a change.
+static LOCALE_GEN: GlobalCell<u32> = GlobalCell::new(u32::MAX);
+
+fn locale_signal() -> reactive::RId {
+    if LOCALE_GEN.get() == u32::MAX {
+        LOCALE_GEN.set(reactive::with_scope(0, || reactive::signal_new(Val::I32(0))));
+    }
+    LOCALE_GEN.get()
+}
+
 /// The argument at `i` of the current call (`None` past the end).
 fn arg_at(i: i32) -> Val {
     usize::try_from(i).ok().and_then(|i| ARGS.get().get(i).copied()).unwrap_or(Val::None)
@@ -314,9 +327,14 @@ impl bindings::Guest for Rt {
                     settle();
                 }
                 plinth_protocol::Event::Lifecycle { kind } => {
-                    use plinth_protocol::lifecycle_kind::{BACKGROUND, FOREGROUND};
+                    use plinth_protocol::lifecycle_kind::{BACKGROUND, FOREGROUND, LOCALE};
                     if kind == FOREGROUND || kind == BACKGROUND {
                         reactive::signal_set(active_signal(), Val::I32(i32::from(kind == FOREGROUND)));
+                        settle();
+                    } else if kind == LOCALE {
+                        let s = locale_signal();
+                        let next = reactive::signal_get(s).i32().wrapping_add(1);
+                        reactive::signal_set(s, Val::I32(next));
                         settle();
                     }
                 }
@@ -685,6 +703,17 @@ abi! {
     fn __plinth_rt_kv_iter(keys: i32, values: i32, index: i32, delta: i32) { kv::iter(ptr(keys), ptr(values), ptr(index), delta) }
     fn __plinth_rt_kv_size(keys: i32, index: i32) -> i32 { kv::size(ptr(keys), ptr(index)) }
     fn __plinth_rt_kv_live(keys: i32, index: i32, pos: i32) -> i32 { kv::live(ptr(keys), ptr(index), pos) }
+    // -- plinth:locale (core 1.13, docs/I18N.md §3.1) -------------------------
+    // Each read tracks the locale signal, so a `lifecycle` LOCALE event runs
+    // the computed values and effects that read the locale again.
+    fn __plinth_rt_locale_tag() -> i32 {
+        reactive::signal_get(locale_signal());
+        host::locale_tag()
+    }
+    fn __plinth_rt_locale_direction() -> i32 {
+        reactive::signal_get(locale_signal());
+        strings::from_str(if host::locale_is_rtl() { "rtl" } else { "ltr" }) as i32
+    }
 
     // -- plinth:time date/time additions (SPEC.md §8.5, docs/GAPS.md gap #5) --
     fn __plinth_rt_tz_offset_minutes(ms: f64) -> f64 { host::timezone_offset(ms as i64) as f64 }

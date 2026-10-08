@@ -4,7 +4,7 @@ A Plinth app cannot reach the outside world by itself. Every effect
 outside its own UI — storage, the clipboard, the network, even a modal
 dialog — goes through a **host API module** (`plinth:time`,
 `plinth:store`, `plinth:clipboard`, `plinth:dialog`, `plinth:net`,
-`plinth:files` and `plinth:notify`). Most of these modules are gated by a **capability**:
+`plinth:files`, `plinth:notify` and `plinth:locale`). Most of these modules are gated by a **capability**:
 a named permission that the app must declare in `plinth.toml`, and that
 the user grants before the app can use it.
 
@@ -323,6 +323,58 @@ cancel("reminder");              // removes the notification with this tag
   - The page has no image of the app's icon, so a notification has no icon
     (`AppFrame`'s `notifyIcon` option can give one).
 
+## `plinth:locale`
+
+The locale of the app (core 1.13, `docs/I18N.md` §3.1, §4 step 1). Needs
+no capability, as for the time zone.
+
+```ts
+import { locale, direction } from "plinth:locale";
+
+<Text>{`${locale()} ${direction()}`}</Text>   // "ar-EG rtl"
+```
+
+- `locale()` returns the locale as a BCP 47 tag, for example `"en-US"`,
+  `"ar-EG"` or `"zh-Hans-CN"`. It is never empty: a host that finds no
+  locale gives `"en-US"`.
+- `direction()` returns `"rtl"` when the script of the locale is written
+  right to left, else `"ltr"`. The type is `Direction` (`"ltr" | "rtl"`).
+  A script subtag decides (`az-Arab` is `rtl`, `az-Latn` is `ltr`); with
+  no script subtag, the language decides (`ar`, `arc`, `azb`, `ckb`, `dv`,
+  `fa`, `he`, `iw`, `ji`, `ks`, `lrc`, `mzn`, `nqo`, `pnb`, `ps`, `sd`,
+  `syr`, `ug`, `ur` and `yi` are `rtl`).
+- Both are reactive, as `isActive()`: a text, a `computed` value or an
+  `effect` that reads them runs again when the locale changes while the app
+  runs. A value that the app keeps in a plain variable does not change.
+- The host normalizes the tag: `_` becomes `-`, `.UTF-8` and `@euro` go
+  away, the language is lower case, a 4-letter script is title case and a
+  region is upper case (`en_us.UTF-8` gives `en-US`).
+- The host does not yet match the locale against the languages that the
+  app supports (`docs/I18N.md` §3.1 and §4 step 3).
+
+**The change event.** The host sends a `lifecycle` event with kind 4
+("locale changed", `plinth_protocol::lifecycle_kind::LOCALE`). The core
+then makes the reactive reads run again; they call `locale.tag` and
+`locale.is-rtl` again. A core older than 1.13 ignores kind 4, so a host can
+send it to every app.
+
+**Where the locale comes from.**
+
+- Desktop: the OS locale (`sys-locale`: Windows `GetUserDefaultLocaleName`,
+  macOS `CFLocale`, Linux `LANG`), read at the first call. The
+  environment variable `PLINTH_LOCALE` (for example `PLINTH_LOCALE=ar-EG`)
+  overrides it, for manual tests. The host reads the OS locale again each
+  time the app window comes to the foreground, and sends the event if it
+  changed. A test fixes the locale with `Guest::set_locale` and changes it
+  with `Guest::change_locale`.
+- Web: in a frame (the web Hub, a web export), the page gives its locale
+  (`navigator.languages[0]`) in the `start` message, and sends each
+  `languagechange` of the page to the frame (`locale`). `AppFrame`'s
+  `locale` option fixes the locale; `setLocale(tag)` changes it. The
+  stand-alone page uses its own locale, and `index.html?locale=ar-EG` fixes
+  it. The host sets `lang` and `dir` on the root element of the app
+  (`applyLocale` in `web/dom-renderer.js`).
+
 ## `plinth:hub` (privileged)
 
 The Hub UI (`examples/hub`, `docs/HUB.md` §4.1) uses this module. It needs
@@ -491,6 +543,7 @@ covers it. There are three hosts:
 | `files` | A folder for each owner and app id under `%APPDATA%\plinth\spaces\private\`. One worker thread for each app, in call order. 8 MiB for one file, 50 MiB for the space. | Same as wasmtime. | In a frame: the page IndexedDB (database `plinth-files`). Stand-alone and in Node: in memory, so the files go away at a reload. The same path rules and limits as the desktop (`web/files.js`). |
 | `store` (sql) | SQLite (`rusqlite`, bundled, with FTS5): `store.sqlite` in `<private space folder>+sql`. One worker thread for each app, in call order. 2 s for one statement, 256 MiB for the database, 16 MiB for a query result. | Same as wasmtime. | **Different.** The official SQLite Wasm build in one Worker of the page for all apps (`web/sql.js`), with the OPFS VFS `opfs-sahpool` (folder `.plinth-sql`, one database for each app id in lower case). The same authorizer, limits and error texts; the memory limit is the Wasm memory of the Worker (512 MiB). Without OPFS: in memory. The folder form of a web export has it; a single-file export answers `denied:unsupported`. `docs/SQL.md` §9. |
 | `notify` | Windows: a WinRT toast; the tag replaces and `cancel` removes. Linux and macOS: `show` answers "unsupported". | Same as wasmtime. | **Different.** The browser's `Notification` API, shown by the page for the app frame. The tag replaces, `cancel` closes. A browser-denied permission answers `denied:refused`; no permission question or no API answers "unsupported". |
+| `locale` | The OS locale (`sys-locale`), or `PLINTH_LOCALE`. The host reads it again when the window comes to the foreground, and sends the locale event if it changed. | Same as wasmtime. | In a frame: the locale of the page (`navigator.languages`), from the `start` message, and the page's `languagechange`. Stand-alone: the page's own locale, or `?locale=`. The host sets `lang` and `dir` on the root element of the app. |
 | `hub` | Only for a package that a trusted Hub key signed, with a Hub backend. Else each call answers `denied:unsupported` (or `denied:refused`). | Same as wasmtime. | Only in the web App Hub (`hub-host.js`, browse mode, `docs/web-hub.md` §3.1). Else each call answers `denied:unsupported`. |
 | `error.report` | The runner logs the text and keeps it (`Guest::take_errors`). The desktop host shows the last one in a banner with "Dismiss". | Same as wasmtime. | `reportError`, which is `console.error` by default, and `PlinthApp.onError`. |
 
@@ -517,6 +570,7 @@ runs every web test except `run-a11y.mjs` (by hand).
 | `files` | `files.rs`, unit tests in `plinth-runner-wasmtime/src/files.rs` | `files.rs`, wasmi gate | `run-files.mjs`, `run-a11y.mjs` (files isolation in the frame) |
 | `store` (sql) | `sql.rs` (compiled apps: the shared cases of `sql_cases.txt`, the file on disk, denied, the warning), unit tests in `plinth-runner-wasmtime/src/sql.rs` | `sql.rs`, wasmi gate | `run-sql.mjs` (the engine with the cases of the desktop unit tests, the shared cases of `sql_cases.txt` built by the CLI, the Worker protocol, denied calls), `run-a11y.mjs` (a fixture app in the web App Hub in Edge: OPFS after a reload) |
 | `notify` | `notify.rs` (a hand-written core caller and compiled apps, with `MemoryNotify`), unit tests in `plinth-runner-wasmtime/src/notify.rs` and `plinth-host-desktop/src/notify.rs` (the real toast only by hand: `--ignored`) | `notify.rs`, wasmi gate | `run-notify.mjs` (a fake `Notification`, `notify-demo`), `run-a11y.mjs` (`notify-demo` export in Edge, without and with the permission) |
+| `locale` | `locale.rs` (compiled apps with five fixed locales, the change event, the normalization, the core version), unit tests in `plinth-runner-wasmtime/src/locale.rs` | `locale.rs`, wasmi gate | `run-locale.mjs` (the tag and the direction, `PlinthApp` and the Worker, the change event, `lang` and `dir`, `AppFrame` and `languagechange`) |
 | `hub` | `hub_api.rs`, `hub_ui.rs`, `plinth-host-desktop/tests/hub_host.rs` | `hub_api.rs`, `hub_ui.rs`, wasmi gate | `run-hub-host.mjs`, `run-a11y.mjs` (the Hub app in the browser) |
 | `error.report` | `errors.rs`, `async_await.rs` (uncaught rejections) | `errors.rs`, `async_await.rs`, wasmi gate | `run-stop.mjs` |
 

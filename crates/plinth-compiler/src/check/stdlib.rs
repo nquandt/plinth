@@ -57,6 +57,7 @@ pub const DIALOG_NAMES: &[&str] = &["alert", "confirm", "prompt"];
 pub const NET_NAMES: &[&str] = &["fetch", "Response", "FetchOptions"];
 pub const FILES_NAMES: &[&str] = &["read", "write", "list", "stat", "remove", "FileEntry"];
 pub const NOTIFY_NAMES: &[&str] = &["show", "cancel", "lastError", "NotifyOptions", "NotifyResult"];
+pub const LOCALE_NAMES: &[&str] = &["locale", "direction", "Direction"];
 pub const HUB_NAMES: &[&str] = &[
     "listApps",
     "launch",
@@ -88,6 +89,11 @@ pub use plinth_link::capabilities::{
 /// `NotifyResult`: what a `show` promise resolves with.
 fn notify_result_type() -> Type {
     Type::str_lits(["shown", "unsupported"].iter().map(|s| s.to_string()).collect())
+}
+
+/// `Direction`: what `direction()` returns.
+fn direction_type() -> Type {
+    Type::str_lits(["ltr", "rtl"].iter().map(|s| s.to_string()).collect())
 }
 
 pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
@@ -158,6 +164,12 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             // `fetch`'s options); the editor's type comes from `notify.d.ts`.
             "NotifyOptions" => Binding::Type(Type::Error),
             "NotifyResult" => Binding::Type(notify_result_type()),
+            _ => return None,
+        }),
+        StdModule::Locale => Some(match name {
+            "locale" => Binding::Std(StdFn::Locale),
+            "direction" => Binding::Std(StdFn::Direction),
+            "Direction" => Binding::Type(direction_type()),
             _ => return None,
         }),
         StdModule::Hub => Some(match name {
@@ -303,6 +315,18 @@ impl Checker<'_> {
                     self.err(code::ARG_COUNT, span, "`isActive` takes no arguments");
                 }
                 TExpr::new(TExprKind::Rt("app_active", Vec::new()), Type::Bool, span)
+            }
+            StdFn::Locale => {
+                if !args.is_empty() {
+                    self.err(code::ARG_COUNT, span, "`locale` takes no arguments");
+                }
+                TExpr::new(TExprKind::Rt("locale_tag", Vec::new()), Type::String, span)
+            }
+            StdFn::Direction => {
+                if !args.is_empty() {
+                    self.err(code::ARG_COUNT, span, "`direction` takes no arguments");
+                }
+                TExpr::new(TExprKind::Rt("locale_direction", Vec::new()), direction_type(), span)
             }
             StdFn::OnMount => {
                 if args.len() != 1 {

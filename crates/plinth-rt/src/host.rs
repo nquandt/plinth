@@ -193,6 +193,23 @@ pub fn timezone_offset(ms: i64) -> i32 {
     }
 }
 
+/// `locale.tag()` (core 1.13, `docs/I18N.md` §3.1): the locale of the app
+/// as a heap string (a BCP 47 tag).
+pub fn locale_tag() -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    return strings::from_str(&host::locale::tag()) as i32;
+    #[cfg(not(target_arch = "wasm32"))]
+    0
+}
+
+/// `locale.is-rtl()` (core 1.13): true for a right-to-left locale.
+pub fn locale_is_rtl() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return host::locale::is_rtl();
+    #[cfg(not(target_arch = "wasm32"))]
+    false
+}
+
 /// `setTimeout`/`setInterval`: schedules `callable` and returns a timer
 /// id (as a `number`) for `clearTimeout`/`clearInterval`.
 pub fn set_timer(callable: Callable, ms: f64, repeat: bool) -> f64 {

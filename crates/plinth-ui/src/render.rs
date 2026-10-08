@@ -129,6 +129,13 @@ pub trait GuestPort {
     fn take_hub_launches(&mut self) -> Vec<String> {
         Vec::new()
     }
+
+    /// Reads the OS locale again (`plinth:locale`, core 1.13). True when it
+    /// changed since the guest last read it: the host then sends the
+    /// `lifecycle` event with kind `LOCALE`. The default never changes.
+    fn refresh_locale(&mut self) -> bool {
+        false
+    }
 }
 
 /// Which `plinth:dialog` call opened a pending dialog request (mirrors
@@ -518,6 +525,11 @@ impl PlinthRoot {
         let kind = if active { lifecycle_kind::FOREGROUND } else { lifecycle_kind::BACKGROUND };
         let mut w = Writer::new();
         w.event(&Event::Lifecycle { kind });
+        // The user can change the OS locale in another window; the host reads
+        // it again each time the app comes back (`docs/I18N.md` §3.1).
+        if active && self.guest.refresh_locale() {
+            w.event(&Event::Lifecycle { kind: lifecycle_kind::LOCALE });
+        }
         match self.guest.dispatch(w.as_bytes()) {
             Ok(commits) => self.apply_commits(commits),
             Err(e) => {

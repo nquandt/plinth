@@ -53,6 +53,8 @@ A binary that contains Apache-2.0 code (for example the desktop host, which cont
 
 `plinth-runner-wasmtime` uses the `rusqlite` crate (MIT) for `store.sql` (`docs/SQL.md`), with the features `bundled`, `hooks` and `limits`. With `bundled`, its `libsqlite3-sys` part (MIT) compiles the C source of SQLite (public domain) into the host with the `cc` crate. Thus a build of the runner needs a C compiler (MSVC on Windows, `cc` on Linux and macOS). The bundled build has FTS5. The dependency is not behind a feature flag: a clean build of `libsqlite3-sys` takes about 11 s in a debug build and 17 s in a release build (Windows, 2026-10-08), and it compiles in parallel with other crates. For the wasm32 target, `rusqlite` also brings `sqlite-wasm-rs` and `rsqlite-vfs` (MIT) into the checked graph. The web host does not use them (it uses the official SQLite Wasm build, `docs/SQL.md` §2). The notice file (L1) must include SQLite.
 
+`plinth-runner-wasmtime` uses the `sys-locale` crate (MIT OR Apache-2.0, from 1Password, about 800 lines) for `plinth:locale` (`docs/I18N.md` §3.1): the OS locale as a BCP 47 tag. On Windows it calls `GetUserDefaultLocaleName` with its own declaration and adds no crate; on Android it adds `libc`. Its feature `js` (for wasm32 in a browser) is off.
+
 ### Web host: the SQLite Wasm build
 
 The web host runs `store.sql` (`docs/SQL.md` §2) on the official SQLite Wasm build. It is a vendored copy, not an npm dependency at run time and not a CDN file: the web host has no build step and no npm dependency (`web/README.md`), and `plinth registry serve --web` embeds the web files in the `plinth` binary (`crates/plinth-registry/src/web_files.rs`), so the files must be in the repository.
@@ -136,14 +138,14 @@ node scripts/gen-license-list.mjs --write
 The script reads `cargo deny list` (the same graph and targets as `deny.toml`) and `cargo metadata`.
 
 <!-- license-list:begin -->
-Third-party crates in the checked graph: **766**.
+Third-party crates in the checked graph: **767**.
 
 Crates whose license expression names each license (a crate that names two licenses counts once for each):
 
 | License | Crates |
 |---|---|
-| MIT | 669 |
-| Apache-2.0 | 517 |
+| MIT | 670 |
+| Apache-2.0 | 518 |
 | Apache-2.0 WITH LLVM-exception | 52 |
 | Zlib | 26 |
 | Unicode-3.0 | 24 |
@@ -162,7 +164,7 @@ Crates by license set (all licenses that the license expression of one crate nam
 
 | Licenses in the expression of one crate | Crates |
 |---|---|
-| Apache-2.0 / MIT | 447 |
+| Apache-2.0 / MIT | 448 |
 | MIT | 158 |
 | Apache-2.0 WITH LLVM-exception | 28 |
 | Apache-2.0 / Apache-2.0 WITH LLVM-exception / MIT | 23 |

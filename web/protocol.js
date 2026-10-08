@@ -27,6 +27,16 @@ export const EventCode = {
   FRAME: 0x07,
 };
 
+/** `kind` values of the `lifecycle` event (SPEC.md §8.4; `plinth_protocol::lifecycle_kind`). */
+export const LifecycleKind = {
+  FOREGROUND: 0,
+  BACKGROUND: 1,
+  LOW_MEMORY: 2,
+  BEFORE_QUIT: 3,
+  // Core 1.13 (docs/I18N.md §3.1): the locale of the app changed. An older core ignores it.
+  LOCALE: 4,
+};
+
 export const NavKind = {
   PUSH: 0,
   REPLACE: 1,

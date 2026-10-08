@@ -12,7 +12,7 @@
     </nav>
     <div id="app">Loading&hellip;</div>
     <script type="module">
-      import { readPlnt, localStorageKvStore, parseManifest } from "./plinth-web.js";
+      import { readPlnt, localStorageKvStore, parseManifest, normalizeLocale, pageLocale } from "./plinth-web.js";
       import { WorkerApp, startAppWorker } from "./app-worker.js";
       import { Tree, DomRenderer } from "./dom-renderer.js";
       import { SqlWorkerHost } from "./sql.js";
@@ -49,7 +49,12 @@
         const app = new WorkerApp(startAppWorker(new URL("./app-worker.js", import.meta.url).href));
         const tree = new Tree();
         app.onCommit = (ops) => tree.apply(ops);
+        // plinth:locale (core 1.13): `?locale=ar-EG` for manual tests, else
+        // the page's locale and its changes (`languagechange`).
+        const fixedLocale = param("locale");
+        const locale = normalizeLocale(fixedLocale ?? pageLocale());
         await app.load(coreBytes, appWasm, {
+          locale,
           log: (s) => console.log("[app]", s),
           manifestText,
           kvStore: localStorageKvStore(window.localStorage, `plinth:${parseManifest(manifestText).id}:`),
@@ -57,7 +62,9 @@
           sql: new SqlWorkerHost(new URL("./sql-worker.js", import.meta.url)).space(parseManifest(manifestText).id),
         });
 
-        new DomRenderer(tree, container, app, assets);
+        const renderer = new DomRenderer(tree, container, app, assets);
+        renderer.setLocale(locale);
+        if (fixedLocale === undefined || fixedLocale === null) window.addEventListener("languagechange", () => renderer.setLocale(pageLocale()));
         await app.init([]);
       }
 

@@ -63,3 +63,6 @@ interface notify: cancel: func(tag: string) -> result<_, host-error>
 world app: import notify
 interface sql: run: func(kind: u8, statement: string, params: string) -> u32
 world app: import sql
+interface locale: tag: func() -> string
+interface locale: is-rtl: func() -> bool
+world app: import locale

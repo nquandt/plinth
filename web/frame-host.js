@@ -25,7 +25,7 @@
 // result as `declared` and `refused`.
 
 import { checkFrameMessage, applyKvMessage, startMessage, CHANNEL, KV_QUOTA } from "./hub-storage.js";
-import { netDenied, httpFetch, browserNotify } from "./plinth-web.js";
+import { netDenied, httpFetch, browserNotify, normalizeLocale, pageLocale } from "./plinth-web.js";
 import { FileSpace, idbFileBackend, memoryFileBackend, FILES_CAPABILITY } from "./files.js";
 
 /** `el("p", { class: "x" }, "text", child)`: a small DOM builder (text is never parsed as HTML). */
@@ -98,6 +98,9 @@ export function hostDialog(kind, message, title = "") {
  *   `browserNotify()`, the page's `Notification` API, with `notifyIcon` (a
  *   URL, optional) as the icon. One backend for each frame, so `cancel`
  *   closes only this app's notifications.
+ * - `locale`: a BCP 47 tag for `plinth:locale` (core 1.13). Default: the
+ *   locale of the page (`navigator.languages`), and a `languagechange` of
+ *   the page goes to the app. `setLocale(tag)` changes it later.
  * - `onStarted()`, `onFailed(message)`.
  *
  * `element` is the iframe; put it in the page. `destroy()` removes it.
@@ -119,9 +122,25 @@ export class AppFrame {
     else this.element.src = this.opts.src;
     this.onMessage = (event) => this.handle(event);
     window.addEventListener("message", this.onMessage);
+    // plinth:locale (core 1.13, docs/I18N.md §3.1): the frame gets the
+    // page's locale in `start`, and each change after it.
+    this.locale = normalizeLocale(opts.locale ?? pageLocale());
+    if (opts.locale === undefined) {
+      this.onLanguageChange = () => this.setLocale(pageLocale());
+      window.addEventListener("languagechange", this.onLanguageChange);
+    }
+  }
+
+  /** Changes the locale of the app (`plinth:locale`): `lang`, `dir` and the app's `locale()`. */
+  setLocale(tag) {
+    const next = normalizeLocale(tag);
+    if (next === this.locale) return;
+    this.locale = next;
+    if (this.sent) this.post({ type: "locale", tag: next });
   }
 
   destroy() {
+    if (this.onLanguageChange) window.removeEventListener("languagechange", this.onLanguageChange);
     if (this.hubListener) this.opts.hub.onChange = () => {};
     window.removeEventListener("message", this.onMessage);
     this.element.remove();
@@ -171,6 +190,7 @@ export class AppFrame {
           };
         }
         if (!this.allowed("store.kv")) start.kv = {};
+        start.locale = this.locale;
         this.element.contentWindow.postMessage(start, "*", [pkg, core]);
         break;
       }

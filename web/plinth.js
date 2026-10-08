@@ -152,6 +152,16 @@ const EventCode = {
   FRAME: 0x07,
 };
 
+/** `kind` values of the `lifecycle` event (SPEC.md §8.4; `plinth_protocol::lifecycle_kind`). */
+const LifecycleKind = {
+  FOREGROUND: 0,
+  BACKGROUND: 1,
+  LOW_MEMORY: 2,
+  BEFORE_QUIT: 3,
+  // Core 1.13 (docs/I18N.md §3.1): the locale of the app changed. An older core ignores it.
+  LOCALE: 4,
+};
+
 const NavKind = {
   PUSH: 0,
   REPLACE: 1,
@@ -416,7 +426,7 @@ function encodeInitArgs(records) {
   }
   return w.finish();
 }
-  return { OpCode, EventCode, NavKind, decodeOps, encodeEvent, encodeInitArgs };
+  return { OpCode, EventCode, LifecycleKind, NavKind, decodeOps, encodeEvent, encodeInitArgs };
   })();
 
   // ---- ui-api.js
@@ -975,7 +985,7 @@ class FileSpace {
 // `PlinthApp` events instead).
 
 const { openZip, checkPlntProfile } = __zip;
-const { decodeOps, encodeEvent, encodeInitArgs } = __protocol;
+const { decodeOps, encodeEvent, encodeInitArgs, LifecycleKind } = __protocol;
 const { FileSpace, memoryFileBackend, FILES_CAPABILITY } = __files;
 
 const RT_PREFIX = "__plinth_rt_";
@@ -1605,6 +1615,53 @@ function defaultAskDialog(kind, message) {
   return typeof g.prompt === "function" ? g.prompt(message) : null;
 }
 
+// plinth:locale (core 1.13, docs/I18N.md §3.1): the locale of the app as a
+// BCP 47 tag, and its text direction. The lists are the same as in
+// `crates/plinth-runner-wasmtime/src/locale.rs`; keep them the same.
+
+/** The locale when the page gives none. */
+const FALLBACK_LOCALE = "en-US";
+const RTL_LANGUAGES = new Set(["ar", "arc", "azb", "ckb", "dv", "fa", "he", "iw", "ji", "ks", "lrc", "mzn", "nqo", "pnb", "ps", "sd", "syr", "ug", "ur", "yi"]);
+const RTL_SCRIPTS = new Set(["adlm", "arab", "hebr", "mand", "nkoo", "rohg", "samr", "syrc", "thaa"]);
+
+/**
+ * A BCP 47 tag from a locale name, as `locale::normalize` on the desktop:
+ * `_` becomes `-`, `.UTF-8` and `@euro` go away, the language is lower case,
+ * a 4-letter script title case, a region upper case. Empty, `C` or `POSIX`
+ * gives "en-US".
+ */
+function normalizeLocale(name) {
+  const base = String(name ?? "").trim().split(/[.@]/)[0];
+  if (base === "" || /^(c|posix)$/i.test(base)) return FALLBACK_LOCALE;
+  const out = [];
+  base
+    .split(/[-_]/)
+    .filter((p) => p !== "")
+    .forEach((part, i) => {
+      if (!/^[A-Za-z0-9]+$/.test(part)) return;
+      const lower = part.toLowerCase();
+      if (i === 0) out.push(lower);
+      else if (/^[A-Za-z]{4}$/.test(part)) out.push(lower[0].toUpperCase() + lower.slice(1));
+      else if (/^([A-Za-z]{2}|[0-9]{3})$/.test(part)) out.push(part.toUpperCase());
+      else out.push(lower);
+    });
+  return out.length === 0 ? FALLBACK_LOCALE : out.join("-");
+}
+
+/** True when the locale `tag` is written right to left (its script, else its language). */
+function isRtlLocale(tag) {
+  const parts = String(tag ?? "").split("-");
+  const script = parts[1];
+  if (script !== undefined && /^[A-Za-z]{4}$/.test(script)) return RTL_SCRIPTS.has(script.toLowerCase());
+  return RTL_LANGUAGES.has((parts[0] ?? "").toLowerCase());
+}
+
+/** The locale of the page: the first of `navigator.languages`, else `navigator.language`, normalized. */
+function pageLocale(nav = globalThis.navigator) {
+  const first = (nav?.languages && nav.languages[0]) || nav?.language || "";
+  return normalizeLocale(first);
+}
+
 function hostImports(
   getExports,
   onCommit,
@@ -1628,6 +1685,7 @@ function hostImports(
     sql = null,
     onCommitBytes = null,
     notify = null,
+    getLocale = () => FALLBACK_LOCALE,
   } = {},
 ) {
   // A capability is usable when the manifest declares it and the user did
@@ -1958,6 +2016,19 @@ function hostImports(
         return -new Date(Number(ms)).getTimezoneOffset();
       },
     },
+    // Core 1.13 (docs/I18N.md §3.1): no capability, as for the time zone.
+    // `tag` returns a plain string through `retptr` (ptr@0, len@4).
+    "plinth:app/locale@1.0.0": {
+      tag(retptr) {
+        const { ptr, len } = writeString(getLocale());
+        const v = mem();
+        v.setUint32(retptr, ptr, true);
+        v.setUint32(retptr + 4, len, true);
+      },
+      "is-rtl"() {
+        return isRtlLocale(getLocale()) ? 1 : 0;
+      },
+    },
     "plinth:app/store@1.0.0": {
       "kv-get"(keyPtr, keyLen, retptr) {
         if (storeReason !== null) return writeDeniedAt4(retptr, storeReason);
@@ -2285,6 +2356,9 @@ class PlinthApp {
       opts.kvStore ?? (opts.storage ? localStorageKvStore(opts.storage, `plinth:${appId}:`) : mapKvStore(opts.sharedMap));
     const log = opts.log ?? ((s) => console.log(s));
     const reportError = opts.reportError ?? ((s) => console.error(s));
+    // plinth:locale (core 1.13): `opts.locale` (the page's locale, from the
+    // parent page through the frame), else the locale of this global scope.
+    this.locale = normalizeLocale(opts.locale ?? pageLocale());
     this.core = await loadCore(coreBytes, {
       ...opts,
       // The core logs `trap: <reason>` before it traps (plinth_rt::trap).
@@ -2309,6 +2383,7 @@ class PlinthApp {
       // `store.sql`: the page's engine (`sql.js`, through the frame's
       // bridge), else none: an allowed call answers "denied:unsupported".
       sql: opts.sql ?? null,
+      getLocale: () => this.locale,
       onCommit: (ops) => this.onCommit(ops),
     });
     this.appInstance = await linkApp(this.core, appBytes);
@@ -2337,6 +2412,19 @@ class PlinthApp {
       const ptr = this._writeBuf(bytes);
       this.core.instance.exports.init(ptr, bytes.length);
     });
+  }
+
+  /**
+   * plinth:locale (core 1.13, docs/I18N.md §3.1): sets the locale of the app
+   * to `tag` (normalized) and, when it changed, sends the `lifecycle` event
+   * with kind 4 (locale changed); the app then reads the new locale. An
+   * older core ignores that kind.
+   */
+  setLocale(tag) {
+    const next = normalizeLocale(tag);
+    if (next === this.locale) return;
+    this.locale = next;
+    this.onEvent({ kind: "lifecycle", lifecycleKind: LifecycleKind.LOCALE });
   }
 
   onEvent(event) {
@@ -2402,7 +2490,7 @@ function plainReason(err, lastTrap) {
   }
   return msg;
 }
-  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, SRCMAP_SECTION, moduleBodies, decodeSrcMap, trapPlace, readPlnt, MAX_SQL_TEXT, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, defaultAskDialog, loadCore, linkApp, PlinthApp, stopReason };
+  return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, SRCMAP_SECTION, moduleBodies, decodeSrcMap, trapPlace, readPlnt, MAX_SQL_TEXT, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, defaultAskDialog, FALLBACK_LOCALE, normalizeLocale, isRtlLocale, pageLocale, loadCore, linkApp, PlinthApp, stopReason };
   })();
 
   // ---- dom-renderer.js
@@ -2422,6 +2510,7 @@ function plainReason(err, lastTrap) {
 // `app.onEvent(...)` back.
 
 const { ControlKind, Prop, Event, EnumAspect, EnumTone, EnumDatePickerMode, EnumChartKind, EnumAxis, EnumCrossAlign, EnumJustify, EnumFraction, EnumColor, EnumRadius, EnumTextSize, EnumWeight, EnumPressableRole, EnumTextAlign, EnumPosition } = __ui_api;
+const { normalizeLocale, isRtlLocale } = __plinth_web;
 
 const ASPECT_RATIO = { [EnumAspect.square]: "1 / 1", [EnumAspect.wide]: "16 / 9", [EnumAspect.tall]: "3 / 4" };
 
@@ -3194,6 +3283,17 @@ function assetMimeType(name) {
 
 let chartIds = 0;
 
+/**
+ * plinth:locale (core 1.13, docs/I18N.md §3.5): sets `lang` and `dir` on the
+ * root element of the app from the locale `tag`. Returns the normalized tag.
+ */
+function applyLocale(element, tag) {
+  const t = normalizeLocale(tag);
+  element.setAttribute("lang", t);
+  element.setAttribute("dir", isRtlLocale(t) ? "rtl" : "ltr");
+  return t;
+}
+
 // -- The renderer ------------------------------------------------------------
 
 /**
@@ -3228,6 +3328,15 @@ class DomRenderer {
     app.onStop = (reason) => this.showStopped(reason);
     app.onError = (message) => this.showError(message);
     this.watchForeground(container.ownerDocument);
+  }
+
+  /**
+   * plinth:locale (core 1.13): the locale of the app is `tag`. Sets `lang`
+   * and `dir` on the root element (`applyLocale`) and tells the app; the app
+   * gets the `lifecycle` event only when the locale changed.
+   */
+  setLocale(tag) {
+    this.app.setLocale?.(applyLocale(this.container, tag));
   }
 
   /** The app trapped: show the reason, and block input to its controls. */
@@ -4405,7 +4514,7 @@ class DomRenderer {
     };
   }
 }
-  return { piePath, niceScale, scaleFrac, barSpan, pieLegend, UNIT, colorVar, primitiveStyle, parsePartialStyle, PARTIAL_STYLE_PROPS, partialRule, keyName, parseShapes, shapeColor, Tree, DomRenderer };
+  return { piePath, niceScale, scaleFrac, barSpan, pieLegend, UNIT, colorVar, primitiveStyle, parsePartialStyle, PARTIAL_STYLE_PROPS, partialRule, keyName, parseShapes, shapeColor, Tree, applyLocale, DomRenderer };
   })();
 
   // ---- hub-storage.js
@@ -4882,6 +4991,8 @@ function runWorker(scope) {
       kvStore: typeof m.kvQuota === "number" ? frameKvStore(m.kv, m.kvQuota, send) : cachedKvStore(m.kv, send),
       refused: new Set(m.refused ?? []),
       memoryLimitPages: m.memoryLimitPages,
+      // plinth:locale (core 1.13): the page's locale; else the Worker's own.
+      locale: m.locale ?? undefined,
       log: (text) => post({ t: "log", text }),
       reportError: () => {}, // the document reports it (`error`)
       askDialog: (kind, message) => ask("dialog", { kind, message: String(message) }),
@@ -4940,6 +5051,9 @@ function runWorker(scope) {
         else p.resolve(m.value ?? null);
         break;
       }
+      case "locale":
+        app?.setLocale(m.tag);
+        break;
       case "hub-state":
         try {
           hub?.applySnapshot({ state: m.state });
@@ -5000,7 +5114,8 @@ class WorkerApp {
    * statement, params) }`, the page's `store.sql` engine; none: an allowed
    * call answers "denied:unsupported"); `notify` (`{ show,
    * cancel }`; default `browserNotify()`, the page's `Notification` API);
-   * `memoryLimitPages`;
+   * `memoryLimitPages`; `locale` (a BCP 47 tag; default the Worker's
+   * `navigator.languages`);
    * `timeLimitMs` (the time limit of one call; default `CALL_TIME_LIMIT_MS`);
    * for the Hub app: `hubSnapshot`, and `send(msg)`/`ask(type, fields)` to
    * the page for the `hub-*` messages.
@@ -5028,6 +5143,7 @@ class WorkerApp {
         refused: [...(opts.refused ?? [])],
         hub: opts.hubSnapshot ?? null,
         memoryLimitPages: opts.memoryLimitPages,
+        locale: opts.locale ?? null,
       });
     });
   }
@@ -5043,6 +5159,11 @@ class WorkerApp {
   onEvent(event) {
     if (this.stopped !== null) return;
     this._post({ t: "event", event });
+  }
+
+  /** plinth:locale (core 1.13): the locale of the app changed (`PlinthApp.setLocale`). */
+  setLocale(tag) {
+    this._post({ t: "locale", tag });
   }
 
   /** The Hub app only: the page changed the `plinth:hub` state. */
@@ -5242,7 +5363,7 @@ class WorkerApp {
 // result as `declared` and `refused`.
 
 const { checkFrameMessage, applyKvMessage, startMessage, CHANNEL, KV_QUOTA } = __hub_storage;
-const { netDenied, httpFetch, browserNotify } = __plinth_web;
+const { netDenied, httpFetch, browserNotify, normalizeLocale, pageLocale } = __plinth_web;
 const { FileSpace, idbFileBackend, memoryFileBackend, FILES_CAPABILITY } = __files;
 
 /** `el("p", { class: "x" }, "text", child)`: a small DOM builder (text is never parsed as HTML). */
@@ -5315,6 +5436,9 @@ function hostDialog(kind, message, title = "") {
  *   `browserNotify()`, the page's `Notification` API, with `notifyIcon` (a
  *   URL, optional) as the icon. One backend for each frame, so `cancel`
  *   closes only this app's notifications.
+ * - `locale`: a BCP 47 tag for `plinth:locale` (core 1.13). Default: the
+ *   locale of the page (`navigator.languages`), and a `languagechange` of
+ *   the page goes to the app. `setLocale(tag)` changes it later.
  * - `onStarted()`, `onFailed(message)`.
  *
  * `element` is the iframe; put it in the page. `destroy()` removes it.
@@ -5336,9 +5460,25 @@ class AppFrame {
     else this.element.src = this.opts.src;
     this.onMessage = (event) => this.handle(event);
     window.addEventListener("message", this.onMessage);
+    // plinth:locale (core 1.13, docs/I18N.md §3.1): the frame gets the
+    // page's locale in `start`, and each change after it.
+    this.locale = normalizeLocale(opts.locale ?? pageLocale());
+    if (opts.locale === undefined) {
+      this.onLanguageChange = () => this.setLocale(pageLocale());
+      window.addEventListener("languagechange", this.onLanguageChange);
+    }
+  }
+
+  /** Changes the locale of the app (`plinth:locale`): `lang`, `dir` and the app's `locale()`. */
+  setLocale(tag) {
+    const next = normalizeLocale(tag);
+    if (next === this.locale) return;
+    this.locale = next;
+    if (this.sent) this.post({ type: "locale", tag: next });
   }
 
   destroy() {
+    if (this.onLanguageChange) window.removeEventListener("languagechange", this.onLanguageChange);
     if (this.hubListener) this.opts.hub.onChange = () => {};
     window.removeEventListener("message", this.onMessage);
     this.element.remove();
@@ -5388,6 +5528,7 @@ class AppFrame {
           };
         }
         if (!this.allowed("store.kv")) start.kv = {};
+        start.locale = this.locale;
         this.element.contentWindow.postMessage(start, "*", [pkg, core]);
         break;
       }
@@ -5732,7 +5873,7 @@ function defineElement({ frameDocument, baseUrl, styleCss }) {
 // document keeps only the DOM renderer and relays the host calls of the
 // Worker that need the page.
 
-const { readPlnt, parseManifest } = __plinth_web;
+const { readPlnt, parseManifest, normalizeLocale, pageLocale } = __plinth_web;
 const { Tree, DomRenderer } = __dom_renderer;
 const { CHANNEL, frameKvStore } = __hub_storage;
 const { WorkerApp, startAppWorker } = __app_worker;
@@ -5743,6 +5884,7 @@ let parentOrigin = null;
 let started = false;
 let nextId = 1;
 let app = null; // the `WorkerApp`: the app runs in its own Worker (app-worker.js)
+let renderer = null; // the `DomRenderer`, after `start`
 const pending = new Map(); // request id -> resolve
 
 function send(msg) {
@@ -5778,7 +5920,11 @@ async function start(msg) {
   app = new WorkerApp(startAppWorker(new URL("app-worker.js", document.baseURI).href, bundleScript));
   const tree = new Tree();
   app.onCommit = (ops) => tree.apply(ops);
+  // plinth:locale (core 1.13): the page gives its locale (the page can let
+  // the user choose one for each app); else the frame's own.
+  const locale = normalizeLocale(typeof msg.locale === "string" ? msg.locale : pageLocale());
   await app.load(new Uint8Array(msg.core), appWasm, {
+    locale,
     log: (s) => console.log("[app]", s),
     manifestText,
     kvStore,
@@ -5810,7 +5956,8 @@ async function start(msg) {
     send,
     ask,
   });
-  new DomRenderer(tree, container, app, assets);
+  renderer = new DomRenderer(tree, container, app, assets);
+  renderer.setLocale(locale);
   await app.init([]);
   // For tests (web/test/run-a11y.mjs): how many kv entries the start message had.
   document.body.dataset.kvEntries = String(Object.keys(msg.kv ?? {}).length);
@@ -5847,6 +5994,8 @@ window.addEventListener("message", (event) => {
     const resolve = pending.get(msg.id);
     pending.delete(msg.id);
     resolve(msg.value ?? null);
+  } else if (msg.type === "locale" && renderer && typeof msg.tag === "string" && (parentOrigin === "*" || event.origin === parentOrigin)) {
+    renderer.setLocale(msg.tag);
   } else if (msg.type === "hub-state" && app && (parentOrigin === "*" || event.origin === parentOrigin)) {
     app.applyHubState(msg.state);
   }

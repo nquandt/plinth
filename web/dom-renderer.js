@@ -32,6 +32,7 @@ import {
   EnumTextAlign,
   EnumPosition,
 } from "./ui-api.js";
+import { normalizeLocale, isRtlLocale } from "./plinth-web.js";
 
 const ASPECT_RATIO = { [EnumAspect.square]: "1 / 1", [EnumAspect.wide]: "16 / 9", [EnumAspect.tall]: "3 / 4" };
 
@@ -804,6 +805,17 @@ function assetMimeType(name) {
 
 let chartIds = 0;
 
+/**
+ * plinth:locale (core 1.13, docs/I18N.md §3.5): sets `lang` and `dir` on the
+ * root element of the app from the locale `tag`. Returns the normalized tag.
+ */
+export function applyLocale(element, tag) {
+  const t = normalizeLocale(tag);
+  element.setAttribute("lang", t);
+  element.setAttribute("dir", isRtlLocale(t) ? "rtl" : "ltr");
+  return t;
+}
+
 // -- The renderer ------------------------------------------------------------
 
 /**
@@ -838,6 +850,15 @@ export class DomRenderer {
     app.onStop = (reason) => this.showStopped(reason);
     app.onError = (message) => this.showError(message);
     this.watchForeground(container.ownerDocument);
+  }
+
+  /**
+   * plinth:locale (core 1.13): the locale of the app is `tag`. Sets `lang`
+   * and `dir` on the root element (`applyLocale`) and tells the app; the app
+   * gets the `lifecycle` event only when the locale changed.
+   */
+  setLocale(tag) {
+    this.app.setLocale?.(applyLocale(this.container, tag));
   }
 
   /** The app trapped: show the reason, and block input to its controls. */

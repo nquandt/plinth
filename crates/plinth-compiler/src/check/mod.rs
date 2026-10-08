@@ -33,6 +33,8 @@ pub enum StdModule {
     Hub,
     Files,
     Notify,
+    /// `plinth:locale` (core 1.13, docs/I18N.md §3.1).
+    Locale,
 }
 
 impl StdModule {
@@ -48,6 +50,7 @@ impl StdModule {
             "plinth:hub" => Some(StdModule::Hub),
             "plinth:files" => Some(StdModule::Files),
             "plinth:notify" => Some(StdModule::Notify),
+            "plinth:locale" => Some(StdModule::Locale),
             _ => None,
         }
     }
@@ -77,6 +80,10 @@ pub enum StdFn {
     OnCleanup,
     /// `isActive()` (core 1.12): a reactive boolean, true while the app's window is in the foreground.
     IsActive,
+    /// `locale()` (core 1.13, `plinth:locale`): the BCP 47 tag of the app's locale, reactive.
+    Locale,
+    /// `direction()` (core 1.13, `plinth:locale`): `"ltr"` or `"rtl"`, reactive.
+    Direction,
     /// `onMount(fn)` (core 1.12): runs `fn` once, after the elements the
     /// current render created are in the host tree.
     OnMount,

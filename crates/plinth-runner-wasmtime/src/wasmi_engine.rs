@@ -36,6 +36,7 @@ use crate::bindings::plinth::app::error::{DeniedReason as WitDeniedReason, Host 
 use crate::bindings::plinth::app::files::Host as FilesHost;
 use crate::bindings::plinth::app::sql::Host as SqlHost;
 use crate::bindings::plinth::app::hub::Host as HubHost;
+use crate::bindings::plinth::app::locale::Host as LocaleHost;
 use crate::bindings::plinth::app::net::Host as NetHost;
 use crate::bindings::plinth::app::notify::Host as NotifyHost;
 use crate::bindings::plinth::app::store::Host as StoreHost;
@@ -133,6 +134,8 @@ pub fn load(
         files: crate::files::Files::unavailable(),
         notify: Box::new(crate::notify::MemoryNotify::default()),
         sql: None,
+        locale: None,
+        locale_fixed: false,
     };
     let mut store = Store::new(engine, state);
     store.limiter(|s| &mut s.limits);
@@ -361,6 +364,18 @@ fn register_imports(linker: &mut Linker<HostState>) -> Result<()> {
     })?;
     linker.func_wrap("plinth:app/time@1.0.0", "timezone-offset", |mut caller: Caller<HostState>, ms: i64| -> i32 {
         TimeHost::timezone_offset(caller.data_mut(), ms)
+    })?;
+
+    // `plinth:locale` (core 1.13): `tag` returns a plain string through
+    // `retptr` (ptr@0, len@4); `is-rtl` returns a bool as an i32.
+    linker.func_wrap("plinth:app/locale@1.0.0", "tag", |mut caller: Caller<HostState>, retptr: i32| {
+        let tag = LocaleHost::tag(caller.data_mut());
+        let (ptr, len) = write_string(&mut caller, &tag)?;
+        write_bytes(&mut caller, retptr, &ptr.to_le_bytes())?;
+        write_bytes(&mut caller, retptr + 4, &len.to_le_bytes())
+    })?;
+    linker.func_wrap("plinth:app/locale@1.0.0", "is-rtl", |mut caller: Caller<HostState>| -> i32 {
+        i32::from(LocaleHost::is_rtl(caller.data_mut()))
     })?;
 
     linker.func_wrap(

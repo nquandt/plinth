@@ -8,7 +8,7 @@
 // document keeps only the DOM renderer and relays the host calls of the
 // Worker that need the page.
 
-import { readPlnt, parseManifest } from "./plinth-web.js";
+import { readPlnt, parseManifest, normalizeLocale, pageLocale } from "./plinth-web.js";
 import { Tree, DomRenderer } from "./dom-renderer.js";
 import { CHANNEL, frameKvStore } from "./hub-storage.js";
 import { WorkerApp, startAppWorker } from "./app-worker.js";
@@ -19,6 +19,7 @@ let parentOrigin = null;
 let started = false;
 let nextId = 1;
 let app = null; // the `WorkerApp`: the app runs in its own Worker (app-worker.js)
+let renderer = null; // the `DomRenderer`, after `start`
 const pending = new Map(); // request id -> resolve
 
 function send(msg) {
@@ -54,7 +55,11 @@ async function start(msg) {
   app = new WorkerApp(startAppWorker(new URL("app-worker.js", document.baseURI).href, bundleScript));
   const tree = new Tree();
   app.onCommit = (ops) => tree.apply(ops);
+  // plinth:locale (core 1.13): the page gives its locale (the page can let
+  // the user choose one for each app); else the frame's own.
+  const locale = normalizeLocale(typeof msg.locale === "string" ? msg.locale : pageLocale());
   await app.load(new Uint8Array(msg.core), appWasm, {
+    locale,
     log: (s) => console.log("[app]", s),
     manifestText,
     kvStore,
@@ -86,7 +91,8 @@ async function start(msg) {
     send,
     ask,
   });
-  new DomRenderer(tree, container, app, assets);
+  renderer = new DomRenderer(tree, container, app, assets);
+  renderer.setLocale(locale);
   await app.init([]);
   // For tests (web/test/run-a11y.mjs): how many kv entries the start message had.
   document.body.dataset.kvEntries = String(Object.keys(msg.kv ?? {}).length);
@@ -123,6 +129,8 @@ window.addEventListener("message", (event) => {
     const resolve = pending.get(msg.id);
     pending.delete(msg.id);
     resolve(msg.value ?? null);
+  } else if (msg.type === "locale" && renderer && typeof msg.tag === "string" && (parentOrigin === "*" || event.origin === parentOrigin)) {
+    renderer.setLocale(msg.tag);
   } else if (msg.type === "hub-state" && app && (parentOrigin === "*" || event.origin === parentOrigin)) {
     app.applyHubState(msg.state);
   }

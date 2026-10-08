@@ -14,7 +14,7 @@
 // `PlinthApp` events instead).
 
 import { openZip, checkPlntProfile } from "./zip.js";
-import { decodeOps, encodeEvent, encodeInitArgs } from "./protocol.js";
+import { decodeOps, encodeEvent, encodeInitArgs, LifecycleKind } from "./protocol.js";
 import { FileSpace, memoryFileBackend, FILES_CAPABILITY } from "./files.js";
 
 const RT_PREFIX = "__plinth_rt_";
@@ -644,6 +644,53 @@ export function defaultAskDialog(kind, message) {
   return typeof g.prompt === "function" ? g.prompt(message) : null;
 }
 
+// plinth:locale (core 1.13, docs/I18N.md §3.1): the locale of the app as a
+// BCP 47 tag, and its text direction. The lists are the same as in
+// `crates/plinth-runner-wasmtime/src/locale.rs`; keep them the same.
+
+/** The locale when the page gives none. */
+export const FALLBACK_LOCALE = "en-US";
+const RTL_LANGUAGES = new Set(["ar", "arc", "azb", "ckb", "dv", "fa", "he", "iw", "ji", "ks", "lrc", "mzn", "nqo", "pnb", "ps", "sd", "syr", "ug", "ur", "yi"]);
+const RTL_SCRIPTS = new Set(["adlm", "arab", "hebr", "mand", "nkoo", "rohg", "samr", "syrc", "thaa"]);
+
+/**
+ * A BCP 47 tag from a locale name, as `locale::normalize` on the desktop:
+ * `_` becomes `-`, `.UTF-8` and `@euro` go away, the language is lower case,
+ * a 4-letter script title case, a region upper case. Empty, `C` or `POSIX`
+ * gives "en-US".
+ */
+export function normalizeLocale(name) {
+  const base = String(name ?? "").trim().split(/[.@]/)[0];
+  if (base === "" || /^(c|posix)$/i.test(base)) return FALLBACK_LOCALE;
+  const out = [];
+  base
+    .split(/[-_]/)
+    .filter((p) => p !== "")
+    .forEach((part, i) => {
+      if (!/^[A-Za-z0-9]+$/.test(part)) return;
+      const lower = part.toLowerCase();
+      if (i === 0) out.push(lower);
+      else if (/^[A-Za-z]{4}$/.test(part)) out.push(lower[0].toUpperCase() + lower.slice(1));
+      else if (/^([A-Za-z]{2}|[0-9]{3})$/.test(part)) out.push(part.toUpperCase());
+      else out.push(lower);
+    });
+  return out.length === 0 ? FALLBACK_LOCALE : out.join("-");
+}
+
+/** True when the locale `tag` is written right to left (its script, else its language). */
+export function isRtlLocale(tag) {
+  const parts = String(tag ?? "").split("-");
+  const script = parts[1];
+  if (script !== undefined && /^[A-Za-z]{4}$/.test(script)) return RTL_SCRIPTS.has(script.toLowerCase());
+  return RTL_LANGUAGES.has((parts[0] ?? "").toLowerCase());
+}
+
+/** The locale of the page: the first of `navigator.languages`, else `navigator.language`, normalized. */
+export function pageLocale(nav = globalThis.navigator) {
+  const first = (nav?.languages && nav.languages[0]) || nav?.language || "";
+  return normalizeLocale(first);
+}
+
 function hostImports(
   getExports,
   onCommit,
@@ -667,6 +714,7 @@ function hostImports(
     sql = null,
     onCommitBytes = null,
     notify = null,
+    getLocale = () => FALLBACK_LOCALE,
   } = {},
 ) {
   // A capability is usable when the manifest declares it and the user did
@@ -997,6 +1045,19 @@ function hostImports(
         return -new Date(Number(ms)).getTimezoneOffset();
       },
     },
+    // Core 1.13 (docs/I18N.md §3.1): no capability, as for the time zone.
+    // `tag` returns a plain string through `retptr` (ptr@0, len@4).
+    "plinth:app/locale@1.0.0": {
+      tag(retptr) {
+        const { ptr, len } = writeString(getLocale());
+        const v = mem();
+        v.setUint32(retptr, ptr, true);
+        v.setUint32(retptr + 4, len, true);
+      },
+      "is-rtl"() {
+        return isRtlLocale(getLocale()) ? 1 : 0;
+      },
+    },
     "plinth:app/store@1.0.0": {
       "kv-get"(keyPtr, keyLen, retptr) {
         if (storeReason !== null) return writeDeniedAt4(retptr, storeReason);
@@ -1324,6 +1385,9 @@ export class PlinthApp {
       opts.kvStore ?? (opts.storage ? localStorageKvStore(opts.storage, `plinth:${appId}:`) : mapKvStore(opts.sharedMap));
     const log = opts.log ?? ((s) => console.log(s));
     const reportError = opts.reportError ?? ((s) => console.error(s));
+    // plinth:locale (core 1.13): `opts.locale` (the page's locale, from the
+    // parent page through the frame), else the locale of this global scope.
+    this.locale = normalizeLocale(opts.locale ?? pageLocale());
     this.core = await loadCore(coreBytes, {
       ...opts,
       // The core logs `trap: <reason>` before it traps (plinth_rt::trap).
@@ -1348,6 +1412,7 @@ export class PlinthApp {
       // `store.sql`: the page's engine (`sql.js`, through the frame's
       // bridge), else none: an allowed call answers "denied:unsupported".
       sql: opts.sql ?? null,
+      getLocale: () => this.locale,
       onCommit: (ops) => this.onCommit(ops),
     });
     this.appInstance = await linkApp(this.core, appBytes);
@@ -1376,6 +1441,19 @@ export class PlinthApp {
       const ptr = this._writeBuf(bytes);
       this.core.instance.exports.init(ptr, bytes.length);
     });
+  }
+
+  /**
+   * plinth:locale (core 1.13, docs/I18N.md §3.1): sets the locale of the app
+   * to `tag` (normalized) and, when it changed, sends the `lifecycle` event
+   * with kind 4 (locale changed); the app then reads the new locale. An
+   * older core ignores that kind.
+   */
+  setLocale(tag) {
+    const next = normalizeLocale(tag);
+    if (next === this.locale) return;
+    this.locale = next;
+    this.onEvent({ kind: "lifecycle", lifecycleKind: LifecycleKind.LOCALE });
   }
 
   onEvent(event) {

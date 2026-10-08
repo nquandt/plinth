@@ -66,6 +66,10 @@ pub mod lifecycle_kind {
     pub const BACKGROUND: u8 = 1;
     pub const LOW_MEMORY: u8 = 2;
     pub const BEFORE_QUIT: u8 = 3;
+    /// Core 1.13 (`docs/I18N.md` §3.1): the locale of the app changed. The
+    /// guest reads `locale.tag` and `locale.is-rtl` again. An older core
+    /// ignores this kind, so a host can send it to every app.
+    pub const LOCALE: u8 = 4;
 }
 
 /// `kind` values of the `navigate` op.

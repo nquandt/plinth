@@ -291,6 +291,22 @@ interface sql {
   run: func(kind: u8, statement: string, params: string) -> u32;
 }
 
+/// The locale of the app (core 1.13, `docs/I18N.md` §3.1, §4 step 1;
+/// capability: none, as for the time zone). Calls are synchronous (SPEC.md
+/// §8.5 permits it for locale calls). When the locale changes while the app
+/// runs, the host sends a `lifecycle` event with kind 4 (locale changed,
+/// SPEC.md §8.4); the guest then calls these functions again. An older core
+/// ignores that kind.
+interface locale {
+  /// The locale as a BCP 47 tag, for example `en-US`, `ar-EG` or
+  /// `zh-Hans-CN`. Never empty: a host that cannot find a locale gives
+  /// `en-US`.
+  tag: func() -> string;
+  /// True when the script of the locale is written right to left (for
+  /// example Arabic, Hebrew, Persian, Urdu).
+  is-rtl: func() -> bool;
+}
+
 world app {
   import ui;
   import dev;
@@ -303,6 +319,7 @@ world app {
   import hub;
   import files;
   import sql;
+  import locale;
 
   /// Builds the initial tree.
   export init: func(args: list<u8>);

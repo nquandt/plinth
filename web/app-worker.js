@@ -131,6 +131,8 @@ export function runWorker(scope) {
       kvStore: typeof m.kvQuota === "number" ? frameKvStore(m.kv, m.kvQuota, send) : cachedKvStore(m.kv, send),
       refused: new Set(m.refused ?? []),
       memoryLimitPages: m.memoryLimitPages,
+      // plinth:locale (core 1.13): the page's locale; else the Worker's own.
+      locale: m.locale ?? undefined,
       log: (text) => post({ t: "log", text }),
       reportError: () => {}, // the document reports it (`error`)
       askDialog: (kind, message) => ask("dialog", { kind, message: String(message) }),
@@ -189,6 +191,9 @@ export function runWorker(scope) {
         else p.resolve(m.value ?? null);
         break;
       }
+      case "locale":
+        app?.setLocale(m.tag);
+        break;
       case "hub-state":
         try {
           hub?.applySnapshot({ state: m.state });
@@ -249,7 +254,8 @@ export class WorkerApp {
    * statement, params) }`, the page's `store.sql` engine; none: an allowed
    * call answers "denied:unsupported"); `notify` (`{ show,
    * cancel }`; default `browserNotify()`, the page's `Notification` API);
-   * `memoryLimitPages`;
+   * `memoryLimitPages`; `locale` (a BCP 47 tag; default the Worker's
+   * `navigator.languages`);
    * `timeLimitMs` (the time limit of one call; default `CALL_TIME_LIMIT_MS`);
    * for the Hub app: `hubSnapshot`, and `send(msg)`/`ask(type, fields)` to
    * the page for the `hub-*` messages.
@@ -277,6 +283,7 @@ export class WorkerApp {
         refused: [...(opts.refused ?? [])],
         hub: opts.hubSnapshot ?? null,
         memoryLimitPages: opts.memoryLimitPages,
+        locale: opts.locale ?? null,
       });
     });
   }
@@ -292,6 +299,11 @@ export class WorkerApp {
   onEvent(event) {
     if (this.stopped !== null) return;
     this._post({ t: "event", event });
+  }
+
+  /** plinth:locale (core 1.13): the locale of the app changed (`PlinthApp.setLocale`). */
+  setLocale(tag) {
+    this._post({ t: "locale", tag });
   }
 
   /** The Hub app only: the page changed the `plinth:hub` state. */

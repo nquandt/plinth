@@ -14,6 +14,7 @@ use wasmtime::{Config, Engine, Store};
 pub mod files;
 pub mod hub;
 pub mod kv;
+pub mod locale;
 pub mod net;
 pub mod notify;
 pub mod policy;
@@ -249,6 +250,29 @@ struct HostState {
     /// The `store.sql` database (`docs/SQL.md`), made at its first use in
     /// the folder of the private space (`files`).
     sql: Option<sql::SqlStore>,
+    /// The locale that the guest reads (`plinth:locale`, core 1.13); `None`
+    /// until the first read, which takes the OS locale.
+    locale: Option<String>,
+    /// True when the host or a test fixed the locale (`Guest::set_locale`):
+    /// `Guest::refresh_locale` then does not read the OS again.
+    locale_fixed: bool,
+}
+
+impl HostState {
+    /// The locale of the app: the fixed one, else the OS locale at the first
+    /// read (`docs/I18N.md` §3.1).
+    fn current_locale(&mut self) -> &str {
+        self.locale.get_or_insert_with(locale::os_locale)
+    }
+}
+
+/// The event buffer that tells a guest that its locale changed: a
+/// `lifecycle` event with kind `LOCALE` (core 1.13, `docs/I18N.md` §3.1). An
+/// older core ignores it.
+pub fn locale_event() -> Vec<u8> {
+    let mut w = plinth_protocol::Writer::new();
+    w.event(&plinth_protocol::Event::Lifecycle { kind: plinth_protocol::lifecycle_kind::LOCALE });
+    w.as_bytes().to_vec()
 }
 
 /// 64 bits of entropy for `Math.random`: the standard library's random
@@ -636,6 +660,17 @@ impl HostState {
 /// `store.sql` (core 1.13, `docs/SQL.md`). The capability check comes
 /// first; a denied call, an unknown `kind` and a guest with no private
 /// space complete at once with an error, and never trap.
+// `plinth:locale` (core 1.13): no capability, as for the time zone.
+impl bindings::plinth::app::locale::Host for HostState {
+    fn tag(&mut self) -> String {
+        self.current_locale().to_owned()
+    }
+
+    fn is_rtl(&mut self) -> bool {
+        locale::is_rtl(self.current_locale())
+    }
+}
+
 impl bindings::plinth::app::sql::Host for HostState {
     fn run(&mut self, kind: u8, statement: String, params: String) -> u32 {
         let id = self.requests.open();
@@ -795,6 +830,8 @@ impl Runner {
                     files: files::Files::unavailable(),
                     notify: Box::new(notify::MemoryNotify::default()),
                     sql: None,
+                    locale: None,
+                    locale_fixed: false,
                 };
                 let mut store = Store::new(engine, state);
                 store.limiter(|s| &mut s.limits);
@@ -939,6 +976,44 @@ impl Guest {
     /// UTC) for tests, instead of the real OS offset.
     pub fn set_fake_timezone_offset(&mut self, minutes: i32) {
         self.data_mut().fake_timezone_offset_minutes = Some(minutes);
+    }
+
+    /// Fixes the locale of the app (`plinth:locale`, core 1.13) to `tag`
+    /// (normalized to BCP 47), instead of the OS locale: for tests, and for
+    /// a host that lets the user choose a locale for each app. Sends no
+    /// event; call it before `init`, or use `change_locale`.
+    pub fn set_locale(&mut self, tag: &str) {
+        let data = self.data_mut();
+        data.locale = Some(locale::normalize(tag));
+        data.locale_fixed = true;
+    }
+
+    /// Fixes the locale to `tag` (as `set_locale`) and, when it changed,
+    /// sends the `lifecycle` event with kind `LOCALE` (`docs/I18N.md` §3.1).
+    /// Returns the op buffers that the guest committed.
+    pub fn change_locale(&mut self, tag: &str) -> Result<Vec<Vec<u8>>> {
+        let before = self.data().locale.clone();
+        self.set_locale(tag);
+        if self.data().locale == before {
+            return Ok(Vec::new());
+        }
+        self.on_event(&locale_event())
+    }
+
+    /// Reads the OS locale again. True when it changed since the guest last
+    /// read it: the host then sends `locale_event()`. Always false when the
+    /// locale is fixed (`set_locale`) or before the guest read it.
+    pub fn refresh_locale(&mut self) -> bool {
+        let data = self.data_mut();
+        if data.locale_fixed || data.locale.is_none() {
+            return false;
+        }
+        let now = locale::os_locale();
+        if data.locale.as_deref() == Some(now.as_str()) {
+            return false;
+        }
+        data.locale = Some(now);
+        true
     }
 
     /// Gives the guest its private space for `plinth:files` (core 1.11,

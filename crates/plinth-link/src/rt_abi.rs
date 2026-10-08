@@ -229,6 +229,9 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("kv_iter", &[I32, I32, I32, I32], &[]),
     ("kv_size", &[I32, I32], &[I32]),
     ("kv_live", &[I32, I32, I32], &[I32]),
+    // -- plinth:locale (core 1.13, docs/I18N.md §3.1) -------------------------
+    ("locale_tag", &[], &[I32]),
+    ("locale_direction", &[], &[I32]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -351,6 +354,9 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("kv_iter", 13),
     ("kv_size", 13),
     ("kv_live", 13),
+    // plinth:locale (docs/I18N.md §4 step 1): `locale()` and `direction()`.
+    ("locale_tag", 13),
+    ("locale_direction", 13),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).
