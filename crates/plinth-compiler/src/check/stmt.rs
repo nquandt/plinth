@@ -20,12 +20,26 @@ impl Checker<'_> {
     pub(super) fn block_stmts(&mut self, stmts: &[ast::Stmt]) -> Vec<TStmt> {
         let mut out = Vec::new();
         for s in stmts {
+            // A `let` that a branch assigns (flow order) drops that `let`'s
+            // narrowing in every live scope (`invalidate_var_narrowing`),
+            // including scopes outside the branch. That is right when the
+            // branch falls through, but wrong when it does not (`if (x ===
+            // null) return;`, or, inside a loop, `if (x.skip) { x =
+            // x.parent; continue; }`): the lines after the `if` are only
+            // ever reached when the condition was false, so an assignment
+            // made only on the true path never applies to them. Snapshot
+            // the live scopes' narrowing first, so it can be restored in
+            // that case.
+            let snapshot: Vec<_> = self.fx.scopes.iter().map(|sc| sc.narrow.clone()).collect();
             let checked = self.stmt(s, false);
             // `if (x === null) return;` narrows `x` for the rest of the block.
             if let (StmtKind::If(_, _, None), Some(TStmt::If(cond, then, els))) = (&s.kind, checked.last())
                 && els.is_empty()
-                && always_exits(then)
+                && (always_exits(then) || matches!(then.last(), Some(TStmt::Break | TStmt::Continue)))
             {
+                for (sc, snap) in self.fx.scopes.iter_mut().zip(snapshot) {
+                    sc.narrow = snap;
+                }
                 let (_, when_false) = self.narrowing(cond);
                 if let Some(scope) = self.fx.scopes.last_mut() {
                     scope.narrow.extend(when_false);
@@ -120,15 +134,39 @@ impl Checker<'_> {
                 vec![TStmt::If(c, t, e)]
             }
             StmtKind::While(cond, body) => {
+                // Docs/GAPS.md "Narrowing in a loop that assigns the
+                // narrowed variable": any narrowing from before the loop,
+                // of a variable the loop itself assigns (its condition or
+                // its body), only ever held for the first pass — drop it
+                // before the condition narrows the body, so a stale
+                // narrowing from before the loop is never read on a later
+                // pass.
+                let mut assigned = std::collections::HashSet::new();
+                assigned_names_expr(cond, &mut assigned);
+                assigned_names_stmt(body, &mut assigned);
+                self.invalidate_named_var_narrowing(&assigned);
                 let c = self.expr(cond, Some(&Type::Bool));
                 let c = self.truthy(c);
+                // The condition narrows at the start of every pass through
+                // the body; an assignment inside the body drops it again
+                // (flow order; `narrow_path`/`assign`).
+                let (when_true, _) = self.narrowing(&c);
                 let id = self.prog.new_loop();
                 self.fx.loops.push(id);
-                let b = self.scoped_block(body);
+                let b = self.with_narrowing(when_true, body);
                 self.fx.loops.pop();
                 vec![TStmt::Loop { id, cond: Some(c), test_after: false, update: None, body: b }]
             }
             StmtKind::DoWhile(body, cond) => {
+                // Same reasoning as `while`: the body runs before the
+                // condition is ever checked, so nothing narrows it from
+                // the condition, but a variable the loop assigns still
+                // cannot trust a narrowing from before the loop (the
+                // second and later passes do not have it).
+                let mut assigned = std::collections::HashSet::new();
+                assigned_names_stmt(body, &mut assigned);
+                assigned_names_expr(cond, &mut assigned);
+                self.invalidate_named_var_narrowing(&assigned);
                 let id = self.prog.new_loop();
                 self.fx.loops.push(id);
                 let b = self.scoped_block(body);
@@ -145,14 +183,44 @@ impl Checker<'_> {
                 if let Some(i) = init {
                     out.extend(self.stmt(i, false));
                 }
+                // Same as `while`: drop the narrowing of anything the loop
+                // itself assigns (its test, its `update`, or its body)
+                // before the test narrows the body — `init` runs once,
+                // before the loop, like ordinary straight-line code, so it
+                // is not part of this (its own assignment already took the
+                // usual flow-order path above).
+                let mut assigned = std::collections::HashSet::new();
+                if let Some(t) = test {
+                    assigned_names_expr(t, &mut assigned);
+                }
+                if let Some(u) = update {
+                    assigned_names_expr(u, &mut assigned);
+                }
+                assigned_names_stmt(body, &mut assigned);
+                self.invalidate_named_var_narrowing(&assigned);
                 let c = test.as_ref().map(|t| {
                     let c = self.expr(t, Some(&Type::Bool));
                     self.truthy(c)
                 });
-                let u = update.as_ref().map(|u| self.expr(u, None));
+                // Same as `while`: the test narrows at the start of the
+                // body, and also while checking `update` — it runs at the
+                // end of the same pass that the test let into the body, so
+                // it sees the same narrowing (`for (; x !== null; x =
+                // x.parent)`).
+                let when_true = c.as_ref().map(|c| self.narrowing(c).0).unwrap_or_default();
                 let id = self.prog.new_loop();
                 self.fx.loops.push(id);
-                let b = self.scoped_block(body);
+                self.push_scope();
+                self.fx.scopes.last_mut().unwrap().narrow.extend(when_true);
+                // Checked in the order they run within one pass: the body,
+                // then `update` — so an assignment in the body (not in this
+                // test) still drops the narrowing for `update` to see.
+                let b = match &body.kind {
+                    StmtKind::Block(b) => self.block_stmts(b),
+                    _ => self.stmt(body, false),
+                };
+                let u = update.as_ref().map(|u| self.expr(u, None));
+                self.pop_scope();
                 self.fx.loops.pop();
                 self.pop_scope();
                 out.push(TStmt::Loop { id, cond: c, test_after: false, update: u, body: b });
@@ -172,6 +240,13 @@ impl Checker<'_> {
                         Type::Error
                     }
                 };
+                // Same reasoning as `while`/`for`: a variable the body
+                // assigns cannot trust a narrowing from before the loop.
+                // `for…of` has no test to narrow the body from, so this
+                // only ever drops narrowing here, it never re-adds any.
+                let mut assigned = std::collections::HashSet::new();
+                assigned_names_stmt(body, &mut assigned);
+                self.invalidate_named_var_narrowing(&assigned);
                 let id = self.prog.new_loop();
                 self.fx.loops.push(id);
                 self.push_scope();
@@ -665,12 +740,38 @@ impl Checker<'_> {
 
     /// The narrowing key a (possibly narrowed/retagged) expression reads,
     /// if it is one the checker is willing to narrow: a plain `const`/
-    /// parameter variable, or a member path `a.b`/`a.b.c` rooted at one,
-    /// where every step is a direct struct field read (`check/expr.rs`'s
-    /// `property`), never a method call or computed index. See
-    /// `docs/language.md` ("Narrowing") for the exact rule and why it is
-    /// capped at two field hops and dropped on assignment/calls. A loop:
-    /// it stops at the third field of a long `a.b.c.d...` read.
+    /// parameter variable, a plain `let` (see below), or a member path
+    /// `a.b`/`a.b.c` rooted at a `const`/parameter, where every step is a
+    /// direct struct field read (`check/expr.rs`'s `property`), never a
+    /// method call or computed index. See `docs/language.md` ("Narrowing")
+    /// for the exact rule and why it is capped at two field hops and
+    /// dropped on assignment/calls. A loop: it stops at the third field of
+    /// a long `a.b.c.d...` read.
+    ///
+    /// A plain `let` (no member path: `path` is still empty here) is
+    /// narrowable too, but only while checking the function that declares
+    /// it (`info.owner != self.fx.func` reads it through a closure
+    /// instead, which is never narrowed — see below): `check/expr.rs`'s
+    /// `assign` drops the narrowing of a `let` the moment it is assigned
+    /// (flow order), so the checker never trusts a stale narrowing of it
+    /// past an assignment, and at the head of a loop the checker drops the
+    /// narrowing of anything the loop itself assigns before the loop's own
+    /// condition narrows the body (`check/stmt.rs`'s `assigned_names_stmt`,
+    /// used by `While`/`For`/`ForOf`/`DoWhile`). A `let` that some closure
+    /// assigns, anywhere in it, is never narrowed, full stop
+    /// (`self.fx.closure_assigned`, computed once before the function is
+    /// checked by `closure_assigned_names_body`/`_stmt`/`_expr`): a
+    /// closure can run at any call to it, not only when the checker
+    /// reaches the assignment's own textual position, so flow-order
+    /// tracking cannot see it coming. A module-level `let` (`info.module`
+    /// is `Some`) is never narrowed either, for the same reason taken to
+    /// its conclusion: a top-level function, a class method, a component
+    /// or an event handler — anything else in the module — can assign it,
+    /// and none of that is a closure nested in the module init function
+    /// (`check/stmt.rs`'s `closure_assigned_names_*` only looks at the
+    /// module init's own top-level statements), so the pre-scan the
+    /// `closure_assigned` set comes from cannot see those assignments
+    /// either.
     pub(super) fn narrow_path(&self, e: &TExpr) -> Option<super::NarrowKey> {
         let mut path = Vec::new();
         let mut e = e;
@@ -679,7 +780,13 @@ impl Checker<'_> {
                 TExprKind::Var(v) => {
                     let info = &self.prog.vars[*v as usize];
                     let is_param = self.prog.funcs[info.owner as usize].params.contains(v);
-                    if info.mutable && !is_param {
+                    if info.mutable
+                        && !is_param
+                        && (!path.is_empty()
+                            || info.owner != self.fx.func
+                            || self.fx.closure_assigned.contains(&info.name)
+                            || info.module.is_some())
+                    {
                         return None;
                     }
                     path.reverse();
@@ -727,6 +834,416 @@ impl Checker<'_> {
             Some(n) if n.repr() == crate::types::Repr::I32 => TExpr::new(TExprKind::Coerce(Coercion::UnboxI32, Box::new(read)), n, span),
             Some(n) => TExpr::new(TExprKind::Coerce(Coercion::Retag, Box::new(read)), n, span),
             None => read,
+        }
+    }
+}
+
+/// Every plain name that an assignment (`x = …`, `x += …`, `x++`) targets
+/// anywhere in `s`, at the AST level, before any type checking. Used at
+/// the head of a loop (docs/GAPS.md "Narrowing in a loop that assigns the
+/// narrowed variable"): a variable the loop (its condition, its `update`,
+/// or its body) assigns cannot trust a narrowing from before the loop on
+/// any pass but the first, so it is dropped before the loop's own
+/// condition narrows the body. This does not look inside a nested
+/// function/arrow (a closure): a `let` that a closure assigns is never
+/// narrowed at all (`Checker::invalidate_let_narrowing`, called on every
+/// call), so there is nothing here to drop for it.
+pub(super) fn assigned_names_stmt(s: &ast::Stmt, out: &mut std::collections::HashSet<String>) {
+    match &s.kind {
+        StmtKind::Var(decls) => {
+            for d in decls {
+                if let Some(init) = &d.init {
+                    assigned_names_expr(init, out);
+                }
+            }
+        }
+        StmtKind::Func(_) | StmtKind::Empty | StmtKind::Break | StmtKind::Continue => {}
+        StmtKind::Expr(e) => assigned_names_expr(e, out),
+        StmtKind::Block(b) => {
+            for st in b {
+                assigned_names_stmt(st, out);
+            }
+        }
+        StmtKind::If(c, t, e) => {
+            assigned_names_expr(c, out);
+            assigned_names_stmt(t, out);
+            if let Some(e) = e {
+                assigned_names_stmt(e, out);
+            }
+        }
+        StmtKind::While(c, b) => {
+            assigned_names_expr(c, out);
+            assigned_names_stmt(b, out);
+        }
+        StmtKind::DoWhile(b, c) => {
+            assigned_names_stmt(b, out);
+            assigned_names_expr(c, out);
+        }
+        StmtKind::For { init, test, update, body } => {
+            if let Some(i) = init {
+                assigned_names_stmt(i, out);
+            }
+            if let Some(t) = test {
+                assigned_names_expr(t, out);
+            }
+            if let Some(u) = update {
+                assigned_names_expr(u, out);
+            }
+            assigned_names_stmt(body, out);
+        }
+        StmtKind::ForOf { iter, body, .. } => {
+            assigned_names_expr(iter, out);
+            assigned_names_stmt(body, out);
+        }
+        StmtKind::Return(v) => {
+            if let Some(e) = v {
+                assigned_names_expr(e, out);
+            }
+        }
+        StmtKind::Switch(d, cases) => {
+            assigned_names_expr(d, out);
+            for (t, b) in cases {
+                if let Some(t) = t {
+                    assigned_names_expr(t, out);
+                }
+                for st in b {
+                    assigned_names_stmt(st, out);
+                }
+            }
+        }
+        StmtKind::Throw(e) => assigned_names_expr(e, out),
+        StmtKind::Try { block, catch, finally } => {
+            for st in block {
+                assigned_names_stmt(st, out);
+            }
+            if let Some(c) = catch {
+                for st in &c.body {
+                    assigned_names_stmt(st, out);
+                }
+            }
+            if let Some(f) = finally {
+                for st in f {
+                    assigned_names_stmt(st, out);
+                }
+            }
+        }
+    }
+}
+
+/// `assigned_names_stmt`'s expression half.
+fn assigned_names_expr(e: &ast::Expr, out: &mut std::collections::HashSet<String>) {
+    match &e.kind {
+        ast::ExprKind::Assign { target, value, .. } => {
+            if let ast::ExprKind::Ident(name) = &target.kind {
+                out.insert(name.clone());
+            }
+            assigned_names_expr(target, out);
+            assigned_names_expr(value, out);
+        }
+        ast::ExprKind::Update { target, .. } => {
+            if let ast::ExprKind::Ident(name) = &target.kind {
+                out.insert(name.clone());
+            }
+            assigned_names_expr(target, out);
+        }
+        // A closure is checked, and invalidated on every call, on its own
+        // (see the doc comment above); its body is not scanned here.
+        ast::ExprKind::Func(_) => {}
+        ast::ExprKind::Template(_, exprs) => {
+            for x in exprs {
+                assigned_names_expr(x, out);
+            }
+        }
+        ast::ExprKind::Array(items) => {
+            for (_, x) in items {
+                assigned_names_expr(x, out);
+            }
+        }
+        ast::ExprKind::Object(props) => {
+            for p in props {
+                match p {
+                    ast::ObjProp::Field(_, x, _) => assigned_names_expr(x, out),
+                    ast::ObjProp::Spread(x) => assigned_names_expr(x, out),
+                }
+            }
+        }
+        ast::ExprKind::Member { obj, .. } => assigned_names_expr(obj, out),
+        ast::ExprKind::Index { obj, index, .. } => {
+            assigned_names_expr(obj, out);
+            assigned_names_expr(index, out);
+        }
+        ast::ExprKind::Call { callee, args, .. } => {
+            assigned_names_expr(callee, out);
+            for a in args {
+                assigned_names_expr(a, out);
+            }
+        }
+        ast::ExprKind::Unary(_, x) | ast::ExprKind::Await(x) => assigned_names_expr(x, out),
+        ast::ExprKind::Binary(_, l, r) | ast::ExprKind::Logical(_, l, r) => {
+            assigned_names_expr(l, out);
+            assigned_names_expr(r, out);
+        }
+        ast::ExprKind::Cond(c, t, f) => {
+            assigned_names_expr(c, out);
+            assigned_names_expr(t, out);
+            assigned_names_expr(f, out);
+        }
+        ast::ExprKind::NewInstance(_, args) | ast::ExprKind::NewPromise(_, args) => {
+            for a in args {
+                assigned_names_expr(a, out);
+            }
+        }
+        ast::ExprKind::InstanceOf(x, _, _) => assigned_names_expr(x, out),
+        ast::ExprKind::As(x, _, _) => assigned_names_expr(x, out),
+        ast::ExprKind::Jsx(j) => assigned_names_jsx(j, out),
+        ast::ExprKind::Num(_)
+        | ast::ExprKind::Str(_)
+        | ast::ExprKind::Bool(_)
+        | ast::ExprKind::Null
+        | ast::ExprKind::Ident(_)
+        | ast::ExprKind::New(..)
+        | ast::ExprKind::Regex(..) => {}
+    }
+}
+
+/// `assigned_names_expr`'s JSX half.
+fn assigned_names_jsx(j: &ast::JsxElement, out: &mut std::collections::HashSet<String>) {
+    for a in &j.attrs {
+        if let Some(v) = &a.value {
+            assigned_names_expr(v, out);
+        }
+    }
+    for c in &j.children {
+        match c {
+            ast::JsxChild::Text(..) => {}
+            ast::JsxChild::Expr(e) => assigned_names_expr(e, out),
+            ast::JsxChild::Element(el) => assigned_names_jsx(el, out),
+        }
+    }
+}
+
+/// Every name that a function's own body assigns somewhere inside a
+/// closure (an arrow, a function expression, or a nested function
+/// declaration) nested in it, at any depth — not an assignment directly
+/// in the function's own top-level flow, which `Checker::
+/// invalidate_var_narrowing` already tracks in flow order as the checker
+/// reaches it. A name in this set is never narrowed by `narrow_path`
+/// (docs/GAPS.md "Narrowing in a loop that assigns the narrowed
+/// variable", rule 1): a closure can run at any later call to it, not
+/// only at the point where the assignment itself is checked, so flow
+/// order cannot see it coming. Computed once, before a function's body
+/// is checked, and kept in `FnCx::closure_assigned` for as long as that
+/// function is the one being checked.
+pub(super) fn closure_assigned_names_body(body: &ast::Body) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    match body {
+        ast::Body::Block(stmts) => {
+            for s in stmts {
+                closure_assigned_names_stmt(s, false, &mut out);
+            }
+        }
+        ast::Body::Expr(e) => closure_assigned_names_expr(e, false, &mut out),
+    }
+    out
+}
+
+/// `closure_assigned_names_body`'s statement half. `in_closure` is true
+/// once the walk has entered a closure nested in the function whose body
+/// this call started from; every assignment target found while it is
+/// true is collected.
+pub(super) fn closure_assigned_names_stmt(s: &ast::Stmt, in_closure: bool, out: &mut std::collections::HashSet<String>) {
+    match &s.kind {
+        StmtKind::Var(decls) => {
+            for d in decls {
+                if let Some(init) = &d.init {
+                    closure_assigned_names_expr(init, in_closure, out);
+                }
+            }
+        }
+        // A nested function declaration is a closure: everything it
+        // assigns, anywhere inside it, counts.
+        StmtKind::Func(f) => {
+            if let ast::Body::Block(stmts) = &f.body {
+                for st in stmts {
+                    closure_assigned_names_stmt(st, true, out);
+                }
+            } else if let ast::Body::Expr(e) = &f.body {
+                closure_assigned_names_expr(e, true, out);
+            }
+        }
+        StmtKind::Empty | StmtKind::Break | StmtKind::Continue => {}
+        StmtKind::Expr(e) => closure_assigned_names_expr(e, in_closure, out),
+        StmtKind::Block(b) => {
+            for st in b {
+                closure_assigned_names_stmt(st, in_closure, out);
+            }
+        }
+        StmtKind::If(c, t, e) => {
+            closure_assigned_names_expr(c, in_closure, out);
+            closure_assigned_names_stmt(t, in_closure, out);
+            if let Some(e) = e {
+                closure_assigned_names_stmt(e, in_closure, out);
+            }
+        }
+        StmtKind::While(c, b) => {
+            closure_assigned_names_expr(c, in_closure, out);
+            closure_assigned_names_stmt(b, in_closure, out);
+        }
+        StmtKind::DoWhile(b, c) => {
+            closure_assigned_names_stmt(b, in_closure, out);
+            closure_assigned_names_expr(c, in_closure, out);
+        }
+        StmtKind::For { init, test, update, body } => {
+            if let Some(i) = init {
+                closure_assigned_names_stmt(i, in_closure, out);
+            }
+            if let Some(t) = test {
+                closure_assigned_names_expr(t, in_closure, out);
+            }
+            if let Some(u) = update {
+                closure_assigned_names_expr(u, in_closure, out);
+            }
+            closure_assigned_names_stmt(body, in_closure, out);
+        }
+        StmtKind::ForOf { iter, body, .. } => {
+            closure_assigned_names_expr(iter, in_closure, out);
+            closure_assigned_names_stmt(body, in_closure, out);
+        }
+        StmtKind::Return(v) => {
+            if let Some(e) = v {
+                closure_assigned_names_expr(e, in_closure, out);
+            }
+        }
+        StmtKind::Switch(d, cases) => {
+            closure_assigned_names_expr(d, in_closure, out);
+            for (t, b) in cases {
+                if let Some(t) = t {
+                    closure_assigned_names_expr(t, in_closure, out);
+                }
+                for st in b {
+                    closure_assigned_names_stmt(st, in_closure, out);
+                }
+            }
+        }
+        StmtKind::Throw(e) => closure_assigned_names_expr(e, in_closure, out),
+        StmtKind::Try { block, catch, finally } => {
+            for st in block {
+                closure_assigned_names_stmt(st, in_closure, out);
+            }
+            if let Some(c) = catch {
+                for st in &c.body {
+                    closure_assigned_names_stmt(st, in_closure, out);
+                }
+            }
+            if let Some(f) = finally {
+                for st in f {
+                    closure_assigned_names_stmt(st, in_closure, out);
+                }
+            }
+        }
+    }
+}
+
+/// `closure_assigned_names_stmt`'s expression half.
+fn closure_assigned_names_expr(e: &ast::Expr, in_closure: bool, out: &mut std::collections::HashSet<String>) {
+    match &e.kind {
+        ast::ExprKind::Assign { target, value, .. } => {
+            if in_closure {
+                if let ast::ExprKind::Ident(name) = &target.kind {
+                    out.insert(name.clone());
+                }
+            }
+            closure_assigned_names_expr(target, in_closure, out);
+            closure_assigned_names_expr(value, in_closure, out);
+        }
+        ast::ExprKind::Update { target, .. } => {
+            if in_closure {
+                if let ast::ExprKind::Ident(name) = &target.kind {
+                    out.insert(name.clone());
+                }
+            }
+            closure_assigned_names_expr(target, in_closure, out);
+        }
+        // A closure nested in another closure: still a closure, so the
+        // walk keeps `in_closure` true (it was already true to get here,
+        // or becomes true now).
+        ast::ExprKind::Func(f) => match &f.body {
+            ast::Body::Block(stmts) => {
+                for st in stmts {
+                    closure_assigned_names_stmt(st, true, out);
+                }
+            }
+            ast::Body::Expr(fe) => closure_assigned_names_expr(fe, true, out),
+        },
+        ast::ExprKind::Template(_, exprs) => {
+            for x in exprs {
+                closure_assigned_names_expr(x, in_closure, out);
+            }
+        }
+        ast::ExprKind::Array(items) => {
+            for (_, x) in items {
+                closure_assigned_names_expr(x, in_closure, out);
+            }
+        }
+        ast::ExprKind::Object(props) => {
+            for p in props {
+                match p {
+                    ast::ObjProp::Field(_, x, _) => closure_assigned_names_expr(x, in_closure, out),
+                    ast::ObjProp::Spread(x) => closure_assigned_names_expr(x, in_closure, out),
+                }
+            }
+        }
+        ast::ExprKind::Member { obj, .. } => closure_assigned_names_expr(obj, in_closure, out),
+        ast::ExprKind::Index { obj, index, .. } => {
+            closure_assigned_names_expr(obj, in_closure, out);
+            closure_assigned_names_expr(index, in_closure, out);
+        }
+        ast::ExprKind::Call { callee, args, .. } => {
+            closure_assigned_names_expr(callee, in_closure, out);
+            for a in args {
+                closure_assigned_names_expr(a, in_closure, out);
+            }
+        }
+        ast::ExprKind::Unary(_, x) | ast::ExprKind::Await(x) => closure_assigned_names_expr(x, in_closure, out),
+        ast::ExprKind::Binary(_, l, r) | ast::ExprKind::Logical(_, l, r) => {
+            closure_assigned_names_expr(l, in_closure, out);
+            closure_assigned_names_expr(r, in_closure, out);
+        }
+        ast::ExprKind::Cond(c, t, f) => {
+            closure_assigned_names_expr(c, in_closure, out);
+            closure_assigned_names_expr(t, in_closure, out);
+            closure_assigned_names_expr(f, in_closure, out);
+        }
+        ast::ExprKind::NewInstance(_, args) | ast::ExprKind::NewPromise(_, args) => {
+            for a in args {
+                closure_assigned_names_expr(a, in_closure, out);
+            }
+        }
+        ast::ExprKind::InstanceOf(x, _, _) => closure_assigned_names_expr(x, in_closure, out),
+        ast::ExprKind::As(x, _, _) => closure_assigned_names_expr(x, in_closure, out),
+        ast::ExprKind::Jsx(j) => closure_assigned_names_jsx(j, in_closure, out),
+        ast::ExprKind::Num(_)
+        | ast::ExprKind::Str(_)
+        | ast::ExprKind::Bool(_)
+        | ast::ExprKind::Null
+        | ast::ExprKind::Ident(_)
+        | ast::ExprKind::New(..)
+        | ast::ExprKind::Regex(..) => {}
+    }
+}
+
+/// `closure_assigned_names_expr`'s JSX half.
+fn closure_assigned_names_jsx(j: &ast::JsxElement, in_closure: bool, out: &mut std::collections::HashSet<String>) {
+    for a in &j.attrs {
+        if let Some(v) = &a.value {
+            closure_assigned_names_expr(v, in_closure, out);
+        }
+    }
+    for c in &j.children {
+        match c {
+            ast::JsxChild::Text(..) => {}
+            ast::JsxChild::Expr(e) => closure_assigned_names_expr(e, in_closure, out),
+            ast::JsxChild::Element(el) => closure_assigned_names_jsx(el, in_closure, out),
         }
     }
 }

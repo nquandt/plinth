@@ -638,9 +638,14 @@ impl Checker<'_> {
         let r = self.call_impl(callee, type_args, args, span, expected);
         // Any call can mutate state reached through aliases of a narrowed
         // member path (`r.subtitle`), so a call conservatively drops all
-        // member-path narrowing (docs/language.md "Narrowing"). Plain
-        // variable narrowing is unaffected: it only ever applies to a
-        // `const`/parameter, which a call cannot reassign.
+        // member-path narrowing (docs/language.md "Narrowing"). A `const`/
+        // parameter's own narrowing is unaffected: it can never be
+        // reassigned, by or through a call. A plain `let` that some
+        // closure assigns is never narrowed in the first place
+        // (`narrow_path` in `check/stmt.rs`, using `FnCx::closure_assigned`
+        // — computed once, before the function is checked, by scanning
+        // for an assignment inside any closure nested in it), so a call
+        // needs no narrowing to drop for it.
         self.invalidate_member_narrowing();
         r
     }
@@ -2593,6 +2598,12 @@ impl Checker<'_> {
             }
         }
 
+        // Same reasoning as the bare `for…of` (`check/stmt.rs`): a
+        // variable the body assigns cannot trust a narrowing from before
+        // this loop.
+        let mut assigned = std::collections::HashSet::new();
+        super::stmt::assigned_names_stmt(body, &mut assigned);
+        self.invalidate_named_var_narrowing(&assigned);
         let b = match &body.kind {
             ast::StmtKind::Block(b) => self.block_stmts(b),
             _ => self.stmt(body, false),
@@ -3631,19 +3642,21 @@ impl Checker<'_> {
         };
         // An assignment to a field (or an index, conservatively) drops any
         // member-path narrowing: nothing proves it wasn't the narrowed path
-        // itself, or an alias of its root, that just changed.
-        if !matches!(&place, Place::Var(_)) {
-            self.invalidate_member_narrowing();
-        }
-        match op {
+        // itself, or an alias of its root, that just changed. An assignment
+        // to a plain `let` drops its own narrowing instead (flow order; see
+        // `narrow_path` in `check/stmt.rs`); it never reaches here through
+        // a member path, so the two cases do not overlap. Either way, this
+        // runs after the value expression is checked (below), since the
+        // value can itself read the still-live narrowing (`x = x.parent`).
+        let result = match op {
             None => {
                 let v = self.expr_with(value, &ty);
                 let v = self.coerce(v, &ty);
-                TExpr::new(TExprKind::Assign(place, bx(v)), ty, span)
+                TExpr::new(TExprKind::Assign(place.clone(), bx(v)), ty, span)
             }
             Some(op) => {
                 let mut stmts = Vec::new();
-                let place = self.stable_place(place, &mut stmts);
+                let place = self.stable_place(place.clone(), &mut stmts);
                 let cur = self.read_place(&place, &ty, target.span);
                 let rhs = self.expr(value, None);
                 let combined = if op == BinOp::Add && ty.is_stringish() {
@@ -3666,7 +3679,12 @@ impl Checker<'_> {
                 let assign = TExpr::new(TExprKind::Assign(place, bx(combined)), ty.clone(), span);
                 if stmts.is_empty() { assign } else { TExpr::new(TExprKind::Block(stmts, bx(assign)), ty, span) }
             }
+        };
+        match &place {
+            Place::Var(v) => self.invalidate_var_narrowing(*v),
+            _ => self.invalidate_member_narrowing(),
         }
+        result
     }
 
     fn update(&mut self, inc: bool, prefix: bool, target: &Expr, span: Span) -> TExpr {
@@ -3773,6 +3791,7 @@ impl Checker<'_> {
                 saw_void_return: false,
                 reactive: ReactiveCtx::Callback,
                 is_async: false,
+                closure_assigned: std::collections::HashSet::new(),
             },
         );
         let body = if stringify {
