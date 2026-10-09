@@ -1,7 +1,8 @@
 # Testing apps: `plinth test` and `plinth:test`
 
 **Status (2026-10-08):** step 1 of PRODUCTION T3 is done. Tests run on the
-desktop runner (wasmtime, no window). Section 12 lists what is not done.
+desktop runner (wasmtime or wasmi, no window). Section 12 lists what is not
+done.
 
 An app author writes tests in Plinth TS, in the app, next to the code. The
 tests use the module `plinth:test`. `plinth test` (or `npm test` in a project
@@ -106,6 +107,11 @@ does not return a value to the test (the runner checks it, section 6).
 | Name | What it does |
 |---|---|
 | `test(name, async () => { ... })` | Registers a test. A test function is `async`. |
+| `testOnly(name, async () => { ... })` | The same, but when the file has any `testOnly` or `describeOnly`, only those tests run (the plain `test`s do not). Plinth TS has no function with properties, so this replaces `test.only`. |
+| `testSkip(name, async () => { ... })` | The same as `test`, but the test shows as "skip" in the output and does not run. Replaces `test.skip`. |
+| `describe(name, () => { ... })` | Groups tests under `name`: the group name goes before the test name ("group > test") in the output and in `--filter`. `describe` can nest. |
+| `describeOnly(name, () => { ... })`, `describeSkip(name, () => { ... })` | The same as `describe`, but every test of the group is `only` or `skip`. |
+| `beforeEach(async () => { ... })`, `afterEach(async () => { ... })` | Run before or after each test of the current group (and its inner groups). `beforeEach` runs outer groups first; `afterEach` runs inner groups first. A throw in `beforeEach` fails the test. |
 | `await render(<X />)` | Shows the element on the view screen and gives a `TestScreen`. The component runs inside the view screen, as in the app. |
 | `await renderApp()` | Gives a `TestScreen` on the app as it starts: its first primary screen. Navigation in the app changes the screen that the queries search. |
 | `await tick(ms?)` | Moves the test clock `ms` milliseconds on and runs each timer when it is due. |
@@ -197,8 +203,9 @@ the type of the argument (section 10).
 |---|---|---|
 | a `Query` | `toExist()`, `toHaveCount(n)`, `toHaveText(s)`, `toContainText(s)`, `toBeChecked()`, `toBeDisabled()` | the runner |
 | `string` or `string \| null` | `toBe(v)`, `toEqual(v)`, `toContain(s)` | the guest |
-| `number`, `int` or `number \| null` | `toBe(v)`, `toEqual(v)` | the guest |
+| `number`, `int` or `number \| null` | `toBe(v)`, `toEqual(v)`, `toBeGreaterThan(v)`, `toBeGreaterThanOrEqual(v)`, `toBeLessThan(v)`, `toBeLessThanOrEqual(v)` | the guest |
 | `boolean` or `boolean \| null` | `toBe(v)`, `toEqual(v)` | the guest |
+| a function, no arguments | `toThrow()`, `toThrow(text)` (the error message contains `text`) | the guest |
 
 Each form has `.not`: `expect(s.row("A")).not.toExist()`.
 
@@ -272,9 +279,14 @@ FAIL  counts wrong (2 ms)
 - A trap (the app stopped) gives the stop reason with its place in the app,
   from the source map (`plinth-srcmap`).
 - `plinth test [dir] [--filter text]` runs only the tests whose names
-  contain `text`. The summary then also counts the tests that did not run.
-- The exit code is 0 when all tests pass (also when there are no tests), and
-  1 when a test fails or the build has errors.
+  contain `text` (the group name and the test name, "group > test"). The
+  summary then also counts the tests that did not run.
+- A `testSkip` or `describeSkip` test does not run; it prints `skip  name`
+  and the summary counts it apart: `8 passed, 0 failed, 1 skipped`. When the
+  file has any `testOnly` or `describeOnly`, the other tests do not run
+  either, and count in the same "skipped" total.
+- The exit code is 0 when all tests pass (also when there are no tests, or
+  only skips), and 1 when a test fails or the build has errors.
 
 ## 10. Compiler details
 
@@ -301,15 +313,20 @@ Also, `JSX.Element` is now a valid type annotation in all Plinth TS (before,
 ## 11. Engines and hosts
 
 - **Now:** `plinth test` runs the test build on the desktop runner with
-  wasmtime and no window (`crates/plinth-cli/src/test_cmd.rs`). The runner
-  got a test clock (`Guest::use_test_clock`, `advance_test_clock`), a count
-  of open host requests, and a cache of the last compiled component (a new
-  instance for each test costs about 2 ms in a debug build).
-- **Next:** the same test build on wasmi (`PLINTH_ENGINE=wasmi`; the
-  channels are the same, so this needs only a test run in the wasmi CI job)
-  and on the web host (a Node runner that loads the core and the test build
-  with `web/plinth-web.js` and the same protocol; the tree code is in
-  `web/`). The records and the harness screen do not change.
+  wasmtime (default) or wasmi (`PLINTH_ENGINE=wasmi`, the `wasmi` cargo
+  feature of `plinth-cli`), with no window
+  (`crates/plinth-cli/src/test_cmd.rs`). `Runner::new` already reads
+  `PLINTH_ENGINE`, so `plinth test` needed no change: it builds the test
+  runner with `--features wasmi` and runs with the env var set
+  (`crates/plinth-cli/tests/plinth_test.rs`,
+  `the_examples_pass_their_tests_on_wasmi`). The runner got a test clock
+  (`Guest::use_test_clock`, `advance_test_clock`), a count of open host
+  requests, and a cache of the last compiled component (a new instance for
+  each test costs about 2 ms in a debug build).
+- **Next:** the same test build on the web host (a Node runner that loads
+  the core and the test build with `web/plinth-web.js` and the same
+  protocol; the tree code is in `web/`). The records and the harness screen
+  do not change.
 
 ## 12. Not done yet (next steps)
 
@@ -323,9 +340,7 @@ Also, `JSX.Element` is now a valid type annotation in all Plinth TS (before,
   sheet with Escape.
 - Regular expressions and substrings in queries; `byLabel` for a field
   with a separate label; queries by test id.
-- Deep equality for arrays and objects in `toEqual`; `toBeGreaterThan` and
-  other number matchers; `toThrow`.
-- `beforeEach`, `describe`, `test.only`, `test.skip`.
+- Deep equality for arrays and objects in `toEqual`.
 - A time limit for each test other than the fixed 30 s.
-- Tests on wasmi and on the web host (section 11), and `plinth test --watch`.
+- Tests on the web host (section 11), and `plinth test --watch`.
 - Snapshots of the screen text, and screenshots with `plinth-shoot`.
