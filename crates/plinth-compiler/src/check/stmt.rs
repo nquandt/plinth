@@ -763,7 +763,15 @@ impl Checker<'_> {
     /// checked by `closure_assigned_names_body`/`_stmt`/`_expr`): a
     /// closure can run at any call to it, not only when the checker
     /// reaches the assignment's own textual position, so flow-order
-    /// tracking cannot see it coming.
+    /// tracking cannot see it coming. A module-level `let` (`info.module`
+    /// is `Some`) is never narrowed either, for the same reason taken to
+    /// its conclusion: a top-level function, a class method, a component
+    /// or an event handler — anything else in the module — can assign it,
+    /// and none of that is a closure nested in the module init function
+    /// (`check/stmt.rs`'s `closure_assigned_names_*` only looks at the
+    /// module init's own top-level statements), so the pre-scan the
+    /// `closure_assigned` set comes from cannot see those assignments
+    /// either.
     pub(super) fn narrow_path(&self, e: &TExpr) -> Option<super::NarrowKey> {
         let mut path = Vec::new();
         let mut e = e;
@@ -774,7 +782,10 @@ impl Checker<'_> {
                     let is_param = self.prog.funcs[info.owner as usize].params.contains(v);
                     if info.mutable
                         && !is_param
-                        && (!path.is_empty() || info.owner != self.fx.func || self.fx.closure_assigned.contains(&info.name))
+                        && (!path.is_empty()
+                            || info.owner != self.fx.func
+                            || self.fx.closure_assigned.contains(&info.name)
+                            || info.module.is_some())
                     {
                         return None;
                     }

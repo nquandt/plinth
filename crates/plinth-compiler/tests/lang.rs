@@ -1863,6 +1863,63 @@ function Home() { return <Screen title="Home"><Text>{""}</Text></Screen>; }
 }
 
 #[test]
+fn a_module_level_let_assigned_by_a_top_level_function_is_never_narrowed() {
+    // `reset` is not a closure nested in the module init (it is its own
+    // top-level function), so the module-init pre-scan never sees it
+    // assign `cur`; a module-level `let` is never narrowed at all,
+    // regardless of what assigns it.
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+let cur: G | null = new G("a", null);
+function reset(): void { cur = null; }
+let t = "";
+if (cur !== null) {
+  reset();
+  t = cur.name;
+}
+function Home() { return <Screen title="Home"><Text>{""}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL3010"]);
+}
+
+#[test]
+fn a_module_level_let_assigned_by_a_class_method_is_never_narrowed() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+let cur: G | null = new G("a", null);
+class R { go(): void { cur = null; } }
+let t = "";
+if (cur !== null) {
+  new R().go();
+  t = cur.name;
+}
+function Home() { return <Screen title="Home"><Text>{""}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL3010"]);
+}
+
+#[test]
+fn a_module_level_const_of_a_nullable_type_still_narrows() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+const cur: G | null = new G("a", null);
+let t = "";
+if (cur !== null) {
+  t = cur.name;
+}
+function Home() { return <Screen title="Home"><Text>{t}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "a");
+}
+
+#[test]
 fn outer_narrowing_does_not_survive_into_the_second_pass_of_a_while_loop() {
     // `x` is narrowed before the loop, but the loop's own condition (`i <
     // 3`) says nothing about `x`, and the body reassigns `x` on every
