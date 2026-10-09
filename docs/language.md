@@ -595,14 +595,21 @@ Rules:
   ASCII fast path.
 - **`null` and `undefined`** are one value at run time.
 - **Object identity.** `===` on objects compares references, as in JS.
-  There is no `==`.
+  There is no `==`. A union that mixes `string` with an object type
+  (`string | Shape`) is the one exception: two values of such a union
+  compare by content when both hold a string, and by reference
+  otherwise (see "Equality of nullable values").
 - **Equality of nullable values.** `===` and `!==` on two values of type
   `T | null` (`T` is `string`, `number`, `int`, `boolean` or an enum)
   compare the values, as in JS: the two values are equal when both are
   `null`, or when neither is `null` and the two `T` values are equal
   (`NaN` is not equal to `NaN`; `0` is equal to `-0`). Strings compare by
   content. The same rule applies to `switch` (also `case null`),
-  `includes` and `indexOf`.
+  `includes` and `indexOf`. A union that has a `string` member
+  (`string | Shape`, also `| null`), compared with another such value or
+  with a plain `string`, follows the same content rule for the string
+  case: equal when both sides hold a string with the same content, or
+  the same reference, as in JS.
 - **Signals.** `set` and `update` do not notify when the new value is
   equal to the current value. A string and a `T | null` value of a
   primitive type compare by value (as `===`). An object or an array

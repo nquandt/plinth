@@ -269,6 +269,7 @@ impl Checker<'_> {
                     Type::Nullable(inner) if **inner == Type::String => EqKind::NullStr,
                     Type::Nullable(inner) if **inner == Type::Number => EqKind::NullF64,
                     Type::Nullable(inner) if inner.repr() == crate::types::Repr::I32 => EqKind::NullI32,
+                    t if self.is_string_union(t) => EqKind::UnionStr,
                     Type::Error => EqKind::I32,
                     other => {
                         let msg = format!("`switch` works on numbers, strings and enums, not `{}`", self.show(other));
