@@ -21,6 +21,34 @@
  * state, the `kv` store and the private files are new. */
 export declare function test(name: string, fn: () => Promise<void>): void;
 
+/** The same as `test`, but when the file has any `testOnly` or
+ * `describeOnly`, only those tests run; the others do not run. */
+export declare function testOnly(name: string, fn: () => Promise<void>): void;
+
+/** The same as `test`, but the test shows as "skip" in the output and does
+ * not run. */
+export declare function testSkip(name: string, fn: () => Promise<void>): void;
+
+/** Groups tests under `name`: the group name goes before the test name
+ * ("group > test") in the output and in `--filter`. `describe` can nest. */
+export declare function describe(name: string, body: () => void): void;
+
+/** The same as `describe`, but when the file has any `only`, this group's
+ * tests run and the others do not. */
+export declare function describeOnly(name: string, body: () => void): void;
+
+/** The same as `describe`, but every test of this group shows as "skip". */
+export declare function describeSkip(name: string, body: () => void): void;
+
+/** Runs before each test of the current group (and its inner groups), at
+ * the top level of a group or a file. Outer groups run first. A throw
+ * fails the test. */
+export declare function beforeEach(f: () => Promise<void>): void;
+
+/** Runs after each test of the current group (and its inner groups), at
+ * the top level of a group or a file. Inner groups run first. */
+export declare function afterEach(f: () => Promise<void>): void;
+
 /** Shows `ui` (for example `<Tasks />`) on the view screen of the test
  * build, and gives the screen to query. */
 export declare function render(ui: JSX.Element): Promise<TestScreen>;

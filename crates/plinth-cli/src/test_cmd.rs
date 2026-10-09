@@ -62,6 +62,8 @@ pub fn find_test_files(dir: &Path) -> Vec<String> {
 struct TestCase {
     name: String,
     at: String,
+    only: bool,
+    skip: bool,
 }
 
 /// Why a test failed.
@@ -118,6 +120,8 @@ pub fn run(dir: &Path, filter: Option<&str>) -> Result<bool> {
             (f.first() == Some(&"test")).then(|| TestCase {
                 name: f.get(1).unwrap_or(&"").to_string(),
                 at: f.get(2).unwrap_or(&"").to_string(),
+                only: f.get(3) == Some(&"1"),
+                skip: f.get(4) == Some(&"1"),
             })
         })
         .collect();
@@ -127,10 +131,18 @@ pub fn run(dir: &Path, filter: Option<&str>) -> Result<bool> {
         return Ok(true);
     }
 
-    let (mut passed, mut failed, mut skipped) = (0, 0, 0);
+    let any_only = cases.iter().any(|c| c.only);
+    let (mut passed, mut failed, mut skipped, mut not_run) = (0, 0, 0, 0);
     for (i, case) in cases.iter().enumerate() {
         if filter.is_some_and(|f| !case.name.contains(f)) {
+            not_run += 1;
+            continue;
+        }
+        if case.skip || (any_only && !case.only) {
             skipped += 1;
+            if case.skip {
+                println!("skip  {}", case.name);
+            }
             continue;
         }
         let started = Instant::now();
@@ -158,7 +170,10 @@ pub fn run(dir: &Path, filter: Option<&str>) -> Result<bool> {
     }
     let mut summary = format!("{passed} passed, {failed} failed");
     if skipped > 0 {
-        let _ = write!(summary, ", {skipped} not run (--filter)");
+        let _ = write!(summary, ", {skipped} skipped");
+    }
+    if not_run > 0 {
+        let _ = write!(summary, ", {not_run} not run (--filter)");
     }
     println!("{summary}");
     Ok(failed == 0)

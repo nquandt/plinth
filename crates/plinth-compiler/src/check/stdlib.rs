@@ -59,6 +59,13 @@ pub const STORE_NAMES: &[&str] = &["kv", "sql"];
 /// exports are for the compiler and the test runner.
 pub const TEST_NAMES: &[&str] = &[
     "test",
+    "testOnly",
+    "testSkip",
+    "describe",
+    "describeOnly",
+    "describeSkip",
+    "beforeEach",
+    "afterEach",
     "render",
     "renderApp",
     "tick",
