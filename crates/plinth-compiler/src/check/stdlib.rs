@@ -81,6 +81,8 @@ pub const TEST_NAMES: &[&str] = &[
     "NumberExpectation",
     "BooleanMatchers",
     "BooleanExpectation",
+    "FunctionMatchers",
+    "FunctionExpectation",
 ];
 pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
 pub const DIALOG_NAMES: &[&str] = &["alert", "confirm", "prompt"];

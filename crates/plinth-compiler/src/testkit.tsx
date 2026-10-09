@@ -510,11 +510,19 @@ export function expect$string(v: string | null, __at?: string): StringExpectatio
 export interface NumberMatchers {
   toBe: (expected: number | null) => void;
   toEqual: (expected: number | null) => void;
+  toBeGreaterThan: (expected: number) => void;
+  toBeGreaterThanOrEqual: (expected: number) => void;
+  toBeLessThan: (expected: number) => void;
+  toBeLessThanOrEqual: (expected: number) => void;
 }
 
 export interface NumberExpectation {
   toBe: (expected: number | null) => void;
   toEqual: (expected: number | null) => void;
+  toBeGreaterThan: (expected: number) => void;
+  toBeGreaterThanOrEqual: (expected: number) => void;
+  toBeLessThan: (expected: number) => void;
+  toBeLessThanOrEqual: (expected: number) => void;
   not: NumberMatchers;
 }
 
@@ -532,13 +540,25 @@ function numberMatchers(v: number | null, negate: boolean, at: string): NumberMa
   return {
     toBe: (e: number | null) => check(v === e, `to be ${showNumber(e)}`),
     toEqual: (e: number | null) => check(v === e, `to equal ${showNumber(e)}`),
+    toBeGreaterThan: (e: number) => check(v !== null && v > e, `to be greater than ${e}`),
+    toBeGreaterThanOrEqual: (e: number) => check(v !== null && v >= e, `to be greater than or equal to ${e}`),
+    toBeLessThan: (e: number) => check(v !== null && v < e, `to be less than ${e}`),
+    toBeLessThanOrEqual: (e: number) => check(v !== null && v <= e, `to be less than or equal to ${e}`),
   };
 }
 
 export function expect$number(v: number | null, __at?: string): NumberExpectation {
   const at = __at ?? "";
   const m = numberMatchers(v, false, at);
-  return { toBe: m.toBe, toEqual: m.toEqual, not: numberMatchers(v, true, at) };
+  return {
+    toBe: m.toBe,
+    toEqual: m.toEqual,
+    toBeGreaterThan: m.toBeGreaterThan,
+    toBeGreaterThanOrEqual: m.toBeGreaterThanOrEqual,
+    toBeLessThan: m.toBeLessThan,
+    toBeLessThanOrEqual: m.toBeLessThanOrEqual,
+    not: numberMatchers(v, true, at),
+  };
 }
 
 export interface BooleanMatchers {
@@ -573,4 +593,53 @@ export function expect$boolean(v: boolean | null, __at?: string): BooleanExpecta
   const at = __at ?? "";
   const m = booleanMatchers(v, false, at);
   return { toBe: m.toBe, toEqual: m.toEqual, not: booleanMatchers(v, true, at) };
+}
+
+export interface FunctionMatchers {
+  toThrow: (text?: string) => void;
+}
+
+export interface FunctionExpectation {
+  toThrow: (text?: string) => void;
+  not: FunctionMatchers;
+}
+
+function thrownMessage(f: () => void): string | null {
+  try {
+    f();
+    return null;
+  } catch (e) {
+    return e.message;
+  }
+}
+
+function functionMatchers(f: () => void, negate: boolean, at: string): FunctionMatchers {
+  const not = negate ? "not " : "";
+  return {
+    toThrow: (text?: string) => {
+      const message = thrownMessage(f);
+      const threw = message !== null;
+      if (text === null) {
+        if (threw === negate) {
+          fail(`expected the function ${not}to throw`, at);
+        }
+        return;
+      }
+      const contains = threw && message !== null && message.includes(text);
+      if (contains === negate) {
+        if (!threw) {
+          fail(`expected the function ${not}to throw ${JSON.stringify(text)}\nit did not throw`, at);
+        } else {
+          fail(`expected the function ${not}to throw ${JSON.stringify(text)}\nit threw ${JSON.stringify(message)}`, at);
+        }
+      }
+    },
+  };
+}
+
+/** Starts an expectation about a function: `expect(() => f()).toThrow()`. */
+export function expect$function(f: () => void, __at?: string): FunctionExpectation {
+  const at = __at ?? "";
+  const m = functionMatchers(f, false, at);
+  return { toThrow: m.toThrow, not: functionMatchers(f, true, at) };
 }

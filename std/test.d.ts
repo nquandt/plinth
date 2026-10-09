@@ -161,6 +161,14 @@ export interface StringExpectation extends StringMatchers {
 export interface NumberMatchers {
   toBe(expected: number | null): void;
   toEqual(expected: number | null): void;
+  /** The number is greater than `expected`. */
+  toBeGreaterThan(expected: number): void;
+  /** The number is greater than or equal to `expected`. */
+  toBeGreaterThanOrEqual(expected: number): void;
+  /** The number is less than `expected`. */
+  toBeLessThan(expected: number): void;
+  /** The number is less than or equal to `expected`. */
+  toBeLessThanOrEqual(expected: number): void;
 }
 
 export interface NumberExpectation extends NumberMatchers {
@@ -176,9 +184,20 @@ export interface BooleanExpectation extends BooleanMatchers {
   not: BooleanMatchers;
 }
 
-/** Starts an expectation about a query, a string, a number or a boolean.
- * A failed expectation ends the test. */
+export interface FunctionMatchers {
+  /** The function throws. With `text`, the message of what it throws
+   * contains `text`. */
+  toThrow(text?: string): void;
+}
+
+export interface FunctionExpectation extends FunctionMatchers {
+  not: FunctionMatchers;
+}
+
+/** Starts an expectation about a query, a string, a number, a boolean or
+ * a function. A failed expectation ends the test. */
 export declare function expect(query: Query): QueryExpectation;
 export declare function expect(value: string | null): StringExpectation;
 export declare function expect(value: number | null): NumberExpectation;
 export declare function expect(value: boolean | null): BooleanExpectation;
+export declare function expect(fn: () => void): FunctionExpectation;

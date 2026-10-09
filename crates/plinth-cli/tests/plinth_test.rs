@@ -564,6 +564,78 @@ test("not in any group", async () => {
 }
 
 #[test]
+fn number_comparison_matchers() {
+    let dir = project(&[
+        ("app/main.tsx", COUNTER_APP),
+        (
+            "app/counter.test.tsx",
+            r#"import { test, expect } from "plinth:test";
+
+test("greater and less", async () => {
+  expect(5).toBeGreaterThan(3);
+  expect(5).toBeGreaterThanOrEqual(5);
+  expect(3).toBeLessThan(5);
+  expect(3).toBeLessThanOrEqual(3);
+  expect(3).not.toBeGreaterThan(5);
+});
+
+test("fails with a clear message", async () => {
+  expect(3).toBeGreaterThan(5);
+});
+"#,
+        ),
+    ]);
+    let (out, text) = run_tests(&dir, &[]);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("  ok  greater and less ("), "{text}");
+    assert!(text.contains("FAIL  fails with a clear message"), "{text}");
+    assert!(text.contains("expected 3 to be greater than 5"), "{text}");
+    assert!(text.contains("1 passed, 1 failed"), "{text}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn to_throw_on_a_function_value() {
+    let dir = project(&[
+        ("app/main.tsx", COUNTER_APP),
+        (
+            "app/counter.test.tsx",
+            r#"import { test, expect } from "plinth:test";
+
+function boom(): void {
+  throw new Error("bad thing");
+}
+
+test("throws, and the message contains text", async () => {
+  expect(() => boom()).toThrow();
+  expect(() => boom()).toThrow("bad");
+  expect(() => {}).not.toThrow();
+});
+
+test("the message does not match", async () => {
+  expect(() => boom()).toThrow("nope");
+});
+
+test("does not throw", async () => {
+  expect(() => {}).toThrow();
+});
+"#,
+        ),
+    ]);
+    let (out, text) = run_tests(&dir, &[]);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("  ok  throws, and the message contains text ("),
+        "{text}"
+    );
+    assert!(text.contains("FAIL  the message does not match"), "{text}");
+    assert!(text.contains("it threw \"bad thing\""), "{text}");
+    assert!(text.contains("FAIL  does not throw"), "{text}");
+    assert!(text.contains("1 passed, 2 failed"), "{text}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn the_examples_pass_their_tests() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     for name in ["counter", "todo"] {
