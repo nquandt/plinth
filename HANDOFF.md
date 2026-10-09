@@ -14,7 +14,7 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 
 ## 0. Read this first
 
-**State (2026-10-08, evening):** `master` is the active branch. One agent branch is open: `wt/chainlocals` (worktree `U:\plinth-wt\chainlocals`), GAPS R3 (§10 item 1). The production checklist `docs/PRODUCTION.md` is the plan to 1.0; `bash scripts/production-status.sh` counts it (Preview 26/26 Done; Beta 27 Done, 12 Partial, 13 Open). The gate passes on `master` after the merge of `wt/eqstr`: `bash scripts/ci-local.sh full` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; more than 130 commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
+**State (2026-10-08, evening):** `master` is the active branch. One agent branch is open: `wt/testkit2` (worktree `U:\plinth-wt	estkit2`), T3 step 2 part 1 (§10 item 1). The production checklist `docs/PRODUCTION.md` is the plan to 1.0; `bash scripts/production-status.sh` counts it (Preview 26/26 Done; Beta 27 Done, 12 Partial, 13 Open). The gate passes on `master` after the merge of `wt/chainlocals`: `bash scripts/ci-local.sh full` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; more than 130 commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
 
 ### 0.1 Owner decisions (keep them)
 
@@ -204,6 +204,7 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 - **C6 (Done):** `docs/language.md` "Language version 1.0" freezes the subset and lists what a 1.x compiler can add.
 - **Compiler fix:** a function with no return type that mixes `return;` and `return <value>` gave an invalid module (only when the value branch came first in the source). Now its type is `T | null` (`finish_ret`, `patch_returns`). `onUpgrade` accepts a handler of type `Promise<void> | null`.
 - **`===` on `string | Shape`** compares two strings by content (`EqKind::UnionStr`: the type tag at offset 0 of each side, then `str_eq`); also `switch`, `includes`, `indexOf`.
+- **GAPS R3 (Done):** a `??`/`?.`/`||` chain reuses one local per type (`chain_temp`); 60,000 links compile. The engine needs minutes to compile such a function in a debug build, so those tests only compile.
 - **Tests:** each diagnostic code has a golden case (`every_code_has_a_golden_case`; `PL3011` is reserved).
 - **Lessons:** a Node test that calls `PlinthApp` directly does not test the browser path: every browser host goes through `WorkerApp`, so test host state across the Worker boundary and a reload. A Sonnet agent that waits on a background build gets stopped: tell it to run cargo in the foreground. After a merge, rebuild `plinth.exe` before a manual check (the gate's binary is older).
 
@@ -211,12 +212,11 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 
 `bash scripts/production-status.sh --open Beta` lists the open Beta items. Work that needs Linux or macOS is in `docs/PLATFORM-TODO.md`.
 
-1. **Small compiler gap:** a `??`/`?.` chain of about 50,000 links needs too many Wasm locals (GAPS R3).
-2. **T3 step 2:** the same app tests on wasmi and on the web host; the missing steps (dialogs, network answers, pointer and key steps, Slider, DatePicker, back navigation); `beforeEach`, `describe`, `only`, `skip` (`docs/TESTING.md` §12).
-3. **D5:** web updates with a service worker cache (UPDATES §9 step 4).
-4. **T4:** an inspector for the UI tree, signals and host calls. **T6:** `plinth publish` to a registry.
-5. **V2 and V3:** the flagship notes app (rich text is the largest design question, VALIDATION §3) and an app suite in one host.
-6. **R7 / GAPS F1:** make nested flex layout linear in gpui-ce (only when no agent builds), then the gpui-ce one-line fix for text input names (`EditableTextElement::write_a11y_info`, U3), and pass `WM_SETTINGCHANGE` to the app (U7; then the one-second poll can go).
-7. **H3:** notifications, the rest (Linux and macOS are in PLATFORM-TODO).
-8. **Owner items:** the CI runners (§0.2), signing (P5), the release key (S6), npm publishing (D1), manual screen reader and IME checks (U3, U4, U5).
-9. **Later (1.0):** platforms (PLATFORM-TODO), mobile with gpui and wasmi (R5, P7, P8), sound (G7), the docs website (X3).
+1. **T3 step 2:** part 1 on `wt/testkit2` (`describe`, `beforeEach`, `test.only`, `test.skip`, number matchers, `toThrow`, `plinth test` on wasmi); then the same app tests on wasmi and on the web host; the missing steps (dialogs, network answers, pointer and key steps, Slider, DatePicker, back navigation); `beforeEach`, `describe`, `only`, `skip` (`docs/TESTING.md` §12).
+2. **D5:** web updates with a service worker cache (UPDATES §9 step 4).
+3. **T4:** an inspector for the UI tree, signals and host calls. **T6:** `plinth publish` to a registry.
+4. **V2 and V3:** the flagship notes app (rich text is the largest design question, VALIDATION §3) and an app suite in one host.
+5. **R7 / GAPS F1:** make nested flex layout linear in gpui-ce (only when no agent builds), then the gpui-ce one-line fix for text input names (`EditableTextElement::write_a11y_info`, U3), and pass `WM_SETTINGCHANGE` to the app (U7; then the one-second poll can go).
+6. **H3:** notifications, the rest (Linux and macOS are in PLATFORM-TODO).
+7. **Owner items:** the CI runners (§0.2), signing (P5), the release key (S6), npm publishing (D1), manual screen reader and IME checks (U3, U4, U5).
+8. **Later (1.0):** platforms (PLATFORM-TODO), mobile with gpui and wasmi (R5, P7, P8), sound (G7), the docs website (X3).
