@@ -1617,6 +1617,156 @@ function Home() {
     assert_eq!(text_of(&tree, ControlKind::Text), "hi");
 }
 
+// -- Narrowing in a loop that assigns the narrowed variable (docs/GAPS.md,
+// fixed 2026-10-08) ----------------------------------------------------
+
+#[test]
+fn while_narrows_a_let_that_the_body_assigns() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+function path(g: G): string {
+  let x: G | null = g;
+  let s = "";
+  while (x !== null) { s = x.name + s; x = x.parent; }
+  return s;
+}
+function Home() {
+  const a: G = new G("a", null);
+  const b: G = new G("b", a);
+  return <Screen title="Home"><Text>{path(b)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "ab");
+}
+
+#[test]
+fn for_loop_narrows_a_let_that_the_update_assigns() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+function path(g: G): string {
+  let x: G | null = g;
+  let s = "";
+  for (; x !== null; x = x.parent) { s = x.name + s; }
+  return s;
+}
+function Home() {
+  const a: G = new G("a", null);
+  const b: G = new G("b", a);
+  return <Screen title="Home"><Text>{path(b)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "ab");
+}
+
+#[test]
+fn if_inside_a_loop_narrows_a_let_that_the_body_assigns_later() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+function path(g: G): string {
+  let x: G | null = g;
+  let s = "";
+  while (true) {
+    if (x === null) break;
+    s = x.name + s;
+    x = x.parent;
+  }
+  return s;
+}
+function Home() {
+  const a: G = new G("a", null);
+  const b: G = new G("b", a);
+  return <Screen title="Home"><Text>{path(b)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "ab");
+}
+
+#[test]
+fn do_while_narrows_a_let_that_a_nested_if_assigns() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+function path(g: G): string {
+  let x: G | null = g;
+  let s = "";
+  do {
+    if (x !== null) {
+      s = x.name + s;
+      x = x.parent;
+    }
+  } while (x !== null);
+  return s;
+}
+function Home() {
+  const a: G = new G("a", null);
+  const b: G = new G("b", a);
+  return <Screen title="Home"><Text>{path(b)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "ab");
+}
+
+#[test]
+fn continue_inside_a_loop_narrows_a_let_that_the_body_assigns() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; skip: boolean; constructor(n: string, p: G | null, sk: boolean) { this.name = n; this.parent = p; this.skip = sk; } }
+function path(g: G): string {
+  let x: G | null = g;
+  let s = "";
+  while (x !== null) {
+    if (x.skip) { x = x.parent; continue; }
+    s = x.name + s;
+    x = x.parent;
+  }
+  return s;
+}
+function Home() {
+  const a: G = new G("a", null, false);
+  const mid: G = new G("skip", a, true);
+  const b: G = new G("b", mid, false);
+  return <Screen title="Home"><Text>{path(b)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "ab");
+}
+
+#[test]
+fn while_narrowing_does_not_survive_the_bodys_own_assignment() {
+    // `x` is narrowed at the top of the body (from the condition), but the
+    // assignment on the line before `x.name` may set it back to null, so
+    // this use still needs the checker to reject it.
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+function path(g: G): string {
+  let x: G | null = g;
+  let s = "";
+  while (x !== null) {
+    x = x.parent;
+    s = x.name + s;
+  }
+  return s;
+}
+function Home() { return <Screen title="Home"><Text>{""}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL3010"]);
+}
+
 #[test]
 fn extends_a_non_class_is_rejected() {
     let main = with_app("interface I { x: number }\nclass C extends I { constructor() { super(); } }");

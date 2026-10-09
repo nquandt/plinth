@@ -107,6 +107,20 @@ members, getters/setters, generic classes.
   conservative than necessary (a call that provably cannot reach the path
   still drops it), by design: it costs an extra local variable in the rare
   case that trips it, in exchange for never needing an alias analysis.
+- Narrowing a plain `let` (not just a `const` or a parameter) in flow
+  order, so a loop that reassigns the variable it tests still narrows it:
+  `let x: G | null = g; while (x !== null) { use(x.name); x = x.parent; }`.
+  The condition narrows at the start of each pass through the body (same
+  for `for`, and for a `for`'s `update`, since it runs at the end of the
+  same pass); an assignment to the `let` drops its narrowing again from
+  that point on, so a further use after the assignment, in the same pass,
+  still needs its own null check. `if (x === null) return;`/`throw`, and
+  the same shape with `break`/`continue` inside a loop, still narrow the
+  rest of the block, even though the branch itself assigned the variable:
+  the lines after the `if` are only ever reached on the path that did not
+  take that branch. A closure that captures the `let` keeps the fully
+  conservative rule (no narrowing at all), since it can run later, after a
+  further assignment the checker already saw past.
 - `expr as T`, but only for a checked, safe narrowing: `string` (or a
   wider string literal union) to a narrower string literal union, or a
   discriminated union to one of its members. Each accepted cast carries

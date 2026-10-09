@@ -20,12 +20,26 @@ impl Checker<'_> {
     pub(super) fn block_stmts(&mut self, stmts: &[ast::Stmt]) -> Vec<TStmt> {
         let mut out = Vec::new();
         for s in stmts {
+            // A `let` that a branch assigns (flow order) drops that `let`'s
+            // narrowing in every live scope (`invalidate_var_narrowing`),
+            // including scopes outside the branch. That is right when the
+            // branch falls through, but wrong when it does not (`if (x ===
+            // null) return;`, or, inside a loop, `if (x.skip) { x =
+            // x.parent; continue; }`): the lines after the `if` are only
+            // ever reached when the condition was false, so an assignment
+            // made only on the true path never applies to them. Snapshot
+            // the live scopes' narrowing first, so it can be restored in
+            // that case.
+            let snapshot: Vec<_> = self.fx.scopes.iter().map(|sc| sc.narrow.clone()).collect();
             let checked = self.stmt(s, false);
             // `if (x === null) return;` narrows `x` for the rest of the block.
             if let (StmtKind::If(_, _, None), Some(TStmt::If(cond, then, els))) = (&s.kind, checked.last())
                 && els.is_empty()
-                && always_exits(then)
+                && (always_exits(then) || matches!(then.last(), Some(TStmt::Break | TStmt::Continue)))
             {
+                for (sc, snap) in self.fx.scopes.iter_mut().zip(snapshot) {
+                    sc.narrow = snap;
+                }
                 let (_, when_false) = self.narrowing(cond);
                 if let Some(scope) = self.fx.scopes.last_mut() {
                     scope.narrow.extend(when_false);
@@ -122,9 +136,14 @@ impl Checker<'_> {
             StmtKind::While(cond, body) => {
                 let c = self.expr(cond, Some(&Type::Bool));
                 let c = self.truthy(c);
+                // The condition narrows at the start of every pass through
+                // the body (docs/GAPS.md "Narrowing in a loop that assigns
+                // the narrowed variable"); an assignment inside the body
+                // drops it again (flow order; `narrow_path`/`assign`).
+                let (when_true, _) = self.narrowing(&c);
                 let id = self.prog.new_loop();
                 self.fx.loops.push(id);
-                let b = self.scoped_block(body);
+                let b = self.with_narrowing(when_true, body);
                 self.fx.loops.pop();
                 vec![TStmt::Loop { id, cond: Some(c), test_after: false, update: None, body: b }]
             }
@@ -149,10 +168,25 @@ impl Checker<'_> {
                     let c = self.expr(t, Some(&Type::Bool));
                     self.truthy(c)
                 });
-                let u = update.as_ref().map(|u| self.expr(u, None));
+                // Same as `while`: the test narrows at the start of the
+                // body, and also while checking `update` — it runs at the
+                // end of the same pass that the test let into the body, so
+                // it sees the same narrowing (`for (; x !== null; x =
+                // x.parent)`).
+                let when_true = c.as_ref().map(|c| self.narrowing(c).0).unwrap_or_default();
                 let id = self.prog.new_loop();
                 self.fx.loops.push(id);
-                let b = self.scoped_block(body);
+                self.push_scope();
+                self.fx.scopes.last_mut().unwrap().narrow.extend(when_true);
+                // Checked in the order they run within one pass: the body,
+                // then `update` — so an assignment in the body (not in this
+                // test) still drops the narrowing for `update` to see.
+                let b = match &body.kind {
+                    StmtKind::Block(b) => self.block_stmts(b),
+                    _ => self.stmt(body, false),
+                };
+                let u = update.as_ref().map(|u| self.expr(u, None));
+                self.pop_scope();
                 self.fx.loops.pop();
                 self.pop_scope();
                 out.push(TStmt::Loop { id, cond: c, test_after: false, update: u, body: b });
@@ -665,12 +699,22 @@ impl Checker<'_> {
 
     /// The narrowing key a (possibly narrowed/retagged) expression reads,
     /// if it is one the checker is willing to narrow: a plain `const`/
-    /// parameter variable, or a member path `a.b`/`a.b.c` rooted at one,
-    /// where every step is a direct struct field read (`check/expr.rs`'s
-    /// `property`), never a method call or computed index. See
-    /// `docs/language.md` ("Narrowing") for the exact rule and why it is
-    /// capped at two field hops and dropped on assignment/calls. A loop:
-    /// it stops at the third field of a long `a.b.c.d...` read.
+    /// parameter variable, a plain `let` (see below), or a member path
+    /// `a.b`/`a.b.c` rooted at a `const`/parameter, where every step is a
+    /// direct struct field read (`check/expr.rs`'s `property`), never a
+    /// method call or computed index. See `docs/language.md` ("Narrowing")
+    /// for the exact rule and why it is capped at two field hops and
+    /// dropped on assignment/calls. A loop: it stops at the third field of
+    /// a long `a.b.c.d...` read.
+    ///
+    /// A plain `let` (no member path: `path` is still empty here) is
+    /// narrowable too, but only while checking the function that declares
+    /// it: `check/expr.rs`'s `assign` drops the narrowing of a `let` the
+    /// moment it is assigned (flow order), so the checker never trusts a
+    /// stale narrowing of it past an assignment. A closure that captures
+    /// the `let` can run later, after such an assignment, so a `let` read
+    /// through a closure (`info.owner != self.fx.func`) is not narrowed —
+    /// the existing conservative rule.
     pub(super) fn narrow_path(&self, e: &TExpr) -> Option<super::NarrowKey> {
         let mut path = Vec::new();
         let mut e = e;
@@ -679,7 +723,7 @@ impl Checker<'_> {
                 TExprKind::Var(v) => {
                     let info = &self.prog.vars[*v as usize];
                     let is_param = self.prog.funcs[info.owner as usize].params.contains(v);
-                    if info.mutable && !is_param {
+                    if info.mutable && !is_param && (!path.is_empty() || info.owner != self.fx.func) {
                         return None;
                     }
                     path.reverse();

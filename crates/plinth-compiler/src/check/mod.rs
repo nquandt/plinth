@@ -198,9 +198,11 @@ pub enum Binding {
     Generic(usize),
 }
 
-/// A narrowing key: a plain variable (`x`, empty path) or a member path
-/// rooted at a `const`/parameter variable (`x.a` is `(x, [idx_a])`, `x.a.b`
-/// is `(x, [idx_a, idx_b])`). See `docs/language.md` ("Narrowing").
+/// A narrowing key: a plain variable (`x`, empty path; a `const`, a
+/// parameter, or a `let` narrowed in flow order — see `narrow_path` in
+/// `check/stmt.rs`) or a member path rooted at a `const`/parameter
+/// variable (`x.a` is `(x, [idx_a])`, `x.a.b` is `(x, [idx_a, idx_b])`).
+/// See `docs/language.md` ("Narrowing").
 pub(crate) type NarrowKey = (VarId, Vec<u32>);
 
 /// What a condition narrows: `(when true, when false)` (`narrowing` in
@@ -915,11 +917,22 @@ impl Checker<'_> {
     /// Drops all member-path narrowing (`r.subtitle`, not plain `x`) in
     /// every live scope: called after anything that could change a field
     /// through an alias (an assignment to any member path, or a call).
-    /// Plain variable narrowing never needs this: it only ever narrows a
-    /// `const`/parameter, which cannot be reassigned.
+    /// Plain variable narrowing of a `const`/parameter never needs this:
+    /// it cannot be reassigned. A plain `let` can be narrowed too (flow
+    /// order; see `narrow_path`); `invalidate_var_narrowing` handles that.
     pub(crate) fn invalidate_member_narrowing(&mut self) {
         for s in self.fx.scopes.iter_mut() {
             s.narrow.retain(|k, _| k.1.is_empty());
+        }
+    }
+
+    /// Drops the narrowing of `v` itself in every live scope: called after
+    /// an assignment to `v` (flow order — the narrowing from before the
+    /// assignment no longer holds). Only a plain `let` needs this; a
+    /// `const`/parameter is never assigned, so it never reaches here.
+    pub(crate) fn invalidate_var_narrowing(&mut self, v: VarId) {
+        for s in self.fx.scopes.iter_mut() {
+            s.narrow.retain(|k, _| k.0 != v);
         }
     }
 

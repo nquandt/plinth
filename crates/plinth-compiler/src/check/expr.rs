@@ -3631,19 +3631,21 @@ impl Checker<'_> {
         };
         // An assignment to a field (or an index, conservatively) drops any
         // member-path narrowing: nothing proves it wasn't the narrowed path
-        // itself, or an alias of its root, that just changed.
-        if !matches!(&place, Place::Var(_)) {
-            self.invalidate_member_narrowing();
-        }
-        match op {
+        // itself, or an alias of its root, that just changed. An assignment
+        // to a plain `let` drops its own narrowing instead (flow order; see
+        // `narrow_path` in `check/stmt.rs`); it never reaches here through
+        // a member path, so the two cases do not overlap. Either way, this
+        // runs after the value expression is checked (below), since the
+        // value can itself read the still-live narrowing (`x = x.parent`).
+        let result = match op {
             None => {
                 let v = self.expr_with(value, &ty);
                 let v = self.coerce(v, &ty);
-                TExpr::new(TExprKind::Assign(place, bx(v)), ty, span)
+                TExpr::new(TExprKind::Assign(place.clone(), bx(v)), ty, span)
             }
             Some(op) => {
                 let mut stmts = Vec::new();
-                let place = self.stable_place(place, &mut stmts);
+                let place = self.stable_place(place.clone(), &mut stmts);
                 let cur = self.read_place(&place, &ty, target.span);
                 let rhs = self.expr(value, None);
                 let combined = if op == BinOp::Add && ty.is_stringish() {
@@ -3666,7 +3668,12 @@ impl Checker<'_> {
                 let assign = TExpr::new(TExprKind::Assign(place, bx(combined)), ty.clone(), span);
                 if stmts.is_empty() { assign } else { TExpr::new(TExprKind::Block(stmts, bx(assign)), ty, span) }
             }
+        };
+        match &place {
+            Place::Var(v) => self.invalidate_var_narrowing(*v),
+            _ => self.invalidate_member_narrowing(),
         }
+        result
     }
 
     fn update(&mut self, inc: bool, prefix: bool, target: &Expr, span: Span) -> TExpr {
