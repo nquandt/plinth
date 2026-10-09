@@ -644,3 +644,28 @@ fn the_examples_pass_their_tests() {
         assert!(text.contains(" passed, 0 failed"), "{name}: {text}");
     }
 }
+
+/// `plinth test` on the wasmi interpreter (docs/TESTING.md §11). This test
+/// builds only with `--features wasmi` (it needs the `wasmi` cargo feature
+/// of `plinth-cli`, which the plain `cargo test -p plinth-cli` run does not
+/// turn on): `cargo test -p plinth-cli --features wasmi`.
+#[cfg(feature = "wasmi")]
+#[test]
+fn the_examples_pass_their_tests_on_wasmi() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    for name in ["counter", "todo"] {
+        let out = plinth()
+            .arg("test")
+            .arg(root.join(name))
+            .env("PLINTH_ENGINE", "wasmi")
+            .output()
+            .expect("run plinth test");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "{name}: {text}");
+        assert!(text.contains(" passed, 0 failed"), "{name}: {text}");
+    }
+}
