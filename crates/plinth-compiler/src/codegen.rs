@@ -16,7 +16,7 @@
 use crate::diag::{FileId, Sources, Span};
 use crate::link::{AppCode, Layout};
 use crate::srcmap::{FuncMap, SrcMap};
-use crate::rt_abi::{ARR_F64, ARR_I32, ARR_REF, FIRST_USER_TYPE, HEADER, STR_BYTES};
+use crate::rt_abi::{ARR_F64, ARR_I32, ARR_REF, FIRST_USER_TYPE, HEADER, STR_BYTES, T_STRING};
 use crate::tir::*;
 use crate::types::{Repr, StructId, Type};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -1603,6 +1603,44 @@ impl FnGen {
                 self.free(ta, Repr::I32);
                 self.free(tb, Repr::I32);
             }
+            EqKind::UnionStr => {
+                // a === null || b === null ? a === b
+                //   : tag(a) === STR && tag(b) === STR ? str_eq(a, b) : a === b
+                let (ta, tb) = (self.tmp(Repr::Ref), self.tmp(Repr::Ref));
+                self.emit(I::LocalSet(tb));
+                self.emit(I::LocalSet(ta));
+                self.emit(I::LocalGet(ta));
+                self.emit(I::I32Eqz);
+                self.emit(I::LocalGet(tb));
+                self.emit(I::I32Eqz);
+                self.emit(I::I32Or);
+                self.open(I::If(BlockType::Result(ValType::I32)));
+                self.emit(I::LocalGet(ta));
+                self.emit(I::LocalGet(tb));
+                self.emit(I::I32Eq);
+                self.emit(I::Else);
+                self.emit(I::LocalGet(ta));
+                self.emit(load(0, Repr::I32));
+                self.emit(I::I32Const(T_STRING as i32));
+                self.emit(I::I32Eq);
+                self.emit(I::LocalGet(tb));
+                self.emit(load(0, Repr::I32));
+                self.emit(I::I32Const(T_STRING as i32));
+                self.emit(I::I32Eq);
+                self.emit(I::I32And);
+                self.open(I::If(BlockType::Result(ValType::I32)));
+                self.emit(I::LocalGet(ta));
+                self.emit(I::LocalGet(tb));
+                self.rt(g, "str_eq");
+                self.emit(I::Else);
+                self.emit(I::LocalGet(ta));
+                self.emit(I::LocalGet(tb));
+                self.emit(I::I32Eq);
+                self.close();
+                self.close();
+                self.free(ta, Repr::Ref);
+                self.free(tb, Repr::Ref);
+            }
         }
     }
 
@@ -1898,7 +1936,7 @@ impl FnGen {
                         CmpOp::Gt => I::F64Gt,
                         CmpOp::Ge => I::F64Ge,
                     }),
-                    EqKind::Str | EqKind::NullStr | EqKind::NullF64 | EqKind::NullI32 | EqKind::OptStr | EqKind::OptNum => {
+                    EqKind::Str | EqKind::NullStr | EqKind::NullF64 | EqKind::NullI32 | EqKind::OptStr | EqKind::OptNum | EqKind::UnionStr => {
                         self.eq(g, *kind);
                         if *op == CmpOp::Ne {
                             self.emit(I::I32Eqz);

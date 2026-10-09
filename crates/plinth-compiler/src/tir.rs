@@ -258,6 +258,13 @@ pub enum EqKind {
     /// all in the `f64` box): equal when both are null, or when neither is
     /// null and the boxed values are equal (`NaN` is not equal to itself).
     OptNum,
+    /// A value of a union that has a `string` member (`string | Shape`,
+    /// also `| null`), compared with another such value or with a plain
+    /// `string`: null compares by reference (so `null === null` is true
+    /// and null is never equal to a non-null value, with no unsafe read of
+    /// a null reference); otherwise, equal when both sides hold a string
+    /// and its content is the same, else by reference.
+    UnionStr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

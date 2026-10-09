@@ -1531,6 +1531,7 @@ impl Checker<'_> {
                     Type::Number => EqKind::F64,
                     Type::Bool | Type::Enum(_) | Type::Element => EqKind::I32,
                     Type::String => EqKind::Str,
+                    t if self.is_string_union(&t) => EqKind::UnionStr,
                     t => self.opt_eq_kind(&t, &t).unwrap_or(EqKind::Ref),
                 };
                 let index = prop == "indexOf";
@@ -3285,6 +3286,13 @@ impl Checker<'_> {
             let cmp = TExpr::new(TExprKind::Cmp(CmpOp::Eq, k, bx(b), bx(read)), Type::Bool, span);
             return TExpr::new(TExprKind::Block(vec![TStmt::Let(tmp, Some(a))], bx(cmp)), Type::Bool, span);
         }
+        // A union with a `string` member (`string | Shape`, also `| null`),
+        // compared with another such value or with a plain `string`: equal
+        // when both sides are strings with the same content, or the same
+        // reference (GAPS.md "`===` on nullable values").
+        if let Some(k) = self.string_union_kind(&lt, &rt) {
+            return TExpr::new(TExprKind::Cmp(CmpOp::Eq, k, bx(a), bx(b)), Type::Bool, span);
+        }
         let eq = match (&lt, &rt) {
             (Type::Number, Type::Number) => EqKind::F64,
             (Type::Bool, Type::Bool) | (Type::Element, Type::Element) => EqKind::I32,
@@ -3318,6 +3326,39 @@ impl Checker<'_> {
             (x, y) if x == y && x.repr() == crate::types::Repr::I32 => Some(EqKind::OptNum),
             _ => None,
         }
+    }
+
+    /// `t`, with one layer of `| null` removed, widened.
+    fn denull_widen(&self, t: &Type) -> Type {
+        match t {
+            Type::Nullable(inner) => self.widen((**inner).clone()),
+            t => self.widen(t.clone()),
+        }
+    }
+
+    /// A value of a union that has a `string` member (`string | Shape`),
+    /// compared with another such value (the same union) or with a plain
+    /// `string`: both sides must be a string with the same content, or the
+    /// same reference. `null` on either side is handled by the caller
+    /// (`equality`'s `is_null` check, or the generated code's own null
+    /// check): `None` here means "no special handling needed", not "never
+    /// a union of this shape". `a` and `b` may each carry one layer of
+    /// `| null`.
+    pub(super) fn string_union_kind(&self, a: &Type, b: &Type) -> Option<EqKind> {
+        let is_string_union = |t: &Type| matches!(t, Type::Union(members) if members.iter().any(|m| matches!(m, Type::String | Type::StrLits(_))));
+        let (x, y) = (self.denull_widen(a), self.denull_widen(b));
+        match (is_string_union(&x), is_string_union(&y)) {
+            (true, true) if x == y => Some(EqKind::UnionStr),
+            (true, false) if y == Type::String => Some(EqKind::UnionStr),
+            (false, true) if x == Type::String => Some(EqKind::UnionStr),
+            _ => None,
+        }
+    }
+
+    /// True for a union type that has a `string` member (`string | Shape`),
+    /// with at most one layer of `| null` first removed.
+    pub(super) fn is_string_union(&self, t: &Type) -> bool {
+        matches!(self.denull_widen(t), Type::Union(members) if members.iter().any(|m| matches!(m, Type::String | Type::StrLits(_))))
     }
 
     /// `lt ?? r`: `r` when `lt` is `null`, else `lt` without `null`. A

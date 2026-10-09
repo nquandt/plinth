@@ -3822,6 +3822,99 @@ function Home() {
     assert_eq!(seen, want);
 }
 
+// -- `===` on a union of `string` and an object (docs/GAPS.md "`===` on
+// nullable values", the open item): two strings in such a union compare by
+// content, a string and an object are never equal, and two objects compare
+// by reference. --
+
+/// Declarations shared by the `union_str_eq_*` tests: `Shape` is a struct,
+/// `pu`/`po` box a `string`/`Shape` into `string | Shape`, `pun`/`pon`/`pnul`
+/// do the same for `string | Shape | null`.
+const UNION_STR: &str = r#"
+interface Shape { kind: "shape"; r: number; }
+function pu(s: string): string | Shape { return s; }
+function po(c: Shape): string | Shape { return c; }
+function pun(s: string): string | Shape | null { return s; }
+function pon(c: Shape): string | Shape | null { return c; }
+function pnul(): string | Shape | null { return null; }
+"#;
+
+#[test]
+fn union_str_eq_two_equal_strings_compare_by_content() {
+    let out = eq_out(UNION_STR, r#"  const a = pu("x" + "y"); const b2 = pu("xy");
+  const out = b(a === b2) + b(a !== b2);"#);
+    assert_eq!(out, "10");
+}
+
+#[test]
+fn union_str_eq_a_string_and_an_object_are_never_equal() {
+    let out = eq_out(
+        UNION_STR,
+        r#"  const a = pu("x" + "y"); const c = po({ kind: "shape", r: 1 });
+  const out = b(a === c) + b(a !== c) + b(c === a) + b(c !== a);"#,
+    );
+    assert_eq!(out, "0101");
+}
+
+#[test]
+fn union_str_eq_two_references_to_the_same_object_are_equal() {
+    let out = eq_out(
+        UNION_STR,
+        r#"  const o: Shape = { kind: "shape", r: 1 };
+  const u1 = po(o); const u2 = po(o);
+  const out = b(u1 === u2) + b(u1 !== u2);"#,
+    );
+    assert_eq!(out, "10");
+}
+
+#[test]
+fn union_str_eq_two_different_objects_with_the_same_fields_are_not_equal() {
+    let out = eq_out(
+        UNION_STR,
+        r#"  const v1 = po({ kind: "shape", r: 1 }); const v2 = po({ kind: "shape", r: 1 });
+  const out = b(v1 === v2) + b(v1 !== v2);"#,
+    );
+    assert_eq!(out, "01");
+}
+
+#[test]
+fn union_str_eq_nullable_union_with_null_on_one_or_both_sides() {
+    let out = eq_out(
+        UNION_STR,
+        r#"  const s = pun("x" + "y"); const n = pnul(); const m = pnul();
+  const out = b(s === n) + b(n === s) + b(n === m) + b(n !== m) + b(s === null) + b(n === null);"#,
+    );
+    assert_eq!(out, "001001");
+}
+
+#[test]
+fn switch_on_a_string_and_object_union_compares_the_string_case_by_content() {
+    let out = eq_out(
+        UNION_STR,
+        r#"  function pick(v: string | Shape): string {
+    switch (v) {
+      case "ab": return "AB";
+      case "c" + "d": return "CD";
+      default: return "-";
+    }
+  }
+  const out = pick(pu("a" + "b")) + pick(pu("cd")) + pick(pu("e")) + pick(po({ kind: "shape", r: 1 }));"#,
+    );
+    assert_eq!(out, "ABCD--");
+}
+
+#[test]
+fn includes_and_index_of_on_a_string_and_object_union_array() {
+    let out = eq_out(
+        UNION_STR,
+        r#"  const o: Shape = { kind: "shape", r: 9 };
+  const arr: (string | Shape)[] = [pu("a"), po(o), pu("x" + "y")];
+  const out = b(arr.includes("x" + "y")) + b(arr.includes(pu("xy"))) + b(arr.includes("z")) + arr.indexOf("x" + "y") + "|"
+    + b(arr.includes(o)) + arr.indexOf(o);"#,
+    );
+    assert_eq!(out, "1102|11");
+}
+
 // -- A callback that mixes `return;` and `return <value>;`, with no return
 // type annotation (GAPS.md, "a callback that mixes `return;` and `return
 // <promise>`"): the inferred type must become `<value type> | null`, with
