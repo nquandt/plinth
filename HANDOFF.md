@@ -14,7 +14,7 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 
 ## 0. Read this first
 
-**State (2026-10-08, evening):** `master` is the active branch. One agent branch is open: `wt/testkit2` (worktree `U:\plinth-wt	estkit2`), T3 step 2 part 1 (§10 item 1). The production checklist `docs/PRODUCTION.md` is the plan to 1.0; `bash scripts/production-status.sh` counts it (Preview 26/26 Done; Beta 27 Done, 12 Partial, 13 Open). The gate passes on `master` after the merge of `wt/chainlocals`: `bash scripts/ci-local.sh full` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; more than 130 commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
+**State (2026-10-08, evening):** `master` is the active branch. One agent branch is open: `wt/loopnarrow` (worktree `U:\plinth-wt\loopnarrow`), narrowing in a loop that assigns the variable (GAPS, the last section). The production checklist `docs/PRODUCTION.md` is the plan to 1.0; `bash scripts/production-status.sh` counts it (Preview 26/26 Done; Beta 27 Done, 12 Partial, 13 Open). The gate (full and wasmi) passes on `master` after the merge of `wt/testkit2`: `bash scripts/ci-local.sh full` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; more than 130 commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
 
 ### 0.1 Owner decisions (keep them)
 
@@ -212,7 +212,7 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 
 `bash scripts/production-status.sh --open Beta` lists the open Beta items. Work that needs Linux or macOS is in `docs/PLATFORM-TODO.md`.
 
-1. **T3 step 2:** part 1 on `wt/testkit2` (`describe`, `beforeEach`, `test.only`, `test.skip`, number matchers, `toThrow`, `plinth test` on wasmi); then the same app tests on wasmi and on the web host; the missing steps (dialogs, network answers, pointer and key steps, Slider, DatePicker, back navigation); `beforeEach`, `describe`, `only`, `skip` (`docs/TESTING.md` §12).
+1. **T3 step 2, the rest** (`docs/TESTING.md` §12): app tests on the web host; dialog answers, fake network answers, pointer and key steps, `Slider`, `DatePicker`, back navigation; deep `toEqual`. Part 1 is merged: `describe`, `beforeEach`/`afterEach`, `testOnly`/`testSkip`/`describeOnly`/`describeSkip` (Plinth TS has no function with properties, so not `test.only`), number matchers, `toThrow`, `plinth test` on wasmi.
 2. **D5:** web updates with a service worker cache (UPDATES §9 step 4).
 3. **T4:** an inspector for the UI tree, signals and host calls. **T6:** `plinth publish` to a registry.
 4. **V2 and V3:** the flagship notes app (rich text is the largest design question, VALIDATION §3) and an app suite in one host.
