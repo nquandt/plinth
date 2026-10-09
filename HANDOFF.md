@@ -14,7 +14,7 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 
 ## 0. Read this first
 
-**State (2026-10-08, pause point):** `master` is the active branch. One agent branch is open: `wt/upgrade` (worktree `U:\plinth-wt\upgrade`), D4 `onUpgrade` steps A and B; step C is the first next step (§10). The production checklist `docs/PRODUCTION.md` is the plan to 1.0; `bash scripts/production-status.sh` counts it (Preview 26/26 Done; Beta 25 Done, 14 Partial, 13 Open). The gate passes on `master`: `bash scripts/ci-local.sh full` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; more than 115 commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
+**State (2026-10-08, evening):** `master` is the active branch. One agent branch is open: `wt/eqstr` (worktree `U:\plinth-wt\eqstr`), `===` on a union of `string` and an object type (§10 item 1). The production checklist `docs/PRODUCTION.md` is the plan to 1.0; `bash scripts/production-status.sh` counts it (Preview 26/26 Done; Beta 27 Done, 12 Partial, 13 Open). The gate passes on `master` at `7d64ceb`: `bash scripts/ci-local.sh full` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; more than 130 commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
 
 ### 0.1 Owner decisions (keep them)
 
@@ -198,18 +198,24 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 - **Docs:** `docs/PLATFORM-TODO.md`, `docs/TESTING.md`, `docs/migrations/`; SPEC §4.6, §4.7, §5.1, §6.3, §6.5, §7.1, §8.1, §8.4, §8.5, §9, §10.5, §13 updated.
 - **Lessons:** a stopped gate leaves stale example packages, so `run-a11y.mjs` then fails for the wrong reason; a Sonnet agent needs a task of one layer; `run-a11y.mjs` checks must wait until a control is enabled, because each app runs in a Worker.
 
+## 9c. Session log 2026-10-08, evening (D4, C6, a compiler fix)
+
+- **D4 `onUpgrade` (Done):** step C on the web host. The data version goes through `WorkerApp` (a `load` field and a `data-version-set` message), the Hub (`plinth-hub:dv:<id>`, removed with the app's kv data) and the stand-alone page (`plinth-data-version:<id>`). `web/test/run-upgrade.mjs` covers a reload through `WorkerApp` and the Hub storage. Docs: ui.md, the core 1.13 guide (the host rule), UPDATES §6 with the UP-Q5 interim rule (a downgrade keeps the higher version, no handler), SPEC §4.7, §8.5.
+- **C6 (Done):** `docs/language.md` "Language version 1.0" freezes the subset and lists what a 1.x compiler can add.
+- **Compiler fix:** a function with no return type that mixes `return;` and `return <value>` gave an invalid module (only when the value branch came first in the source). Now its type is `T | null` (`finish_ret`, `patch_returns`). `onUpgrade` accepts a handler of type `Promise<void> | null`.
+- **Tests:** each diagnostic code has a golden case (`every_code_has_a_golden_case`; `PL3011` is reserved).
+- **Lessons:** a Node test that calls `PlinthApp` directly does not test the browser path: every browser host goes through `WorkerApp`, so test host state across the Worker boundary and a reload. A Sonnet agent that waits on a background build gets stopped: tell it to run cargo in the foreground. After a merge, rebuild `plinth.exe` before a manual check (the gate's binary is older).
+
 ## 10. Next steps (in order)
 
 `bash scripts/production-status.sh --open Beta` lists the open Beta items. Work that needs Linux or macOS is in `docs/PLATFORM-TODO.md`.
 
-1. **D4 `onUpgrade`, step C** (branch `wt/upgrade`: step A `f332df8` = WIT `app-info`, core `app_data_version`/`app_mark_data_version`, desktop storage in `<data dir>/apps/<id>/data-version`; step B `e0d616a` = the host rule, `plinth:ui` `onUpgrade`, `Guest::set_app_version` before `init` and `Guest::finish_start` after it, `tests/upgrade.rs` 8/8 on both engines; the web host still has stub imports): the web host (store the data version with the web kv keys; `data-version` returns a version only when an upgrade is pending; store the version after start unless the app claimed the upgrade), a Node test, the docs (`docs/UPDATES.md` §6, §9.1 and the UP-Q5 interim rule, `docs/migrations/core-1.13.md`, `docs/host-apis.md`, PRODUCTION D4, CHANGELOG), then SPEC (§4.7 `onUpgrade`, §8.5). Merge, run the gate and `run-a11y.mjs`.
+1. **Small compiler gaps:** `===` on a union of `string` and an object type (agent on `wt/eqstr`; review, merge, gate); a `??`/`?.` chain of about 50,000 links needs too many Wasm locals (GAPS R3).
 2. **T3 step 2:** the same app tests on wasmi and on the web host; the missing steps (dialogs, network answers, pointer and key steps, Slider, DatePicker, back navigation); `beforeEach`, `describe`, `only`, `skip` (`docs/TESTING.md` §12).
-3. **Small compiler gaps:** a non-async callback that mixes `return;` and `return <promise>` gives an invalid Wasm module (GAPS, found 2026-10-08; fix this first, a compiler must never emit an invalid module); `===` on a union of `string` and an object type (GAPS); a `??`/`?.` chain of about 50,000 links needs too many Wasm locals (GAPS R3).
-4. **C6:** freeze the 1.0 language subset in `docs/language.md`.
-5. **D5:** web updates with a service worker cache (UPDATES §9 step 4).
-6. **T4:** an inspector for the UI tree, signals and host calls. **T6:** `plinth publish` to a registry.
-7. **V2 and V3:** the flagship notes app (rich text is the largest design question, VALIDATION §3) and an app suite in one host.
-8. **R7 / GAPS F1:** make nested flex layout linear in gpui-ce (only when no agent builds), then the gpui-ce one-line fix for text input names (`EditableTextElement::write_a11y_info`, U3), and pass `WM_SETTINGCHANGE` to the app (U7; then the one-second poll can go).
-9. **H3:** notifications, the rest (Linux and macOS are in PLATFORM-TODO).
-10. **Owner items:** the CI runners (§0.2), signing (P5), the release key (S6), npm publishing (D1), manual screen reader and IME checks (U3, U4, U5).
-11. **Later (1.0):** platforms (PLATFORM-TODO), mobile with gpui and wasmi (R5, P7, P8), sound (G7), the docs website (X3).
+3. **D5:** web updates with a service worker cache (UPDATES §9 step 4).
+4. **T4:** an inspector for the UI tree, signals and host calls. **T6:** `plinth publish` to a registry.
+5. **V2 and V3:** the flagship notes app (rich text is the largest design question, VALIDATION §3) and an app suite in one host.
+6. **R7 / GAPS F1:** make nested flex layout linear in gpui-ce (only when no agent builds), then the gpui-ce one-line fix for text input names (`EditableTextElement::write_a11y_info`, U3), and pass `WM_SETTINGCHANGE` to the app (U7; then the one-second poll can go).
+7. **H3:** notifications, the rest (Linux and macOS are in PLATFORM-TODO).
+8. **Owner items:** the CI runners (§0.2), signing (P5), the release key (S6), npm publishing (D1), manual screen reader and IME checks (U3, U4, U5).
+9. **Later (1.0):** platforms (PLATFORM-TODO), mobile with gpui and wasmi (R5, P7, P8), sound (G7), the docs website (X3).
