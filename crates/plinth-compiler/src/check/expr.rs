@@ -93,6 +93,17 @@ impl Checker<'_> {
     /// by the same code as a single operator (`binary_rest`,
     /// `logical_rest`, `member_rest`, `index_rest`, `method_call`).
     fn chain(&mut self, top: &Expr, expected: Option<&Type>) -> TExpr {
+        // A fresh reuse frame (`chain_temp`, docs/GAPS.md R3), so a chain
+        // on the right side of this chain's last link does not share
+        // temporaries with this one (whose own temporary may still be
+        // live when that nested chain runs).
+        self.chain_reuse.push(Vec::new());
+        let r = self.chain_inner(top, expected);
+        self.chain_reuse.pop();
+        r
+    }
+
+    fn chain_inner(&mut self, top: &Expr, expected: Option<&Type>) -> TExpr {
         let mut spine = vec![top];
         let mut cur = chain_left(top).expect("a chain");
         while let Some(next) = chain_left(cur) {
@@ -493,7 +504,7 @@ impl Checker<'_> {
                 Type::Nullable(t) => (**t).clone(),
                 t => t.clone(),
             };
-            let tmp = self.temp(o.ty.clone());
+            let tmp = self.chain_temp(o.ty.clone());
             let read = TExpr::new(TExprKind::Var(tmp), o.ty.clone(), o.span);
             let unwrapped = match inner.repr() {
                 crate::types::Repr::F64 => TExpr::new(TExprKind::Coerce(Coercion::UnboxNum, bx(read.clone())), inner.clone(), o.span),
@@ -3372,7 +3383,7 @@ impl Checker<'_> {
         let want = expected.cloned().unwrap_or(inner.clone());
         let rt = self.expr(r, Some(&want));
         let ty = self.join(&inner, &rt.ty, span);
-        let tmp = self.temp(lt.ty.clone());
+        let tmp = self.chain_temp(lt.ty.clone());
         let read = TExpr::new(TExprKind::Var(tmp), lt.ty.clone(), l_span);
         let unwrapped = if !matches!(lt.ty, Type::Nullable(_)) {
             TExpr::new(TExprKind::Coerce(Coercion::Retag, bx(read.clone())), inner, l_span)
@@ -3456,7 +3467,7 @@ impl Checker<'_> {
                     };
                     // `a || b` with one type: `tmp = a; truthy(tmp) ? tmp : b`.
                     let ty = self.widen(lt_ty);
-                    let tmp = self.temp(ty.clone());
+                    let tmp = self.chain_temp(ty.clone());
                     let read = TExpr::new(TExprKind::Var(tmp), ty.clone(), l_span);
                     let test = self.truthy(read.clone());
                     let rt = self.coerce(rt, &ty);

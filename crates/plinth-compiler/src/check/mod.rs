@@ -349,6 +349,11 @@ pub struct Checker<'d> {
     regex_helpers: [Option<FuncId>; 5],
     /// Set in a test build (docs/TESTING.md).
     test: Option<TestCx>,
+    /// The temporaries reused across the links of the chain `check/expr.rs`
+    /// `chain` is checking now (docs/GAPS.md R3): one stack frame per
+    /// nested chain, each a list of `(type, var)` reused by `chain_temp`.
+    /// Linear for the same reason as `instantiations`.
+    chain_reuse: Vec<Vec<(Type, VarId)>>,
 }
 
 /// The test build part of the checker (docs/TESTING.md).
@@ -471,6 +476,7 @@ pub fn check_full(
         regex_globals: HashMap::new(),
         regex_helpers: [None; 5],
         test: test.map(|t| TestCx { prelude_file, prelude_module: test_prelude, sources: t.sources }),
+        chain_reuse: Vec::new(),
     };
     c.prog.module_count = modules.len() as u32;
     c.declare_error_class(modules[main].file);
@@ -941,6 +947,25 @@ impl Checker<'_> {
             in_loop: self.fx.loops.last().copied(),
             captured: false,
         })
+    }
+
+    /// Like [`Checker::temp`], but inside a chain (`check/expr.rs` `chain`)
+    /// reuses the temporary of a previous link of the same type, instead
+    /// of allocating a fresh one: each link's temporary is dead once the
+    /// next link has read it, so a chain of any length keeps at most one
+    /// Wasm local per type, instead of one local per link (docs/GAPS.md
+    /// R3). Outside a chain, this is the same as `temp`.
+    pub(super) fn chain_temp(&mut self, ty: Type) -> VarId {
+        if let Some(frame) = self.chain_reuse.last() {
+            if let Some((_, v)) = frame.iter().find(|(t, _)| *t == ty) {
+                return *v;
+            }
+        } else {
+            return self.temp(ty);
+        }
+        let v = self.temp(ty.clone());
+        self.chain_reuse.last_mut().unwrap().push((ty, v));
+        v
     }
 
     /// A compiler temporary in the current function.
