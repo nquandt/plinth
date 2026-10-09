@@ -96,6 +96,37 @@ fn coalesce_optional_and_string_or_chains_of_5000_terms() {
     assert_eq!(shown(&decls), "7z3");
 }
 
+/// Each `??`, `?.` or non-boolean `||` link keeps one Wasm local and used
+/// to allocate a fresh one for each link, so a long chain of such links
+/// ran into the Wasm limit of locals in a function ("the app module is
+/// not valid") near 50,000 links. The fix (docs/GAPS.md R3) reuses one
+/// local per type across the links of a chain, so 60,000 links of each
+/// kind compile to a valid module (`compile` validates it). These tests
+/// do not run the app: the engine needs minutes to compile one function
+/// of 60,000 links, and the 5,000-term tests above check the values.
+#[test]
+fn coalesce_chain_of_60000_terms() {
+    let nulls = vec!["n"; 60_000].join(" ?? ");
+    let decls = format!("const n: number | null = null;\nconst x = {nulls} ?? 7;");
+    compile(&program(&decls));
+}
+
+#[test]
+fn optional_member_chain_of_60000_terms() {
+    let nexts = "?.next".repeat(60_000);
+    let decls = format!(
+        "class L {{\n  next: L | null = null;\n  v: number = 1;\n}}\nconst l = new L();\nconst x = l.next{nexts}?.v ?? 3;"
+    );
+    compile(&program(&decls));
+}
+
+#[test]
+fn string_or_chain_of_60000_terms() {
+    let empties = vec!["e"; 60_000].join(" || ");
+    let decls = format!("const e: string = \"\";\nconst x = {empties} || \"z\";");
+    compile(&program(&decls));
+}
+
 /// Each `n > 0` needs the narrowing of `n !== null` at the start of the
 /// chain, which the loop in the checker carries from link to link.
 #[test]

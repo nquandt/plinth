@@ -632,12 +632,12 @@ Rules:
   Past that, the compiler gives `PL1008` ("this code nests more than
   1000 levels deep"); move the inner parts into named `const`s or
   functions. A left-deep chain is not nesting: `a + b + c + ...`,
-  `a && b && ...` and `x.f().g()...` have no length limit (the compiler
-  reads 100,000 terms in a few seconds). A chain of `??`, `?.` or `||`
-  on values that are not booleans keeps one local for each link, so it
-  stops near 50,000 links (the Wasm limit of locals in a function). A
-  call that runs longer than the host's time limit (2 s on the
-  desktop), endless recursion and memory past the host's cap (64 MiB on
+  `a && b && ...`, `a ?? b ?? ...`, `a?.b?.c...` and `x.f().g()...` have
+  no length limit (the compiler reads 100,000 terms in a few seconds,
+  and reuses one local per type across the links of a chain of `??`,
+  `?.` or `||` on values that are not booleans, instead of one local
+  for each link). A call that runs longer than the host's time limit
+  (2 s on the desktop), endless recursion and memory past the host's cap (64 MiB on
   the desktop) stop the app with a plain reason.
 - **`for (let i = ...)`** uses one binding for the whole loop — closures
   made inside the body see its final value, matching old-style `var`
