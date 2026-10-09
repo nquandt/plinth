@@ -1043,7 +1043,7 @@ impl Checker<'_> {
             return None;
         }
         let name = f.name.clone();
-        let forms = ["string", "number", "boolean"].map(|t| self.exports[module].get(&format!("{name}${t}")).cloned());
+        let forms = ["string", "number", "boolean", "function"].map(|t| self.exports[module].get(&format!("{name}${t}")).cloned());
         if forms.iter().all(Option::is_none) {
             return None;
         }
@@ -1056,6 +1056,7 @@ impl Checker<'_> {
             Type::String | Type::StrLits(_) => forms[0].clone(),
             Type::Number | Type::Int => forms[1].clone(),
             Type::Bool => forms[2].clone(),
+            Type::Func(_) => forms[3].clone(),
             _ => None,
         };
         let target = match form {

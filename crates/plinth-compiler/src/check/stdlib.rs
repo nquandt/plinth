@@ -59,6 +59,13 @@ pub const STORE_NAMES: &[&str] = &["kv", "sql"];
 /// exports are for the compiler and the test runner.
 pub const TEST_NAMES: &[&str] = &[
     "test",
+    "testOnly",
+    "testSkip",
+    "describe",
+    "describeOnly",
+    "describeSkip",
+    "beforeEach",
+    "afterEach",
     "render",
     "renderApp",
     "tick",
@@ -74,6 +81,8 @@ pub const TEST_NAMES: &[&str] = &[
     "NumberExpectation",
     "BooleanMatchers",
     "BooleanExpectation",
+    "FunctionMatchers",
+    "FunctionExpectation",
 ];
 pub const CLIPBOARD_NAMES: &[&str] = &["writeText", "readText", "lastError"];
 pub const DIALOG_NAMES: &[&str] = &["alert", "confirm", "prompt"];

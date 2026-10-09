@@ -31,10 +31,149 @@ interface TestCase {
 
 const cases: TestCase[] = [];
 
+// -- Groups: describe, beforeEach, afterEach ----------------------------------
+
+class Group {
+  name: string;
+  parent: Group | null;
+  only: boolean;
+  skip: boolean;
+  befores: (() => Promise<void>)[];
+  afters: (() => Promise<void>)[];
+  constructor(name: string, parent: Group | null) {
+    this.name = name;
+    this.parent = parent;
+    this.only = false;
+    this.skip = false;
+    this.befores = [];
+    this.afters = [];
+  }
+}
+
+const rootGroup = new Group("", null);
+let currentGroup: Group = rootGroup;
+
+function joinName(group: Group, name: string): string {
+  return group.name === "" ? name : `${group.name} > ${name}`;
+}
+
+function groupOnly(group: Group): boolean {
+  if (group.only) {
+    return true;
+  }
+  const p = group.parent;
+  return p === null ? false : groupOnly(p);
+}
+
+function groupSkip(group: Group): boolean {
+  if (group.skip) {
+    return true;
+  }
+  const p = group.parent;
+  return p === null ? false : groupSkip(p);
+}
+
+/** The chain of groups from the outermost to `group`. */
+function groupChain(group: Group): Group[] {
+  const p = group.parent;
+  const outer: Group[] = p === null ? [] : groupChain(p);
+  outer.push(group);
+  return outer;
+}
+
+/** Runs `beforeEach` of `group` and its outer groups, outer first. */
+async function runBefores(group: Group): Promise<void> {
+  const chain = groupChain(group);
+  for (let i = 0; i < chain.length; i++) {
+    const fns = chain[i].befores;
+    for (let j = 0; j < fns.length; j++) {
+      await fns[j]();
+    }
+  }
+}
+
+/** Runs `afterEach` of `group` and its outer groups, inner first. */
+async function runAfters(group: Group): Promise<void> {
+  const chain = groupChain(group);
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const fns = chain[i].afters;
+    for (let j = 0; j < fns.length; j++) {
+      await fns[j]();
+    }
+  }
+}
+
+/** Groups tests: the group name goes before the test name ("group > test"),
+ * also in `--filter`. `describe` can nest. */
+export function describe(name: string, body: () => void): void {
+  const group = new Group(joinName(currentGroup, name), currentGroup);
+  const outer = currentGroup;
+  currentGroup = group;
+  body();
+  currentGroup = outer;
+}
+
+/** The same as `describe`, but only this group (and other `only` groups or
+ * tests) runs when the file has any `only`. */
+export function describeOnly(name: string, body: () => void): void {
+  const group = new Group(joinName(currentGroup, name), currentGroup);
+  group.only = true;
+  const outer = currentGroup;
+  currentGroup = group;
+  body();
+  currentGroup = outer;
+}
+
+/** The same as `describe`, but every test of this group shows as "skip". */
+export function describeSkip(name: string, body: () => void): void {
+  const group = new Group(joinName(currentGroup, name), currentGroup);
+  group.skip = true;
+  const outer = currentGroup;
+  currentGroup = group;
+  body();
+  currentGroup = outer;
+}
+
+/** Runs before each test of the current group (and its inner groups),
+ * outer groups first. A throw fails the test. */
+export function beforeEach(f: () => Promise<void>): void {
+  currentGroup.befores.push(f);
+}
+
+/** Runs after each test of the current group (and its inner groups),
+ * inner groups first. */
+export function afterEach(f: () => Promise<void>): void {
+  currentGroup.afters.push(f);
+}
+
+function register(name: string, fn: () => Promise<void>, only: boolean, skip: boolean, at: string): void {
+  const group = currentGroup;
+  const full = joinName(group, name);
+  const isOnly = only || groupOnly(group);
+  const isSkip = skip || groupSkip(group);
+  const wrapped = async () => {
+    await runBefores(group);
+    await fn();
+    await runAfters(group);
+  };
+  cases.push({ name: full, fn: wrapped });
+  send(["test", full, at, isOnly ? "1" : "", isSkip ? "1" : ""]);
+}
+
 /** Registers a test. The runner runs each test in a new app instance. */
 export function test(name: string, fn: () => Promise<void>, __at?: string): void {
-  cases.push({ name, fn });
-  send(["test", name, __at ?? ""]);
+  register(name, fn, false, false, __at ?? "");
+}
+
+/** The same as `test`, but only this test (and other `only` tests or
+ * groups) runs when the file has any `only`. */
+export function testOnly(name: string, fn: () => Promise<void>, __at?: string): void {
+  register(name, fn, true, false, __at ?? "");
+}
+
+/** The same as `test`, but the test shows as "skip" and does not run. */
+export function testSkip(name: string, fn: () => Promise<void>, __at?: string): void {
+  register(name, fn, false, true, __at ?? "");
 }
 
 // -- Steps -------------------------------------------------------------------
@@ -371,11 +510,19 @@ export function expect$string(v: string | null, __at?: string): StringExpectatio
 export interface NumberMatchers {
   toBe: (expected: number | null) => void;
   toEqual: (expected: number | null) => void;
+  toBeGreaterThan: (expected: number) => void;
+  toBeGreaterThanOrEqual: (expected: number) => void;
+  toBeLessThan: (expected: number) => void;
+  toBeLessThanOrEqual: (expected: number) => void;
 }
 
 export interface NumberExpectation {
   toBe: (expected: number | null) => void;
   toEqual: (expected: number | null) => void;
+  toBeGreaterThan: (expected: number) => void;
+  toBeGreaterThanOrEqual: (expected: number) => void;
+  toBeLessThan: (expected: number) => void;
+  toBeLessThanOrEqual: (expected: number) => void;
   not: NumberMatchers;
 }
 
@@ -393,13 +540,25 @@ function numberMatchers(v: number | null, negate: boolean, at: string): NumberMa
   return {
     toBe: (e: number | null) => check(v === e, `to be ${showNumber(e)}`),
     toEqual: (e: number | null) => check(v === e, `to equal ${showNumber(e)}`),
+    toBeGreaterThan: (e: number) => check(v !== null && v > e, `to be greater than ${e}`),
+    toBeGreaterThanOrEqual: (e: number) => check(v !== null && v >= e, `to be greater than or equal to ${e}`),
+    toBeLessThan: (e: number) => check(v !== null && v < e, `to be less than ${e}`),
+    toBeLessThanOrEqual: (e: number) => check(v !== null && v <= e, `to be less than or equal to ${e}`),
   };
 }
 
 export function expect$number(v: number | null, __at?: string): NumberExpectation {
   const at = __at ?? "";
   const m = numberMatchers(v, false, at);
-  return { toBe: m.toBe, toEqual: m.toEqual, not: numberMatchers(v, true, at) };
+  return {
+    toBe: m.toBe,
+    toEqual: m.toEqual,
+    toBeGreaterThan: m.toBeGreaterThan,
+    toBeGreaterThanOrEqual: m.toBeGreaterThanOrEqual,
+    toBeLessThan: m.toBeLessThan,
+    toBeLessThanOrEqual: m.toBeLessThanOrEqual,
+    not: numberMatchers(v, true, at),
+  };
 }
 
 export interface BooleanMatchers {
@@ -434,4 +593,53 @@ export function expect$boolean(v: boolean | null, __at?: string): BooleanExpecta
   const at = __at ?? "";
   const m = booleanMatchers(v, false, at);
   return { toBe: m.toBe, toEqual: m.toEqual, not: booleanMatchers(v, true, at) };
+}
+
+export interface FunctionMatchers {
+  toThrow: (text?: string) => void;
+}
+
+export interface FunctionExpectation {
+  toThrow: (text?: string) => void;
+  not: FunctionMatchers;
+}
+
+function thrownMessage(f: () => void): string | null {
+  try {
+    f();
+    return null;
+  } catch (e) {
+    return e.message;
+  }
+}
+
+function functionMatchers(f: () => void, negate: boolean, at: string): FunctionMatchers {
+  const not = negate ? "not " : "";
+  return {
+    toThrow: (text?: string) => {
+      const message = thrownMessage(f);
+      const threw = message !== null;
+      if (text === null) {
+        if (threw === negate) {
+          fail(`expected the function ${not}to throw`, at);
+        }
+        return;
+      }
+      const contains = threw && message !== null && message.includes(text);
+      if (contains === negate) {
+        if (!threw) {
+          fail(`expected the function ${not}to throw ${JSON.stringify(text)}\nit did not throw`, at);
+        } else {
+          fail(`expected the function ${not}to throw ${JSON.stringify(text)}\nit threw ${JSON.stringify(message)}`, at);
+        }
+      }
+    },
+  };
+}
+
+/** Starts an expectation about a function: `expect(() => f()).toThrow()`. */
+export function expect$function(f: () => void, __at?: string): FunctionExpectation {
+  const at = __at ?? "";
+  const m = functionMatchers(f, false, at);
+  return { toThrow: m.toThrow, not: functionMatchers(f, true, at) };
 }

@@ -15,6 +15,11 @@ path = "src/main.rs"
 name = "plinthw"
 path = "src/plinthw.rs"
 
+[features]
+# `plinth test` on the wasmi interpreter (docs/TESTING.md §11; set
+# `PLINTH_ENGINE=wasmi`). Off by default: a debug build of wasmi is slow.
+wasmi = ["plinth-runner-wasmtime/wasmi"]
+
 [dependencies]
 plinth-compiler.workspace = true
 plinth-package.workspace = true

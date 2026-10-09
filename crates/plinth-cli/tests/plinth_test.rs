@@ -394,10 +394,277 @@ test("a test name that only the test file has", async () => {
 }
 
 #[test]
+fn describe_groups_tests_and_can_nest() {
+    let dir = project(&[
+        ("app/main.tsx", COUNTER_APP),
+        (
+            "app/counter.test.tsx",
+            r#"import { test, describe, expect } from "plinth:test";
+
+describe("math", () => {
+  test("adds", async () => {
+    expect(1 + 1).toBe(2);
+  });
+  describe("odd numbers", () => {
+    test("three is odd", async () => {
+      expect(3 % 2).toBe(1);
+    });
+  });
+});
+"#,
+        ),
+    ]);
+    let (out, text) = run_tests(&dir, &[]);
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("  ok  math > adds ("), "{text}");
+    assert!(
+        text.contains("  ok  math > odd numbers > three is odd ("),
+        "{text}"
+    );
+    assert!(text.contains("2 passed, 0 failed"), "{text}");
+    let (out, text) = run_tests(&dir, &["--filter", "odd numbers"]);
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("three is odd"), "{text}");
+    assert!(!text.contains("  ok  math > adds"), "{text}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn before_each_and_after_each_run_outer_first_and_inner_first() {
+    let app = COUNTER_APP.replace(
+        "import { setTimeout } from \"plinth:time\";",
+        "import { setTimeout } from \"plinth:time\";\nimport { kv } from \"plinth:store\";",
+    );
+    let dir = project(&[
+        ("app/main.tsx", &app),
+        (
+            "app/counter.test.tsx",
+            r#"import { test, describe, beforeEach, afterEach, expect } from "plinth:test";
+import { kv } from "plinth:store";
+
+beforeEach(async () => {
+  kv.set("log", `${kv.get("log") ?? ""}outer-before,`);
+});
+afterEach(async () => {
+  kv.set("log", `${kv.get("log") ?? ""}outer-after,`);
+});
+
+describe("group", () => {
+  beforeEach(async () => {
+    kv.set("log", `${kv.get("log") ?? ""}inner-before,`);
+  });
+  afterEach(async () => {
+    kv.set("log", `${kv.get("log") ?? ""}inner-after,`);
+  });
+  test("order", async () => {
+    expect(kv.get("log")).toBe("outer-before,inner-before,");
+  });
+});
+"#,
+        ),
+        (
+            "caps",
+            "\n[[capabilities]]\nname = \"store.kv\"\nrationale = \"Log the order.\"\n",
+        ),
+    ]);
+    let (out, text) = run_tests(&dir, &[]);
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("1 passed, 0 failed"), "{text}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_throw_in_before_each_fails_the_test() {
+    let dir = project(&[
+        ("app/main.tsx", COUNTER_APP),
+        (
+            "app/counter.test.tsx",
+            r#"import { test, beforeEach, expect } from "plinth:test";
+
+beforeEach(async () => {
+  throw new Error("setup failed");
+});
+
+test("never runs cleanly", async () => {
+  expect(1).toBe(1);
+});
+"#,
+        ),
+    ]);
+    let (out, text) = run_tests(&dir, &[]);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("FAIL  never runs cleanly"), "{text}");
+    assert!(text.contains("setup failed"), "{text}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn test_only_runs_only_the_only_tests_and_test_skip_does_not_run() {
+    let dir = project(&[
+        ("app/main.tsx", COUNTER_APP),
+        (
+            "app/counter.test.tsx",
+            r#"import { test, testOnly, testSkip, expect } from "plinth:test";
+
+test("not selected", async () => {
+  expect(1).toBe(2);
+});
+
+testOnly("selected", async () => {
+  expect(1).toBe(1);
+});
+
+testSkip("skipped one", async () => {
+  expect(1).toBe(2);
+});
+"#,
+        ),
+    ]);
+    let (out, text) = run_tests(&dir, &[]);
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("  ok  selected ("), "{text}");
+    assert!(!text.contains("not selected"), "{text}");
+    assert!(text.contains("skip  skipped one"), "{text}");
+    assert!(text.contains("1 passed, 0 failed, 2 skipped"), "{text}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn describe_only_and_describe_skip() {
+    let dir = project(&[
+        ("app/main.tsx", COUNTER_APP),
+        (
+            "app/counter.test.tsx",
+            r#"import { test, describeOnly, describeSkip, expect } from "plinth:test";
+
+describeSkip("off", () => {
+  test("never runs", async () => {
+    expect(1).toBe(2);
+  });
+});
+
+describeOnly("on", () => {
+  test("runs", async () => {
+    expect(1).toBe(1);
+  });
+});
+
+test("not in any group", async () => {
+  expect(1).toBe(2);
+});
+"#,
+        ),
+    ]);
+    let (out, text) = run_tests(&dir, &[]);
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("  ok  on > runs ("), "{text}");
+    assert!(!text.contains("not in any group"), "{text}");
+    assert!(text.contains("skip  off > never runs"), "{text}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn number_comparison_matchers() {
+    let dir = project(&[
+        ("app/main.tsx", COUNTER_APP),
+        (
+            "app/counter.test.tsx",
+            r#"import { test, expect } from "plinth:test";
+
+test("greater and less", async () => {
+  expect(5).toBeGreaterThan(3);
+  expect(5).toBeGreaterThanOrEqual(5);
+  expect(3).toBeLessThan(5);
+  expect(3).toBeLessThanOrEqual(3);
+  expect(3).not.toBeGreaterThan(5);
+});
+
+test("fails with a clear message", async () => {
+  expect(3).toBeGreaterThan(5);
+});
+"#,
+        ),
+    ]);
+    let (out, text) = run_tests(&dir, &[]);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("  ok  greater and less ("), "{text}");
+    assert!(text.contains("FAIL  fails with a clear message"), "{text}");
+    assert!(text.contains("expected 3 to be greater than 5"), "{text}");
+    assert!(text.contains("1 passed, 1 failed"), "{text}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn to_throw_on_a_function_value() {
+    let dir = project(&[
+        ("app/main.tsx", COUNTER_APP),
+        (
+            "app/counter.test.tsx",
+            r#"import { test, expect } from "plinth:test";
+
+function boom(): void {
+  throw new Error("bad thing");
+}
+
+test("throws, and the message contains text", async () => {
+  expect(() => boom()).toThrow();
+  expect(() => boom()).toThrow("bad");
+  expect(() => {}).not.toThrow();
+});
+
+test("the message does not match", async () => {
+  expect(() => boom()).toThrow("nope");
+});
+
+test("does not throw", async () => {
+  expect(() => {}).toThrow();
+});
+"#,
+        ),
+    ]);
+    let (out, text) = run_tests(&dir, &[]);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("  ok  throws, and the message contains text ("),
+        "{text}"
+    );
+    assert!(text.contains("FAIL  the message does not match"), "{text}");
+    assert!(text.contains("it threw \"bad thing\""), "{text}");
+    assert!(text.contains("FAIL  does not throw"), "{text}");
+    assert!(text.contains("1 passed, 2 failed"), "{text}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn the_examples_pass_their_tests() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     for name in ["counter", "todo"] {
         let (out, text) = run_tests(&root.join(name), &[]);
+        assert!(out.status.success(), "{name}: {text}");
+        assert!(text.contains(" passed, 0 failed"), "{name}: {text}");
+    }
+}
+
+/// `plinth test` on the wasmi interpreter (docs/TESTING.md §11). This test
+/// builds only with `--features wasmi` (it needs the `wasmi` cargo feature
+/// of `plinth-cli`, which the plain `cargo test -p plinth-cli` run does not
+/// turn on): `cargo test -p plinth-cli --features wasmi`.
+#[cfg(feature = "wasmi")]
+#[test]
+fn the_examples_pass_their_tests_on_wasmi() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    for name in ["counter", "todo"] {
+        let out = plinth()
+            .arg("test")
+            .arg(root.join(name))
+            .env("PLINTH_ENGINE", "wasmi")
+            .output()
+            .expect("run plinth test");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert!(out.status.success(), "{name}: {text}");
         assert!(text.contains(" passed, 0 failed"), "{name}: {text}");
     }

@@ -65,6 +65,9 @@ wasmi_check() {
   for t in "${wasmi_suites[@]}"; do args+=(--test "$t"); done
   PLINTH_ENGINE=wasmi cargo test -p plinth-compiler --features plinth-runner-wasmtime/wasmi "${args[@]}"
   end
+  step "cargo test -p plinth-cli --features wasmi (plinth test on wasmi)"
+  cargo test -p plinth-cli --features wasmi --test plinth_test
+  end
 }
 
 case "$mode" in
