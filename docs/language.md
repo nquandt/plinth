@@ -107,20 +107,24 @@ members, getters/setters, generic classes.
   conservative than necessary (a call that provably cannot reach the path
   still drops it), by design: it costs an extra local variable in the rare
   case that trips it, in exchange for never needing an alias analysis.
-- Narrowing a plain `let` (not just a `const` or a parameter) in flow
-  order, so a loop that reassigns the variable it tests still narrows it:
+- Narrowing of a `let` in a function, in the order of the code. A loop
+  that assigns the variable it tests still narrows it:
   `let x: G | null = g; while (x !== null) { use(x.name); x = x.parent; }`.
-  The condition narrows at the start of each pass through the body (same
-  for `for`, and for a `for`'s `update`, since it runs at the end of the
-  same pass); an assignment to the `let` drops its narrowing again from
-  that point on, so a further use after the assignment, in the same pass,
-  still needs its own null check. `if (x === null) return;`/`throw`, and
-  the same shape with `break`/`continue` inside a loop, still narrow the
-  rest of the block, even though the branch itself assigned the variable:
-  the lines after the `if` are only ever reached on the path that did not
-  take that branch. A closure that captures the `let` keeps the fully
-  conservative rule (no narrowing at all), since it can run later, after a
-  further assignment the checker already saw past.
+  The rules:
+  1. The condition of `while` and `for` narrows the body at the start of
+     each pass (also the `update` of a `for`).
+  2. An assignment to the `let` removes its narrowing from that point on.
+     A use after the assignment needs its own null check.
+  3. At the start of a loop, the compiler removes the narrowing of each
+     variable that the loop assigns. Thus a check before the loop does not
+     apply in the loop or after it.
+  4. A `let` that a closure assigns is never narrowed, because the closure
+     can run between the check and the use.
+  5. A `let` at the top level of a module is never narrowed, because each
+     function of the module can assign it. A `const` is narrowed.
+
+  `if (x === null) return;` (or `throw`, or `break` and `continue` in a
+  loop) narrows the rest of the block.
 - `expr as T`, but only for a checked, safe narrowing: `string` (or a
   wider string literal union) to a narrower string literal union, or a
   discriminated union to one of its members. Each accepted cast carries

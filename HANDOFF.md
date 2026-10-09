@@ -14,7 +14,7 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 
 ## 0. Read this first
 
-**State (2026-10-08, evening):** `master` is the active branch. One agent branch is open: `wt/loopnarrow` (worktree `U:\plinth-wt\loopnarrow`), narrowing in a loop that assigns the variable (GAPS, the last section). The production checklist `docs/PRODUCTION.md` is the plan to 1.0; `bash scripts/production-status.sh` counts it (Preview 26/26 Done; Beta 27 Done, 12 Partial, 13 Open). The gate (full and wasmi) passes on `master` after the merge of `wt/testkit2`: `bash scripts/ci-local.sh full` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; more than 130 commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
+**State (2026-10-08, evening):** `master` is the active branch. No agent branch is open. The production checklist `docs/PRODUCTION.md` is the plan to 1.0; `bash scripts/production-status.sh` counts it (Preview 26/26 Done; Beta 27 Done, 12 Partial, 13 Open). The gate (full and wasmi) passes on `master` after the merge of `wt/loopnarrow`: `bash scripts/ci-local.sh full` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; more than 130 commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
 
 ### 0.1 Owner decisions (keep them)
 
@@ -205,6 +205,7 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 - **Compiler fix:** a function with no return type that mixes `return;` and `return <value>` gave an invalid module (only when the value branch came first in the source). Now its type is `T | null` (`finish_ret`, `patch_returns`). `onUpgrade` accepts a handler of type `Promise<void> | null`.
 - **`===` on `string | Shape`** compares two strings by content (`EqKind::UnionStr`: the type tag at offset 0 of each side, then `str_eq`); also `switch`, `includes`, `indexOf`.
 - **GAPS R3 (Done):** a `??`/`?.`/`||` chain reuses one local per type (`chain_temp`); 60,000 links compile. The engine needs minutes to compile such a function in a debug build, so those tests only compile.
+- **Narrowing of a function-local `let`** in code order, also in loops that assign it (`docs/language.md` has the 5 rules). Review found 5 unsound cases in the first agent versions (a closure that assigns, a narrowing from before a loop, a module-level `let` assigned by a function or a method): check each narrowing change against these cases.
 - **Tests:** each diagnostic code has a golden case (`every_code_has_a_golden_case`; `PL3011` is reserved).
 - **Lessons:** a Node test that calls `PlinthApp` directly does not test the browser path: every browser host goes through `WorkerApp`, so test host state across the Worker boundary and a reload. A Sonnet agent that waits on a background build gets stopped: tell it to run cargo in the foreground. After a merge, rebuild `plinth.exe` before a manual check (the gate's binary is older).
 
