@@ -638,10 +638,13 @@ impl Checker<'_> {
         let r = self.call_impl(callee, type_args, args, span, expected);
         // Any call can mutate state reached through aliases of a narrowed
         // member path (`r.subtitle`), so a call conservatively drops all
-        // member-path narrowing (docs/language.md "Narrowing"). Plain
-        // variable narrowing is unaffected: it only ever applies to a
-        // `const`/parameter, which a call cannot reassign.
+        // member-path narrowing (docs/language.md "Narrowing"). A `const`/
+        // parameter's own narrowing is unaffected: it can never be
+        // reassigned, by or through a call. A `let`'s narrowing is
+        // dropped too — the call could be a closure that assigns it
+        // (declared earlier or later in the source, it does not matter).
         self.invalidate_member_narrowing();
+        self.invalidate_let_narrowing();
         r
     }
 
@@ -2593,6 +2596,12 @@ impl Checker<'_> {
             }
         }
 
+        // Same reasoning as the bare `for…of` (`check/stmt.rs`): a
+        // variable the body assigns cannot trust a narrowing from before
+        // this loop.
+        let mut assigned = std::collections::HashSet::new();
+        super::stmt::assigned_names_stmt(body, &mut assigned);
+        self.invalidate_named_var_narrowing(&assigned);
         let b = match &body.kind {
             ast::StmtKind::Block(b) => self.block_stmts(b),
             _ => self.stmt(body, false),

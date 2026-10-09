@@ -1768,6 +1768,103 @@ function Home() { return <Screen title="Home"><Text>{""}</Text></Screen>; }
 }
 
 #[test]
+fn while_narrows_a_let_the_body_reassigns_each_pass() {
+    // The original shape (docs/GAPS.md): `x.name` reads the narrowed `x`
+    // before the body reassigns it.
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+function path(g: G): string {
+  let x: G | null = g;
+  let s = "";
+  while (x !== null) { s = x.name + s; x = x.parent; }
+  return s;
+}
+function Home() {
+  const a: G = new G("a", null);
+  const b: G = new G("b", a);
+  return <Screen title="Home"><Text>{path(b)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "ab");
+}
+
+#[test]
+fn a_closure_that_assigns_a_let_keeps_it_unnarrowed() {
+    // `reset` assigns `x` to null; a call to it after `if (x !== null)`
+    // must still drop the narrowing, even though the assignment is
+    // textually inside a closure declared earlier in the function.
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+function f(g: G): string {
+  let x: G | null = g;
+  const reset = (): void => { x = null; };
+  if (x !== null) {
+    reset();
+    return x.name;
+  }
+  return "";
+}
+function Home() { return <Screen title="Home"><Text>{""}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL3010"]);
+}
+
+#[test]
+fn outer_narrowing_does_not_survive_into_the_second_pass_of_a_while_loop() {
+    // `x` is narrowed before the loop, but the loop's own condition (`i <
+    // 3`) says nothing about `x`, and the body reassigns `x` on every
+    // pass; the narrowing from before the loop only ever held for the
+    // first pass, so `x.name` still needs its own check.
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+function f(g: G): string {
+  let x: G | null = g;
+  let s = "";
+  let i = 0;
+  if (x !== null) {
+    while (i < 3) {
+      s = s + x.name;
+      x = x.parent;
+      i = i + 1;
+    }
+  }
+  return s;
+}
+function Home() { return <Screen title="Home"><Text>{""}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL3010", "PL3010"]);
+}
+
+#[test]
+fn outer_narrowing_does_not_survive_into_the_second_pass_of_a_for_of_loop() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+function f(g: G): string {
+  let x: G | null = g;
+  let s = "";
+  if (x !== null) {
+    for (const k of [1, 2, 3]) {
+      s = s + x.name;
+      x = x.parent;
+    }
+  }
+  return s;
+}
+function Home() { return <Screen title="Home"><Text>{""}</Text></Screen>; }
+"#
+    .to_string()
+        + APP;
+    assert_eq!(codes(&main), ["PL3010", "PL3010"]);
+}
+
+#[test]
 fn extends_a_non_class_is_rejected() {
     let main = with_app("interface I { x: number }\nclass C extends I { constructor() { super(); } }");
     assert!(codes(&main).contains(&"PL2022"));

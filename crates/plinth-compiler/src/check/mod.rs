@@ -936,6 +936,40 @@ impl Checker<'_> {
         }
     }
 
+    /// `invalidate_var_narrowing` for every name in `names` that resolves
+    /// to a variable. Used at the head of a loop: see `check/stmt.rs`'s
+    /// `assigned_names_stmt`/`assigned_names_expr`.
+    pub(crate) fn invalidate_named_var_narrowing(&mut self, names: &std::collections::HashSet<String>) {
+        for name in names {
+            if let Some(Binding::Var(v)) = self.lookup(name) {
+                self.invalidate_var_narrowing(v);
+            }
+        }
+    }
+
+    /// Drops the narrowing of every plain `let` (a `const`/parameter is
+    /// never reassigned, so it is unaffected) in every live scope. Called
+    /// on every call (`check/expr.rs`'s `call`): the simplest sound rule
+    /// for a closure that assigns an outer `let` is to treat a call to it
+    /// as able to change it right there, even though the assignment is
+    /// textually later in the source — the same way `invalidate_member_
+    /// narrowing` already treats a call as able to change anything
+    /// reached through an alias.
+    pub(crate) fn invalidate_let_narrowing(&mut self) {
+        let vars = &self.prog.vars;
+        let funcs = &self.prog.funcs;
+        for s in self.fx.scopes.iter_mut() {
+            s.narrow.retain(|k, _| {
+                if !k.1.is_empty() {
+                    return true;
+                }
+                let info = &vars[k.0 as usize];
+                let is_param = funcs[info.owner as usize].params.contains(&k.0);
+                !(info.mutable && !is_param)
+            });
+        }
+    }
+
     fn push_scope(&mut self) {
         self.fx.scopes.push(Scope::default());
     }
