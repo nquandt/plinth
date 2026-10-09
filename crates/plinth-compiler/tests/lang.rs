@@ -1792,6 +1792,54 @@ function Home() {
 }
 
 #[test]
+fn while_narrows_a_let_the_body_reassigns_even_with_a_call_in_between() {
+    // A plain call (not a closure assigning `x`) must not drop `x`'s
+    // narrowing: rule 1 is about a closure that assigns the `let`, not
+    // about calls in general.
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+function show(s: string): string { return s; }
+function path(g: G): string {
+  let x: G | null = g;
+  let s = "";
+  while (x !== null) { s = show(x.name) + s; x = x.parent; }
+  return s;
+}
+function Home() {
+  const a: G = new G("a", null);
+  const b: G = new G("b", a);
+  return <Screen title="Home"><Text>{path(b)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "ab");
+}
+
+#[test]
+fn while_narrows_a_let_the_body_reassigns_with_a_method_call_on_it() {
+    let main = r#"import { app, Screen, Text } from "plinth:ui";
+class G { name: string; parent: G | null; constructor(n: string, p: G | null) { this.name = n; this.parent = p; } }
+function path(g: G): string {
+  let x: G | null = g;
+  let s = "";
+  while (x !== null) { s = x.name.toUpperCase() + s; x = x.parent; }
+  return s;
+}
+function Home() {
+  const a: G = new G("a", null);
+  const b: G = new G("b", a);
+  return <Screen title="Home"><Text>{path(b)}</Text></Screen>;
+}
+"#
+    .to_string()
+        + APP;
+    let tree = run(&main);
+    assert_eq!(text_of(&tree, ControlKind::Text), "AB");
+}
+
+#[test]
 fn a_closure_that_assigns_a_let_keeps_it_unnarrowed() {
     // `reset` assigns `x` to null; a call to it after `if (x !== null)`
     // must still drop the narrowing, even though the assignment is

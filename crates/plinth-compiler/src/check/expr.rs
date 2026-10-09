@@ -640,11 +640,13 @@ impl Checker<'_> {
         // member path (`r.subtitle`), so a call conservatively drops all
         // member-path narrowing (docs/language.md "Narrowing"). A `const`/
         // parameter's own narrowing is unaffected: it can never be
-        // reassigned, by or through a call. A `let`'s narrowing is
-        // dropped too — the call could be a closure that assigns it
-        // (declared earlier or later in the source, it does not matter).
+        // reassigned, by or through a call. A plain `let` that some
+        // closure assigns is never narrowed in the first place
+        // (`narrow_path` in `check/stmt.rs`, using `FnCx::closure_assigned`
+        // — computed once, before the function is checked, by scanning
+        // for an assignment inside any closure nested in it), so a call
+        // needs no narrowing to drop for it.
         self.invalidate_member_narrowing();
-        self.invalidate_let_narrowing();
         r
     }
 
@@ -3789,6 +3791,7 @@ impl Checker<'_> {
                 saw_void_return: false,
                 reactive: ReactiveCtx::Callback,
                 is_async: false,
+                closure_assigned: std::collections::HashSet::new(),
             },
         );
         let body = if stringify {

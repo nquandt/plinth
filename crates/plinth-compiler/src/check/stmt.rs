@@ -750,12 +750,20 @@ impl Checker<'_> {
     ///
     /// A plain `let` (no member path: `path` is still empty here) is
     /// narrowable too, but only while checking the function that declares
-    /// it: `check/expr.rs`'s `assign` drops the narrowing of a `let` the
-    /// moment it is assigned (flow order), so the checker never trusts a
-    /// stale narrowing of it past an assignment. A closure that captures
-    /// the `let` can run later, after such an assignment, so a `let` read
-    /// through a closure (`info.owner != self.fx.func`) is not narrowed —
-    /// the existing conservative rule.
+    /// it (`info.owner != self.fx.func` reads it through a closure
+    /// instead, which is never narrowed — see below): `check/expr.rs`'s
+    /// `assign` drops the narrowing of a `let` the moment it is assigned
+    /// (flow order), so the checker never trusts a stale narrowing of it
+    /// past an assignment, and at the head of a loop the checker drops the
+    /// narrowing of anything the loop itself assigns before the loop's own
+    /// condition narrows the body (`check/stmt.rs`'s `assigned_names_stmt`,
+    /// used by `While`/`For`/`ForOf`/`DoWhile`). A `let` that some closure
+    /// assigns, anywhere in it, is never narrowed, full stop
+    /// (`self.fx.closure_assigned`, computed once before the function is
+    /// checked by `closure_assigned_names_body`/`_stmt`/`_expr`): a
+    /// closure can run at any call to it, not only when the checker
+    /// reaches the assignment's own textual position, so flow-order
+    /// tracking cannot see it coming.
     pub(super) fn narrow_path(&self, e: &TExpr) -> Option<super::NarrowKey> {
         let mut path = Vec::new();
         let mut e = e;
@@ -764,7 +772,10 @@ impl Checker<'_> {
                 TExprKind::Var(v) => {
                     let info = &self.prog.vars[*v as usize];
                     let is_param = self.prog.funcs[info.owner as usize].params.contains(v);
-                    if info.mutable && !is_param && (!path.is_empty() || info.owner != self.fx.func) {
+                    if info.mutable
+                        && !is_param
+                        && (!path.is_empty() || info.owner != self.fx.func || self.fx.closure_assigned.contains(&info.name))
+                    {
                         return None;
                     }
                     path.reverse();
@@ -996,6 +1007,232 @@ fn assigned_names_jsx(j: &ast::JsxElement, out: &mut std::collections::HashSet<S
             ast::JsxChild::Text(..) => {}
             ast::JsxChild::Expr(e) => assigned_names_expr(e, out),
             ast::JsxChild::Element(el) => assigned_names_jsx(el, out),
+        }
+    }
+}
+
+/// Every name that a function's own body assigns somewhere inside a
+/// closure (an arrow, a function expression, or a nested function
+/// declaration) nested in it, at any depth — not an assignment directly
+/// in the function's own top-level flow, which `Checker::
+/// invalidate_var_narrowing` already tracks in flow order as the checker
+/// reaches it. A name in this set is never narrowed by `narrow_path`
+/// (docs/GAPS.md "Narrowing in a loop that assigns the narrowed
+/// variable", rule 1): a closure can run at any later call to it, not
+/// only at the point where the assignment itself is checked, so flow
+/// order cannot see it coming. Computed once, before a function's body
+/// is checked, and kept in `FnCx::closure_assigned` for as long as that
+/// function is the one being checked.
+pub(super) fn closure_assigned_names_body(body: &ast::Body) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    match body {
+        ast::Body::Block(stmts) => {
+            for s in stmts {
+                closure_assigned_names_stmt(s, false, &mut out);
+            }
+        }
+        ast::Body::Expr(e) => closure_assigned_names_expr(e, false, &mut out),
+    }
+    out
+}
+
+/// `closure_assigned_names_body`'s statement half. `in_closure` is true
+/// once the walk has entered a closure nested in the function whose body
+/// this call started from; every assignment target found while it is
+/// true is collected.
+pub(super) fn closure_assigned_names_stmt(s: &ast::Stmt, in_closure: bool, out: &mut std::collections::HashSet<String>) {
+    match &s.kind {
+        StmtKind::Var(decls) => {
+            for d in decls {
+                if let Some(init) = &d.init {
+                    closure_assigned_names_expr(init, in_closure, out);
+                }
+            }
+        }
+        // A nested function declaration is a closure: everything it
+        // assigns, anywhere inside it, counts.
+        StmtKind::Func(f) => {
+            if let ast::Body::Block(stmts) = &f.body {
+                for st in stmts {
+                    closure_assigned_names_stmt(st, true, out);
+                }
+            } else if let ast::Body::Expr(e) = &f.body {
+                closure_assigned_names_expr(e, true, out);
+            }
+        }
+        StmtKind::Empty | StmtKind::Break | StmtKind::Continue => {}
+        StmtKind::Expr(e) => closure_assigned_names_expr(e, in_closure, out),
+        StmtKind::Block(b) => {
+            for st in b {
+                closure_assigned_names_stmt(st, in_closure, out);
+            }
+        }
+        StmtKind::If(c, t, e) => {
+            closure_assigned_names_expr(c, in_closure, out);
+            closure_assigned_names_stmt(t, in_closure, out);
+            if let Some(e) = e {
+                closure_assigned_names_stmt(e, in_closure, out);
+            }
+        }
+        StmtKind::While(c, b) => {
+            closure_assigned_names_expr(c, in_closure, out);
+            closure_assigned_names_stmt(b, in_closure, out);
+        }
+        StmtKind::DoWhile(b, c) => {
+            closure_assigned_names_stmt(b, in_closure, out);
+            closure_assigned_names_expr(c, in_closure, out);
+        }
+        StmtKind::For { init, test, update, body } => {
+            if let Some(i) = init {
+                closure_assigned_names_stmt(i, in_closure, out);
+            }
+            if let Some(t) = test {
+                closure_assigned_names_expr(t, in_closure, out);
+            }
+            if let Some(u) = update {
+                closure_assigned_names_expr(u, in_closure, out);
+            }
+            closure_assigned_names_stmt(body, in_closure, out);
+        }
+        StmtKind::ForOf { iter, body, .. } => {
+            closure_assigned_names_expr(iter, in_closure, out);
+            closure_assigned_names_stmt(body, in_closure, out);
+        }
+        StmtKind::Return(v) => {
+            if let Some(e) = v {
+                closure_assigned_names_expr(e, in_closure, out);
+            }
+        }
+        StmtKind::Switch(d, cases) => {
+            closure_assigned_names_expr(d, in_closure, out);
+            for (t, b) in cases {
+                if let Some(t) = t {
+                    closure_assigned_names_expr(t, in_closure, out);
+                }
+                for st in b {
+                    closure_assigned_names_stmt(st, in_closure, out);
+                }
+            }
+        }
+        StmtKind::Throw(e) => closure_assigned_names_expr(e, in_closure, out),
+        StmtKind::Try { block, catch, finally } => {
+            for st in block {
+                closure_assigned_names_stmt(st, in_closure, out);
+            }
+            if let Some(c) = catch {
+                for st in &c.body {
+                    closure_assigned_names_stmt(st, in_closure, out);
+                }
+            }
+            if let Some(f) = finally {
+                for st in f {
+                    closure_assigned_names_stmt(st, in_closure, out);
+                }
+            }
+        }
+    }
+}
+
+/// `closure_assigned_names_stmt`'s expression half.
+fn closure_assigned_names_expr(e: &ast::Expr, in_closure: bool, out: &mut std::collections::HashSet<String>) {
+    match &e.kind {
+        ast::ExprKind::Assign { target, value, .. } => {
+            if in_closure {
+                if let ast::ExprKind::Ident(name) = &target.kind {
+                    out.insert(name.clone());
+                }
+            }
+            closure_assigned_names_expr(target, in_closure, out);
+            closure_assigned_names_expr(value, in_closure, out);
+        }
+        ast::ExprKind::Update { target, .. } => {
+            if in_closure {
+                if let ast::ExprKind::Ident(name) = &target.kind {
+                    out.insert(name.clone());
+                }
+            }
+            closure_assigned_names_expr(target, in_closure, out);
+        }
+        // A closure nested in another closure: still a closure, so the
+        // walk keeps `in_closure` true (it was already true to get here,
+        // or becomes true now).
+        ast::ExprKind::Func(f) => match &f.body {
+            ast::Body::Block(stmts) => {
+                for st in stmts {
+                    closure_assigned_names_stmt(st, true, out);
+                }
+            }
+            ast::Body::Expr(fe) => closure_assigned_names_expr(fe, true, out),
+        },
+        ast::ExprKind::Template(_, exprs) => {
+            for x in exprs {
+                closure_assigned_names_expr(x, in_closure, out);
+            }
+        }
+        ast::ExprKind::Array(items) => {
+            for (_, x) in items {
+                closure_assigned_names_expr(x, in_closure, out);
+            }
+        }
+        ast::ExprKind::Object(props) => {
+            for p in props {
+                match p {
+                    ast::ObjProp::Field(_, x, _) => closure_assigned_names_expr(x, in_closure, out),
+                    ast::ObjProp::Spread(x) => closure_assigned_names_expr(x, in_closure, out),
+                }
+            }
+        }
+        ast::ExprKind::Member { obj, .. } => closure_assigned_names_expr(obj, in_closure, out),
+        ast::ExprKind::Index { obj, index, .. } => {
+            closure_assigned_names_expr(obj, in_closure, out);
+            closure_assigned_names_expr(index, in_closure, out);
+        }
+        ast::ExprKind::Call { callee, args, .. } => {
+            closure_assigned_names_expr(callee, in_closure, out);
+            for a in args {
+                closure_assigned_names_expr(a, in_closure, out);
+            }
+        }
+        ast::ExprKind::Unary(_, x) | ast::ExprKind::Await(x) => closure_assigned_names_expr(x, in_closure, out),
+        ast::ExprKind::Binary(_, l, r) | ast::ExprKind::Logical(_, l, r) => {
+            closure_assigned_names_expr(l, in_closure, out);
+            closure_assigned_names_expr(r, in_closure, out);
+        }
+        ast::ExprKind::Cond(c, t, f) => {
+            closure_assigned_names_expr(c, in_closure, out);
+            closure_assigned_names_expr(t, in_closure, out);
+            closure_assigned_names_expr(f, in_closure, out);
+        }
+        ast::ExprKind::NewInstance(_, args) | ast::ExprKind::NewPromise(_, args) => {
+            for a in args {
+                closure_assigned_names_expr(a, in_closure, out);
+            }
+        }
+        ast::ExprKind::InstanceOf(x, _, _) => closure_assigned_names_expr(x, in_closure, out),
+        ast::ExprKind::As(x, _, _) => closure_assigned_names_expr(x, in_closure, out),
+        ast::ExprKind::Jsx(j) => closure_assigned_names_jsx(j, in_closure, out),
+        ast::ExprKind::Num(_)
+        | ast::ExprKind::Str(_)
+        | ast::ExprKind::Bool(_)
+        | ast::ExprKind::Null
+        | ast::ExprKind::Ident(_)
+        | ast::ExprKind::New(..)
+        | ast::ExprKind::Regex(..) => {}
+    }
+}
+
+/// `closure_assigned_names_expr`'s JSX half.
+fn closure_assigned_names_jsx(j: &ast::JsxElement, in_closure: bool, out: &mut std::collections::HashSet<String>) {
+    for a in &j.attrs {
+        if let Some(v) = &a.value {
+            closure_assigned_names_expr(v, in_closure, out);
+        }
+    }
+    for c in &j.children {
+        match c {
+            ast::JsxChild::Text(..) => {}
+            ast::JsxChild::Expr(e) => closure_assigned_names_expr(e, in_closure, out),
+            ast::JsxChild::Element(el) => closure_assigned_names_jsx(el, in_closure, out),
         }
     }
 }

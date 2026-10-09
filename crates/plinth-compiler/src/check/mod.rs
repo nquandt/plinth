@@ -256,6 +256,14 @@ struct FnCx {
     /// The function is `async`: `await` is allowed, and `ret` is the `T`
     /// of its `Promise<T>` (SPEC.md §4.5).
     is_async: bool,
+    /// The name of every plain `let` this function declares directly that
+    /// some closure nested in it (at any depth) assigns — computed once,
+    /// before the function's body is checked, by `check/stmt.rs`'s
+    /// `closure_assigned_names`. `narrow_path` never narrows one of these:
+    /// a closure can run at any later call to it, not only at the
+    /// assignment's own textual position, so flow-order tracking
+    /// (`Checker::invalidate_var_narrowing`) cannot see it coming.
+    closure_assigned: std::collections::HashSet<String>,
 }
 
 struct PendingFunc {
@@ -448,7 +456,18 @@ pub fn check_full(
         defaults: vec![None; modules.len()],
         module_scopes: vec![HashMap::new(); modules.len()],
         module: 0,
-        fx: FnCx { func: 0, scopes: Vec::new(), loops: Vec::new(), switches: 0, ret: None, inferred: None, saw_void_return: false, reactive: ReactiveCtx::Plain, is_async: false },
+        fx: FnCx {
+            func: 0,
+            scopes: Vec::new(),
+            loops: Vec::new(),
+            switches: 0,
+            ret: None,
+            inferred: None,
+            saw_void_return: false,
+            reactive: ReactiveCtx::Plain,
+            is_async: false,
+            closure_assigned: std::collections::HashSet::new(),
+        },
         pending: HashMap::new(),
         in_progress: HashSet::new(),
         aliases: vec![Vec::new(); modules.len()],
@@ -640,8 +659,28 @@ impl Checker<'_> {
             span: Span::new(src.file, 0, 0),
         });
         self.prog.module_inits.push(init);
-        self.fx =
-            FnCx { func: init, scopes: Vec::new(), loops: Vec::new(), switches: 0, ret: Some(Type::Void), inferred: None, saw_void_return: false, reactive: ReactiveCtx::Plain, is_async: false };
+        // A top-level `let` that a closure (an event handler, a `computed`,
+        // …) assigns is never narrowed; see `FnCx::closure_assigned`.
+        let mut closure_assigned = std::collections::HashSet::new();
+        for item in &src.ast.items {
+            if let Item::Stmt(s) = item
+                && !matches!(s.kind, ast::StmtKind::Func(_))
+            {
+                stmt::closure_assigned_names_stmt(s, false, &mut closure_assigned);
+            }
+        }
+        self.fx = FnCx {
+            func: init,
+            scopes: Vec::new(),
+            loops: Vec::new(),
+            switches: 0,
+            ret: Some(Type::Void),
+            inferred: None,
+            saw_void_return: false,
+            reactive: ReactiveCtx::Plain,
+            is_async: false,
+            closure_assigned,
+        };
 
         // 1. Imports.
         let mut import_index = 0;
@@ -944,29 +983,6 @@ impl Checker<'_> {
             if let Some(Binding::Var(v)) = self.lookup(name) {
                 self.invalidate_var_narrowing(v);
             }
-        }
-    }
-
-    /// Drops the narrowing of every plain `let` (a `const`/parameter is
-    /// never reassigned, so it is unaffected) in every live scope. Called
-    /// on every call (`check/expr.rs`'s `call`): the simplest sound rule
-    /// for a closure that assigns an outer `let` is to treat a call to it
-    /// as able to change it right there, even though the assignment is
-    /// textually later in the source — the same way `invalidate_member_
-    /// narrowing` already treats a call as able to change anything
-    /// reached through an alias.
-    pub(crate) fn invalidate_let_narrowing(&mut self) {
-        let vars = &self.prog.vars;
-        let funcs = &self.prog.funcs;
-        for s in self.fx.scopes.iter_mut() {
-            s.narrow.retain(|k, _| {
-                if !k.1.is_empty() {
-                    return true;
-                }
-                let info = &vars[k.0 as usize];
-                let is_param = funcs[info.owner as usize].params.contains(&k.0);
-                !(info.mutable && !is_param)
-            });
         }
     }
 
@@ -1960,9 +1976,24 @@ impl Checker<'_> {
         self.fx.func = saved_func;
         self.prog.funcs[fid as usize].params = param_vars.clone();
 
+        let mut closure_assigned = std::collections::HashSet::new();
+        for s in &ctor_ast.body {
+            stmt::closure_assigned_names_stmt(s, false, &mut closure_assigned);
+        }
         let saved_fx = std::mem::replace(
             &mut self.fx,
-            FnCx { func: fid, scopes: vec![Scope::default()], loops: Vec::new(), switches: 0, ret: Some(Type::Struct(sid)), inferred: None, saw_void_return: false, reactive: ReactiveCtx::Callback, is_async: false },
+            FnCx {
+                func: fid,
+                scopes: vec![Scope::default()],
+                loops: Vec::new(),
+                switches: 0,
+                ret: Some(Type::Struct(sid)),
+                inferred: None,
+                saw_void_return: false,
+                reactive: ReactiveCtx::Callback,
+                is_async: false,
+                closure_assigned,
+            },
         );
         let mut prologue = Vec::new();
         for (p, v) in ctor_ast.params.iter().zip(&param_vars) {
@@ -2188,6 +2219,7 @@ impl Checker<'_> {
                 saw_void_return: false,
                 reactive: if is_component { ReactiveCtx::Plain } else { ReactiveCtx::Callback },
                 is_async,
+                closure_assigned: stmt::closure_assigned_names_body(&p.decl.body),
             },
         );
         let params = self.prog.funcs[fid as usize].params.clone();
@@ -2410,8 +2442,21 @@ impl Checker<'_> {
         // `self.prog.funcs[owner].params` to tell a parameter from a
         // captured `let`, and it runs while the body below is checked.
         self.prog.funcs[fid as usize].params = param_vars.clone();
-        let mut saved =
-            std::mem::replace(&mut self.fx, FnCx { func: fid, scopes: Vec::new(), loops: Vec::new(), switches: 0, ret: declared.clone(), inferred: None, saw_void_return: false, reactive, is_async: f.is_async });
+        let mut saved = std::mem::replace(
+            &mut self.fx,
+            FnCx {
+                func: fid,
+                scopes: Vec::new(),
+                loops: Vec::new(),
+                switches: 0,
+                ret: declared.clone(),
+                inferred: None,
+                saw_void_return: false,
+                reactive,
+                is_async: f.is_async,
+                closure_assigned: stmt::closure_assigned_names_body(&f.body),
+            },
+        );
         // A closure sees the scopes of the enclosing function: move them in
         // for the body, then give them back.
         self.fx.scopes = std::mem::take(&mut saved.scopes);
