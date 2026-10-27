@@ -1,0 +1,24 @@
+# XcodeGen spec for the iOS web shell. On a Mac:
+#   brew install xcodegen && xcodegen generate && open PlinthHub.xcodeproj
+# Then pick your team under "Signing & Capabilities" and run on a device.
+name: PlinthHub
+options:
+  bundleIdPrefix: dev.femur.plinth
+  deploymentTarget:
+    iOS: "16.4"
+targets:
+  PlinthHub:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.femur.plinth.hub
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Plinth
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        # The registry site that this shell opens (docs/REGISTRY-HOSTING.md).
+        INFOPLIST_KEY_PlinthHubURL: "https://plinth.femur.dev/"

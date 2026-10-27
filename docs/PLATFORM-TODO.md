@@ -11,7 +11,7 @@ Status: 2026-10-08. Nothing in this file is started.
    - Linux: `infra/self-hosted-runner/setup-linux.sh` (it installs `build-essential` and the other packages).
    - macOS: Xcode command line tools (`xcode-select --install`), Rust, Node 22.
 3. Run `bash scripts/ci-local.sh full`. The compiler, the runner and the Hub tests must pass already (`docs/LIMITS.md`). Record each failure as a new item in this file before you fix it.
-4. Give an agent one bounded item at a time, and run only one build agent on a machine (`HANDOFF.md` §9a).
+4. Give an agent one bounded item at a time, and run only one build agent on a machine (`HANDOFF.md` §8, `docs/HISTORY.md`).
 
 ## 2. Linux
 

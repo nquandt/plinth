@@ -11,15 +11,16 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 - `docs/HUB.md` (the App Hub), `docs/REGISTRY.md`, `docs/web-hub.md`.
 - Design drafts: `docs/VALIDATION.md`, `docs/STORAGE.md`, `docs/UI-ADVANCED.md`, `docs/EXPERIENCE.md`.
 - `infra/self-hosted-runner/README.md`: the CI runners on the owner's PC.
+- `docs/MAC-HANDOFF.md` (the Mac and iPhone work), `docs/REGISTRY-HOSTING.md` and `infra/registry/README.md` (the personal registry), `docs/HISTORY.md` (old session logs).
 
 ## 0. Read this first
 
-**State (2026-10-08, evening):** `master` is the active branch. No agent branch is open. The production checklist `docs/PRODUCTION.md` is the plan to 1.0; `bash scripts/production-status.sh` counts it (Preview 26/26 Done; Beta 27 Done, 12 Partial, 13 Open). The gate (full and wasmi) passes on `master` after the merge of `wt/loopnarrow`: `bash scripts/ci-local.sh full` and `node web/test/run-a11y.mjs`. GitHub has `master` up to `b6e766e`; more than 130 commits after it are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first.
+**State (2026-10-27):** `master` is the active branch. No agent branch is open. The production checklist `docs/PRODUCTION.md` is the plan to 1.0; `bash scripts/production-status.sh` counts it. Dependencies were updated on 2026-10-27 (wasmtime 48, zip 9; `docs/DEPENDENCIES.md`). The gate (`bash scripts/ci-local.sh full`, then `node web/test/run-a11y.mjs`) passes: see `docs/HISTORY.md` for the last run. GitHub has `master` only up to `b6e766e`; more than 150 commits are local. **Push only when the owner asks**, and only commits that passed the gate. A push starts CI; read §0.2 first. **Next big goal:** run Plinth apps on an iPhone from a personal registry (`docs/MAC-HANDOFF.md`).
 
 ### 0.1 Owner decisions (keep them)
 
 1. **One implementation for all hosts.** One `.plnt` runs on every host; a host supplies only host APIs and host-owned UI (consent window, error and stop banners, dialogs). Never build a second UI for one host.
-2. **Mobile hosts render with gpui.** Only the web host renders to the DOM.
+2. **Mobile hosts render with gpui.** Only the web host renders to the DOM. Note (2026-10-27): gpui-ce has **no iOS platform crate yet**; see `docs/MAC-HANDOFF.md`. A `WKWebView` shell (`hosts/ios-shell`) is a bridge until it exists.
 3. **The web host stays DOM** (SPEC M5). A `gpui_web` canvas host is a possible later experiment, not planned.
 4. **Every web app runs in a sandboxed iframe** (opaque origin), the web Hub app too; the parent page is the host shell (SPEC §10.3).
 5. **Level 2 UI:** typed style props, spacing units (4 px) and theme tokens, no raw pixels or colors.
@@ -33,10 +34,12 @@ This file gives a new agent what it needs to continue the work. Read it first. T
 13. **App tests are written in Plinth TS (2026-10-08, T3):** `*.test.tsx` files with `plinth:test`, run by `plinth test` and `npm test`. Not a JavaScript package. Design: `docs/TESTING.md`.
 14. **Linux and macOS work waits for agents on those machines (2026-10-08).** Until then, track each item in `docs/PLATFORM-TODO.md`, and do not mark such an item Done from Windows.
 15. **Orchestrate subagents (2026-10-08):** this session plans, reviews, merges and runs the gate. Clear implementation work goes to Sonnet agents (`model: "sonnet"`), mechanical test work to Haiku (`model: "haiku"`, Haiku 5.5). Split each task small: one layer for each agent (for example WIT + core + desktop; then compiler + tests; then web + docs), each step buildable and testable alone. A Sonnet agent refused a full end-to-end feature as too big for one pass.
-16. **The web Hub server and the Cloudflare tunnel are stopped (2026-10-08).** Do not start them again unless the owner asks.
+16. **The web Hub server and the Cloudflare quick tunnel are stopped (2026-10-08).** Do not start them again unless the owner asks. The personal registry (`infra/registry`, name `plinth.femur.dev`, a named tunnel) is the owner's own and is meant to run: the owner started that work on 2026-10-27.
+17. **Personal registry (2026-10-27):** a static registry, served by Docker and a Cloudflare named tunnel on `plinth.femur.dev`, with a copy in Azure (`docs/REGISTRY-HOSTING.md`). Complex hosting (uploads, private registry) is planned, not built.
 
 ### 0.2 Open items for the owner (remind them)
 
+0. **Personal registry and the Mac (2026-10-27):** (a) run `cloudflared tunnel login` (a browser step), then the tunnel steps in `infra/registry/README.md`; (b) push `master` of `plinth` and the gpui-ce branch `feat/webview` (commit `30572650c8`) so that the Mac can clone them; (c) copy the publisher key and the Hub key to the Mac by a safe way; (d) read `docs/MAC-HANDOFF.md`.
 1. **Finish the self-hosted CI runners** (`infra/self-hosted-runner/README.md`). Done: both agents downloaded, `ci.yml` moved to them (commit `4aff175`), the WSL packages installed, the WSL service `plinth-runner` installed and enabled (not started). Left for the owner: (a) `gh auth token | wsl -d Ubuntu -- bash -c 'umask 077; cat > ~/.plinth-runner-token'`; (b) in an elevated PowerShell, `infra\self-hosted-runner\install-windows-service.ps1`. Then the agent: `sudo systemctl start plinth-runner` in WSL (the owner gave the WSL sudo password in the session of 2026-10-07; ask again if needed), check that both runners are online (`gh api repos/nquandt/plinth/actions/runners`), push when the owner asks, and watch the first CI run. **Until the runners are online, a push queues CI jobs that nothing runs** (the hosted Actions minutes ran out on 2026-10-06).
 2. **Remove a scratch folder:** an agent left `U:\plinth-wt\icutry-target` (ICU4X experiments). The safety check of the agent session blocks a recursive delete; the owner runs `rm -rf U:/plinth-wt/icutry-target`. (The old worktrees of 2026-10-07 are already removed.)
 3. **Decisions:** UP-Q1..Q6 in `docs/UPDATES.md` (the core policy default is `follow` for now); the project key that signs cores (also the Hub key, HANDOFF of 2026-10-06); `docs/HUB.md` H-Q4; the open questions in the design drafts (ST-Q*, UA-Q*, UX-Q*).
@@ -64,7 +67,7 @@ Plinth is a framework for cross-platform apps. Authors write a strict subset of 
 | Web export (SPEC §10.3) | `plinth build <dir> --target web [--single-file]`; `web/plinth.js` is GENERATED (`node scripts/gen-plinth-js.mjs`; commit it). |
 | Storage | `kv`, `files` (private space) and `store.sql` (SQLite on every host; `docs/SQL.md`). `examples/notes` keeps its notes in SQL with FTS5 search. |
 | Validation apps | 7GUIs 1–7, Pong, primitives, files-demo, notes, and 20 other examples. `examples/todo` and `examples/counter` have `plinth test` tests. |
-| Platforms | Windows: everything. Linux and macOS: compiler, cores, runner, hub and registry tests pass; no GUI window yet; all their work is listed in `docs/PLATFORM-TODO.md`. Mobile: not started (decided: gpui + wasmi on iOS). |
+| Platforms | Windows: everything. Linux and macOS: compiler, cores, runner, hub and registry tests pass; no GUI window yet; all their work is listed in `docs/PLATFORM-TODO.md`. Mobile: not started (decided: gpui + wasmi on iOS; gpui-ce has no iOS platform yet, so the plan is in `docs/MAC-HANDOFF.md`). |
 | CI | `ci.yml` runs Windows and Linux on self-hosted runners (not online yet, §0.2), macOS weekly on GitHub. |
 
 ## 3. Build, run, test
@@ -167,52 +170,15 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 - **Subagents** (§0.1 decision 15): worktrees `U:\plinth-wt\<name>` (`git worktree add U:/plinth-wt/<name> -b wt/<name> master`; `U:\plinth-wt\gpui-ce` is a junction, so `../gpui-ce` resolves). Run one build agent at a time. Brief each agent with the design, the files to read and the exact test commands; tell it to work only in its worktree, to run only the targeted tests of the crates it changes (never `ci-local.sh`), to commit on its branch, never to push, and not to edit `HANDOFF.md` or `SPEC.md` (it reports what SPEC needs; the orchestrator edits SPEC). Then review the diff, merge into `master`, run `ci-local.sh full` (and `run-a11y.mjs` for UI or web changes), update SPEC, and remove the worktree. If the gate stops early, the example packages can be stale: fix the gate, then run `run-a11y.mjs` again.
 - Write all prose in ASD-STE100 Simplified Technical English.
 
-## 9. Session log 2026-10-07 (what changed and why)
+## 9. History
 
-- **Robustness:** compiler mutation test (fixed a `break` outside a loop, JSON of recursive types, deep nesting with `stacker` and `PL1000`); runner limit tests; plain stop reasons on both hosts; web host stopped state and banners; hostile op streams, hostile render trees and changed app modules (no bugs found; tests kept).
-- **Language:** default values in patterns, object rest, optional props set to `undefined` for every prop kind, `onMount`.
-- **Memory:** three core leaks found by the monkey test and fixed (allocator tail loss, first fit, uncounted array buffers).
-- **Performance:** frame-cost survey; labelled form controls about two times faster (block layout; GAPS F1); async code size measured.
-- **Platform decisions:** `docs/UPDATES.md` (three-layer updates), wasmi for iOS, core patch versions and the `core` policy.
-- **CI:** self-hosted runner files and `ci.yml` (owner steps open, §0.2). Pushed to GitHub up to `b6e766e`.
-
-## 9a. Session log 2026-10-07, second part (production checklist)
-
-- **`docs/PRODUCTION.md`:** gates Preview, Beta, 1.0 and Later; owner decisions in §15 (1.0 = all platforms, localization and sound; rolling support; MIT OR Apache-2.0; no sync in 1.0). Preview is complete. New docs: `docs/LIMITS.md`, `CHANGELOG.md`, `SECURITY.md`, `docs/THREAT-MODEL.md`, `docs/COMPATIBILITY.md`, `docs/PRIVACY.md`, `docs/I18N.md` (design), `docs/DEPENDENCIES.md`, `docs/guides/`, `CODE_OF_CONDUCT.md`.
-- **Security fixes:** `net.local` covered too few private ranges (both hosts; the desktop now also checks the address after DNS resolution); the package signature did not cover `manifest.toml` (now `plinth.signature/2`, which refuses `/1`).
-- **Built:** RegExp (linear-time Pike VM in the core; literals, `new RegExp`, `test`, `exec`; collectable objects); notify step 1 (WIT, core, runner; no compiler module yet); updater re-consent and the restart prompt; package format compatibility; a WIT append-only snapshot test (`wit/plinth/app.wit.snapshot`, bless with `PLINTH_BLESS=1`); the web 64 MiB memory cap and a Worker for each web app; `cargo deny` and `npm audit` in the gate; desktop keyboard and accessibility for every control (`plinth-shoot/tests/a11y_controls.rs`).
-- **Flaky tests fixed:** six test files named temp folders from the clock only (100 ns steps on Windows); they now add an atomic counter.
-- **Lesson (agents):** seven parallel agents with cold worktree builds overloaded the PC for hours. Run at most one or two build agents; tell an agent to run only the tests of the crates it changes, then merge into `master` and run the full gate there (the cache of `master` is warm). Give an agent one bounded step; a large task makes it stop with no code.
-
-## 9b. Session log 2026-10-08 (store.sql, core 1.13, UI, test kit)
-
-- **Core 1.13 is open** (1.12 is frozen). `docs/migrations/` (X5) lists every item; `plinth-link/tests/migration_guides.rs` requires a guide for each new minor.
-- **`store.sql` (H4, Done):** SQLite on the desktop (`rusqlite`, `plinth-runner-wasmtime/src/sql.rs`) and the web (the official SQLite Wasm build, vendored in `web/vendor/sqlite-wasm/`, in a Worker of the page with OPFS); the same authorizer, limits and error texts on both (`tests/sql_cases.txt`); folder web exports; `examples/notes` with FTS5. The desktop database is in `<app id>+sql/`, out of reach of `plinth:files`.
-- **wasmi (R4, Q4, Done):** all app suites pass; `FUEL_PER_MS` from release numbers; a gate mode and a CI job.
-- **Speed and memory:** `Map`/`Set` hash tables (about 120 times faster), merge sort (about 110 times faster), `JSON.stringify` and `join` without quadratic memory.
-- **Locale (L5, Done):** `locale()`, `direction()`, `formatNumber`, `formatDate`, `pluralCategory`, `formatList`, `compare` (ICU4X on the desktop, `Intl` on the web); lifecycle kind 4 on a locale change. 8 of 448 cases differ between the hosts, each with a reason (`docs/I18N.md` §3.7).
-- **Compiler:** long chains without recursion and `PL1008` (L6, Done); `===` on strings and nullable primitives compares values, and a signal set with an equal value does nothing.
-- **UI:** `onContextMenu`, `Menu` at a point, a modal layer blocks the pointer, drag and drop, `Dialog` children (U6, Done); OS dark mode, high contrast, text size and reduced motion (U7, Done on Windows and the web).
-- **Test kit (T3 step 1):** `plinth:test` and `plinth test`; no core or WIT change (a private protocol over `dev.log`).
-- **Host API tests (H7, Done):** `clipboard` on three hosts, `dialog` on the web.
-- **Docs:** `docs/PLATFORM-TODO.md`, `docs/TESTING.md`, `docs/migrations/`; SPEC §4.6, §4.7, §5.1, §6.3, §6.5, §7.1, §8.1, §8.4, §8.5, §9, §10.5, §13 updated.
-- **Lessons:** a stopped gate leaves stale example packages, so `run-a11y.mjs` then fails for the wrong reason; a Sonnet agent needs a task of one layer; `run-a11y.mjs` checks must wait until a control is enabled, because each app runs in a Worker.
-
-## 9c. Session log 2026-10-08, evening (D4, C6, a compiler fix)
-
-- **D4 `onUpgrade` (Done):** step C on the web host. The data version goes through `WorkerApp` (a `load` field and a `data-version-set` message), the Hub (`plinth-hub:dv:<id>`, removed with the app's kv data) and the stand-alone page (`plinth-data-version:<id>`). `web/test/run-upgrade.mjs` covers a reload through `WorkerApp` and the Hub storage. Docs: ui.md, the core 1.13 guide (the host rule), UPDATES §6 with the UP-Q5 interim rule (a downgrade keeps the higher version, no handler), SPEC §4.7, §8.5.
-- **C6 (Done):** `docs/language.md` "Language version 1.0" freezes the subset and lists what a 1.x compiler can add.
-- **Compiler fix:** a function with no return type that mixes `return;` and `return <value>` gave an invalid module (only when the value branch came first in the source). Now its type is `T | null` (`finish_ret`, `patch_returns`). `onUpgrade` accepts a handler of type `Promise<void> | null`.
-- **`===` on `string | Shape`** compares two strings by content (`EqKind::UnionStr`: the type tag at offset 0 of each side, then `str_eq`); also `switch`, `includes`, `indexOf`.
-- **GAPS R3 (Done):** a `??`/`?.`/`||` chain reuses one local per type (`chain_temp`); 60,000 links compile. The engine needs minutes to compile such a function in a debug build, so those tests only compile.
-- **Narrowing of a function-local `let`** in code order, also in loops that assign it (`docs/language.md` has the 5 rules). Review found 5 unsound cases in the first agent versions (a closure that assigns, a narrowing from before a loop, a module-level `let` assigned by a function or a method): check each narrowing change against these cases.
-- **Tests:** each diagnostic code has a golden case (`every_code_has_a_golden_case`; `PL3011` is reserved).
-- **Lessons:** a Node test that calls `PlinthApp` directly does not test the browser path: every browser host goes through `WorkerApp`, so test host state across the Worker boundary and a reload. A Sonnet agent that waits on a background build gets stopped: tell it to run cargo in the foreground. After a merge, rebuild `plinth.exe` before a manual check (the gate's binary is older).
+The session logs of 2026-10-07 and 2026-10-08 (what changed and why) are in `docs/HISTORY.md`. Add a new log there, not here.
 
 ## 10. Next steps (in order)
 
 `bash scripts/production-status.sh --open Beta` lists the open Beta items. Work that needs Linux or macOS is in `docs/PLATFORM-TODO.md`.
 
+0. **iPhone from a personal registry:** `docs/MAC-HANDOFF.md` (Mac checks, the web shell, R5, `gpui_ios`). On Windows, the part that is left is R5 (a host state crate without wasmtime, step 5.1 there): it builds and tests here.
 1. **T3 step 2, the rest** (`docs/TESTING.md` §12): app tests on the web host; dialog answers, fake network answers, pointer and key steps, `Slider`, `DatePicker`, back navigation; deep `toEqual`. Part 1 is merged: `describe`, `beforeEach`/`afterEach`, `testOnly`/`testSkip`/`describeOnly`/`describeSkip` (Plinth TS has no function with properties, so not `test.only`), number matchers, `toThrow`, `plinth test` on wasmi.
 2. **D5:** web updates with a service worker cache (UPDATES §9 step 4).
 3. **T4:** an inspector for the UI tree, signals and host calls. **T6:** `plinth publish` to a registry.
