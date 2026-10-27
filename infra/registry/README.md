@@ -23,7 +23,7 @@ The design, the cloud mirror and the plan for a bigger registry are in `docs/REG
    cloudflared tunnel token plinth-registry      # prints the token
    ```
 
-5. Copy `.env.example` to `.env`. Put the token in `TUNNEL_TOKEN`. Never commit `.env`.
+5. Copy `.env.example` to `.env`. Put the token in `TUNNEL_TOKEN`. Never commit `.env`. The compose file sets the origin with `--url http://registry:80`. Without it, the tunnel answers 503, because no ingress rule exists.
 6. Set `PLINTH_REGISTRY_DIR` in `.env` (or in your shell) to the folder where the registry is built. The default is `./site` for Docker and `~/plinth-registry` for the script, so set one value for both.
 
 ## 2. Publish an app

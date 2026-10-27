@@ -1,6 +1,6 @@
 # Hosting your own registry
 
-> Status: 2026-10-27. Parts 1 to 3 are built. Parts 4 to 6 are plans: nothing in them is deployed. This document uses ASD-STE100 Simplified Technical English, as `SPEC.md` does.
+> Status: 2026-10-27. Parts 1 to 3 are built and live at `https://plinth.femur.dev/` (tunnel `plinth-registry`, started 2026-10-27). Parts 4 to 6 are plans: nothing in them is deployed. This document uses ASD-STE100 Simplified Technical English, as `SPEC.md` does.
 
 The goal: the owner builds Plinth apps, publishes them to a personal registry, and installs them on a phone from the Hub. A registry is a folder of static files (`docs/REGISTRY.md` §8), so the first version needs no server code.
 
@@ -79,6 +79,6 @@ If some apps must stay private:
 
 ## 7. Open items for the owner
 
-1. Run `cloudflared tunnel login` once (it needs a browser). The tunnel steps then take a minute (`infra/registry/README.md`).
+1. Keep the PC on and Docker running. The registry is offline when they stop.
 2. Decide when to do §4 and give a Cloudflare API token, if the owner wants the mirror to replace Docker.
 3. Decide if any app needs a private registry (§6).
