@@ -69,16 +69,47 @@ Also possible: Cloudflare R2 with a custom domain, which removes the Host header
 
 Do not build it before the static flow has worked for a month. A script is enough for one person.
 
-## 6. Plan: a private registry (not done)
+## 6. Access control (built, 2026-10-27)
 
-If some apps must stay private:
+Cloudflare Access protects `plinth.femur.dev`. A request without a login or a token gets a redirect (302) at the Cloudflare edge and never reaches the PC. The Access application "Plinth registry" (account of the owner) has two policies:
 
-1. Put Cloudflare Access in front of `plinth.femur.dev` with one allowed e-mail and a service token for the Hub.
-2. The Hub client needs a header per source (`docs/HUB.md` §5.1: add `headers` to a source). This is not built.
-3. The web App Hub works with an Access cookie with no client change.
+| Policy | Who | How |
+|---|---|---|
+| Operator only (allow) | The owner's e-mail | Browsers log in once and keep a cookie (24 h). The web Hub and the iOS web shell need no client change. |
+| Plinth devices (service auth) | Service tokens `plinth-pc`, `plinth-mac`, `plinth-iphone` | A native host sends the headers `CF-Access-Client-Id` and `CF-Access-Client-Secret`. |
+
+Rules for the tokens:
+
+- Do not build a token into a binary. A binary can be read. Each device keeps its own token: the owner enters it once, and the host stores it in the OS keychain.
+- The secrets are in `~/.plinth-access/<device>.env` on the PC. They are not in git. Cloudflare shows a secret only once, so a lost secret needs a new token.
+- Each token expires after one year (2027-10-27). Make a new token, add it to the policy "Plinth devices", and delete the old one.
+- To revoke one device: delete its token (Zero Trust, Access, Service Auth). The other devices keep working.
+- The admin API token (`~/.cloudflare/super.env`) is for one-off set-up only. Never use it in an app or in CI.
+
+Test commands (replace the file name for the device):
+
+```bash
+set -a; . ~/.plinth-access/mac.env; set +a
+curl -s -o /dev/null -w "%{http_code}
+" -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" https://plinth.femur.dev/plinth-registry.json
+```
+
+Without the headers the answer is 302. With a valid token it is 200.
+
+Not built yet:
+
+- The Hub client does not send the headers. A registry source needs a `headers` field (it is not in `docs/HUB.md` yet), and the secret must come from the keychain, not from the source list file.
+- A second layer: a Cloudflare rate-limit rule for the name.
+
+The Azure mirror (§1) has **no** Access. Its URL is public. Do not put private apps there, and do not use `--sync` for an app that must stay private.
+
+## 6.1 Plan: a private registry (not done)
+
+If some apps must stay private, use a second registry source with a different name and a different policy. Access already hides the whole registry from people without a login or a token.
 
 ## 7. Open items for the owner
 
 1. Keep the PC on and Docker running. The registry is offline when they stop.
-2. Decide when to do §4 and give a Cloudflare API token, if the owner wants the mirror to replace Docker.
-3. Decide if any app needs a private registry (§6).
+2. Decide when to do §4. The admin API token is in `~/.cloudflare/super.env`.
+3. Decide if any app needs a private registry (§6.1).
+4. Decide when to build the client `headers` support (§6).

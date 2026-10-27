@@ -10,7 +10,7 @@ Read `HANDOFF.md` first, then `docs/REGISTRY-HOSTING.md` and `docs/PLATFORM-TODO
 
 ## 1. The facts that decide the plan
 
-1. **The registry works now.** `plinth.femur.dev` (when the tunnel is up; `infra/registry/README.md`) serves a registry and the web App Hub. A Plinth app already runs in a phone browser through the web host. Safari is untested (PRODUCTION P4).
+1. **The registry works now.** `plinth.femur.dev` (when the tunnel is up; `infra/registry/README.md`) serves a registry and the web App Hub, behind Cloudflare Access (§6). A Plinth app already runs in a phone browser through the web host. Safari is untested (PRODUCTION P4).
 2. **There is no iOS window in gpui-ce.** `../gpui-ce/crates` has `gpui_macos` (AppKit), `gpui_apple` (the shared Metal renderer), `gpui_windows`, `gpui_linux`, `gpui_web` and `gpui_wgpu`. There is no `gpui_ios` and no UIKit code. The HANDOFF assumption "assume gpui mobile backends exist" is **wrong today**: somebody must write the iOS platform. This is the largest item on this list.
 3. **The native host cannot start on iOS yet.** `plinth-runner-wasmtime` depends on `wasmtime`, which cannot run generated code on iOS (no JIT). The engine to use is `wasmi` (feature `wasmi`, passes all suites, 7 to 11 times slower than wasmtime in a release build). The host state must build without `wasmtime` (PRODUCTION R5, open).
 4. **Neither dev mode nor SideStore allows JIT.** A host that uses `wasmi` runs under both. Do not add the JIT entitlement.
@@ -67,6 +67,7 @@ When gpui works on iOS, retire the shell of track A, or keep it as a fallback.
 | Publish script | `scripts/registry-publish.sh <app dir>... [--sync]` | Needs the `plinth` CLI, `az` for `--sync`. |
 | Docker site and tunnel | `infra/registry/` | Needs `.env` with `TUNNEL_TOKEN` (a secret; not in git). |
 | Azure | Resource group `plinth-rg`, storage account `plinthreg36610`, `centralus` | `az login`, then `bash scripts/registry-publish.sh ... --sync` works from the Mac. The account name is in `infra/azure/.account-name` (not in git): run `echo plinthreg36610 > infra/azure/.account-name`. |
+| Access | `plinth.femur.dev` is behind Cloudflare Access (`docs/REGISTRY-HOSTING.md` §6) | Safari and the iOS shell: log in once with the owner e-mail. Native hosts need a service token: copy `~/.plinth-access/mac.env` (and `iphone.env`) to the Mac by a safe way. The Hub client does not send the token yet. |
 | Keys | The PC: `%APPDATA%\plinth\publisher` (publisher "Nate"), `~/.plinth-hub-key` (Hub key, name "you") | **Not in git. Copy them by a safe way** (not by chat or e-mail) to `~/.config/plinth/publisher` and `~/.plinth-hub-key` on the Mac, or make new keys: the registry then refuses a new version of an app that a different key signed. |
 
 ## 7. How the Mac gets the code
