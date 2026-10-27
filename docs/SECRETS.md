@@ -1,6 +1,6 @@
 # `plinth:secrets`: secure storage for credentials
 
-> Status: 2026-10-27. Design. Nothing in this file is built yet. This document uses ASD-STE100 Simplified Technical English, as `SPEC.md` does. The first mention of the idea is in `docs/STORAGE.md` (concept 6).
+> Status: 2026-10-27. Steps 1 to 5 of §7 are built (Windows and web). Step 6 (iOS) and checks on macOS and Linux are open. This document uses ASD-STE100 Simplified Technical English, as `SPEC.md` does. The first mention of the idea is in `docs/STORAGE.md` (concept 6).
 
 ## 1. The goal
 
@@ -36,7 +36,7 @@ const all = await names();            // Promise<string[]>, sorted
 
 | Host | Store | Notes |
 |---|---|---|
-| Windows | Credential Manager (`CredWrite`, `CredRead`) | Target name `plinth/<app id>/<instance>/<name>`. |
+| Windows | Credential Manager (`CredWrite`, `CredRead`) | Target name `plinth/<app id>/<instance>/<name>`. A blob holds at most 2560 bytes, so a value is cut into chunks of 2 KiB. |
 | macOS and iOS | Keychain (generic password items) | Service `plinth.<app id>.<instance>`, account = name. On iOS the item class is `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`: it does not leave the device and it is not in the backup. |
 | Linux | Secret Service (libsecret) | If no service runs, the call answers `unsupported`. |
 | Web | WebCrypto key in IndexedDB | A browser has no keychain. The page makes one AES-GCM key per profile with `extractable: false`, and stores only the encrypted values. This protects against a disk copy of the profile, **not** against code that runs in the page. The apps run in sandboxed frames, so the page does the work for the frame and checks the capability again (like `notify`). |

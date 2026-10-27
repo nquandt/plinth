@@ -4,7 +4,7 @@ A Plinth app cannot reach the outside world by itself. Every effect
 outside its own UI — storage, the clipboard, the network, even a modal
 dialog — goes through a **host API module** (`plinth:time`,
 `plinth:store`, `plinth:clipboard`, `plinth:dialog`, `plinth:net`,
-`plinth:files`, `plinth:notify` and `plinth:locale`). Most of these modules are gated by a **capability**:
+`plinth:files`, `plinth:notify`, `plinth:secrets` and `plinth:locale`). Most of these modules are gated by a **capability**:
 a named permission that the app must declare in `plinth.toml`, and that
 the user grants before the app can use it.
 
@@ -322,6 +322,31 @@ cancel("reminder");              // removes the notification with this tag
     Android allows it only in a service worker) answers "unsupported".
   - The page has no image of the app's icon, so a notification has no icon
     (`AppFrame`'s `notifyIcon` option can give one).
+
+## `plinth:secrets`
+
+Secure storage for an app's own passwords and tokens (core 1.13, `docs/SECRETS.md`). Needs the `secrets` capability. Its risk is Low: the store belongs to this app only, like `kv`, so the host grants it with no question.
+
+```ts
+import { set, get, remove, names, lastError } from "plinth:secrets";
+
+await set("api-token", "abc123");   // Promise<void>
+const t = await get("api-token");   // Promise<string | null>
+await remove("api-token");
+const all = await names();          // Promise<string[]>, sorted
+```
+
+- A name has 1 to 64 characters from `a-z A-Z 0-9 . _ -`. A value is a string of at most 16 KiB. An app has at most 64 secrets.
+- `get` resolves with `null` when the name does not exist.
+- A denied call rejects with `Error("denied:<reason>")`. The reasons are `undeclared`, `refused`, `unsupported`, `limit` and `failed`. `unsupported` means this host has no safe store. The host never falls back to a plain file.
+- The host never logs a value. Secrets stay on the device and are not in the sync of app data.
+
+**Where each host keeps them.**
+
+- Windows: Credential Manager (`plinth-host-desktop/src/secrets.rs`, the `keyring` crate). The target is `plinth/<app id>/default/<name>`. A blob holds at most 2560 bytes, so the host cuts a value into chunks of 2 KiB.
+- macOS, Linux: the native store through `keyring`. Not tested yet.
+- Web: a WebCrypto AES-GCM key (not extractable) in IndexedDB encrypts the values (`web/secrets.js`). This protects against a copy of the browser profile on disk. It does not protect against code that runs in the page. The page does the work for the sandboxed frame.
+- iOS: the Keychain. Not built yet (`docs/MAC-HANDOFF.md` §5).
 
 ## `plinth:locale`
 
