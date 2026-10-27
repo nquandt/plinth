@@ -71,8 +71,8 @@ When gpui works on iOS, retire the shell of track A, or keep it as a fallback.
 
 ## 7. How the Mac gets the code
 
-- `plinth`: `https://github.com/nquandt/plinth` (private). The owner pushes `master` before this work starts (`HANDOFF.md` §0).
-- `gpui-ce`: `https://github.com/nquandt/gpui-ce`, commit `30572650c80c1975c33bfd66c90ae66ea00ee1cc` (`feat/webview`). The owner pushes that branch from the PC first, because the commit was not on the remote on 2026-10-27.
+- `plinth`: `https://github.com/nquandt/plinth` (private). `master` was pushed on 2026-10-27.
+- `gpui-ce`: `https://github.com/nquandt/gpui-ce`, commit `30572650c80c1975c33bfd66c90ae66ea00ee1cc`, on the branch `plinth-pin` (pushed on 2026-10-27; the remote `feat/webview` has other commits, so it was not used). Run `git clone https://github.com/nquandt/gpui-ce ../gpui-ce && git -C ../gpui-ce checkout 30572650c8`.
 - If a push is not possible, make a bundle on the PC (`git bundle create plinth.bundle --all`) and copy it.
 
 ## 8. Order of the work, short
