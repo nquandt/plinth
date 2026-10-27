@@ -107,6 +107,25 @@ The Azure mirror (§1) has **no** Access. Its URL is public. Do not put private 
 
 If some apps must stay private, use a second registry source with a different name and a different policy. Access already hides the whole registry from people without a login or a token.
 
+## 6.2 Secrets in Azure Key Vault (built, 2026-10-27)
+
+The keys and the device tokens are in the Key Vault `plinthkv36610` (resource group `plinth-rg`, `centralus`, RBAC mode, 90-day soft delete, the owner has "Key Vault Secrets Officer").
+
+| Secret | Content |
+|---|---|
+| `plinth-publisher-key-b64`, `plinth-publisher-toml` | The publisher key "Nate" (`key.ed25519` in base64, and `publisher.toml`). |
+| `plinth-hub-key-b64`, `plinth-hub-toml` | The Hub key "you". |
+| `plinth-access-mac-env`, `plinth-access-iphone-env` | The Access service tokens for those devices. |
+
+Not in the vault: the tunnel token (`infra/registry/.env`, only the PC needs it) and the admin API token (`~/.cloudflare/super.env`).
+
+On the Mac, run `az login`, then `bash scripts/secrets-pull.sh mac`. The script writes the files to the paths that `plinth` and the publish script read. It never overwrites a file. A round trip on the PC gave the same bytes.
+
+Cautions:
+
+- The vault holds the private keys. Anyone with "Key Vault Secrets User" on it can read them. Give that role to nobody else.
+- After a key change, put the new secret in the vault (`az keyvault secret set`). A new version replaces the old one for `show`.
+
 ## 7. Open items for the owner
 
 1. Keep the PC on and Docker running. The registry is offline when they stop.

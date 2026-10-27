@@ -67,8 +67,8 @@ When gpui works on iOS, retire the shell of track A, or keep it as a fallback.
 | Publish script | `scripts/registry-publish.sh <app dir>... [--sync]` | Needs the `plinth` CLI, `az` for `--sync`. |
 | Docker site and tunnel | `infra/registry/` | Needs `.env` with `TUNNEL_TOKEN` (a secret; not in git). |
 | Azure | Resource group `plinth-rg`, storage account `plinthreg36610`, `centralus` | `az login`, then `bash scripts/registry-publish.sh ... --sync` works from the Mac. The account name is in `infra/azure/.account-name` (not in git): run `echo plinthreg36610 > infra/azure/.account-name`. |
-| Access | `plinth.femur.dev` is behind Cloudflare Access (`docs/REGISTRY-HOSTING.md` §6) | Safari and the iOS shell: log in once with the owner e-mail. Native hosts need a service token: copy `~/.plinth-access/mac.env` (and `iphone.env`) to the Mac by a safe way. The Hub client does not send the token yet. |
-| Keys | The PC: `%APPDATA%\plinth\publisher` (publisher "Nate"), `~/.plinth-hub-key` (Hub key, name "you") | **Not in git. Copy them by a safe way** (not by chat or e-mail) to `~/.config/plinth/publisher` and `~/.plinth-hub-key` on the Mac, or make new keys: the registry then refuses a new version of an app that a different key signed. |
+| Access | `plinth.femur.dev` is behind Cloudflare Access (`docs/REGISTRY-HOSTING.md` §6) | Safari and the iOS shell: log in once with the owner e-mail. Native hosts need a service token: `scripts/secrets-pull.sh mac` restores `~/.plinth-access/mac.env` (use `iphone` for the phone). The Hub client does not send the token yet. |
+| Keys | The PC: `%APPDATA%\plinth\publisher` (publisher "Nate"), `~/.plinth-hub-key` (Hub key, name "you") | **Not in git. They are in Azure Key Vault `plinthkv36610`: run `az login`, then `bash scripts/secrets-pull.sh mac`** (`docs/REGISTRY-HOSTING.md` §6.2). Do not send them by chat or e-mail to `~/.config/plinth/publisher` and `~/.plinth-hub-key` on the Mac, or make new keys: the registry then refuses a new version of an app that a different key signed. |
 
 ## 7. How the Mac gets the code
 
