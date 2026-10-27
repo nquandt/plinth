@@ -96,6 +96,7 @@ const TYPINGS: &[(&str, &str)] = &[
     ("net.d.ts", include_str!("../../../std/net.d.ts")),
     ("files.d.ts", include_str!("../../../std/files.d.ts")),
     ("notify.d.ts", include_str!("../../../std/notify.d.ts")),
+    ("secrets.d.ts", include_str!("../../../std/secrets.d.ts")),
     ("locale.d.ts", include_str!("../../../std/locale.d.ts")),
     ("test.d.ts", include_str!("../../../std/test.d.ts")),
 ];
