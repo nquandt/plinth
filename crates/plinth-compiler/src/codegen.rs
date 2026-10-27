@@ -2577,6 +2577,10 @@ pub(crate) fn expr_children(e: &TExpr) -> Vec<&TExpr> {
         TExprKind::Cond(a, b, c) | TExprKind::HostCall(_, _, a, b, c) => out.extend([&**a, &**b, &**c]),
         TExprKind::NetFetchCall(a, b, c, d, f) => out.extend([&**a, &**b, &**c, &**d, &**f]),
         TExprKind::NotifyShow(a, b, c, f) => out.extend([&**a, &**b, &**c, &**f]),
+        TExprKind::SecretsCall(_, args, f) => {
+            out.extend(args.iter());
+            out.push(&**f);
+        }
         TExprKind::Call(_, args) | TExprKind::Rt(_, args) | TExprKind::MathOp(_, args) | TExprKind::StructLit(_, args) => {
             out.extend(args.iter())
         }
@@ -2651,6 +2655,10 @@ pub(crate) fn expr_children_mut(e: &mut TExpr) -> Vec<&mut TExpr> {
         TExprKind::Cond(a, b, c) | TExprKind::HostCall(_, _, a, b, c) => out.extend([&mut **a, &mut **b, &mut **c]),
         TExprKind::NetFetchCall(a, b, c, d, f) => out.extend([&mut **a, &mut **b, &mut **c, &mut **d, &mut **f]),
         TExprKind::NotifyShow(a, b, c, f) => out.extend([&mut **a, &mut **b, &mut **c, &mut **f]),
+        TExprKind::SecretsCall(_, args, f) => {
+            out.extend(args.iter_mut());
+            out.push(&mut **f);
+        }
         TExprKind::Call(_, args) | TExprKind::Rt(_, args) | TExprKind::MathOp(_, args) | TExprKind::StructLit(_, args) => {
             out.extend(args.iter_mut())
         }

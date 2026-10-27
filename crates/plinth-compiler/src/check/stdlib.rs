@@ -104,6 +104,7 @@ pub const LOCALE_NAMES: &[&str] = &[
     "PluralType",
     "ListType",
 ];
+pub const SECRETS_NAMES: &[&str] = &["set", "get", "remove", "names", "lastError"];
 pub const HUB_NAMES: &[&str] = &[
     "listApps",
     "launch",
@@ -129,7 +130,7 @@ pub const HUB_NAMES: &[&str] = &[
 /// `capabilities` module, `docs/HUB.md` §12.3) rather than a duplicated
 /// list here.
 pub use plinth_link::capabilities::{
-    CLIPBOARD_READ as CAP_CLIPBOARD_READ, CLIPBOARD_WRITE as CAP_CLIPBOARD_WRITE, FILES_PRIVATE as CAP_FILES_PRIVATE, HUB_MANAGE as CAP_HUB_MANAGE, NOTIFY as CAP_NOTIFY, STORE_KV as CAP_STORE_KV,
+    CLIPBOARD_READ as CAP_CLIPBOARD_READ, CLIPBOARD_WRITE as CAP_CLIPBOARD_WRITE, FILES_PRIVATE as CAP_FILES_PRIVATE, HUB_MANAGE as CAP_HUB_MANAGE, NOTIFY as CAP_NOTIFY, SECRETS as CAP_SECRETS, STORE_KV as CAP_STORE_KV,
 };
 
 /// `NotifyResult`: what a `show` promise resolves with.
@@ -253,6 +254,14 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "PluralCategory" => Binding::Type(plural_category_type()),
             "PluralType" => Binding::Type(lits(&["cardinal", "ordinal"])),
             "ListType" => Binding::Type(lits(&["conjunction", "disjunction"])),
+            _ => return None,
+        }),
+        StdModule::Secrets => Some(match name {
+            "set" => Binding::Std(StdFn::SecretsSet),
+            "get" => Binding::Std(StdFn::SecretsGet),
+            "remove" => Binding::Std(StdFn::SecretsRemove),
+            "names" => Binding::Std(StdFn::SecretsNames),
+            "lastError" => Binding::Std(StdFn::SecretsLastError),
             _ => return None,
         }),
         StdModule::Hub => Some(match name {
@@ -893,6 +902,13 @@ impl Checker<'_> {
             }
             StdFn::FilesRead | StdFn::FilesWrite | StdFn::FilesList | StdFn::FilesStat | StdFn::FilesRemove => self.files_call(f, args, span),
             StdFn::NotifyShow => self.notify_show_call(args, span),
+            StdFn::SecretsSet | StdFn::SecretsGet | StdFn::SecretsRemove | StdFn::SecretsNames => self.secrets_call(f, args, span),
+            StdFn::SecretsLastError => {
+                if !args.is_empty() {
+                    self.err(code::ARG_COUNT, span, "`lastError` takes no arguments");
+                }
+                TExpr::new(TExprKind::Rt("secrets_last_error", Vec::new()), Type::String.nullable(), span)
+            }
             StdFn::NotifyCancel => {
                 self.require_capability(CAP_NOTIFY, span);
                 if !one_arg(self, "cancel") {
@@ -1081,6 +1097,99 @@ impl Checker<'_> {
                 TExpr::new(TExprKind::Block(vec![TStmt::Let(pv, Some(self.new_promise(&info, span))), TStmt::Expr(call)], Box::new(p)), pty, span)
             }
         }
+    }
+
+    /// `plinth:secrets` `set`, `get`, `remove` and `names` (core 1.13,
+    /// `docs/SECRETS.md`). Each returns a `Promise` that rejects with an
+    /// `Error` whose message is `"denied:<reason>"`. `get` resolves with the
+    /// value, or `null` when the completion has `n = 0`. `names` resolves
+    /// with the JSON array in `text`, parsed to `string[]`. The wrapper
+    /// closure reads the completion list with `net_result_*`.
+    fn secrets_call(&mut self, f: StdFn, args: &[Expr], span: Span) -> TExpr {
+        self.require_capability(CAP_SECRETS, span);
+        // (name, runtime function, string arguments, the value type)
+        let (name, rt_fn, nargs, value_ty) = match f {
+            StdFn::SecretsSet => ("set", "secrets_set", 2, Type::Void),
+            StdFn::SecretsGet => ("get", "secrets_get", 1, Type::String.nullable()),
+            StdFn::SecretsRemove => ("remove", "secrets_remove", 1, Type::Void),
+            _ => ("names", "secrets_names", 0, Type::Array(Box::new(Type::String))),
+        };
+        if args.len() != nargs {
+            let what = match nargs {
+                0 => "no arguments",
+                1 => "one argument: the name",
+                _ => "two arguments: the name and the value",
+            };
+            self.err(code::ARG_COUNT, span, format!("`{name}` takes {what}"));
+            return TExpr::new(TExprKind::Null, Type::Error, span);
+        }
+        let mut call_args = Vec::new();
+        for a in args {
+            let t = self.expr_with(a, &Type::String);
+            call_args.push(self.coerce(t, &Type::String));
+        }
+
+        // The wrapper: `e = error; if e == null resolve(value) else
+        // reject(Error(e))`.
+        let fid = self.prog.new_func(FuncDef {
+            name: format!("<secrets_{name}_done>"),
+            kind: FuncKind::Closure,
+            params: Vec::new(),
+            ret: Type::Void,
+            body: Vec::new(),
+            span,
+        });
+        let e_ty = Type::String.nullable();
+        let ev = self.temp(e_ty.clone());
+        let e = TExpr::new(TExprKind::Var(ev), e_ty.clone(), span);
+        let mut body = vec![TStmt::Let(ev, Some(TExpr::new(TExprKind::Rt("net_result_error", Vec::new()), e_ty.clone(), span)))];
+        let text = || TExpr::new(TExprKind::Rt("net_result_text", Vec::new()), Type::String, span);
+        let value = match f {
+            StdFn::SecretsGet => {
+                // `net_result_status() > 0 ? text : null`.
+                let n = TExpr::new(TExprKind::Rt("net_result_status", Vec::new()), Type::Number, span);
+                let zero = TExpr::new(TExprKind::Num(0.0), Type::Number, span);
+                let found = TExpr::new(TExprKind::Cmp(CmpOp::Gt, EqKind::F64, Box::new(n), Box::new(zero)), Type::Bool, span);
+                let t = self.coerce(text(), &value_ty);
+                let none = TExpr::new(TExprKind::Null, value_ty.clone(), span);
+                Some(TExpr::new(TExprKind::Cond(Box::new(found), Box::new(t), Box::new(none)), value_ty.clone(), span))
+            }
+            StdFn::SecretsNames => {
+                // `JSON.parse<string[]>(text) ?? []`.
+                let parsed = self.json_parse_value(text(), &value_ty, span);
+                let lv = self.temp(parsed.ty.clone());
+                let l = TExpr::new(TExprKind::Var(lv), parsed.ty.clone(), span);
+                body.push(TStmt::Let(lv, Some(parsed)));
+                let is_null = TExpr::new(TExprKind::IsNull(Box::new(l.clone())), Type::Bool, span);
+                let empty = TExpr::new(TExprKind::ArrayLit(Vec::new()), value_ty.clone(), span);
+                let some = TExpr::new(TExprKind::Coerce(Coercion::Retag, Box::new(l)), value_ty.clone(), span);
+                Some(TExpr::new(TExprKind::Cond(Box::new(is_null), Box::new(empty), Box::new(some)), value_ty.clone(), span))
+            }
+            _ => None,
+        };
+        let vv = value.map(|v| {
+            let vv = self.temp(value_ty.clone());
+            body.push(TStmt::Let(vv, Some(v)));
+            TExpr::new(TExprKind::Var(vv), value_ty.clone(), span)
+        });
+        let info = self.promise_info(&value_ty);
+        let pty = Type::Struct(info.sid);
+        let pv = self.temp(pty.clone());
+        let p = TExpr::new(TExprKind::Var(pv), pty.clone(), span);
+        let (_, reject) = self.promise_then_reject();
+        let resolved = vv.unwrap_or_else(|| TExpr::new(TExprKind::Bool(false), Type::Bool, span));
+        let resolve = TStmt::Expr(TExpr::new(TExprKind::Call(info.resolve, vec![p.clone(), resolved]), Type::Void, span));
+        let err = self.new_error(e.clone());
+        let base = self.as_base(p.clone());
+        let reject = TStmt::Expr(TExpr::new(TExprKind::Call(reject, vec![base, err]), Type::Void, span));
+        let is_null = TExpr::new(TExprKind::IsNull(Box::new(e)), Type::Bool, span);
+        body.push(TStmt::If(is_null, vec![resolve], vec![reject]));
+        super::asyncfn::reown(&mut self.prog, &body, fid, None);
+        self.prog.funcs[fid as usize].body = body;
+        let ft = crate::types::FuncType { params: Vec::new(), required: 0, ret: Type::Void };
+        let wrapper = TExpr::new(TExprKind::Closure(fid), Type::Func(std::rc::Rc::new(ft)), span);
+        let call = TExpr::new(TExprKind::SecretsCall(rt_fn, call_args, Box::new(wrapper)), Type::Void, span);
+        TExpr::new(TExprKind::Block(vec![TStmt::Let(pv, Some(self.new_promise(&info, span))), TStmt::Expr(call)], Box::new(p)), pty, span)
     }
 
     /// `plinth:notify` `show(options)` (core 1.12, `docs/PRODUCTION.md` H3).

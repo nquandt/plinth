@@ -337,7 +337,7 @@ fn missing_app() {
 #[test]
 fn std_typings_match() {
     use plinth_compiler::check::stdlib::{
-        CLIPBOARD_NAMES, CORE_NAMES, DIALOG_NAMES, FILES_NAMES, HUB_NAMES, LOCALE_NAMES, NET_NAMES, NOTIFY_NAMES, STORE_NAMES, TEST_NAMES, TIME_NAMES,
+        CLIPBOARD_NAMES, CORE_NAMES, DIALOG_NAMES, FILES_NAMES, HUB_NAMES, LOCALE_NAMES, NET_NAMES, NOTIFY_NAMES, SECRETS_NAMES, STORE_NAMES, TEST_NAMES, TIME_NAMES,
         UI_NAMES,
     };
     let std_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../std");
@@ -373,6 +373,7 @@ fn std_typings_match() {
     assert_eq!(exports("files.d.ts"), sorted(FILES_NAMES), "std/files.d.ts and check::stdlib::FILES_NAMES differ");
     assert_eq!(exports("hub.d.ts"), sorted(HUB_NAMES), "std/hub.d.ts and check::stdlib::HUB_NAMES differ");
     assert_eq!(exports("notify.d.ts"), sorted(NOTIFY_NAMES), "std/notify.d.ts and check::stdlib::NOTIFY_NAMES differ");
+    assert_eq!(exports("secrets.d.ts"), sorted(SECRETS_NAMES), "std/secrets.d.ts and check::stdlib::SECRETS_NAMES differ");
     assert_eq!(exports("locale.d.ts"), sorted(LOCALE_NAMES), "std/locale.d.ts and check::stdlib::LOCALE_NAMES differ");
     assert_eq!(exports("test.d.ts"), sorted(TEST_NAMES), "std/test.d.ts and check::stdlib::TEST_NAMES differ");
     // `plinth:test` is Plinth TS: each public name is an export of its source.

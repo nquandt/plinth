@@ -419,6 +419,13 @@ pub enum TExprKind {
     /// closure that reads the completion with `net_result_*`
     /// (`check/stdlib.rs`).
     NotifyShow(Box<TExpr>, Box<TExpr>, Box<TExpr>, Box<TExpr>),
+    /// `plinth:secrets` (core 1.13): `(runtime function, arguments,
+    /// wrapper)`. The runtime function is `secrets_set`, `secrets_get`,
+    /// `secrets_remove` or `secrets_names`. The arguments are the strings
+    /// that the function takes (none, one or two). `wrapper` is a synthetic
+    /// 0-arg closure that reads the completion with `net_result_*`
+    /// (`check/stdlib.rs`).
+    SecretsCall(&'static str, Vec<TExpr>, Box<TExpr>),
 
     // -- Forms that only `lower` makes. ------------------------------------
     /// The table index of the thunk adapter for a closure signature.

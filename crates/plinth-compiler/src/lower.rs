@@ -194,6 +194,10 @@ fn visit_expr(e: &TExpr, f: &mut dyn FnMut(&TExpr)) {
             | TExprKind::DialogCall(_, a, b) => kids.extend([&**a, &**b]),
             TExprKind::Cond(a, b, c) | TExprKind::HostCall(_, _, a, b, c) => kids.extend([&**a, &**b, &**c]),
             TExprKind::NotifyShow(a, b, c, d) => kids.extend([&**a, &**b, &**c, &**d]),
+            TExprKind::SecretsCall(_, args, f) => {
+                kids.extend(args.iter());
+                kids.push(&**f);
+            }
             TExprKind::NetFetchCall(a, b, c, d, x) => kids.extend([&**a, &**b, &**c, &**d, &**x]),
             TExprKind::Call(_, args) | TExprKind::Rt(_, args) | TExprKind::MathOp(_, args) | TExprKind::StructLit(_, args) => {
                 kids.extend(args.iter())
@@ -472,6 +476,14 @@ impl Cx<'_> {
                 let f = self.expr(*f);
                 let thunk = thunk_of(&f);
                 TExprKind::Rt("notify_show", vec![thunk, f, title, body, tag])
+            }
+            TExprKind::SecretsCall(rt, args, f) => {
+                let args: Vec<TExpr> = args.into_iter().map(|a| self.expr(a)).collect();
+                let f = self.expr(*f);
+                let thunk = thunk_of(&f);
+                let mut all = vec![thunk, f];
+                all.extend(args);
+                TExprKind::Rt(rt, all)
             }
             TExprKind::Navigate(name) => {
                 let idx = self.prog.screens.iter().position(|s| s.name == name).unwrap_or(0);
