@@ -33,6 +33,7 @@ pub enum StdModule {
     Hub,
     Files,
     Notify,
+    Secrets,
     /// `plinth:locale` (core 1.13, docs/I18N.md §3.1).
     Locale,
 }
@@ -50,6 +51,7 @@ impl StdModule {
             "plinth:hub" => Some(StdModule::Hub),
             "plinth:files" => Some(StdModule::Files),
             "plinth:notify" => Some(StdModule::Notify),
+            "plinth:secrets" => Some(StdModule::Secrets),
             "plinth:locale" => Some(StdModule::Locale),
             _ => None,
         }
@@ -153,6 +155,12 @@ pub enum StdFn {
     NotifyShow,
     NotifyCancel,
     NotifyLastError,
+    /// `plinth:secrets` (core 1.13, `docs/SECRETS.md`).
+    SecretsSet,
+    SecretsGet,
+    SecretsRemove,
+    SecretsNames,
+    SecretsLastError,
     /// `rect`, `circle`, `line`, `canvasText` from `plinth:ui` (UI API 1.10):
     /// each makes one encoded `Shape` string for `Canvas.shapes`.
     ShapeRect,

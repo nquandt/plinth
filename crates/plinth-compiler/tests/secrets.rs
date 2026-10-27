@@ -271,3 +271,228 @@ fn a_value_is_never_in_a_log() {
     let r = run(&[set("t", "topsecret"), get("t"), set("", "topsecret")], Policy::new([SECRETS]), Some((&backend, "app.one")));
     assert!(r.logs.iter().all(|l| !l.contains("topsecret")), "{:?}", r.logs);
 }
+
+// -- Compiled apps -------------------------------------------------------------
+
+/// TypeScript apps that import `plinth:secrets`, compiled by the compiler.
+mod compiled {
+    use super::*;
+    use plinth_compiler::driver::MemFs;
+    use plinth_protocol::{ControlKind, Event, NodeId, Writer, event};
+    use plinth_ui::tree::{Node, Tree};
+    use std::time::{Duration, Instant};
+
+    /// An app whose button runs `body` in `async function go()`; `body` sets
+    /// `result` to a text that starts with `done:` at the end.
+    fn app_src(body: &str) -> String {
+        format!(
+            r#"import {{ app, Screen, Text, Button, signal }} from "plinth:ui";
+import {{ set, get, remove, names, lastError }} from "plinth:secrets";
+const result = signal("waiting");
+async function go(): Promise<void> {{
+{body}
+}}
+function Home() {{
+  return <Screen title="Home">
+    <Text>{{result()}}</Text>
+    <Button label="go" onPress={{() => {{ go(); }}}} />
+  </Screen>;
+}}
+export default app({{ screens: {{ home: {{ title: "Home", component: Home }} }} }});
+"#
+        )
+    }
+
+    struct App {
+        guest: Guest,
+        tree: Tree,
+    }
+
+    fn start(body: &str, policy: Policy, store: Option<(&MemorySecrets, &str)>) -> App {
+        let fs = MemFs::default().with("app/main.tsx", &app_src(body));
+        let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &[SECRETS.to_owned()]).expect("compile");
+        let artifact = artifact.unwrap_or_else(|| {
+            let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+            panic!("compile errors:\n{}", diags.join("\n"))
+        });
+        let runner = Runner::new().unwrap();
+        let mut guest = runner
+            .load_with_policy(&artifact.component, Limits::default(), policy, Kv::in_memory(), Box::new(MemoryClipboard::default()))
+            .unwrap();
+        if let Some((backend, app_id)) = store {
+            guest.set_secrets(Box::new(backend.clone()), app_id);
+        }
+        let mut tree = Tree::new();
+        for commit in guest.init(&[]).unwrap() {
+            assert!(tree.apply(&commit).unwrap().is_empty());
+        }
+        App { guest, tree }
+    }
+
+    fn find(tree: &Tree, kind: ControlKind, pred: impl Fn(&Node) -> bool) -> NodeId {
+        let mut stack: Vec<NodeId> = tree.screens().map(|(_, id)| id).collect();
+        while let Some(id) = stack.pop() {
+            let node = tree.get(id).unwrap();
+            if node.kind == Some(kind) && pred(node) {
+                return id;
+            }
+            stack.extend(node.children.iter());
+        }
+        panic!("no matching {kind:?} found");
+    }
+
+    fn text(tree: &Tree) -> String {
+        let id = find(tree, ControlKind::Text, |_| true);
+        tree.get(id).unwrap().text.clone().unwrap()
+    }
+
+    impl App {
+        /// Presses the button, then delivers completions until the text
+        /// starts with `done:`, and returns the text after it.
+        fn go(&mut self) -> String {
+            let button = find(&self.tree, ControlKind::Button, |_| true);
+            let handler = self.tree.get(button).and_then(|n| n.handler(event::PRESS)).unwrap();
+            let mut w = Writer::new();
+            w.event(&Event::Ui { handler, event: event::PRESS, value: Value::Null });
+            for commit in self.guest.on_event(w.as_bytes()).unwrap() {
+                assert!(self.tree.apply(&commit).unwrap().is_empty());
+            }
+            let start = Instant::now();
+            loop {
+                if let Some(rest) = text(&self.tree).strip_prefix("done:") {
+                    assert!(self.guest.take_errors().is_empty(), "uncaught errors");
+                    return rest.to_owned();
+                }
+                for (id, result) in self.guest.poll_net_results() {
+                    for commit in self.guest.answer_dialog(id, result).unwrap() {
+                        assert!(self.tree.apply(&commit).unwrap().is_empty());
+                    }
+                }
+                assert!(start.elapsed() < Duration::from_secs(10), "no result; text is {:?}", text(&self.tree));
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+    }
+
+    fn run(body: &str, backend: &MemorySecrets, app_id: &str) -> String {
+        start(body, Policy::new([SECRETS]), Some((backend, app_id))).go()
+    }
+
+    #[test]
+    fn compiled_round_trip() {
+        let backend = MemorySecrets::new();
+        let out = run(
+            r#"
+  await set("api-token", "abc123");
+  const a = await get("api-token");
+  const miss = await get("nothing");
+  const n1 = await names();
+  await remove("api-token");
+  const b = await get("api-token");
+  const n2 = await names();
+  result.set("done:" + (a ?? "null") + ";" + (miss === null ? "null" : "value") + ";" + n1.join(",") + ";" + (b === null ? "null" : "value") + ";" + n2.length + ";" + (lastError() ?? "null"));
+"#,
+            &backend,
+            "app.one",
+        );
+        assert_eq!(out, "abc123;null;api-token;null;0;null");
+    }
+
+    #[test]
+    fn compiled_get_of_a_missing_name_gives_null_and_an_empty_value_is_not_null() {
+        let backend = MemorySecrets::new();
+        let out = run(
+            r#"
+  const a = await get("nope");
+  await set("empty", "");
+  const b = await get("empty");
+  result.set("done:" + (a === null ? "null" : "value") + ";" + (b === null ? "null" : "[" + b + "]"));
+"#,
+            &backend,
+            "app.one",
+        );
+        assert_eq!(out, "null;[]");
+    }
+
+    #[test]
+    fn compiled_names_are_sorted() {
+        let backend = MemorySecrets::new();
+        let out = run(
+            r#"
+  await set("zeta", "1");
+  await set("alpha", "2");
+  await set("mid.dle", "3");
+  const all = await names();
+  result.set("done:" + all.length + ":" + all.join(","));
+"#,
+            &backend,
+            "app.one",
+        );
+        assert_eq!(out, "3:alpha,mid.dle,zeta");
+    }
+
+    #[test]
+    fn compiled_apps_do_not_see_each_other() {
+        let backend = MemorySecrets::new();
+        let a = run(r#"await set("t", "one"); result.set("done:" + ((await get("t")) ?? "null"));"#, &backend, "app.a");
+        assert_eq!(a, "one");
+        let b = run(
+            r#"
+  const before = await get("t");
+  const list = await names();
+  await set("t", "two");
+  result.set("done:" + (before === null ? "null" : "value") + ";" + list.length + ";" + ((await get("t")) ?? "null"));
+"#,
+            &backend,
+            "app.b",
+        );
+        assert_eq!(b, "null;0;two");
+        let a2 = run(r#"result.set("done:" + ((await get("t")) ?? "null"));"#, &backend, "app.a");
+        assert_eq!(a2, "one");
+    }
+
+    #[test]
+    fn compiled_limit_errors_reject_with_denied_limit() {
+        let backend = MemorySecrets::new();
+        let out = run(
+            r#"
+  let r = "";
+  try { await set("bad name", "x"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  const first = lastError() ?? "null";
+  try { await set("fine", "x".repeat(16385)); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  await set("fine", "x");
+  const after = lastError() ?? "null";
+  result.set("done:" + r + first + ";" + after);
+"#,
+            &backend,
+            "app.one",
+        );
+        assert_eq!(out, "denied:limit;denied:limit;denied:limit;null");
+    }
+
+    #[test]
+    fn compiled_denied_calls_reject_and_never_trap() {
+        let body = r#"
+  let r = "";
+  try { await set("t", "topsecret"); r = r + "ok;"; } catch (e) { r = r + e.message + ";"; }
+  try { const v = await get("t"); r = r + (v === null ? "null" : "value") + ";"; } catch (e) { r = r + e.message + ";"; }
+  try { const l = await names(); r = r + l.length + ";"; } catch (e) { r = r + e.message + ";"; }
+  result.set("done:" + r + (lastError() ?? "null"));
+"#;
+        let backend = MemorySecrets::new();
+        let mut refused = Policy::new([SECRETS]);
+        refused.refuse(SECRETS);
+        let out = start(body, refused, Some((&backend, "app.one"))).go();
+        assert_eq!(out, "denied:refused;denied:refused;denied:refused;denied:refused");
+
+        let out = start(body, Policy::new(["store.kv"]), Some((&backend, "app.one"))).go();
+        assert_eq!(out, "denied:undeclared;denied:undeclared;denied:undeclared;denied:undeclared");
+
+        // No safe store: the default backend. It never falls back to a file.
+        let out = start(body, Policy::new([SECRETS]), None).go();
+        assert_eq!(out, "denied:unsupported;denied:unsupported;denied:unsupported;denied:unsupported");
+
+        let mut direct = backend.clone();
+        assert_eq!(direct.names(&SecretsScope::new("app.one")), Ok(vec![]), "no denied call reached the backend");
+    }
+}

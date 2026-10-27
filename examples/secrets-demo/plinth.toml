@@ -1,0 +1,8 @@
+id = "dev.plinth.examples.secrets-demo"
+name = "Secret keeper"
+version = "0.1.0"
+publisher = "plinth"
+
+[[capabilities]]
+name = "secrets"
+rationale = "Keep your token safe on this device."
