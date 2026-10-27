@@ -21,6 +21,7 @@ pub mod net;
 pub mod notify;
 pub mod policy;
 pub mod requests;
+pub mod secrets;
 pub mod sql;
 pub mod timers;
 #[cfg(feature = "wasmi")]
@@ -33,6 +34,7 @@ use kv::Kv;
 use notify::NotifyBackend;
 use policy::{DeniedReason, Policy};
 use requests::RequestQueue;
+use secrets::{SecretsBackend, SecretsScope};
 use timers::TimerQueue;
 
 mod bindings {
@@ -249,6 +251,11 @@ struct HostState {
     /// The `plinth:notify` backend (core 1.12). A `MemoryNotify` until the
     /// host gives its own with `Guest::set_notify`.
     notify: Box<dyn NotifyBackend>,
+    /// The `plinth:secrets` backend (core 1.13). An `UnsupportedSecrets`
+    /// until the host gives its own with `Guest::set_secrets`.
+    secrets: Box<dyn SecretsBackend>,
+    /// Whose secrets the guest reads (the app id and the instance).
+    secrets_scope: SecretsScope,
     /// The `store.sql` database (`docs/SQL.md`), made at its first use in
     /// the folder of the private space (`files`).
     sql: Option<sql::SqlStore>,
@@ -684,6 +691,36 @@ impl bindings::plinth::app::notify::Host for HostState {
     }
 }
 
+impl bindings::plinth::app::secrets::Host for HostState {
+    fn set(&mut self, name: String, value: String) -> u32 {
+        let id = self.requests.open();
+        let result = secrets::set(&self.policy, self.secrets.as_mut(), &self.secrets_scope, &name, &value);
+        self.net_results.lock().unwrap().push((id, result));
+        id
+    }
+
+    fn get(&mut self, name: String) -> u32 {
+        let id = self.requests.open();
+        let result = secrets::get(&self.policy, self.secrets.as_mut(), &self.secrets_scope, &name);
+        self.net_results.lock().unwrap().push((id, result));
+        id
+    }
+
+    fn remove(&mut self, name: String) -> u32 {
+        let id = self.requests.open();
+        let result = secrets::remove(&self.policy, self.secrets.as_mut(), &self.secrets_scope, &name);
+        self.net_results.lock().unwrap().push((id, result));
+        id
+    }
+
+    fn names(&mut self) -> u32 {
+        let id = self.requests.open();
+        let result = secrets::names(&self.policy, self.secrets.as_mut(), &self.secrets_scope);
+        self.net_results.lock().unwrap().push((id, result));
+        id
+    }
+}
+
 impl bindings::plinth::app::net::Host for HostState {
     fn fetch(&mut self, url: String, method: String, headers: Vec<(String, String)>, body: Option<String>) -> u32 {
         let id = self.requests.open();
@@ -956,6 +993,8 @@ impl Runner {
                     hub,
                     files: files::Files::unavailable(),
                     notify: Box::new(notify::MemoryNotify::default()),
+                    secrets: Box::new(secrets::UnsupportedSecrets),
+                    secrets_scope: SecretsScope::default(),
                     sql: None,
                     locale: None,
                     locale_fixed: false,
@@ -1187,6 +1226,16 @@ impl Guest {
     /// `MemoryNotify`, which only records the calls. Call it before `init`.
     pub fn set_notify(&mut self, notify: Box<dyn NotifyBackend>) {
         self.data_mut().notify = notify;
+    }
+
+    /// Gives the guest the host's safe store for `plinth:secrets` (core 1.13,
+    /// `docs/SECRETS.md`), and the id of the app that owns the secrets. The
+    /// instance is `default`. Without it, every call is
+    /// `denied:unsupported`. Call it before `init`.
+    pub fn set_secrets(&mut self, backend: Box<dyn SecretsBackend>, app_id: &str) {
+        let data = self.data_mut();
+        data.secrets = backend;
+        data.secrets_scope = SecretsScope::new(app_id);
     }
 
     /// Starts a test clock (`plinth test`, docs/TESTING.md): from now on,

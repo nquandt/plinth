@@ -687,6 +687,20 @@ abi! {
     }
     fn __plinth_rt_notify_cancel(tag: i32) { host::notify_cancel(tag) }
     fn __plinth_rt_notify_last_error() -> i32 { host::notify_last_error() }
+    // -- plinth:secrets (core 1.13, docs/SECRETS.md) ---------------------------
+    fn __plinth_rt_secrets_set(thunk: i32, env: i32, name: i32, value: i32) {
+        host::secrets_set(Callable { thunk: thunk as u32, env: env as u32 }, name, value)
+    }
+    fn __plinth_rt_secrets_get(thunk: i32, env: i32, name: i32) {
+        host::secrets_get(Callable { thunk: thunk as u32, env: env as u32 }, name)
+    }
+    fn __plinth_rt_secrets_remove(thunk: i32, env: i32, name: i32) {
+        host::secrets_remove(Callable { thunk: thunk as u32, env: env as u32 }, name)
+    }
+    fn __plinth_rt_secrets_names(thunk: i32, env: i32) {
+        host::secrets_names(Callable { thunk: thunk as u32, env: env as u32 })
+    }
+    fn __plinth_rt_secrets_last_error() -> i32 { host::secrets_last_error() }
     // -- store.sql (core 1.13, docs/SQL.md) ------------------------------------
     fn __plinth_rt_sql_call(thunk: i32, env: i32, kind: i32, statement: i32, params: i32) {
         host::sql_call(Callable { thunk: thunk as u32, env: env as u32 }, kind, statement, params)

@@ -148,6 +148,31 @@ interface notify {
   cancel: func(tag: string) -> result<_, host-error>;
 }
 
+/// Secure storage for credentials (core 1.13, `docs/SECRETS.md`; capability:
+/// `secrets`, Low risk). The store belongs to this app only. The host keeps
+/// the values in the safest place that the platform offers, and never in a
+/// plain file. Every call returns a request id at once; the result arrives
+/// later through a `completion` event (SPEC.md §8.4) as a 4-element list:
+/// `ok` (bool), `n` (s32), `text` (string) and `error` (string, or null when
+/// `ok`). A denied call completes with `ok` false and `error` =
+/// `"denied:<reason>"`, where the reason is `undeclared`, `refused`,
+/// `unsupported` or `limit`. A denied call never traps. A name has 1 to 64
+/// characters from `a-z A-Z 0-9 . _ -`. A value is at most 16 KiB. An app
+/// has at most 64 secrets.
+interface secrets {
+  /// Stores `value` under `name`. A success has `n` 0 and `text` empty.
+  set: func(name: string, value: string) -> u32;
+  /// Reads the secret `name`. A success has `n` 1 and the value in `text`,
+  /// or `n` 0 and `text` empty when the name does not exist.
+  get: func(name: string) -> u32;
+  /// Removes the secret `name`. A name that does not exist is not an error.
+  /// A success has `n` 0 and `text` empty.
+  remove: func(name: string) -> u32;
+  /// Lists the names. A success has `n` = the count and `text` = a JSON
+  /// array of the names, sorted.
+  names: func() -> u32;
+}
+
 /// HTTP fetch (SPEC.md §8.5, §11; capability: `net:<host>`, dynamic per
 /// declared host, plus `net.local` for private network ranges). Every
 /// call returns at once with a request id; the result arrives later
@@ -358,6 +383,7 @@ world app {
   import clipboard;
   import dialog;
   import notify;
+  import secrets;
   import net;
   import hub;
   import files;

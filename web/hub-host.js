@@ -36,6 +36,7 @@ const CAPABILITIES = {
   "clipboard.write": { risk: "low", description: "write to the clipboard" },
   "clipboard.read": { risk: "medium", description: "read the clipboard" },
   notify: { risk: "medium", description: "show notifications" },
+  secrets: { risk: "low", description: "keep passwords and tokens for this app" },
   "net.local": { risk: "medium", description: "connect to devices on your local network" },
   "hub.manage": { risk: "high", description: "manage the Hub library: list, launch, grant and block apps" },
 };

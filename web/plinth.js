@@ -1919,6 +1919,17 @@ function hostImports(
     run.then((result) => completeRequest?.(id, result));
     return id;
   }
+  // plinth:secrets (core 1.13, docs/SECRETS.md): the same request id and
+  // `[ok, n, text, error]` completion as `net.fetch`. The capability check
+  // comes first; a denied call answers "denied:<reason>" and never traps.
+  // This host has no safe store yet (a later step adds WebCrypto), so an
+  // allowed call answers "denied:unsupported". It never keeps a value.
+  function openSecrets() {
+    const id = nextRequest++;
+    const reason = capReason("secrets") ?? DeniedReason.unsupported;
+    Promise.resolve().then(() => completeRequest?.(id, [false, 0, "", deniedText(reason)]));
+    return id;
+  }
   // store.sql (core 1.13, docs/SQL.md): the same request id and
   // `[ok, int, text, error]` completion as `net.fetch`. The capability
   // check comes first, then the kind, then the backend, as on the desktop;
@@ -2302,6 +2313,22 @@ function hostImports(
         // Fire-and-forget: an unknown tag is not an error.
         if (notify) Promise.resolve().then(() => notify.cancel(tag)).catch(() => {});
         writeOkUnit(retptr);
+      },
+    },
+    // Lowered core ABI: name(ptr,len), value(ptr,len). Each call returns the
+    // request id directly.
+    "plinth:app/secrets@1.0.0": {
+      set(_namePtr, _nameLen, _valuePtr, _valueLen) {
+        return openSecrets();
+      },
+      get(_ptr, _len) {
+        return openSecrets();
+      },
+      remove(_ptr, _len) {
+        return openSecrets();
+      },
+      names() {
+        return openSecrets();
       },
     },
     "plinth:app/net@1.0.0": {

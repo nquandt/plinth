@@ -115,6 +115,17 @@ pub fn dispatch_completion(request: u32, result: &plinth_protocol::Value) {
         let i = r.iter().position(|x| x.id == request)?;
         Some(r.remove(i).callable)
     });
+    // `plinth:secrets`: keep the reason of a denied call for `lastError()`.
+    if SECRETS_REQUESTS.with(|r| r.iter().position(|x| *x == request).map(|i| r.remove(i))).is_some() {
+        let error = match result {
+            plinth_protocol::Value::List(items) => match items.get(3) {
+                Some(plinth_protocol::Value::Str(s)) => Some(s.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        SECRETS_LAST_ERROR.with(|e| *e = error);
+    }
     if let Some(callable) = callable {
         crate::reactive::untracked(|| invoke(callable, crate::ui::value_to_val(result)));
     }
@@ -623,6 +634,72 @@ pub fn notify_cancel(tag: i32) {
 pub fn notify_last_error() -> i32 {
     #[cfg(target_arch = "wasm32")]
     return NOTIFY_LAST_ERROR.with(|e| match e {
+        Some(s) => strings::from_str(s) as i32,
+        None => 0,
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    0
+}
+
+/// The request ids of the `plinth:secrets` calls that wait for a completion.
+static SECRETS_REQUESTS: Global<Vec<u32>> = Global::new(Vec::new());
+/// The `error` field of the last `plinth:secrets` completion, as the string
+/// `secrets.lastError()` returns, or `None` if the last call was not denied.
+static SECRETS_LAST_ERROR: Global<Option<alloc::string::String>> = Global::new(None);
+
+/// Registers a `plinth:secrets` request: the callback, and the request id
+/// for `secrets_last_error`.
+#[cfg(target_arch = "wasm32")]
+fn register_secrets_request(id: u32, callable: Callable) {
+    SECRETS_REQUESTS.with(|r| r.push(id));
+    register_request(id, callable);
+}
+
+/// `plinth:secrets` `set` (core 1.13, `docs/SECRETS.md`): stores a value.
+/// The completion is the same 4-element list as `net.fetch`, so the
+/// compiler's wrapper closure reads it with `net_result_*`. The host checks
+/// the capability and the limits. It never logs a value.
+pub fn secrets_set(callable: Callable, name: i32, value: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = host::secrets::set(strings::as_str(name as u32), strings::as_str(value as u32));
+        register_secrets_request(id, callable);
+    }
+}
+
+/// `plinth:secrets` `get`: `n` is 1 and `text` is the value, or `n` is 0
+/// when the name does not exist.
+pub fn secrets_get(callable: Callable, name: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = host::secrets::get(strings::as_str(name as u32));
+        register_secrets_request(id, callable);
+    }
+}
+
+/// `plinth:secrets` `remove`.
+pub fn secrets_remove(callable: Callable, name: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = host::secrets::remove(strings::as_str(name as u32));
+        register_secrets_request(id, callable);
+    }
+}
+
+/// `plinth:secrets` `names`: `text` is a JSON array of the sorted names.
+pub fn secrets_names(callable: Callable) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = host::secrets::names();
+        register_secrets_request(id, callable);
+    }
+}
+
+/// `secrets.lastError()`: the reason the last `plinth:secrets` call was
+/// denied, or `null`.
+pub fn secrets_last_error() -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    return SECRETS_LAST_ERROR.with(|e| match e {
         Some(s) => strings::from_str(s) as i32,
         None => 0,
     });
