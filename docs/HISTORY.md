@@ -50,3 +50,4 @@
 - **Personal registry:** `scripts/registry-publish.sh`, `infra/registry/` (Caddy and `cloudflared` in Docker, for `plinth.femur.dev`), `infra/azure/provision.sh` (resource group `plinth-rg`, storage account `plinthreg36610` with a static website). Design and plans: `docs/REGISTRY-HOSTING.md`.
 - **iOS:** found that gpui-ce has no iOS platform crate. `docs/MAC-HANDOFF.md` has the plan and `hosts/ios-shell/` has a `WKWebView` bridge (never built).
 - **Repository:** merged `wt/*` branches deleted. `wt/lang` is not merged (old size-limit change; superseded by owner decision 6).
+- **Gate (2026-10-27):** `bash scripts/ci-local.sh full` passes; `node web/test/run-a11y.mjs` passes on the second run (the first run failed at the known web Hub start flake, HANDOFF §7). The publish script, the Docker site (Caddy) and the Azure mirror were tested with a scratch app; the mirror was emptied after the test.
