@@ -27,6 +27,7 @@
 import { checkFrameMessage, applyKvMessage, startMessage, CHANNEL, KV_QUOTA } from "./hub-storage.js";
 import { netDenied, httpFetch, browserNotify, normalizeLocale, pageLocale } from "./plinth-web.js";
 import { FileSpace, idbFileBackend, memoryFileBackend, FILES_CAPABILITY } from "./files.js";
+import { SecretSpace, idbSecretBackend, SECRETS_CAPABILITY } from "./secrets.js";
 
 /** `el("p", { class: "x" }, "text", child)`: a small DOM builder (text is never parsed as HTML). */
 function el(tag, attrs = {}, ...children) {
@@ -94,6 +95,9 @@ export function hostDialog(kind, message, title = "") {
  * - `sql`: the page's `store.sql` engine (`SqlWorkerHost` of `sql.js`, or
  *   anything with its `space(appId)`); default none: an allowed call
  *   answers "denied:unsupported".
+ * - `secrets`: the `SecretSpace` of this app for `plinth:secrets`; default:
+ *   the page's IndexedDB with WebCrypto (`idbSecretBackend(appId)`); a page
+ *   without them answers "denied:unsupported", never a weaker store.
  * - `notify`: the `plinth:notify` backend (`{ show, cancel }`); default:
  *   `browserNotify()`, the page's `Notification` API, with `notifyIcon` (a
  *   URL, optional) as the icon. One backend for each frame, so `cancel`
@@ -113,6 +117,7 @@ export class AppFrame {
     this.sent = false;
     this.files =
       opts.files ?? new FileSpace(typeof indexedDB !== "undefined" ? idbFileBackend(opts.appId) : memoryFileBackend());
+    this.secrets = opts.secrets ?? new SecretSpace(idbSecretBackend(opts.appId));
     this.notify = opts.notify ?? browserNotify(globalThis.Notification, { icon: opts.notifyIcon });
     this.sql = opts.sql ? opts.sql.space(opts.appId) : null;
     // `allow-scripts` only: an opaque origin, no forms, no popups, no modal
@@ -236,6 +241,19 @@ export class AppFrame {
         }
         const op = msg.type.slice("files-".length);
         this.files.call(op, msg.path, op === "write" ? msg.text : null).then((r) => this.answer(msg.id, r));
+        break;
+      }
+      case "secrets-set":
+      case "secrets-get":
+      case "secrets-remove":
+      case "secrets-names": {
+        // The frame checked the capability; the page checks it again.
+        if (!this.allowed(SECRETS_CAPABILITY)) {
+          this.answer(msg.id, [false, 0, "", this.declared.has(SECRETS_CAPABILITY) ? "denied:refused" : "denied:undeclared"]);
+          break;
+        }
+        const op = msg.type.slice("secrets-".length);
+        this.secrets.call(op, msg.name ?? "", msg.value ?? null).then((r) => this.answer(msg.id, r));
         break;
       }
       case "sql-run": {

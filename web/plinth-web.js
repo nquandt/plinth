@@ -16,6 +16,7 @@
 import { openZip, checkPlntProfile } from "./zip.js";
 import { decodeOps, encodeEvent, encodeInitArgs, LifecycleKind } from "./protocol.js";
 import { FileSpace, memoryFileBackend, FILES_CAPABILITY } from "./files.js";
+import { pageSecrets } from "./secrets.js";
 
 const RT_PREFIX = "__plinth_rt_";
 /** The `init` record of the `Math.random` seed (core 1.12): 8 bytes, a little-endian u64. */
@@ -859,6 +860,7 @@ function hostImports(
     sql = null,
     onCommitBytes = null,
     notify = null,
+    secrets = null,
     getLocale = () => FALLBACK_LOCALE,
     appId = "",
     appVersion = null,
@@ -947,12 +949,21 @@ function hostImports(
   // plinth:secrets (core 1.13, docs/SECRETS.md): the same request id and
   // `[ok, n, text, error]` completion as `net.fetch`. The capability check
   // comes first; a denied call answers "denied:<reason>" and never traps.
-  // This host has no safe store yet (a later step adds WebCrypto), so an
-  // allowed call answers "denied:unsupported". It never keeps a value.
-  function openSecrets() {
+  // `secrets` (`{ call(op, name, value) }`: a `SecretSpace` of `secrets.js`,
+  // or the frame's bridge to the page) answers the list itself: the limits,
+  // "denied:unsupported" (no IndexedDB or no WebCrypto) and "failed". With no
+  // `secrets` (Node), an allowed call answers "denied:unsupported". This host
+  // never keeps a value in a weaker place.
+  function openSecrets(op, name, value) {
     const id = nextRequest++;
-    const reason = capReason("secrets") ?? DeniedReason.unsupported;
-    Promise.resolve().then(() => completeRequest?.(id, [false, 0, "", deniedText(reason)]));
+    const reason = capReason("secrets");
+    const run =
+      reason !== null
+        ? Promise.resolve([false, 0, "", deniedText(reason)])
+        : Promise.resolve()
+            .then(() => (secrets ? secrets.call(op, name, value) : [false, 0, "", "denied:unsupported"]))
+            .catch(() => [false, 0, "", "failed"]);
+    run.then((result) => completeRequest?.(id, result));
     return id;
   }
   // store.sql (core 1.13, docs/SQL.md): the same request id and
@@ -1343,17 +1354,17 @@ function hostImports(
     // Lowered core ABI: name(ptr,len), value(ptr,len). Each call returns the
     // request id directly.
     "plinth:app/secrets@1.0.0": {
-      set(_namePtr, _nameLen, _valuePtr, _valueLen) {
-        return openSecrets();
+      set(namePtr, nameLen, valuePtr, valueLen) {
+        return openSecrets("set", readString(namePtr, nameLen), readString(valuePtr, valueLen));
       },
-      get(_ptr, _len) {
-        return openSecrets();
+      get(ptr, len) {
+        return openSecrets("get", readString(ptr, len), null);
       },
-      remove(_ptr, _len) {
-        return openSecrets();
+      remove(ptr, len) {
+        return openSecrets("remove", readString(ptr, len), null);
       },
       names() {
-        return openSecrets();
+        return openSecrets("names", "", null);
       },
     },
     "plinth:app/net@1.0.0": {
@@ -1686,6 +1697,10 @@ export class PlinthApp {
       // `plinth:files`: the caller's space (the frame's bridge to the page),
       // else a space in memory for this app (Node, the stand-alone page).
       files: opts.files ?? new FileSpace(memoryFileBackend(opts.filesMap)),
+      // `plinth:secrets`: the caller's space (the frame's bridge to the
+      // page), else this page's IndexedDB with WebCrypto (`secrets.js`), else
+      // none: an allowed call answers "denied:unsupported" (Node).
+      secrets: opts.secrets !== undefined ? opts.secrets : pageSecrets(appId),
       // `store.sql`: the page's engine (`sql.js`, through the frame's
       // bridge), else none: an allowed call answers "denied:unsupported".
       sql: opts.sql ?? null,

@@ -18,6 +18,7 @@
 
 import { MAX_PATH as FILES_MAX_PATH, MAX_FILE as FILES_MAX_FILE } from "./files.js";
 import { MAX_SQL_TEXT } from "./plinth-web.js";
+import { MAX_NAME as SECRETS_MAX_NAME, MAX_VALUE as SECRETS_MAX_VALUE, clearAppSecrets } from "./secrets.js";
 
 /** The kv quota of one app, in characters (UTF-16 code units) of keys and values. */
 export const KV_QUOTA = 512 * 1024;
@@ -93,9 +94,12 @@ function storageKeys(storage) {
  * the decisions that last for one session (`sessionStorage`).
  */
 export class HubStore {
-  constructor(storage, session = memoryStorage()) {
+  constructor(storage, session = memoryStorage(), clearSecrets = clearAppSecrets) {
     this.storage = storage;
     this.session = session;
+    // `plinth:secrets` keep their data in IndexedDB, not in `storage`; an
+    // uninstall deletes them too (docs/SECRETS.md §3 rule 3).
+    this.clearSecrets = clearSecrets;
   }
 
   /** The kv data of `id` as a plain object. */
@@ -131,11 +135,17 @@ export class HubStore {
     this.storage.removeItem(kvPrefix(id) + key);
   }
 
-  /** Removes all kv data of `id`. */
+  /**
+   * Removes all data of `id` (an uninstall): the kv data and the data
+   * version at once, and the secrets of `plinth:secrets` (IndexedDB). Returns
+   * a promise that resolves when the secrets are gone (it rejects if the
+   * browser fails to delete them).
+   */
   kvClear(id) {
     const prefix = kvPrefix(id);
     for (const k of storageKeys(this.storage)) if (k.startsWith(prefix)) this.storage.removeItem(k);
     this.storage.removeItem(dataVersionKey(id));
+    return Promise.resolve().then(() => this.clearSecrets?.(id));
   }
 
   /** `plinth:app-info` (core 1.13, PRODUCTION.md D4): the stored data version of `id`, or null. */
@@ -288,6 +298,11 @@ const FRAME_TYPES = {
   "files-remove": { id: "number", path: "string" },
   // store.sql (core 1.13): the page runs the database of the app.
   "sql-run": { id: "number", kind: "number", statement: "string", params: "string" },
+  // plinth:secrets (core 1.13): the page keeps the secrets of the app.
+  "secrets-set": { id: "number", name: "string", value: "string" },
+  "secrets-get": { id: "number", name: "string" },
+  "secrets-remove": { id: "number", name: "string" },
+  "secrets-names": { id: "number" },
   // plinth:notify (core 1.12): the page shows the notification.
   "notify-show": { id: "number", title: "string" },
   "notify-cancel": { tag: "string" },
@@ -324,6 +339,12 @@ export function checkFrameMessage(data) {
     if (data.path.length > FILES_MAX_PATH) return null;
     if (data.type === "files-write" && data.text.length > FILES_MAX_FILE) return null;
     if (data.type !== "files-write" && data.text !== undefined) return null;
+  }
+  if (data.type.startsWith("secrets-")) {
+    // The page checks the call again (`SecretSpace`); this only bounds the
+    // sizes. The frame answers a call over a limit itself.
+    if (data.type !== "secrets-names" && data.name.length > SECRETS_MAX_NAME) return null;
+    if (data.type === "secrets-set" ? data.value.length > SECRETS_MAX_VALUE : data.value !== undefined) return null;
   }
   if (data.type === "sql-run") {
     // The page's engine checks the call again (docs/SQL.md §4); this only

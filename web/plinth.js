@@ -971,6 +971,247 @@ class FileSpace {
   return { FILES_CAPABILITY, FILES_QUOTA, MAX_FILE, MAX_PATH, MAX_SEGMENT, MAX_DEPTH, checkPath, isValidSegment, memoryFileBackend, sharedMemoryBackend, idbFileBackend, FileSpace };
   })();
 
+  // ---- secrets.js
+  const __secrets = (() => {
+// `plinth:secrets` on the web (core 1.13, docs/SECRETS.md): the secrets of an
+// app. A browser has no keychain. The page makes one AES-GCM 256 key for the
+// browser profile (WebCrypto, `extractable: false`) and keeps it as a
+// `CryptoKey` in IndexedDB. Only encrypted values are stored: a random
+// 12-byte IV for each write, and the app id, the instance and the name as
+// additional authenticated data, so a record cannot move to another name or
+// app. This protects against a copy of the profile on disk, not against code
+// that runs in the page. The sandboxed frame has an opaque origin and cannot
+// use IndexedDB: the page keeps the secrets for the frame (`frame-host.js`)
+// and checks the capability again.
+//
+// A `SecretSpace` runs the calls of one app, one at a time in call order, on
+// a backend. `call(op, name, value)` (op "set", "get", "remove" or "names")
+// answers `[ok, n, text, error]` and never throws (docs/SECRETS.md §5).
+// A browser with no IndexedDB or no `crypto.subtle` answers
+// "denied:unsupported" and never keeps a value in a weaker place.
+//
+// No DOM code: `test/run-secrets.mjs` runs this file in a browser.
+
+/** The capability of the secrets. */
+const SECRETS_CAPABILITY = "secrets";
+/** The most characters in a name, the most bytes (UTF-8) in a value, the most secrets of one app. */
+const MAX_NAME = 64;
+const MAX_VALUE = 16 * 1024;
+const MAX_SECRETS = 64;
+/** The instance of an app (docs/STORAGE.md "Instances"). */
+const INSTANCE = "default";
+
+const DB_NAME = "plinth-secrets";
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+const ok = (n = 0, text = "") => [true, n, text, null];
+const fail = (error) => [false, 0, "", error];
+
+/** True if `name` is a name of a secret: 1 to 64 characters from `a-z A-Z 0-9 . _ -`. */
+function validName(name) {
+  return typeof name === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(name);
+}
+
+/** True if the call breaks a limit of §2 (a bad name, or a value over 16 KiB). */
+function overLimit(op, name, value) {
+  if (op !== "names" && !validName(name)) return true;
+  return op === "set" && (typeof value !== "string" || encoder.encode(value).length > MAX_VALUE);
+}
+
+/** True if this page can keep secrets: it has IndexedDB and WebCrypto `subtle`. */
+function secretsSupported(idb = globalThis.indexedDB, subtle = globalThis.crypto?.subtle) {
+  return Boolean(idb) && Boolean(subtle) && typeof subtle.generateKey === "function";
+}
+
+/** A backend in memory, for tests of `SecretSpace` (the values are not encrypted). */
+function memorySecretBackend(map = new Map()) {
+  return {
+    supported: true,
+    async get(name) {
+      return map.has(name) ? map.get(name) : undefined;
+    },
+    async put(name, value) {
+      map.set(name, value);
+    },
+    async delete(name) {
+      map.delete(name);
+    },
+    async names() {
+      return [...map.keys()];
+    },
+    async clear() {
+      map.clear();
+    },
+  };
+}
+
+/** Opens (and makes, once) the database: the object stores `keys` and `values`. */
+function openDb(idb) {
+  return new Promise((resolve, reject) => {
+    const req = idb.open(DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore("keys");
+      req.result.createObjectStore("values");
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * A backend on the page's IndexedDB and WebCrypto. The database
+ * `plinth-secrets` has the object store `keys` (the key "profile": the
+ * `CryptoKey`) and the object store `values` (keys `[space, instance,
+ * name]`, values `{ iv, data }`, both `ArrayBuffer`). `space` is the app id
+ * in lower case (the same namespace rule as `idbFileBackend`).
+ */
+function idbSecretBackend(space, idb = globalThis.indexedDB, subtle = globalThis.crypto?.subtle) {
+  const ns = String(space).toLowerCase();
+  const supported = secretsSupported(idb, subtle);
+  let dbPromise = null;
+  let keyPromise = null;
+  const db = () => (dbPromise ??= openDb(idb));
+  function run(store, mode, fn) {
+    return db().then(
+      (d) =>
+        new Promise((resolve, reject) => {
+          const tx = d.transaction(store, mode);
+          let value;
+          fn(tx.objectStore(store), (v) => (value = v));
+          tx.oncomplete = () => resolve(value);
+          tx.onerror = () => reject(tx.error);
+          tx.onabort = () => reject(tx.error);
+        }),
+    );
+  }
+  /** The key of the profile. Made one time; two tabs that race both end with the key that was stored first. */
+  function profileKey() {
+    keyPromise ??= (async () => {
+      const found = await run("keys", "readonly", (s, set) => {
+        const r = s.get("profile");
+        r.onsuccess = () => set(r.result);
+      });
+      if (found) return found;
+      const fresh = await subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+      return run("keys", "readwrite", (s, set) => {
+        const r = s.get("profile");
+        r.onsuccess = () => {
+          if (r.result) set(r.result);
+          else {
+            s.put(fresh, "profile");
+            set(fresh);
+          }
+        };
+      });
+    })();
+    // A failure is not kept: the next call tries again.
+    keyPromise.catch(() => (keyPromise = null));
+    return keyPromise;
+  }
+  const aad = (name) => encoder.encode(`${ns}\u0000${INSTANCE}\u0000${name}`);
+  return {
+    supported,
+    async get(name) {
+      const rec = await run("values", "readonly", (s, set) => {
+        const r = s.get([ns, INSTANCE, name]);
+        r.onsuccess = () => set(r.result);
+      });
+      if (!rec) return undefined;
+      const key = await profileKey();
+      const plain = await subtle.decrypt({ name: "AES-GCM", iv: rec.iv, additionalData: aad(name) }, key, rec.data);
+      return decoder.decode(plain);
+    },
+    async put(name, value) {
+      const key = await profileKey();
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const data = await subtle.encrypt({ name: "AES-GCM", iv, additionalData: aad(name) }, key, encoder.encode(value));
+      await run("values", "readwrite", (s) => s.put({ iv: iv.buffer, data }, [ns, INSTANCE, name]));
+    },
+    async delete(name) {
+      await run("values", "readwrite", (s) => s.delete([ns, INSTANCE, name]));
+    },
+    async names() {
+      return run("values", "readonly", (s, set) => {
+        const out = [];
+        const r = s.openCursor(IDBKeyRange.bound([ns, INSTANCE, ""], [ns, INSTANCE, "￿"]));
+        r.onsuccess = () => {
+          const c = r.result;
+          if (!c) return set(out);
+          out.push(c.key[2]);
+          c.continue();
+        };
+      });
+    },
+    /** Deletes every secret of the app (uninstall, docs/SECRETS.md §3 rule 3). */
+    async clear() {
+      await run("values", "readwrite", (s) => s.delete(IDBKeyRange.bound([ns], [ns, "￿"])));
+    },
+  };
+}
+
+/**
+ * Deletes every secret of the app `appId` from the page's IndexedDB. Does
+ * nothing if there is none, or if the browser has no IndexedDB. Resolves
+ * with nothing; rejects if the database fails.
+ */
+async function clearAppSecrets(appId, idb = globalThis.indexedDB) {
+  if (!idb) return;
+  await idbSecretBackend(appId, idb, { generateKey() {} }).clear();
+}
+
+/**
+ * The secrets of one app on a backend. `call(op, name, value)` answers `[ok,
+ * n, text, error]` and never throws. The error of a failed store is "failed"
+ * (the text never holds a value).
+ */
+class SecretSpace {
+  constructor(backend) {
+    this.backend = backend;
+    this.queue = Promise.resolve();
+  }
+
+  call(op, name, value = null) {
+    const run = this.queue.then(() => this.run(op, name, value));
+    this.queue = run.catch(() => {});
+    return run.catch(() => fail("failed"));
+  }
+
+  async run(op, name, value) {
+    const b = this.backend;
+    if (overLimit(op, name, value)) return fail("denied:limit");
+    if (!b.supported) return fail("denied:unsupported");
+    switch (op) {
+      case "set": {
+        const names = await b.names();
+        if (names.length >= MAX_SECRETS && !names.includes(name)) return fail("denied:limit");
+        await b.put(name, value);
+        return ok();
+      }
+      case "get": {
+        const v = await b.get(name);
+        return v === undefined ? ok(0, "") : ok(1, v);
+      }
+      case "remove":
+        await b.delete(name);
+        return ok();
+      case "names": {
+        const names = [...(await b.names())].sort();
+        return ok(names.length, JSON.stringify(names));
+      }
+      default:
+        return fail("failed");
+    }
+  }
+}
+
+/** The secrets of `appId` in this page, or null if the browser cannot keep them safely. */
+function pageSecrets(appId) {
+  return appId && secretsSupported() ? new SecretSpace(idbSecretBackend(appId)) : null;
+}
+  return { SECRETS_CAPABILITY, MAX_NAME, MAX_VALUE, MAX_SECRETS, INSTANCE, validName, overLimit, secretsSupported, memorySecretBackend, idbSecretBackend, clearAppSecrets, SecretSpace, pageSecrets };
+  })();
+
   // ---- plinth-web.js
   const __plinth_web = (() => {
 // The Plinth web host (SPEC.md §18.3 "browse mode" / side-module model).
@@ -991,6 +1232,7 @@ class FileSpace {
 const { openZip, checkPlntProfile } = __zip;
 const { decodeOps, encodeEvent, encodeInitArgs, LifecycleKind } = __protocol;
 const { FileSpace, memoryFileBackend, FILES_CAPABILITY } = __files;
+const { pageSecrets } = __secrets;
 
 const RT_PREFIX = "__plinth_rt_";
 /** The `init` record of the `Math.random` seed (core 1.12): 8 bytes, a little-endian u64. */
@@ -1834,6 +2076,7 @@ function hostImports(
     sql = null,
     onCommitBytes = null,
     notify = null,
+    secrets = null,
     getLocale = () => FALLBACK_LOCALE,
     appId = "",
     appVersion = null,
@@ -1922,12 +2165,21 @@ function hostImports(
   // plinth:secrets (core 1.13, docs/SECRETS.md): the same request id and
   // `[ok, n, text, error]` completion as `net.fetch`. The capability check
   // comes first; a denied call answers "denied:<reason>" and never traps.
-  // This host has no safe store yet (a later step adds WebCrypto), so an
-  // allowed call answers "denied:unsupported". It never keeps a value.
-  function openSecrets() {
+  // `secrets` (`{ call(op, name, value) }`: a `SecretSpace` of `secrets.js`,
+  // or the frame's bridge to the page) answers the list itself: the limits,
+  // "denied:unsupported" (no IndexedDB or no WebCrypto) and "failed". With no
+  // `secrets` (Node), an allowed call answers "denied:unsupported". This host
+  // never keeps a value in a weaker place.
+  function openSecrets(op, name, value) {
     const id = nextRequest++;
-    const reason = capReason("secrets") ?? DeniedReason.unsupported;
-    Promise.resolve().then(() => completeRequest?.(id, [false, 0, "", deniedText(reason)]));
+    const reason = capReason("secrets");
+    const run =
+      reason !== null
+        ? Promise.resolve([false, 0, "", deniedText(reason)])
+        : Promise.resolve()
+            .then(() => (secrets ? secrets.call(op, name, value) : [false, 0, "", "denied:unsupported"]))
+            .catch(() => [false, 0, "", "failed"]);
+    run.then((result) => completeRequest?.(id, result));
     return id;
   }
   // store.sql (core 1.13, docs/SQL.md): the same request id and
@@ -2318,17 +2570,17 @@ function hostImports(
     // Lowered core ABI: name(ptr,len), value(ptr,len). Each call returns the
     // request id directly.
     "plinth:app/secrets@1.0.0": {
-      set(_namePtr, _nameLen, _valuePtr, _valueLen) {
-        return openSecrets();
+      set(namePtr, nameLen, valuePtr, valueLen) {
+        return openSecrets("set", readString(namePtr, nameLen), readString(valuePtr, valueLen));
       },
-      get(_ptr, _len) {
-        return openSecrets();
+      get(ptr, len) {
+        return openSecrets("get", readString(ptr, len), null);
       },
-      remove(_ptr, _len) {
-        return openSecrets();
+      remove(ptr, len) {
+        return openSecrets("remove", readString(ptr, len), null);
       },
       names() {
-        return openSecrets();
+        return openSecrets("names", "", null);
       },
     },
     "plinth:app/net@1.0.0": {
@@ -2661,6 +2913,10 @@ class PlinthApp {
       // `plinth:files`: the caller's space (the frame's bridge to the page),
       // else a space in memory for this app (Node, the stand-alone page).
       files: opts.files ?? new FileSpace(memoryFileBackend(opts.filesMap)),
+      // `plinth:secrets`: the caller's space (the frame's bridge to the
+      // page), else this page's IndexedDB with WebCrypto (`secrets.js`), else
+      // none: an allowed call answers "denied:unsupported" (Node).
+      secrets: opts.secrets !== undefined ? opts.secrets : pageSecrets(appId),
       // `store.sql`: the page's engine (`sql.js`, through the frame's
       // bridge), else none: an allowed call answers "denied:unsupported".
       sql: opts.sql ?? null,
@@ -5224,6 +5480,7 @@ class DomRenderer {
 
 const { MAX_PATH: FILES_MAX_PATH, MAX_FILE: FILES_MAX_FILE } = __files;
 const { MAX_SQL_TEXT } = __plinth_web;
+const { MAX_NAME: SECRETS_MAX_NAME, MAX_VALUE: SECRETS_MAX_VALUE, clearAppSecrets } = __secrets;
 
 /** The kv quota of one app, in characters (UTF-16 code units) of keys and values. */
 const KV_QUOTA = 512 * 1024;
@@ -5299,9 +5556,12 @@ function storageKeys(storage) {
  * the decisions that last for one session (`sessionStorage`).
  */
 class HubStore {
-  constructor(storage, session = memoryStorage()) {
+  constructor(storage, session = memoryStorage(), clearSecrets = clearAppSecrets) {
     this.storage = storage;
     this.session = session;
+    // `plinth:secrets` keep their data in IndexedDB, not in `storage`; an
+    // uninstall deletes them too (docs/SECRETS.md §3 rule 3).
+    this.clearSecrets = clearSecrets;
   }
 
   /** The kv data of `id` as a plain object. */
@@ -5337,11 +5597,17 @@ class HubStore {
     this.storage.removeItem(kvPrefix(id) + key);
   }
 
-  /** Removes all kv data of `id`. */
+  /**
+   * Removes all data of `id` (an uninstall): the kv data and the data
+   * version at once, and the secrets of `plinth:secrets` (IndexedDB). Returns
+   * a promise that resolves when the secrets are gone (it rejects if the
+   * browser fails to delete them).
+   */
   kvClear(id) {
     const prefix = kvPrefix(id);
     for (const k of storageKeys(this.storage)) if (k.startsWith(prefix)) this.storage.removeItem(k);
     this.storage.removeItem(dataVersionKey(id));
+    return Promise.resolve().then(() => this.clearSecrets?.(id));
   }
 
   /** `plinth:app-info` (core 1.13, PRODUCTION.md D4): the stored data version of `id`, or null. */
@@ -5494,6 +5760,11 @@ const FRAME_TYPES = {
   "files-remove": { id: "number", path: "string" },
   // store.sql (core 1.13): the page runs the database of the app.
   "sql-run": { id: "number", kind: "number", statement: "string", params: "string" },
+  // plinth:secrets (core 1.13): the page keeps the secrets of the app.
+  "secrets-set": { id: "number", name: "string", value: "string" },
+  "secrets-get": { id: "number", name: "string" },
+  "secrets-remove": { id: "number", name: "string" },
+  "secrets-names": { id: "number" },
   // plinth:notify (core 1.12): the page shows the notification.
   "notify-show": { id: "number", title: "string" },
   "notify-cancel": { tag: "string" },
@@ -5530,6 +5801,12 @@ function checkFrameMessage(data) {
     if (data.path.length > FILES_MAX_PATH) return null;
     if (data.type === "files-write" && data.text.length > FILES_MAX_FILE) return null;
     if (data.type !== "files-write" && data.text !== undefined) return null;
+  }
+  if (data.type.startsWith("secrets-")) {
+    // The page checks the call again (`SecretSpace`); this only bounds the
+    // sizes. The frame answers a call over a limit itself.
+    if (data.type !== "secrets-names" && data.name.length > SECRETS_MAX_NAME) return null;
+    if (data.type === "secrets-set" ? data.value.length > SECRETS_MAX_VALUE : data.value !== undefined) return null;
   }
   if (data.type === "sql-run") {
     // The page's engine checks the call again (docs/SQL.md §4); this only
@@ -5622,7 +5899,7 @@ function startMessage(store, id, { pkg, core, refused, quota = KV_QUOTA, hub = n
 //   `frameKvStore` in `hub-storage.js`).
 // - `clipboard`: `write-text` goes to the document; `read-text` answers from
 //   the cache of the Worker and asks the document for a new value.
-// - `dialog`, `net.fetch`, `files.*`, `sql.run`: a request id at once, the
+// - `dialog`, `net.fetch`, `files.*`, `secrets.*`, `sql.run`: a request id at once, the
 //   answer from the document later (`ask`/`answer`), as before.
 // - `hub.*` (the Hub app only): `FrameHub` runs in the Worker on its
 //   snapshot; its `hub-save`, `hub-launch` and `hub-call` messages go out
@@ -5760,6 +6037,7 @@ function runWorker(scope) {
       netFetch: (url, method, headers, body) => ask("net-fetch", { url, method, headers, body }),
       files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
       sql: { call: (kind, statement, params) => ask("sql-run", { kind, statement, params }) },
+      secrets: { call: (op, name, value) => ask(`secrets-${op}`, op === "set" ? { name, value } : op === "names" ? {} : { name }) },
       notify: {
         show: (title, body, tag) => ask("notify-show", { title, body, tag }),
         cancel: (tag) => send({ type: "notify-cancel", tag }),
@@ -5873,7 +6151,9 @@ class WorkerApp {
    * `log`; `reportError`; `askDialog`;
    * `clipboard`; `netFetch`; `files` (a `FileSpace`); `sql` (`{ call(kind,
    * statement, params) }`, the page's `store.sql` engine; none: an allowed
-   * call answers "denied:unsupported"); `notify` (`{ show,
+   * call answers "denied:unsupported"); `secrets` (`{ call(op, name, value)
+   * }`, a `SecretSpace` or the page's bridge; none: "denied:unsupported");
+   * `notify` (`{ show,
    * cancel }`; default `browserNotify()`, the page's `Notification` API);
    * `memoryLimitPages`; `locale` (a BCP 47 tag; default the Worker's
    * `navigator.languages`);
@@ -6098,6 +6378,7 @@ class WorkerApp {
     if (type === "notify-show") return this._notify().show(f.title, f.body ?? null, f.tag ?? null);
     if (type.startsWith("files-")) return this.files.call(type.slice("files-".length), f.path, f.text ?? null);
     if (type === "sql-run") return o.sql ? o.sql.call(f.kind, f.statement, f.params) : [false, 0, "", "denied:unsupported"];
+    if (type.startsWith("secrets-")) return o.secrets ? o.secrets.call(type.slice("secrets-".length), f.name ?? "", f.value ?? null) : [false, 0, "", "denied:unsupported"];
     if (type === "hub-call" && o.ask) return o.ask(type, f);
     throw new Error(`unknown request ${type}`);
   }
@@ -6136,6 +6417,7 @@ class WorkerApp {
 const { checkFrameMessage, applyKvMessage, startMessage, CHANNEL, KV_QUOTA } = __hub_storage;
 const { netDenied, httpFetch, browserNotify, normalizeLocale, pageLocale } = __plinth_web;
 const { FileSpace, idbFileBackend, memoryFileBackend, FILES_CAPABILITY } = __files;
+const { SecretSpace, idbSecretBackend, SECRETS_CAPABILITY } = __secrets;
 
 /** `el("p", { class: "x" }, "text", child)`: a small DOM builder (text is never parsed as HTML). */
 function el(tag, attrs = {}, ...children) {
@@ -6203,6 +6485,9 @@ function hostDialog(kind, message, title = "") {
  * - `sql`: the page's `store.sql` engine (`SqlWorkerHost` of `sql.js`, or
  *   anything with its `space(appId)`); default none: an allowed call
  *   answers "denied:unsupported".
+ * - `secrets`: the `SecretSpace` of this app for `plinth:secrets`; default:
+ *   the page's IndexedDB with WebCrypto (`idbSecretBackend(appId)`); a page
+ *   without them answers "denied:unsupported", never a weaker store.
  * - `notify`: the `plinth:notify` backend (`{ show, cancel }`); default:
  *   `browserNotify()`, the page's `Notification` API, with `notifyIcon` (a
  *   URL, optional) as the icon. One backend for each frame, so `cancel`
@@ -6222,6 +6507,7 @@ class AppFrame {
     this.sent = false;
     this.files =
       opts.files ?? new FileSpace(typeof indexedDB !== "undefined" ? idbFileBackend(opts.appId) : memoryFileBackend());
+    this.secrets = opts.secrets ?? new SecretSpace(idbSecretBackend(opts.appId));
     this.notify = opts.notify ?? browserNotify(globalThis.Notification, { icon: opts.notifyIcon });
     this.sql = opts.sql ? opts.sql.space(opts.appId) : null;
     // `allow-scripts` only: an opaque origin, no forms, no popups, no modal
@@ -6345,6 +6631,19 @@ class AppFrame {
         }
         const op = msg.type.slice("files-".length);
         this.files.call(op, msg.path, op === "write" ? msg.text : null).then((r) => this.answer(msg.id, r));
+        break;
+      }
+      case "secrets-set":
+      case "secrets-get":
+      case "secrets-remove":
+      case "secrets-names": {
+        // The frame checked the capability; the page checks it again.
+        if (!this.allowed(SECRETS_CAPABILITY)) {
+          this.answer(msg.id, [false, 0, "", this.declared.has(SECRETS_CAPABILITY) ? "denied:refused" : "denied:undeclared"]);
+          break;
+        }
+        const op = msg.type.slice("secrets-".length);
+        this.secrets.call(op, msg.name ?? "", msg.value ?? null).then((r) => this.answer(msg.id, r));
         break;
       }
       case "sql-run": {
@@ -6659,6 +6958,7 @@ const { readPlnt, parseManifest, normalizeLocale, pageLocale } = __plinth_web;
 const { Tree, DomRenderer } = __dom_renderer;
 const { CHANNEL, frameKvStore, frameDataVersionStore } = __hub_storage;
 const { WorkerApp, startAppWorker } = __app_worker;
+const { overLimit } = __secrets;
 
 const container = document.getElementById("app");
 const embedded = window.parent !== window;
@@ -6727,6 +7027,16 @@ async function start(msg) {
     // plinth:files: the page keeps the files (its IndexedDB, one namespace
     // for this app) and checks the capability and the path again.
     files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
+    // plinth:secrets: an opaque origin has no IndexedDB, so the page keeps
+    // the secrets (encrypted, WebCrypto) and checks the capability again. A
+    // call over a limit is answered here: the page drops a message that is
+    // too big.
+    secrets: {
+      call: (op, name, value) =>
+        overLimit(op, name, value)
+          ? Promise.resolve([false, 0, "", "denied:limit"])
+          : ask(`secrets-${op}`, op === "set" ? { name, value } : op === "names" ? {} : { name }),
+    },
     // store.sql: the page runs the database (SQLite in its own Worker, with
     // OPFS of the page origin) and checks the capability again.
     sql: { call: (kind, statement, params) => ask("sql-run", { kind, statement, params }) },
