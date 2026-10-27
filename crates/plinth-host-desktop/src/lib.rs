@@ -16,6 +16,7 @@ use std::time::Duration;
 
 pub mod consent;
 pub mod notify;
+pub mod secrets;
 pub mod system_settings;
 pub mod updater;
 
@@ -348,6 +349,9 @@ pub fn start_with_policy_and_hub(
         Ok(mut guest) => {
             guest.set_files(private_files(owner, app_id));
             guest.set_notify(notify::system_notify(app_id));
+            // `plinth:secrets` (core 1.13, `docs/SECRETS.md`): the system
+            // keychain. The policy decides if the app may call it.
+            guest.set_secrets(secrets::system_secrets(), app_id);
             // `plinth:app-info` (core 1.13, `PRODUCTION.md` D4): the
             // manifest version, for `onUpgrade(fromVersion)`.
             guest.set_app_version(version);
