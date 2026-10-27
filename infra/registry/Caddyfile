@@ -1,0 +1,28 @@
+# Static registry (docs/REGISTRY.md §8). Packages and cores are named by
+# digest or version, so they never change: cache them for ever. The JSON
+# indexes change when an app is published: always revalidate.
+:80 {
+	root * /srv
+	encode zstd gzip
+
+	header {
+		Access-Control-Allow-Origin *
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+
+	# The root opens the web App Hub (docs/web-hub.md).
+	redir / /web/hub.html 302
+
+	@immutable path /packages/* /cores/*/core.wasm
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	@index path *.json
+	header @index Cache-Control "no-cache"
+
+	# Never serve the build inputs.
+	@incoming path /incoming /incoming/*
+	respond @incoming 404
+
+	file_server
+}

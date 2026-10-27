@@ -1,0 +1,24 @@
+# The personal Plinth registry: a static file server plus a Cloudflare named
+# tunnel. See README.md in this folder.
+#
+#   cp .env.example .env     # then put the tunnel token in .env
+#   docker compose up -d
+services:
+  registry:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The folder that `plinth registry build` writes (scripts/registry-publish.sh).
+      - ${PLINTH_REGISTRY_DIR:-./site}:/srv:ro
+    ports:
+      - "127.0.0.1:8080:80"   # local test only; the tunnel uses the compose network
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in infra/registry/.env}
+    depends_on:
+      - registry
