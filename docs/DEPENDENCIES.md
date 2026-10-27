@@ -110,15 +110,13 @@ Duplicate versions (about 65 crates, for example `windows-sys`, `hashbrown`, `wa
 
 | Advisory | Crate | Reason |
 |---|---|---|
-| RUSTSEC-2026-0316 (GHSA-jqpg-j7w6-42pr) | `wasmtime` 46.0.3 | Dynamic record lifting can allocate more than the hostcall fuel limit. The bug is in the dynamic `component::Val` API. Plinth calls components only through the typed bindings of `wasmtime::component::bindgen!` (no `component::Val` in the code), so the bug does not apply. See A1. |
-| RUSTSEC-2026-0327 (GHSA-32h6-97mm-8q3c) | `wasmtime` 46.0.3 | The result count of async-lifted component callbacks is not validated. The bug needs the `component-model-async` feature. Plinth turns off the default features of wasmtime and does not turn on this feature (root `Cargo.toml`). See A1. |
 | RUSTSEC-2024-0436 (warning only) | `paste` 1.0.15 | No longer maintained. It comes from `pulp` ← `exr` ← `image` ← gpui-ce. A proc macro at build time only. No action until `image` changes. |
 
 ## 4. Open items (tracking)
 
 | # | Item | Next step |
 |---|---|---|
-| A1 | Update wasmtime from 46.0.3 to 48.0.4 or later. 46.x has no fix for RUSTSEC-2026-0316 and RUSTSEC-2026-0327. | A major update: the wasmtime API changes between majors, and `wit-bindgen`, `wit-component`, `wasmparser` and `wasm-encoder` must move with it. Do it as its own task with the full gate and the wasmi engine tests. Then remove the two `ignore` entries in `deny.toml`. |
+| A1 | Done (2026-10-27): wasmtime 46.0.3 is now 48.0.7 (it fixes RUSTSEC-2026-0316, RUSTSEC-2026-0327 and the 2026-10 batch). `zip` 2.4 is now 9.1 and `rustls` 0.23.46. | The update needed one small code change (`ZipFile::name()` returns a `Result`). The `ignore` entries are removed from `deny.toml`. |
 | B1 | gpui-ce uses `wgsl-rs` as a git dependency with no version. | In gpui-ce: add a version to the `wgsl-rs` workspace dependency, or use a crates.io release when one exists. A git dependency also stops a publish of gpui-ce to crates.io. Then remove the `skip` entries in `deny.toml`. |
 | L1 | Release binaries need a third-party license notice file. | Generate it at release time (for example with `cargo about`) and ship it next to the binary and in the npm packages. Add it to `docs/RELEASING.md`. |
 | D1 | `plinth-registry` uses `ureq` 2; the other crates use `ureq` 3. | Move `plinth-registry` to `ureq` 3 (one less copy of `ureq`, `webpki-roots` and `rustls` parts). |

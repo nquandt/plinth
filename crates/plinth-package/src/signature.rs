@@ -186,7 +186,7 @@ mod tests {
                 let mut f = zip.by_index(i).unwrap();
                 let mut data = Vec::new();
                 f.read_to_end(&mut data).unwrap();
-                (f.name().to_owned(), data)
+                (f.name().unwrap().into_owned(), data)
             })
             .collect()
     }

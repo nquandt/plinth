@@ -34,15 +34,7 @@ feature-depth = 1
 db-urls = ["https://github.com/rustsec/advisory-db"]
 unmaintained = "all"
 yanked = "warn"
-ignore = [
-  # wasmtime 46.0.3. The fix is in wasmtime 48.0.4 and 49.0.2 (no 46.x fix):
-  # a major update. Plinth does not use the dynamic `component::Val` API, so
-  # the bug does not apply. Tracking: DEPENDENCIES.md §4, A1.
-  { id = "RUSTSEC-2026-0316", reason = "dynamic record lifting: Plinth uses only typed bindgen calls; fix needs wasmtime 48.0.4 (major update), tracked in docs/DEPENDENCIES.md A1" },
-  # wasmtime 46.0.3. The bug is in async-lifted component callbacks; Plinth
-  # does not turn on the `component-model-async` feature. Tracking: A1.
-  { id = "RUSTSEC-2026-0327", reason = "async-lifted callbacks: Plinth does not enable component-model-async; fix needs wasmtime 48.0.4 (major update), tracked in docs/DEPENDENCIES.md A1" },
-]
+ignore = []
 
 # ---------------------------------------------------------------------------
 # Licenses. Only permissive licenses are allowed for all crates. A crate with

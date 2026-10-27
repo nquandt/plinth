@@ -586,7 +586,7 @@ impl Package {
         let (mut profile, mut manifest, mut files) = (None, None, Vec::new());
         for i in 0..zip.len() {
             let mut f = zip.by_index(i)?;
-            let name = f.name().to_owned();
+            let name = f.name().context("the package has an invalid file name")?.into_owned();
             if f.is_dir() {
                 continue;
             }
