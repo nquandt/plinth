@@ -29,6 +29,13 @@ ureq.workspace = true
 sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# `plinth:secrets` (src/secrets.rs): the system keychain. `v1` selects the
+# native store of each platform: Windows Credential Manager, macOS Keychain,
+# Linux Secret Service. No other store is on.
+keyring = { version = "4.2", default-features = false, features = ["v1"] }
+# The `target` modifier of a Windows entry (the entry type of `keyring` has no
+# constructor with modifiers). `keyring` already needs this crate.
+keyring-core = "1"
 
 # `plinth:notify` on Windows (src/notify.rs): WinRT toasts. The same
 # versions as gpui-ce uses, so no new crate comes into the build.
