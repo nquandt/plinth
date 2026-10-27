@@ -18,9 +18,9 @@ const all = await names();            // Promise<string[]>, sorted
 ```
 
 - The capability is `secrets`. Its risk is **Low**: the store belongs to this app only, like `kv`, so the host grants it with no question. (The user can still see it in the Hub.)
-- A name has 1 to 64 characters from `a-z A-Z 0-9 . _ -`. A value is a string of at most 16 KiB (UTF-8). An app has at most 64 secrets. A call that breaks a limit rejects with `Error("denied:limit")`.
+- A name has 1 to 64 characters from `a-z A-Z 0-9 . _ -`. A value is a string of at most 16 KiB (UTF-8). An app has at most 64 secrets. A call that breaks a limit rejects with `Error("denied:limit")`; a bad name does so for `get` and `remove` too. Replacing a secret at the limit of 64 is allowed. The functions are in core 1.13 (not yet shipped).
 - `get` resolves with `null` when the name does not exist. A missing name is not an error.
-- A denied call rejects with `Error("denied:<reason>")`, as `plinth:notify` does. The reasons are `undeclared`, `refused`, `unsupported` and `limit`. A denied call never traps the app. `lastError()` gives the reason of the last denied call, or `null`.
+- A denied call rejects with `Error("denied:<reason>")`, as `plinth:notify` does. The reasons are `undeclared`, `refused`, `unsupported`, `limit` and `failed`. `failed` means the safe store itself failed (for example a locked keychain); its message never holds a value. A denied call never traps the app. `lastError()` gives the reason of the last denied call, or `null`.
 - `unsupported` means this host has no safe store. The host must **not** fall back to a plain file. The app must then ask the user, or work without the secret.
 
 ## 3. The rules
