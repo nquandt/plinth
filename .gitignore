@@ -11,3 +11,4 @@
 /examples/7guis/*/dist/
 /web/test/fixtures/*/dist/
 infra/azure/.account-name
+.claude/worktrees/
