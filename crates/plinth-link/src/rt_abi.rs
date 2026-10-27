@@ -242,6 +242,12 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     // -- plinth:app-info (core 1.13, PRODUCTION.md D4, onUpgrade) -------------
     ("app_data_version", &[], &[I32]),
     ("app_mark_data_version", &[], &[]),
+    // -- plinth:secrets (core 1.13, docs/SECRETS.md) ---------------------------
+    ("secrets_set", &[I32, I32, I32, I32], &[]),
+    ("secrets_get", &[I32, I32, I32], &[]),
+    ("secrets_remove", &[I32, I32, I32], &[]),
+    ("secrets_names", &[I32, I32], &[]),
+    ("secrets_last_error", &[], &[I32]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -376,6 +382,12 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     // plinth:app-info (PRODUCTION.md D4): `onUpgrade(fromVersion)`.
     ("app_data_version", 13),
     ("app_mark_data_version", 13),
+    // plinth:secrets (docs/SECRETS.md): also in the unshipped 1.13.
+    ("secrets_set", 13),
+    ("secrets_get", 13),
+    ("secrets_remove", 13),
+    ("secrets_names", 13),
+    ("secrets_last_error", 13),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).

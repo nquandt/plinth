@@ -43,6 +43,10 @@ pub const STORE_SQL: &str = "store.sql";
 /// show at any time, also while the user works in another app, so it is
 /// asked one time.
 pub const NOTIFY: &str = "notify";
+/// `plinth:secrets` (core 1.13, `docs/SECRETS.md`): passwords and tokens in
+/// the safest store of the host. Low risk: the store belongs to this app
+/// only, like the kv store, so it is granted with no question.
+pub const SECRETS: &str = "secrets";
 /// Privileged Hub management (`docs/HUB.md` §4.1, §12.2): `list-apps`,
 /// `launch`, `set-grant`, `block`, `unblock`. The host grants this only to
 /// a package signed by a trusted Hub key (`docs/HUB.md` §4.1); it is not
@@ -83,6 +87,7 @@ pub const CAPABILITIES: &[CapabilityInfo] = &[
     CapabilityInfo { name: CLIPBOARD_WRITE, risk: Risk::Low, description: "write to the clipboard" },
     CapabilityInfo { name: CLIPBOARD_READ, risk: Risk::Medium, description: "read the clipboard" },
     CapabilityInfo { name: NOTIFY, risk: Risk::Medium, description: "show notifications" },
+    CapabilityInfo { name: SECRETS, risk: Risk::Low, description: "keep passwords and tokens for this app" },
     CapabilityInfo { name: NET_LOCAL, risk: Risk::Medium, description: "connect to devices on your local network" },
     CapabilityInfo {
         name: HUB_MANAGE,
@@ -116,6 +121,11 @@ pub const FUNCTION_CAPABILITIES: &[(&str, &str)] = &[
     ("notify_show", NOTIFY),
     ("notify_cancel", NOTIFY),
     // `notify_last_error` needs no capability, like `kv_last_error` above.
+    ("secrets_set", SECRETS),
+    ("secrets_get", SECRETS),
+    ("secrets_remove", SECRETS),
+    ("secrets_names", SECRETS),
+    // `secrets_last_error` needs no capability, like `kv_last_error` above.
     ("hub_list_apps", HUB_MANAGE),
     ("hub_launch", HUB_MANAGE),
     ("hub_set_grant", HUB_MANAGE),

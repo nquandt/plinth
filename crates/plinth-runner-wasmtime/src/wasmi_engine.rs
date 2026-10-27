@@ -40,6 +40,7 @@ use crate::bindings::plinth::app::app_info::Host as AppInfoHost;
 use crate::bindings::plinth::app::locale::Host as LocaleHost;
 use crate::bindings::plinth::app::net::Host as NetHost;
 use crate::bindings::plinth::app::notify::Host as NotifyHost;
+use crate::bindings::plinth::app::secrets::Host as SecretsHost;
 use crate::bindings::plinth::app::store::Host as StoreHost;
 use crate::bindings::plinth::app::time::Host as TimeHost;
 use crate::bindings::plinth::app::ui::Host as UiHost;
@@ -134,6 +135,8 @@ pub fn load(
         hub,
         files: crate::files::Files::unavailable(),
         notify: Box::new(crate::notify::MemoryNotify::default()),
+        secrets: Box::new(crate::secrets::UnsupportedSecrets),
+        secrets_scope: crate::secrets::SecretsScope::default(),
         sql: None,
         locale: None,
         locale_fixed: false,
@@ -566,6 +569,29 @@ fn register_imports(linker: &mut Linker<HostState>) -> Result<()> {
             }
         },
     )?;
+
+    // `secrets` (core 1.13): `set(name, value)`, `get(name)`, `remove(name)`
+    // and `names()`. Each returns the request id directly.
+    linker.func_wrap(
+        "plinth:app/secrets@1.0.0",
+        "set",
+        |mut caller: Caller<HostState>, n_ptr: i32, n_len: i32, v_ptr: i32, v_len: i32| -> Result<i32, WasmiError> {
+            let name = read_string(&mut caller, n_ptr, n_len)?;
+            let value = read_string(&mut caller, v_ptr, v_len)?;
+            Ok(SecretsHost::set(caller.data_mut(), name, value) as i32)
+        },
+    )?;
+    linker.func_wrap("plinth:app/secrets@1.0.0", "get", |mut caller: Caller<HostState>, ptr: i32, len: i32| -> Result<i32, WasmiError> {
+        let name = read_string(&mut caller, ptr, len)?;
+        Ok(SecretsHost::get(caller.data_mut(), name) as i32)
+    })?;
+    linker.func_wrap("plinth:app/secrets@1.0.0", "remove", |mut caller: Caller<HostState>, ptr: i32, len: i32| -> Result<i32, WasmiError> {
+        let name = read_string(&mut caller, ptr, len)?;
+        Ok(SecretsHost::remove(caller.data_mut(), name) as i32)
+    })?;
+    linker.func_wrap("plinth:app/secrets@1.0.0", "names", |mut caller: Caller<HostState>| -> Result<i32, WasmiError> {
+        Ok(SecretsHost::names(caller.data_mut()) as i32)
+    })?;
 
     // `net.fetch` (SPEC.md §8.5, §11): url(ptr,len), method(ptr,len),
     // headers(ptr,count) -- each element a 16-byte (ptr,len,ptr,len)

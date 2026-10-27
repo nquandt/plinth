@@ -74,3 +74,8 @@ interface locale: compare: func(a: string, b: string) -> s32
 interface app-info: data-version: func() -> option<string>
 interface app-info: mark-data-version: func()
 world app: import app-info
+interface secrets: set: func(name: string, value: string) -> u32
+interface secrets: get: func(name: string) -> u32
+interface secrets: remove: func(name: string) -> u32
+interface secrets: names: func() -> u32
+world app: import secrets
