@@ -12,6 +12,7 @@ import { readPlnt, parseManifest, normalizeLocale, pageLocale } from "./plinth-w
 import { Tree, DomRenderer } from "./dom-renderer.js";
 import { CHANNEL, frameKvStore, frameDataVersionStore } from "./hub-storage.js";
 import { WorkerApp, startAppWorker } from "./app-worker.js";
+import { overLimit } from "./secrets.js";
 
 const container = document.getElementById("app");
 const embedded = window.parent !== window;
@@ -80,6 +81,16 @@ async function start(msg) {
     // plinth:files: the page keeps the files (its IndexedDB, one namespace
     // for this app) and checks the capability and the path again.
     files: { call: (op, path, text) => ask(`files-${op}`, op === "write" ? { path, text } : { path }) },
+    // plinth:secrets: an opaque origin has no IndexedDB, so the page keeps
+    // the secrets (encrypted, WebCrypto) and checks the capability again. A
+    // call over a limit is answered here: the page drops a message that is
+    // too big.
+    secrets: {
+      call: (op, name, value) =>
+        overLimit(op, name, value)
+          ? Promise.resolve([false, 0, "", "denied:limit"])
+          : ask(`secrets-${op}`, op === "set" ? { name, value } : op === "names" ? {} : { name }),
+    },
     // store.sql: the page runs the database (SQLite in its own Worker, with
     // OPFS of the page origin) and checks the capability again.
     sql: { call: (kind, statement, params) => ask("sql-run", { kind, statement, params }) },
