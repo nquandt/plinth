@@ -59,7 +59,7 @@ if [ "$sync" = yes ]; then
   KEY="$(az storage account keys list -g "$RG" -n "$ACCOUNT" --query '[0].value' -o tsv)"
   up() { # <source> <dest-path> <cache-control>
     az storage blob upload-batch --account-name "$ACCOUNT" --account-key "$KEY" -d '$web' \
-      -s "$1" --destination-path "$2" --overwrite --content-cache-control "$3" -o none
+      -s "$1" --destination-path "$2" --overwrite --no-progress --content-cache-control "$3" -o none
   }
   echo "== sync to Azure ($ACCOUNT)"
   [ -d "$REG/packages" ] && up "$REG/packages" packages "public, max-age=31536000, immutable"
