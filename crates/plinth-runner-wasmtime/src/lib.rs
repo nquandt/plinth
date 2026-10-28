@@ -358,6 +358,27 @@ impl HostState {
     }
 }
 
+/// The local time zone offset of the OS at `secs` (Unix time), in minutes
+/// east of UTC. 0 if the OS does not know it.
+#[cfg(not(target_os = "ios"))]
+fn local_offset_minutes(secs: i64) -> i32 {
+    let dt = time::OffsetDateTime::from_unix_timestamp(secs).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    time::UtcOffset::local_offset_at(dt).map(|o| o.whole_minutes() as i32).unwrap_or(0)
+}
+
+/// As above, for iOS: the `time` crate does not build there (see
+/// `Cargo.toml`), so this calls `localtime_r` and reads `tm_gmtoff`.
+#[cfg(target_os = "ios")]
+fn local_offset_minutes(secs: i64) -> i32 {
+    let t = secs as libc::time_t;
+    // SAFETY: `tm` is plain data, so all-zero is valid; `localtime_r` writes
+    // only into `tm` and returns null on failure.
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&t, &mut tm).is_null() { 0 } else { (tm.tm_gmtoff / 60) as i32 }
+    }
+}
+
 /// The event buffer that tells a guest that its locale changed: a
 /// `lifecycle` event with kind `LOCALE` (core 1.13, `docs/I18N.md` §3.1). An
 /// older core ignores it.
@@ -428,9 +449,7 @@ impl bindings::plinth::app::time::Host for HostState {
         if let Some(fake) = self.fake_timezone_offset_minutes {
             return fake;
         }
-        let secs = ms.div_euclid(1000);
-        let dt = time::OffsetDateTime::from_unix_timestamp(secs).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
-        time::UtcOffset::local_offset_at(dt).map(|o| o.whole_minutes() as i32).unwrap_or(0)
+        local_offset_minutes(ms.div_euclid(1000))
     }
 }
 

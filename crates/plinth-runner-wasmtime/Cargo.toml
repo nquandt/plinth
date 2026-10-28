@@ -15,7 +15,6 @@ serde.workspace = true
 serde_json = "1"
 sha2.workspace = true
 ureq.workspace = true
-time = { version = "0.3.55", default-features = false, features = ["std", "local-offset"] }
 wasmi = { version = "2.0.0", optional = true }
 wasmparser = { workspace = true, optional = true }
 wasmi_core = { version = "2.0.0", optional = true }
@@ -41,6 +40,15 @@ icu_collator = "2.3.1"
 icu_experimental = "0.6.0"
 fixed_decimal = { version = "0.7.2", features = ["ryu"] }
 writeable = "0.6.4"
+
+# The local time zone offset (`plinth:time` `timezone-offset`). `time` with
+# `local-offset` uses `num_threads`, which does not build for iOS (libc has
+# no `mach_task_self` there), so iOS reads the offset with `localtime_r`.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+time = { version = "0.3.55", default-features = false, features = ["std", "local-offset"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+libc = "0.2"
 
 [features]
 # `wasmtime` is the desktop and Android engine (on by default). An iOS build
