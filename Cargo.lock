@@ -5746,6 +5746,7 @@ dependencies = [
  "log",
  "plinth-compiler",
  "plinth-host-desktop",
+ "plinth-package",
  "plinth-protocol",
  "plinth-runner-wasmtime",
  "plinth-ui",
