@@ -100,6 +100,9 @@ Stability tests (all in the gate unless marked):
 | `plinth-compiler/tests/errors.rs` "Limits" | Endless loop, recursion, allocation stop only the app | — |
 | `plinth-ui/tests/hostile_ops.rs` | Random op streams keep the tree valid | `PLINTH_FUZZ_ITERS` |
 | `plinth-shoot/tests/hostile_render.rs` | Random trees with bad props draw with no panic (`--shoot`) | `PLINTH_FUZZ_ITERS` |
+| `plinth-runner-wasmtime/tests/secrets_hostile.rs` | Random and hostile names and values for `plinth:secrets`: limits, isolation, failing backend, no leak | `PLINTH_FUZZ_ITERS`, `PLINTH_FUZZ_SEED` |
+| `plinth-host-desktop/src/secrets_double_tests.rs` | The Windows secrets backend on a failing store double: chunk edges, crash points, case, random run | `PLINTH_FUZZ_ITERS`, `PLINTH_FUZZ_SEED` |
+| `plinth-runner-wasmtime/tests/host_traits_drift.rs` | `host_traits.rs` equals `wit/plinth/app.wit` (default build) | — |
 | `plinth-shoot/tests/frame_cost.rs` | Frame cost of every example and of each form control (`--shoot`) | `PLINTH_FRAME_APP` |
 | `plinth-compiler/tests/async_size.rs` | Code size of `await` against callbacks (`--ignored`) | — |
 | `web/test/run-stop.mjs` | Web host stopped state and reasons | — |

@@ -13,21 +13,36 @@
 //!
 //! A keychain cannot list items by prefix on every platform. So the backend
 //! also keeps one index item for each scope (`__index__`, a JSON array of the
-//! names). It writes the item first and the index second. It removes the item
-//! first and the index second. A crash between the two steps leaves an item
-//! that `names` does not list. It never leaves a listed name with no item.
+//! names). A new name goes in the index first and the item second. If the
+//! item write fails, the backend takes the name out of the index again. A
+//! crash between the two steps leaves a listed name with no item (`get`
+//! answers `null`). It never leaves an item that the index does not list,
+//! because the host could not delete such an item when it removes the app
+//! (`remove_app_secrets` reads the index). A removal deletes the item first
+//! and the index second.
 //!
 //! The Windows Credential Manager limits a value to 2560 bytes, but a secret
 //! can have 16 KiB. So the backend cuts each value (and the index) into chunks
-//! of 2048 bytes. Chunk 0 is the item named `<name>`. It starts with one byte,
-//! the number of chunks. Chunk `i` (`i > 0`) is the item `<name>~<i>`. A `~`
-//! cannot be in a secret name, so the chunk names do not collide with it. The
-//! backend writes the chunks 1 and up first, then chunk 0. A reader that finds
-//! no chunk 0 sees no value.
+//! of 2048 bytes. Chunk 0 is the item named `<name>`. It starts with a header:
+//! one byte (the number of chunks, plus 0x80) and four bytes (the CRC-32 of
+//! the whole value). Chunk `i` (`i > 0`) is the item `<name>~<i>`. A `~`
+//! cannot be in a secret name, and the backend rejects such a name itself, so
+//! the chunk names do not collide with a secret. The backend writes the
+//! chunks 1 and up first, then chunk 0. A reader that finds no chunk 0 sees
+//! no value. A crash in the middle of a replace leaves the old chunk 0 with
+//! new chunks: the CRC-32 does not match, and `get` fails (`failed`) in place
+//! of returning a wrong value. The next `set` repairs the secret. (A header
+//! byte with no 0x80 flag is the older format with no CRC-32. The backend
+//! still reads it.)
+//!
+//! The Windows Credential Manager compares target names without case. So the
+//! backend writes each uppercase letter of a name as `^` and the lowercase
+//! letter (`Token` is the item `^token`). `Token` and `token` are then two
+//! different secrets on every platform. A name never holds `^`.
 //!
 //! The backend never puts a value in a log line or in an error text.
 
-use plinth_runner_wasmtime::secrets::{SecretsBackend, SecretsError, SecretsScope};
+use plinth_runner_wasmtime::secrets::{valid_name, SecretsBackend, SecretsError, SecretsScope};
 use std::collections::HashMap;
 
 /// The name of the index item of a scope. The backend rejects it as a secret
@@ -37,6 +52,8 @@ const INDEX: &str = "__index__";
 const CHUNK: usize = 2048;
 /// The most chunks of one blob (16 KiB).
 const MAX_CHUNKS: usize = 8;
+/// A flag in the header byte: four bytes of CRC-32 follow.
+const HAS_CRC: u8 = 0x80;
 
 /// The secrets backend of this platform: the system keychain.
 pub fn system_secrets() -> Box<dyn SecretsBackend> {
@@ -47,15 +64,31 @@ pub fn system_secrets() -> Box<dyn SecretsBackend> {
 /// calls this when it removes the app and its data (`docs/SECRETS.md` §3,
 /// rule 3). A host with no keychain has nothing to delete.
 pub fn remove_app_secrets(app_id: &str) -> Result<(), SecretsError> {
-    let scope = SecretsScope::new(app_id);
-    let mut backend = KeyringSecrets;
-    match backend.names(&scope) {
+    let _guard = lock();
+    remove_all(&Chunked(KeyringItems), &SecretsScope::new(app_id))
+}
+
+/// One lock for every keychain call of this process. A call reads the index,
+/// changes it and writes it again, so two calls at the same time would lose
+/// one change. The Windows Credential Manager also loses writes and deletes
+/// that threads make at the same time. (Another process can still race with
+/// this one. The host runs as one process.)
+static KEYCHAIN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn lock() -> std::sync::MutexGuard<'static, ()> {
+    // A panic in another call does not make the keychain unusable.
+    KEYCHAIN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Deletes all secrets of `scope` in `store`, then the index.
+fn remove_all<S: ItemStore>(store: &Chunked<S>, scope: &SecretsScope) -> Result<(), SecretsError> {
+    match store.read_index(scope) {
         Ok(names) => {
             for name in names {
-                backend.remove(&scope, &name)?;
+                store.delete_blob(scope, &name)?;
             }
             // The index is empty now. Delete the blob chunks too.
-            backend.delete_blob(&scope, INDEX)
+            store.delete_blob(scope, INDEX)
         }
         Err(SecretsError::Unsupported) => Ok(()),
         Err(e) => Err(e),
@@ -90,12 +123,50 @@ fn failed(what: &str, e: &keyring::Error) -> SecretsError {
     SecretsError::Failed(format!("{what}: {}", kind(e)))
 }
 
-/// The item key of chunk `i` of the blob `key`.
-fn chunk_key(key: &str, i: usize) -> String {
-    if i == 0 { key.to_owned() } else { format!("{key}~{i}") }
+/// The CRC-32 (IEEE) of `data`.
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &b in data {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+        }
+    }
+    !crc
 }
 
-impl KeyringSecrets {
+/// The item key of chunk `i` of the blob `key`. The key is written without
+/// uppercase letters (see the header of this file).
+fn chunk_key(key: &str, i: usize) -> String {
+    let mut out = String::with_capacity(key.len() + 4);
+    for c in key.chars() {
+        if c.is_ascii_uppercase() {
+            out.push('^');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    if i > 0 {
+        out.push('~');
+        out.push_str(&i.to_string());
+    }
+    out
+}
+
+/// A store of items: byte strings under a key, in the scope of one app. The
+/// keychain is one; tests use a double that can fail.
+trait ItemStore: Send {
+    /// One item. `None` when it does not exist.
+    fn read(&self, scope: &SecretsScope, key: &str) -> Result<Option<Vec<u8>>, SecretsError>;
+    fn write(&self, scope: &SecretsScope, key: &str, bytes: &[u8]) -> Result<(), SecretsError>;
+    /// An item that does not exist is not an error.
+    fn delete(&self, scope: &SecretsScope, key: &str) -> Result<(), SecretsError>;
+}
+
+/// The items in the system keychain.
+#[derive(Clone, Copy, Debug, Default)]
+struct KeyringItems;
+
+impl KeyringItems {
     /// The keychain entry for the item `key` of `scope`.
     fn entry(scope: &SecretsScope, key: &str) -> Result<keyring::Entry, SecretsError> {
         // The first call opens the platform store. If that fails, there is no
@@ -116,9 +187,10 @@ impl KeyringSecrets {
             Err(e) => Err(failed("open entry", &e)),
         }
     }
+}
 
-    /// Reads one item. `None` when it does not exist.
-    fn read_item(scope: &SecretsScope, key: &str) -> Result<Option<Vec<u8>>, SecretsError> {
+impl ItemStore for KeyringItems {
+    fn read(&self, scope: &SecretsScope, key: &str) -> Result<Option<Vec<u8>>, SecretsError> {
         match Self::entry(scope, key)?.get_secret() {
             Ok(bytes) => Ok(Some(bytes)),
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -127,7 +199,7 @@ impl KeyringSecrets {
         }
     }
 
-    fn write_item(scope: &SecretsScope, key: &str, bytes: &[u8]) -> Result<(), SecretsError> {
+    fn write(&self, scope: &SecretsScope, key: &str, bytes: &[u8]) -> Result<(), SecretsError> {
         match Self::entry(scope, key)?.set_secret(bytes) {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoDefaultStore) => Err(SecretsError::Unsupported),
@@ -135,28 +207,37 @@ impl KeyringSecrets {
         }
     }
 
-    /// Deletes one item. An item that does not exist is not an error.
-    fn delete_item(scope: &SecretsScope, key: &str) -> Result<(), SecretsError> {
+    fn delete(&self, scope: &SecretsScope, key: &str) -> Result<(), SecretsError> {
         match Self::entry(scope, key)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(keyring::Error::NoDefaultStore) => Err(SecretsError::Unsupported),
             Err(e) => Err(failed("delete", &e)),
         }
     }
+}
 
+/// Secrets in chunks, with an index, on an `ItemStore`.
+struct Chunked<S>(S);
+
+impl<S: ItemStore> Chunked<S> {
     /// Reads a blob (all its chunks). `None` when chunk 0 does not exist.
     fn read_blob(&self, scope: &SecretsScope, key: &str) -> Result<Option<Vec<u8>>, SecretsError> {
-        let Some(first) = Self::read_item(scope, key)? else { return Ok(None) };
-        let count = first.first().copied().unwrap_or(0) as usize;
-        if count == 0 || count > MAX_CHUNKS {
+        let Some(first) = self.0.read(scope, &chunk_key(key, 0))? else { return Ok(None) };
+        let head = first.first().copied().unwrap_or(0);
+        let count = (head & !HAS_CRC) as usize;
+        let header = if head & HAS_CRC != 0 { 5 } else { 1 };
+        if count == 0 || count > MAX_CHUNKS || first.len() < header {
             return Err(SecretsError::Failed("read: bad header".to_owned()));
         }
-        let mut data = first[1..].to_vec();
+        let mut data = first[header..].to_vec();
         for i in 1..count {
-            match Self::read_item(scope, &chunk_key(key, i))? {
+            match self.0.read(scope, &chunk_key(key, i))? {
                 Some(part) => data.extend_from_slice(&part),
                 None => return Err(SecretsError::Failed("read: missing chunk".to_owned())),
             }
+        }
+        if head & HAS_CRC != 0 && first[1..5] != crc32(&data).to_le_bytes() {
+            return Err(SecretsError::Failed("read: chunks do not match".to_owned()));
         }
         Ok(Some(data))
     }
@@ -170,14 +251,15 @@ impl KeyringSecrets {
         }
         let parts: Vec<&[u8]> = if data.is_empty() { vec![&[][..]] } else { data.chunks(CHUNK).collect() };
         for (i, part) in parts.iter().enumerate().skip(1) {
-            Self::write_item(scope, &chunk_key(key, i), part)?;
+            self.0.write(scope, &chunk_key(key, i), part)?;
         }
-        let mut first = Vec::with_capacity(1 + parts[0].len());
-        first.push(count as u8);
+        let mut first = Vec::with_capacity(5 + parts[0].len());
+        first.push(count as u8 | HAS_CRC);
+        first.extend_from_slice(&crc32(data).to_le_bytes());
         first.extend_from_slice(parts[0]);
-        Self::write_item(scope, key, &first)?;
+        self.0.write(scope, &chunk_key(key, 0), &first)?;
         for i in count..MAX_CHUNKS {
-            Self::delete_item(scope, &chunk_key(key, i))?;
+            self.0.delete(scope, &chunk_key(key, i))?;
         }
         Ok(())
     }
@@ -185,7 +267,7 @@ impl KeyringSecrets {
     /// Deletes a blob: the chunks 1 and up first, chunk 0 last.
     fn delete_blob(&self, scope: &SecretsScope, key: &str) -> Result<(), SecretsError> {
         for i in (0..MAX_CHUNKS).rev() {
-            Self::delete_item(scope, &chunk_key(key, i))?;
+            self.0.delete(scope, &chunk_key(key, i))?;
         }
         Ok(())
     }
@@ -206,24 +288,35 @@ impl KeyringSecrets {
     }
 }
 
-impl SecretsBackend for KeyringSecrets {
+impl<S: ItemStore> SecretsBackend for Chunked<S> {
     fn set(&mut self, scope: &SecretsScope, name: &str, value: &str) -> Result<(), SecretsError> {
-        if name == INDEX {
-            return Err(SecretsError::Failed("reserved name".to_owned()));
+        // The runner checks the name before it calls a backend. This check is
+        // for any other caller: a name with `~` or `^` could reach the chunks
+        // or the folded keys of another secret.
+        if name == INDEX || !valid_name(name) {
+            return Err(SecretsError::Failed("invalid name".to_owned()));
         }
-        // The item first, the index second.
-        self.write_blob(scope, name, value.as_bytes())?;
         let mut names = self.read_index(scope)?;
-        if !names.iter().any(|n| n == name) {
+        // A new name goes in the index first, the item second.
+        let added = !names.iter().any(|n| n == name);
+        if added {
             names.push(name.to_owned());
             names.sort();
             self.write_index(scope, &names)?;
+        }
+        if let Err(e) = self.write_blob(scope, name, value.as_bytes()) {
+            if added {
+                // Best effort: take the name out of the index again.
+                names.retain(|n| n != name);
+                let _ = self.write_index(scope, &names);
+            }
+            return Err(e);
         }
         Ok(())
     }
 
     fn get(&mut self, scope: &SecretsScope, name: &str) -> Result<Option<String>, SecretsError> {
-        if name == INDEX {
+        if name == INDEX || !valid_name(name) {
             return Ok(None);
         }
         match self.read_blob(scope, name)? {
@@ -235,7 +328,7 @@ impl SecretsBackend for KeyringSecrets {
     }
 
     fn remove(&mut self, scope: &SecretsScope, name: &str) -> Result<(), SecretsError> {
-        if name == INDEX {
+        if name == INDEX || !valid_name(name) {
             return Ok(());
         }
         // The item first, the index last.
@@ -254,6 +347,29 @@ impl SecretsBackend for KeyringSecrets {
         Ok(names)
     }
 }
+
+impl SecretsBackend for KeyringSecrets {
+    fn set(&mut self, scope: &SecretsScope, name: &str, value: &str) -> Result<(), SecretsError> {
+        let _guard = lock();
+        Chunked(KeyringItems).set(scope, name, value)
+    }
+    fn get(&mut self, scope: &SecretsScope, name: &str) -> Result<Option<String>, SecretsError> {
+        let _guard = lock();
+        Chunked(KeyringItems).get(scope, name)
+    }
+    fn remove(&mut self, scope: &SecretsScope, name: &str) -> Result<(), SecretsError> {
+        let _guard = lock();
+        Chunked(KeyringItems).remove(scope, name)
+    }
+    fn names(&mut self, scope: &SecretsScope) -> Result<Vec<String>, SecretsError> {
+        let _guard = lock();
+        Chunked(KeyringItems).names(scope)
+    }
+}
+
+#[cfg(test)]
+#[path = "secrets_double_tests.rs"]
+mod double_tests;
 
 #[cfg(test)]
 mod tests {
@@ -363,7 +479,7 @@ mod tests {
         // A shorter value in its place leaves no old chunk.
         b.set(&scope, "big", "short").unwrap();
         assert_eq!(b.get(&scope, "big"), Ok(Some("short".to_owned())));
-        assert_eq!(KeyringSecrets::read_item(&scope, "big~3"), Ok(None));
+        assert_eq!(KeyringItems.read(&scope, "big~3"), Ok(None));
         // The most secrets, with the longest names: the index needs chunks.
         for i in 0..MAX_SECRETS {
             let name = format!("{i:02}{}", "n".repeat(62));
@@ -396,8 +512,8 @@ mod tests {
         remove_app_secrets(&app.0).unwrap();
         assert_eq!(b.names(&scope), Ok(vec![]));
         assert_eq!(b.get(&scope, "a"), Ok(None));
-        assert_eq!(KeyringSecrets::read_item(&scope, "b"), Ok(None));
-        assert_eq!(KeyringSecrets::read_item(&scope, INDEX), Ok(None));
+        assert_eq!(KeyringItems.read(&scope, "b"), Ok(None));
+        assert_eq!(KeyringItems.read(&scope, INDEX), Ok(None));
     }
 
     /// Reads every file under `dir` and checks that none holds `needle`.
@@ -440,6 +556,49 @@ mod tests {
         let caught = std::panic::catch_unwind(|| assert_no_file_holds(&tmp, &value));
         assert!(caught.is_err(), "the scan did not find a planted value");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn names_that_differ_only_in_case_are_two_secrets() {
+        // The Credential Manager compares target names without case.
+        if !store_works() {
+            return;
+        }
+        let app = TestApp::new();
+        let (scope, mut b) = (app.scope(), KeyringSecrets);
+        b.set(&scope, "Token", "upper").unwrap();
+        b.set(&scope, "token", "lower").unwrap();
+        assert_eq!(b.get(&scope, "Token"), Ok(Some("upper".to_owned())));
+        assert_eq!(b.get(&scope, "token"), Ok(Some("lower".to_owned())));
+        b.remove(&scope, "Token").unwrap();
+        assert_eq!(b.get(&scope, "Token"), Ok(None));
+        assert_eq!(b.get(&scope, "token"), Ok(Some("lower".to_owned())));
+        // A name with `~` cannot reach the chunk of another secret.
+        b.set(&scope, "long", &"c".repeat(5000)).unwrap();
+        assert!(b.set(&scope, "long~1", "evil").is_err());
+        b.remove(&scope, "long~1").unwrap();
+        assert_eq!(b.get(&scope, "long").unwrap().map(|v| v.len()), Some(5000));
+    }
+
+    #[test]
+    fn values_at_the_chunk_boundaries_round_trip_in_the_keychain() {
+        if !store_works() {
+            return;
+        }
+        let app = TestApp::new();
+        let (scope, mut b) = (app.scope(), KeyringSecrets);
+        for (i, size) in [2047usize, 2048, 2049, 4096, 4097].into_iter().enumerate() {
+            // A 3-byte character that crosses the boundary of a chunk.
+            let mut v = "a".repeat(i % 3);
+            while v.len() + 3 <= size {
+                v.push('日');
+            }
+            while v.len() < size {
+                v.push('z');
+            }
+            b.set(&scope, "v", &v).unwrap();
+            assert_eq!(b.get(&scope, "v"), Ok(Some(v)), "size {size}");
+        }
     }
 
     #[test]
