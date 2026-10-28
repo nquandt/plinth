@@ -91,7 +91,7 @@ if (!playwright) {
 }
 
 const PLAIN = "plain-VALUE-0123456789-xyz";
-const browser = await playwright.chromium.launch();
+const browser = await playwright[process.env.PLINTH_BROWSER ?? "chromium"].launch();
 let server;
 let exportServer;
 let tmp;

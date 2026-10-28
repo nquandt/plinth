@@ -82,7 +82,7 @@ if (!playwright) {
 const A = "dev.plinth.test.uninstall-a";
 const B = "dev.plinth.test.uninstall-b";
 
-const browser = await playwright.chromium.launch();
+const browser = await playwright[process.env.PLINTH_BROWSER ?? "chromium"].launch();
 let server;
 try {
   const context = await browser.newContext();
@@ -165,7 +165,12 @@ try {
     assert.equal(made["migrate-" + app], true);
     assert.equal(made["insert-" + app], true);
   }
-  assert.notEqual(made.inMemory, true, "this browser keeps the SQL databases in OPFS, so the test is real");
+  // Playwright's WebKit build for Windows has no OPFS sync access handle, so
+  // the SQL database is in memory there. Only Chromium must have the OPFS part.
+  if (made.inMemory) {
+    assert.notEqual(process.env.PLINTH_BROWSER ?? "chromium", "chromium", "Chromium keeps the SQL databases in OPFS, so the test is real");
+    console.log("note: this engine has no OPFS sync access handle; the SQL databases are in memory");
+  }
 
   // The state of one app, read from the stores.
   const readApp = (app) =>
@@ -224,7 +229,10 @@ try {
     }
   }
   checkGone(reloaded);
-  assert.deepEqual(await readApp(B), beforeB, "B is unchanged after the reload");
+  const afterB = await readApp(B);
+  // In-memory SQL (no OPFS) does not survive a reload.
+  if (made.inMemory) for (const o of [afterB, beforeB]) { delete o.rows; delete o.tables; }
+  assert.deepEqual(afterB, beforeB, "B is unchanged after the reload");
   console.log("after a reload the data of A is still gone");
 
   // -- A failing step: all steps run, the call rejects, the grants stay ----------
