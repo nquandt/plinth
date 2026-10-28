@@ -44,15 +44,24 @@ pub const MAX_KEYS: usize = 12;
 /// The name of the accent when the app sets none.
 pub const DEFAULT_ACCENT: &str = "teal";
 
-/// The named accent palette. Each entry is (name, light, dark).
+/// The toggle track (off) and knob that the host paints, for light and dark.
+/// They are fixed: an app cannot set them, and the contrast guard checks
+/// them against the merged `surface` (see `PAIRS`).
+pub const TRACK_LIGHT: u32 = 0xc9c9d0;
+pub const TRACK_DARK: u32 = 0x48484f;
+pub const KNOB: u32 = 0xffffff;
+
+/// The named accent palette. Each entry is (name, light, dark). Each light
+/// value has a contrast of at least 4.5:1 with the white `on-accent`, and
+/// each dark value with the dark `on-accent` (a test checks this).
 pub const ACCENTS: &[(&str, u32, u32)] = &[
-    ("teal", 0x0b8a7e, 0x2ec4b6),
+    ("teal", 0x0b857a, 0x2ec4b6),
     ("blue", 0x1a63d6, 0x5b9cff),
     ("indigo", 0x4f46c8, 0x8c86ff),
     ("purple", 0x8a3ec9, 0xc08cff),
     ("pink", 0xc8327a, 0xff7ab8),
     ("red", 0xc93a2f, 0xff7a6e),
-    ("orange", 0xc25a00, 0xff9f45),
+    ("orange", 0xbf5900, 0xff9f45),
     ("green", 0x2e8540, 0x5fd27a),
 ];
 
@@ -132,21 +141,36 @@ impl Palette {
         }
     }
 
-    /// The color of a token by its key (`selected` is its blend over the
-    /// surface when the theme does not set it).
-    fn get(&self, key: &str, alphas: Alphas) -> u32 {
+    /// The color of a token by its key, for the contrast guard. `selected`
+    /// is the blend of its tint over the surface when the theme does not set
+    /// it. The two keys `selected over surface` and `selected over
+    /// background` are the composite of `selected` over that token (the
+    /// desktop paints `selected` with alpha over what is under it). `track`
+    /// and `knob` are the fixed host colors of the toggle.
+    fn get(&self, key: &str, dark: bool) -> u32 {
+        let alphas = Alphas::for_appearance(dark);
+        let selected_over = |under: u32| self.selected.unwrap_or_else(|| blend(self.accent, under, alphas.selected));
         match key {
             "background" => self.background,
             "surface" => self.surface,
             "surface-alt" => self.surface_alt,
             "border" => self.border,
             "hover" => self.hover,
-            "selected" => self.selected.unwrap_or_else(|| blend(self.accent, self.surface, alphas.selected)),
+            "selected" | "selected over surface" => selected_over(self.surface),
+            "selected over background" => selected_over(self.background),
             "text" => self.text,
             "text-muted" => self.text_muted,
             "accent" => self.accent,
             "on-accent" => self.on_accent,
             "danger" => self.danger,
+            "track" => {
+                if dark {
+                    TRACK_DARK
+                } else {
+                    TRACK_LIGHT
+                }
+            }
+            "knob" => KNOB,
             _ => self.success,
         }
     }
@@ -231,7 +255,7 @@ impl fmt::Display for ThemeError {
             }
             ThemeError::Contrast { fg, bg, dark, ratio, min } => write!(
                 f,
-                "`[theme]` {} mode: `{fg}` on `{bg}` has a contrast of {ratio:.2}:1; the least is {min}:1",
+                "`[theme]` {} mode: `{fg}` on `{bg}` has a contrast of {ratio:.2}:1; the least is {min}:1 (the host values fill the tokens that you do not set)",
                 if *dark { "dark" } else { "light" }
             ),
         }
@@ -274,15 +298,24 @@ fn blend(top: u32, under: u32, alpha: f64) -> u32 {
     (mix(16) << 16) | (mix(8) << 8) | mix(0)
 }
 
-/// The pairs that the contrast guard checks: (text token, background token,
-/// least ratio). A pair is checked when the override sets one of its tokens.
-const PAIRS: [(&str, &str, f64); 6] = [
+/// The pairs that the contrast guard checks: (foreground token, background
+/// token, least ratio). Every pair is checked in light and in dark on the
+/// palette AFTER the merge with the host palette, whether or not the theme
+/// sets its tokens. The text pairs use the WCAG text ratios (4.5:1 and 3:1).
+/// The toggle pairs are not text: WCAG 1.4.11 asks 3:1, but the host track is
+/// a quiet grey (1.6:1 on the default surface), so the guard uses 1.5:1 and
+/// only stops a theme from hiding the track on its surface.
+const PAIRS: [(&str, &str, f64); 10] = [
     ("text", "background", 4.5),
     ("text", "surface", 4.5),
     ("on-accent", "accent", 4.5),
+    ("text", "selected over surface", 4.5),
+    ("text", "selected over background", 4.5),
     ("text-muted", "background", 3.0),
     ("danger", "background", 3.0),
     ("success", "background", 3.0),
+    ("track", "surface", 1.5),
+    ("knob", "track", 1.5),
 ];
 
 /// The merged palettes of both appearances.
@@ -352,10 +385,9 @@ impl ThemeOverride {
     /// runs the contrast guard. `named_accent` is the app's `accent` (the
     /// default when `None`); `[theme].accent` wins over it.
     ///
-    /// A pair is checked when the override sets at least one of its two
-    /// tokens in that appearance. A pair that the app does not touch keeps
-    /// the host palette, which the author did not choose (the default
-    /// light teal accent with white text is 4.2:1, for example).
+    /// Every pair of `PAIRS` is checked on the merged palette, so a theme
+    /// that sets only some tokens fails (or passes) on the result of the
+    /// merge, not on the tokens that it set.
     pub fn resolve(&self, named_accent: Option<&str>) -> Result<Resolved, ThemeError> {
         self.check()?;
         let accent = named_accent.unwrap_or(DEFAULT_ACCENT);
@@ -366,12 +398,8 @@ impl ThemeOverride {
                 let value = parse_hex(color.text(dark)).ok_or_else(|| ThemeError::BadHex { key: key.clone(), value: color.text(dark).to_owned() })?;
                 p.set(key, value);
             }
-            let alphas = Alphas::for_appearance(dark);
             for (fg, bg, min) in PAIRS {
-                if !self.0.contains_key(fg) && !self.0.contains_key(bg) {
-                    continue;
-                }
-                let ratio = contrast(p.get(fg, alphas), p.get(bg, alphas));
+                let ratio = contrast(p.get(fg, dark), p.get(bg, dark));
                 if ratio < min {
                     return Err(ThemeError::Contrast { fg, bg, dark, ratio, min });
                 }
@@ -470,18 +498,31 @@ mod tests {
     }
 
     #[test]
-    fn host_defaults_pass_the_text_guard() {
-        // The pairs that the guard checks, on the host palette itself. The
-        // light on-accent/accent pairs of some accents are below 4.5:1.
+    fn host_defaults_pass_every_pair() {
+        // Every pair of the guard, on the host palette itself, for every
+        // named accent, in light and dark.
         for dark in [false, true] {
             for (name, _, _) in ACCENTS {
                 let p = Palette::default_for(dark, name);
-                for (fg, bg, min) in PAIRS.into_iter().filter(|(fg, _, _)| *fg != "on-accent") {
-                    let a = Alphas::for_appearance(dark);
-                    let r = contrast(p.get(fg, a), p.get(bg, a));
+                for (fg, bg, min) in PAIRS {
+                    let r = contrast(p.get(fg, dark), p.get(bg, dark));
                     assert!(r >= min, "{name} dark {dark}: {fg}/{bg} {r:.2}");
                 }
             }
+        }
+        // An empty override resolves for every accent.
+        for (name, _, _) in ACCENTS {
+            assert!(ThemeOverride::default().resolve(Some(name)).is_ok(), "{name}");
+        }
+    }
+
+    #[test]
+    fn every_named_accent_has_4_5_with_its_on_accent() {
+        for (name, light, dark) in ACCENTS {
+            let (l, d) = (Palette::default_for(false, name), Palette::default_for(true, name));
+            assert_eq!((l.accent, d.accent), (*light, *dark));
+            assert!(contrast(l.on_accent, l.accent) >= 4.5, "{name} light {:.3}", contrast(l.on_accent, l.accent));
+            assert!(contrast(d.on_accent, d.accent) >= 4.5, "{name} dark {:.3}", contrast(d.on_accent, d.accent));
         }
     }
 
@@ -524,10 +565,15 @@ mod tests {
             ("on-accent", "#ffffff"),
         ]);
         assert!(good.resolve(None).is_ok());
-        // Only the background: the host dark text is too faint on it. The
-        // first failure names the pair.
+        // Only the background (one value for light and dark): the host dark
+        // text is too faint on a light background. The result of the merge
+        // is checked, so the error names the dark pair.
         let e = ov(&[("background", "#fffaf0")]).resolve(None).unwrap_err();
-        assert!(matches!(e, ThemeError::Contrast { dark: true, .. }), "{e}");
+        assert!(matches!(e, ThemeError::Contrast { dark: true, fg: "text", bg: "background", .. }), "{e}");
+        // A background for each appearance that suits the host text passes.
+        let mut t = ThemeOverride::default();
+        t.0.insert("background".into(), pair("#ffffff", "#000000"));
+        assert!(t.resolve(None).is_ok());
         // Light text on a light background fails: names the pair and ratio.
         let bad = ov(&[("text", "#eeeeee")]);
         let e = bad.resolve(None).unwrap_err();
@@ -575,12 +621,37 @@ mod tests {
     }
 
     #[test]
-    fn untouched_pairs_are_not_blamed() {
-        // Light teal with white is 4.2:1 on the host palette. An override
-        // that does not touch that pair still passes.
-        assert!(contrast(0x0b8a7e, 0xffffff) < 4.5);
+    fn untouched_tokens_keep_the_host_values_and_pass() {
+        // The host default accent passes now, so an override of other tokens
+        // passes too.
+        assert!(contrast(0x0b857a, 0xffffff) >= 4.5);
         assert!(ov(&[("hover", "#e0e0ff")]).resolve(None).is_ok());
         assert!(ov(&[("border", "#999999")]).resolve(Some("orange")).is_ok());
+    }
+
+    #[test]
+    fn selected_text_contrast_is_checked() {
+        // An explicit opaque `selected` that is dark behind the dark text.
+        let e = ov(&[("selected", "#202020")]).resolve(None).unwrap_err();
+        assert!(matches!(e, ThemeError::Contrast { fg: "text", bg: "selected over surface", dark: false, .. }), "{e}");
+        assert!(e.to_string().contains("`text` on `selected over surface`"), "{e}");
+        // A pair of light and dark values that the text can read passes.
+        let mut t = ThemeOverride::default();
+        t.0.insert("selected".into(), pair("#ccddee", "#334455"));
+        t.0.insert("text".into(), pair("#1b1b1f", "#f2f2f5"));
+        assert!(t.resolve(None).is_ok());
+        // A black accent: the low-alpha tint over the surface still passes.
+        assert!(ov(&[("accent", "#000000"), ("on-accent", "#ffffff")]).resolve(None).is_ok());
+    }
+
+    #[test]
+    fn toggle_track_is_checked_against_the_surface() {
+        // A surface that has the color of the light track hides the track.
+        let e = ov(&[("surface", "#c9c9d0"), ("text", "#000000")]).resolve(None).unwrap_err();
+        assert!(matches!(e, ThemeError::Contrast { fg: "track", bg: "surface", dark: false, min, .. } if min == 1.5), "{e}");
+        // The host track on the host surfaces: at least 1.5:1.
+        assert!(contrast(TRACK_LIGHT, 0xffffff) >= 1.5 && contrast(TRACK_DARK, 0x232326) >= 1.5);
+        assert!(contrast(KNOB, TRACK_LIGHT) >= 1.5 && contrast(KNOB, TRACK_DARK) >= 1.5);
     }
 
     #[test]
@@ -612,8 +683,10 @@ mod tests {
         let r = ov(&[("hover", "#e0e0ff")]).resolve(Some("pink")).unwrap();
         assert_eq!(r.light.accent, 0xc8327a);
         // An explicit `selected` is used as it is.
-        let r = ov(&[("selected", "#ccddee")]).resolve(None).unwrap();
-        assert_eq!(r.light.selected, Some(0xccddee));
+        let mut t = ThemeOverride::default();
+        t.0.insert("selected".into(), pair("#ccddee", "#334455"));
+        let r = t.resolve(None).unwrap();
+        assert_eq!((r.light.selected, r.dark.selected), (Some(0xccddee), Some(0x334455)));
     }
 
     /// The default palette is the one that the desktop themes always had.

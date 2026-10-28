@@ -17,8 +17,26 @@
         "`text` on `background`",
         "dark mode"
       ],
-      "name": "only a light background: the host dark text fails",
+      "name": "only a light background: the host dark text fails (the merged palette is checked)",
       "theme_toml": "[theme]\nbackground = \"#fffaf0\"\n"
+    },
+    {
+      "accent": null,
+      "error_contains": [
+        "`text` on `selected over surface`",
+        "light mode"
+      ],
+      "name": "selected too dark for the text",
+      "theme_toml": "[theme]\nselected = \"#202020\"\n"
+    },
+    {
+      "accent": null,
+      "error_contains": [
+        "`track` on `surface`",
+        "1.5:1"
+      ],
+      "name": "surface hides the toggle track",
+      "theme_toml": "[theme]\nsurface = \"#c9c9d0\"\ntext = \"#000000\"\n"
     },
     {
       "accent": null,
@@ -155,7 +173,7 @@
         "--pl-danger": "#ff6b5e",
         "--pl-hover": "#34343a",
         "--pl-muted": "#9a9aa2",
-        "--pl-selected": "#ccddee",
+        "--pl-selected": "#334455",
         "--pl-success": "#5fd27a",
         "--pl-surface": "#232326",
         "--pl-surface-alt": "#2e2e32",
@@ -177,7 +195,7 @@
         "--pl-text": "#1b1b1f"
       },
       "name": "explicit selected, named accent blue",
-      "theme_toml": "[theme]\nselected = \"#ccddee\"\n"
+      "theme_toml": "[theme.selected]\nlight = \"#ccddee\"\ndark = \"#334455\"\n"
     },
     {
       "accent": "orange",
@@ -197,15 +215,15 @@
         "--pl-text": "#f2f2f5"
       },
       "light": {
-        "--pl-accent": "#c25a00",
-        "--pl-accent-fg": "#c25a00",
+        "--pl-accent": "#bf5900",
+        "--pl-accent-fg": "#bf5900",
         "--pl-accent-text": "#ffffff",
         "--pl-bg": "#f4f4f6",
         "--pl-border": "#999999",
         "--pl-danger": "#c93a2f",
         "--pl-hover": "#e4e4ea",
         "--pl-muted": "#6b6b74",
-        "--pl-selected": "rgb(194 90 0 / 0.12)",
+        "--pl-selected": "rgb(191 89 0 / 0.12)",
         "--pl-success": "#2e8540",
         "--pl-surface": "#ffffff",
         "--pl-surface-alt": "#ececf0",

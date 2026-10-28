@@ -88,8 +88,8 @@ impl Tokens {
             on_accent: c(p.on_accent),
             danger: c(p.danger),
             success: c(p.success),
-            track: if dark { c(0x48484f) } else { c(0xc9c9d0) },
-            knob: c(0xffffff),
+            track: c(if dark { tk::TRACK_DARK } else { tk::TRACK_LIGHT }),
+            knob: c(tk::KNOB),
             backdrop: with_alpha(c(0x000000), a.backdrop as f32),
             focus_ring: FOCUS_RING,
             reduced_motion: false,
@@ -588,7 +588,7 @@ mod tests {
         assert_eq!(t.backdrop, with_alpha(c(0x000000), 0.55));
         let t = Tokens::new(WindowAppearance::Light, "teal");
         assert_eq!((t.background, t.text, t.track), (c(0xf4f4f6), c(0x1b1b1f), c(0xc9c9d0)));
-        assert_eq!(t.accent_hover, with_alpha(c(0x0b8a7e), 0.88));
+        assert_eq!(t.accent_hover, with_alpha(c(0x0b857a), 0.88));
     }
 
     /// The override sets the base tokens, light and dark; the derived
@@ -617,7 +617,7 @@ mod tests {
         assert!(Tokens::themed_with(WindowAppearance::Light, &rm, "blue", Some(&resolved)).reduced_motion);
         // A `selected` in the theme is used as it is (opaque).
         let mut th = brand();
-        th.0.insert("selected".into(), ThemeColor::Same("#ffe0c2".into()));
+        th.0.insert("selected".into(), ThemeColor::Pair(ColorPair { light: "#ffe0c2".into(), dark: "#4a3426".into() }));
         let r = th.resolve(None).unwrap();
         assert_eq!(Tokens::themed_with(WindowAppearance::Light, &base, "teal", Some(&r)).selected, c(0xffe0c2));
     }

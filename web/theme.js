@@ -23,13 +23,13 @@ const DEFAULT_ACCENT = "teal";
 
 /** The named accents: [light, dark]. */
 const ACCENTS = {
-  teal: [0x0b8a7e, 0x2ec4b6],
+  teal: [0x0b857a, 0x2ec4b6],
   blue: [0x1a63d6, 0x5b9cff],
   indigo: [0x4f46c8, 0x8c86ff],
   purple: [0x8a3ec9, 0xc08cff],
   pink: [0xc8327a, 0xff7ab8],
   red: [0xc93a2f, 0xff7a6e],
-  orange: [0xc25a00, 0xff9f45],
+  orange: [0xbf5900, 0xff9f45],
   green: [0x2e8540, 0x5fd27a],
 };
 
@@ -90,15 +90,51 @@ export function contrast(a, b) {
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 
-/** The pairs of the contrast guard: [text token, background token, least ratio]. */
+/** The toggle track (off) and knob that the host paints: fixed, [light, dark]. */
+const TRACK = [0xc9c9d0, 0x48484f];
+const KNOB = 0xffffff;
+
+/**
+ * The pairs of the contrast guard: [foreground, background, least ratio].
+ * All of them are checked, in light and dark, on the merged palette. The
+ * toggle pairs are not text: they use 1.5 (the host track is a quiet grey).
+ */
 const PAIRS = [
   ["text", "background", 4.5],
   ["text", "surface", 4.5],
   ["on-accent", "accent", 4.5],
+  ["text", "selected over surface", 4.5],
+  ["text", "selected over background", 4.5],
   ["text-muted", "background", 3],
   ["danger", "background", 3],
   ["success", "background", 3],
+  ["track", "surface", 1.5],
+  ["knob", "track", 1.5],
 ];
+
+/** `top` with opacity `alpha` over `under`, rounded to a byte per channel. */
+function blend(top, under, alpha) {
+  const mix = (shift) => Math.round(((top >> shift) & 0xff) * alpha + ((under >> shift) & 0xff) * (1 - alpha)) & 0xff;
+  return (mix(16) << 16) | (mix(8) << 8) | mix(0);
+}
+
+/** The color of a token for the guard (as `Palette::get` in Rust). */
+function tokenColor(p, key, dark) {
+  const alpha = SELECTED_ALPHA[dark ? "dark" : "light"];
+  const selectedOver = (under) => (p.selected === null ? blend(p.accent, under, alpha) : p.selected);
+  switch (key) {
+    case "selected over surface":
+      return selectedOver(p.surface);
+    case "selected over background":
+      return selectedOver(p.background);
+    case "track":
+      return TRACK[dark ? 1 : 0];
+    case "knob":
+      return KNOB;
+    default:
+      return p[key];
+  }
+}
 
 // -- Reading `[theme]` from manifest.toml ---------------------------------------
 
@@ -206,7 +242,7 @@ function colorText(color, dark) {
  * appearances, as `ThemeOverride::resolve` does. Returns `{ ok: true,
  * light, dark }` (the palettes) or `{ ok: false, reason }`.
  *
- * A contrast pair is checked when the override sets one of its tokens.
+ * Every contrast pair is checked on the merged palette.
  */
 export function resolveOverride(theme, namedAccent) {
   if (theme === null || typeof theme !== "object" || Array.isArray(theme)) return { ok: false, reason: "`[theme]` must be a table of color tokens" };
@@ -226,9 +262,8 @@ export function resolveOverride(theme, namedAccent) {
     const p = defaultPalette(dark, accent);
     for (const key of keys) p[key] = parseHex(colorText(theme[key], dark));
     for (const [fg, bg, min] of PAIRS) {
-      if (!Object.hasOwn(theme, fg) && !Object.hasOwn(theme, bg)) continue;
-      const ratio = contrast(p[fg], p[bg]);
-      if (ratio < min) return { ok: false, reason: `\`[theme]\` ${dark ? "dark" : "light"} mode: \`${fg}\` on \`${bg}\` has a contrast of ${ratio.toFixed(2)}:1; the least is ${min}:1` };
+      const ratio = contrast(tokenColor(p, fg, dark), tokenColor(p, bg, dark));
+      if (ratio < min) return { ok: false, reason: `\`[theme]\` ${dark ? "dark" : "light"} mode: \`${fg}\` on \`${bg}\` has a contrast of ${ratio.toFixed(2)}:1; the least is ${min}:1 (the host values fill the tokens that you do not set)` };
     }
     out[dark ? "dark" : "light"] = p;
   }
