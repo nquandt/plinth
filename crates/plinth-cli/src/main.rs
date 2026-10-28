@@ -65,6 +65,7 @@ usage:
   plinth hub groups [create <name> | add <app id> <name>]
                                    list, or manage, library groups
   plinth hub source add <name> <base> | list | remove <name>
+  plinth hub source set-token <name> [--client-id <id>] [--client-secret <secret>] | clear-token <name>
                                    manage registry sources (docs/REGISTRY.md)
   plinth hub search <text>         search configured registry sources
   plinth hub install <id>[@version] [--source <name>]
@@ -780,15 +781,57 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                 }
                 Some("list") | None => {
                     for (name, base) in hub.sources()? {
-                        println!("{name}  {base}");
+                        // Header names only, never a value (`docs/HUB.md` §5.4).
+                        let names: Vec<String> = hub.source_headers(&name)?.into_iter().map(|h| h.name).collect();
+                        if names.is_empty() {
+                            println!("{name}  {base}");
+                        } else {
+                            println!("{name}  {base}  [headers: {}]", names.join(", "));
+                        }
                     }
                 }
                 Some("remove") => {
                     let name = args.get(2).context("usage: plinth hub source remove <name>")?;
+                    // The token is in the keychain, so remove it first.
+                    if !hub.source_headers(name)?.is_empty() {
+                        plinth_host_desktop::source_headers::clear_headers(&hub, name, &mut *plinth_host_desktop::secrets::system_secrets())?;
+                    }
                     hub.source_remove(name)?;
                     println!("removed source {name}");
                 }
-                Some(other) => bail!("unknown `plinth hub source {other}`; use add, list or remove"),
+                Some("set-token") => {
+                    // `docs/HUB.md` §5.4: a Cloudflare Access service token.
+                    // Order: a flag, then CF_ACCESS_CLIENT_ID / _SECRET, then
+                    // a line from stdin (id first, then secret).
+                    let usage = "usage: plinth hub source set-token <name> [--client-id <id>] [--client-secret <secret>] (or CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET, or two lines on stdin)";
+                    let name = args.get(2).context(usage)?;
+                    let flag = |f: &str| raw.iter().position(|a| *a == f).and_then(|i| raw.get(i + 1)).map(|s| (*s).to_owned());
+                    let read_line = |what: &str| -> Result<String> {
+                        let mut line = String::new();
+                        std::io::stdin().read_line(&mut line)?;
+                        let line = line.trim().to_owned();
+                        if line.is_empty() {
+                            bail!("no {what}; {usage}");
+                        }
+                        Ok(line)
+                    };
+                    let id = match flag("--client-id").or_else(|| std::env::var("CF_ACCESS_CLIENT_ID").ok().filter(|v| !v.is_empty())) {
+                        Some(v) => v,
+                        None => read_line("client id")?,
+                    };
+                    let secret = match flag("--client-secret").or_else(|| std::env::var("CF_ACCESS_CLIENT_SECRET").ok().filter(|v| !v.is_empty())) {
+                        Some(v) => v,
+                        None => read_line("client secret")?,
+                    };
+                    plinth_host_desktop::source_headers::set_access_token(&hub, name, &id, &secret)?;
+                    println!("saved the access token for source {name} in the system keychain");
+                }
+                Some("clear-token") => {
+                    let name = args.get(2).context("usage: plinth hub source clear-token <name>")?;
+                    plinth_host_desktop::source_headers::clear_headers(&hub, name, &mut *plinth_host_desktop::secrets::system_secrets())?;
+                    println!("removed the access token of source {name}");
+                }
+                Some(other) => bail!("unknown `plinth hub source {other}`; use add, list, remove, set-token or clear-token"),
             }
             return Ok(ExitCode::SUCCESS);
         }
@@ -811,7 +854,7 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
         }
         Some("open") => {
             let url = args.get(1).context("usage: plinth hub open <plinth://app/<app id>>")?;
-            let sources: std::sync::Arc<dyn plinth_hub::SourceClient> = std::sync::Arc::new(plinth_registry::HubSources);
+            let sources: std::sync::Arc<dyn plinth_hub::SourceClient> = std::sync::Arc::new(plinth_host_desktop::source_headers::hub_sources(&hub));
             let id = match plinth_hub::os::parse_link(url)? {
                 plinth_hub::os::Link::Hub => HUB_UI_APP_ID.to_owned(),
                 plinth_hub::os::Link::App { id, version } => {
@@ -864,7 +907,7 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
         Some("search") => {
             let text = args.get(1).context("usage: plinth hub search <text>")?;
             for (name, base) in hub.sources()? {
-                let source = plinth_registry::source::Source::open(&base).with_context(|| format!("open source {name} ({base})"))?;
+                let source = plinth_host_desktop::source_headers::hub_sources(&hub).open(&base).with_context(|| format!("open source {name} ({base})"))?;
                 for app in source.search(text)? {
                     println!("{}  {}  {}  [{name}]", app.id, app.name, app.latest);
                 }
@@ -876,7 +919,7 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
             let (id, version) = spec.split_once('@').map(|(i, v)| (i, Some(v.to_owned()))).unwrap_or((spec, None));
             let source_flag = raw.iter().position(|a| *a == "--source").and_then(|i| raw.get(i + 1)).copied();
             let (name, base) = resolve_source(&hub, id, source_flag)?;
-            let source = plinth_registry::source::Source::open(&base).with_context(|| format!("open source {name} ({base})"))?;
+            let source = plinth_host_desktop::source_headers::hub_sources(&hub).open(&base).with_context(|| format!("open source {name} ({base})"))?;
             let doc = source.app(id)?;
             let version = version.unwrap_or_else(|| doc.latest().map(|v| v.version.clone()).unwrap_or_default());
             if version.is_empty() {
@@ -892,7 +935,7 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
             // `docs/HUB.md` §9.2: the same code path as the Hub UI's
             // `update` (`plinth_hub::apply_update`).
             let only = args.get(1).copied();
-            let client = plinth_registry::HubSources;
+            let client = plinth_host_desktop::source_headers::hub_sources(&hub);
             for entry in hub.list()? {
                 if let Some(only) = only
                     && entry.id != only
@@ -948,7 +991,7 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                 _ => bail!("usage: plinth hub run <app id>"),
             };
             plinth_host_desktop::init_logging();
-            let sources: std::sync::Arc<dyn plinth_hub::SourceClient> = std::sync::Arc::new(plinth_registry::HubSources);
+            let sources: std::sync::Arc<dyn plinth_hub::SourceClient> = std::sync::Arc::new(plinth_host_desktop::source_headers::hub_sources(&hub));
             plinth_host_desktop::run_from_hub_with_sources(&hub, id, Some(sources))?;
         }
         Some("remove") => {

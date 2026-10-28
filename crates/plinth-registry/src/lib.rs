@@ -313,11 +313,39 @@ mod tests {
 /// Reads registry sources for the Hub UI's `search` and `install`
 /// (`plinth_hub::SourceClient`). Each call opens the source again, so a
 /// changed registry is seen at once.
-pub struct HubSources;
+///
+/// With `with_secrets`, a call sends the request headers of the source
+/// (`docs/HUB.md` §5.4). It reads a secret from the store at that time.
+#[derive(Clone, Default)]
+pub struct HubSources {
+    headers: Option<(plinth_hub::Hub, plinth_hub::SecretsFactory)>,
+}
+
+impl HubSources {
+    /// A client that sends no request headers.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A client that sends the request headers of the sources of `hub`. It
+    /// reads their secrets from the store that `secrets` makes.
+    pub fn with_secrets(hub: plinth_hub::Hub, secrets: plinth_hub::SecretsFactory) -> Self {
+        Self { headers: Some((hub, secrets)) }
+    }
+
+    /// Opens the source at `base` with its request headers.
+    pub fn open(&self, base: &str) -> anyhow::Result<source::Source> {
+        let headers = match &self.headers {
+            Some((hub, secrets)) => source::RequestHeaders::new(hub.request_headers(base, secrets().as_mut())?)?,
+            None => source::RequestHeaders::default(),
+        };
+        source::Source::open_with(base, headers)
+    }
+}
 
 impl plinth_hub::SourceClient for HubSources {
     fn search(&self, base: &str, query: &str) -> anyhow::Result<Vec<plinth_hub::SearchHit>> {
-        let source = source::Source::open(base)?;
+        let source = self.open(base)?;
         Ok(source
             .search(query)?
             .into_iter()
@@ -326,7 +354,7 @@ impl plinth_hub::SourceClient for HubSources {
     }
 
     fn latest_package(&self, base: &str, id: &str) -> anyhow::Result<Option<Vec<u8>>> {
-        let source = source::Source::open(base)?;
+        let source = self.open(base)?;
         if !source.apps()?.iter().any(|a| a.id == id) {
             return Ok(None);
         }
@@ -336,7 +364,7 @@ impl plinth_hub::SourceClient for HubSources {
     }
 
     fn latest_version(&self, base: &str, id: &str) -> anyhow::Result<Option<plinth_hub::SourceVersion>> {
-        let source = source::Source::open(base)?;
+        let source = self.open(base)?;
         if !source.apps()?.iter().any(|a| a.id == id) {
             return Ok(None);
         }
@@ -348,6 +376,6 @@ impl plinth_hub::SourceClient for HubSources {
     }
 
     fn package(&self, base: &str, id: &str, version: &str) -> anyhow::Result<Vec<u8>> {
-        source::Source::open(base)?.package(id, version)
+        self.open(base)?.package(id, version)
     }
 }

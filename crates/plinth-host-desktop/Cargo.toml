@@ -36,6 +36,9 @@ keyring = { version = "4.2", default-features = false, features = ["v1"] }
 # The `target` modifier of a Windows entry (the entry type of `keyring` has no
 # constructor with modifiers). `keyring` already needs this crate.
 keyring-core = "1"
+# The registry client for the Hub sources (src/source_headers.rs); the updater
+# test (`tests/updater_http.rs`) also reuses its server.
+plinth-registry.workspace = true
 
 # `plinth:notify` on Windows (src/notify.rs): WinRT toasts. The same
 # versions as gpui-ce uses, so no new crate comes into the build.
@@ -55,6 +58,3 @@ wat = "1"
 # the Hub launch poll loop test (`tests/hub_host.rs`).
 gpui = { workspace = true, features = ["test-support"] }
 plinth-ui.workspace = true
-# A tiny real HTTP server for the updater's integration test
-# (`tests/updater_http.rs`), reusing `plinth registry serve`'s server.
-plinth-registry.workspace = true

@@ -151,9 +151,74 @@ pub fn is_newer(a: &str, b: &str) -> bool {
 }
 
 /// The registry sources known to this Hub (`hub source add/list/remove`),
-/// stored in `sources.json`: name -> base URL/path.
+/// stored in `sources.json`: name -> base URL/path, with optional request
+/// headers (`docs/HUB.md` §5.4).
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct Sources(pub BTreeMap<String, String>);
+pub struct Sources(pub BTreeMap<String, SourceRecord>);
+
+/// One entry of `sources.json`. A source with no headers is a plain string,
+/// so an older Hub can read the file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum SourceRecord {
+    Plain(String),
+    Full {
+        base: String,
+        #[serde(default)]
+        headers: Vec<HeaderSpec>,
+    },
+}
+
+impl SourceRecord {
+    fn new(base: &str, headers: Vec<HeaderSpec>) -> Self {
+        if headers.is_empty() { Self::Plain(base.to_owned()) } else { Self::Full { base: base.to_owned(), headers } }
+    }
+
+    pub fn base(&self) -> &str {
+        match self {
+            Self::Plain(base) | Self::Full { base, .. } => base,
+        }
+    }
+
+    pub fn headers(&self) -> &[HeaderSpec] {
+        match self {
+            Self::Plain(_) => &[],
+            Self::Full { headers, .. } => headers,
+        }
+    }
+}
+
+/// A request header of a source. It has a `value` (only for a value that is
+/// not secret) or a `secret`: the name of an entry in the secret store. The
+/// file never holds a secret value.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HeaderSpec {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+}
+
+/// The app id of the host's own secrets (`docs/SECRETS.md`). No app can
+/// have this id.
+pub const HOST_SECRETS_APP: &str = "plinth.host";
+
+/// The name of the secret for header `header` of source `source`:
+/// `source.<source>.<header in lowercase>`. The name must pass the rule for
+/// secret names (1 to 64 characters from `a-z A-Z 0-9 . _ -`), so this
+/// returns an error for a source name or a header name that does not fit.
+pub fn header_secret_name(source: &str, header: &str) -> Result<String> {
+    let name = format!("source.{source}.{}", header.to_ascii_lowercase());
+    let fits = name.chars().count() <= 64 && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if !fits {
+        bail!("the source name `{source}` or the header name `{header}` cannot make a secret name (use letters, digits, `.`, `_` and `-`, at most 64 characters in all)");
+    }
+    Ok(name)
+}
+
+/// A new secret store for each call (the system keychain on a desktop).
+pub type SecretsFactory = std::sync::Arc<dyn Fn() -> Box<dyn plinth_runner_wasmtime::secrets::SecretsBackend> + Send + Sync>;
 
 impl LibraryEntry {
     /// The version the Hub should run: the pinned one, or the latest added
@@ -310,7 +375,7 @@ impl Hub {
     fn blocks_path(&self) -> PathBuf {
         self.dir.join("blocks.json")
     }
-    fn sources_path(&self) -> PathBuf {
+    pub fn sources_path(&self) -> PathBuf {
         self.dir.join("sources.json")
     }
 
@@ -699,13 +764,76 @@ impl Hub {
 
     /// The configured registry sources, name -> base.
     pub fn sources(&self) -> Result<BTreeMap<String, String>> {
-        Ok(self.sources_store()?.0)
+        Ok(self.sources_store()?.0.into_iter().map(|(name, rec)| (name, rec.base().to_owned())).collect())
     }
 
+    /// Adds a source, or replaces the source of the same name. A replaced
+    /// source loses its headers (a new base is a new host).
     pub fn source_add(&self, name: &str, base: &str) -> Result<()> {
         let mut store = self.sources_store()?;
-        store.0.insert(name.to_owned(), base.to_owned());
+        store.0.insert(name.to_owned(), SourceRecord::Plain(base.to_owned()));
         write_json(&self.sources_path(), &store)
+    }
+
+    /// The request headers of source `name` (no values of secrets).
+    pub fn source_headers(&self, name: &str) -> Result<Vec<HeaderSpec>> {
+        let store = self.sources_store()?;
+        Ok(store.0.get(name).with_context(|| format!("no source named `{name}`"))?.headers().to_vec())
+    }
+
+    /// Sets the request headers of source `name`, in place of the old ones.
+    /// A header has a `value` or a `secret`, not both.
+    pub fn source_set_headers(&self, name: &str, headers: Vec<HeaderSpec>) -> Result<()> {
+        for h in &headers {
+            if h.name.is_empty() || !h.name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                bail!("`{}` is not a valid header name", h.name);
+            }
+            if h.value.is_some() == h.secret.is_some() {
+                bail!("the header `{}` needs a value or a secret, not both and not none", h.name);
+            }
+        }
+        let mut store = self.sources_store()?;
+        let rec = store.0.get_mut(name).with_context(|| format!("no source named `{name}`"))?;
+        *rec = SourceRecord::new(rec.base(), headers);
+        write_json(&self.sources_path(), &store)
+    }
+
+    /// The headers to send to the source at `base`, with the secrets read
+    /// from the store now. A secret is read at the time of a request and is
+    /// not kept. An error names the source and the header, never a value.
+    pub fn request_headers(
+        &self,
+        base: &str,
+        secrets: &mut dyn plinth_runner_wasmtime::secrets::SecretsBackend,
+    ) -> Result<Vec<(String, String)>> {
+        let scope = plinth_runner_wasmtime::secrets::SecretsScope::new(HOST_SECRETS_APP);
+        let mut out = Vec::new();
+        for (source, rec) in self.sources_store()?.0 {
+            if rec.base() != base {
+                continue;
+            }
+            for h in rec.headers() {
+                let value = match (&h.value, &h.secret) {
+                    (Some(v), None) => v.clone(),
+                    (None, Some(secret)) => match secrets.get(&scope, secret) {
+                        Ok(Some(v)) => v,
+                        Ok(None) => bail!(
+                            "the source `{source}` needs the header {}, but its token is not in the secret store (run `plinth hub source set-token {source}`)",
+                            h.name
+                        ),
+                        Err(plinth_runner_wasmtime::secrets::SecretsError::Unsupported) => {
+                            bail!("the source `{source}` needs a token, but this computer has no secret store (system keychain)")
+                        }
+                        Err(plinth_runner_wasmtime::secrets::SecretsError::Failed(why)) => {
+                            bail!("the secret store failed for the header {} of source `{source}` ({why})", h.name)
+                        }
+                    },
+                    _ => bail!("the header {} of source `{source}` is not valid", h.name),
+                };
+                out.push((h.name.clone(), value));
+            }
+        }
+        Ok(out)
     }
 
     pub fn source_remove(&self, name: &str) -> Result<()> {
@@ -717,7 +845,7 @@ impl Hub {
     }
 
     pub fn source_base(&self, name: &str) -> Result<String> {
-        self.sources_store()?.0.remove(name).with_context(|| format!("no source named `{name}`"))
+        self.sources_store()?.0.remove(name).map(|r| r.base().to_owned()).with_context(|| format!("no source named `{name}`"))
     }
 
     /// The declared capabilities of `id` that still need the user's
@@ -1254,6 +1382,33 @@ mod tests {
     fn temp_hub() -> (Hub, PathBuf) {
         let dir = std::env::temp_dir().join(format!("plinth-hub-test-{}-{}", std::process::id(), rand_suffix()));
         (Hub::open(&dir).unwrap(), dir)
+    }
+
+    #[test]
+    fn sources_file_keeps_the_old_format_and_adds_headers() {
+        let (hub, dir) = temp_hub();
+        // A file from an older Hub: name -> base string.
+        std::fs::write(hub.sources_path(), r#"{"main":"https://a.example.com","dev":"/tmp/reg"}"#).unwrap();
+        assert_eq!(hub.sources().unwrap()["main"], "https://a.example.com");
+        assert!(hub.source_headers("main").unwrap().is_empty());
+        let spec = HeaderSpec { name: "CF-Access-Client-Id".into(), value: None, secret: Some("source.main.cf-access-client-id".into()) };
+        hub.source_set_headers("main", vec![spec.clone()]).unwrap();
+        assert_eq!(hub.source_headers("main").unwrap(), vec![spec]);
+        assert_eq!(hub.sources().unwrap()["main"], "https://a.example.com");
+        // A source with no headers is a plain string again.
+        hub.source_set_headers("main", vec![]).unwrap();
+        let text = std::fs::read_to_string(hub.sources_path()).unwrap();
+        assert!(text.contains(r#""main": "https://a.example.com""#), "{text}");
+        // A value and a secret together, or neither, is an error.
+        let both = HeaderSpec { name: "X-A".into(), value: Some("v".into()), secret: Some("s".into()) };
+        assert!(hub.source_set_headers("main", vec![both]).is_err());
+        assert!(hub.source_set_headers("none", vec![]).is_err());
+        // A new base drops the headers.
+        let lit = HeaderSpec { name: "X-A".into(), value: Some("v".into()), secret: None };
+        hub.source_set_headers("main", vec![lit]).unwrap();
+        hub.source_add("main", "https://b.example.com").unwrap();
+        assert!(hub.source_headers("main").unwrap().is_empty());
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// A unique suffix for a test directory. The clock alone is not enough:

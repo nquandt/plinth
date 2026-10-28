@@ -164,7 +164,7 @@ fn hub_service_searches_and_installs_with_hub_sources() {
     let empty = temp_dir("hubsrc-empty");
     hub.source_add("broken", empty.to_str().unwrap()).unwrap();
     hub.source_add("local", reg_dir.to_str().unwrap()).unwrap();
-    let svc = plinth_hub::HubService::with_sources(hub.clone(), std::sync::Arc::new(plinth_registry::HubSources));
+    let svc = plinth_hub::HubService::with_sources(hub.clone(), std::sync::Arc::new(plinth_registry::HubSources::new()));
 
     let result: serde_json::Value = serde_json::from_str(&(svc.search("note"))().unwrap()).unwrap();
     assert_eq!(result["hits"][0]["id"], "com.example.notes", "{result}");
