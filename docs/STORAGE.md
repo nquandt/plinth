@@ -1,6 +1,6 @@
 # Storage design (draft)
 
-Status: draft for discussion (2026-10-06). Built: `store.kv`, and `plinth:files` on the private space (core 1.11, `files.private`: `read`, `write`, `list`, `stat`, `remove` of text files; local folder on the desktop, the page's IndexedDB on the web; path rules and isolation tests; `docs/host-apis.md` "plinth:files"). Not built: granted spaces (`vault`), `watch`, sync, remote providers, the Hub UI for spaces, the cross-app capability.
+Status: draft for discussion (2026-10-06). Built: `store.kv`, and `plinth:files` on the private space (core 1.11, `files.private`: `read`, `write`, `list`, `stat`, `remove` of text files; local folder on the desktop, the page's IndexedDB on the web; path rules and isolation tests; `docs/host-apis.md` "plinth:files"). Built for S13 (2026-10-27, §7): a data quota, export to a zip, and uninstall with data, on the desktop (`plinth hub uninstall`, `plinth hub export`) and in the web storage layer. Not built: granted spaces (`vault`), `watch`, sync, remote providers, the Hub UI for spaces, the cross-app capability, a button or a `plinth:hub` call for uninstall with data.
 
 This document gives one model for app data in Plinth. The model must cover many scenarios: private app data, sync across devices, the app vendor's cloud, storage that the user chooses, folders that other tools also use, shared team storage, and more. §1 lists the scenarios. §2 gives the model. §3 gives the rules that keep apps apart. §4 shows how each scenario maps to the model. §6 is the first slice to build.
 
@@ -176,3 +176,76 @@ The Obsidian-like notes app is the first user of this design. The slice builds o
 The slice does not build the full profile (§2.1). It keeps the profile in mind: object layout, keys and the library format must not block it later. Encryption of synced objects is in the slice if ST-Q7 has an answer by then.
 
 Editor: Markdown source in a `TextArea`, with a new `Markdown` display control for the reading view (headings, lists, links, `[[wiki links]]`, code). A rich-text control is a later decision.
+
+## 7. S13: quotas, export, and removal on uninstall (state)
+
+Status 2026-10-27. The desktop part is a command line (`plinth hub ...`). The web part is the storage layer of the web Hub. There is no button in the Hub UI yet, and the `plinth:hub` API has no uninstall call yet.
+
+### 7.1 Where the data of an app is
+
+| What | Desktop (under `%APPDATA%\plinth`) | Web (in the page origin) |
+|---|---|---|
+| `store.kv` | `apps/<app id>/kv.json`, and `apps/<app id>/data-version` | `localStorage`, keys `plinth-hub:kv:<app id>:<key>` and `plinth-hub:dv:<app id>` |
+| Private files | `spaces/private/<owner>/<app id>/` | IndexedDB `plinth-files` |
+| `store.sql` | `spaces/private/<owner>/<app id>+sql/store.sqlite` | OPFS folder `.plinth-sql` |
+| Secrets | The system keychain (`docs/SECRETS.md`) | IndexedDB `plinth-secrets` (encrypted) |
+| Grant records | `grants.json` in the Hub directory | `localStorage`, key `plinth-hub:grants:<app id>`, and the state of the web Hub |
+
+`<owner>` is the publisher key of a signed package, or the digest of an unsigned package. So an app can have more than one space. The Hub library keeps the signer and the digest of each installed version, and the commands use them to find all spaces. The host keeps no window state on disk.
+
+### 7.2 Uninstall with data
+
+`plinth hub uninstall <app id> [--keep-data]` removes the app from the library and removes the cached packages that no other app uses. Without `--keep-data`, it also deletes everything that the app owns, in this order:
+
+1. The `store.sql` databases, the private files and the `store.kv` folder (all spaces of the app).
+2. The secrets of the app (the host calls `remove_app_secrets`).
+3. The grant records of the app.
+4. The library entry, last. If a step fails, the app stays in the library and the same command can run again.
+
+With `--keep-data`, the data, the grants and the secrets stay. A new install of the same package finds them again.
+
+Rules:
+
+- **A running app must stop first.** A started app holds a shared lock on a small file (`locks/<hash of the app id>.lock`). The uninstall needs the exclusive lock. If any window of the app is open, the command stops with "`<app id>` is running; close all its windows first, then try again", and it changes nothing. The operating system frees the lock when a process ends, so a crash leaves no stale lock. While an uninstall runs, the app does not start.
+- **Nothing outside the app's folders is deleted.** The app id must be one plain file name (letters, digits, `.`, `_`, `-`, `+`; no `/`, `\`, `:`, `..`, no device name). The host builds each folder from the id and the owners in the library, and it checks that the folder is exactly in the place `apps/<id>` or `spaces/private/<owner>/<name>`. A link is removed as a link and is not followed. The same id from another publisher has another owner folder and stays.
+- **The block list does not change.** A block is a safety decision, not app data.
+- `plinth hub remove` is not changed. It hides the app and keeps the data, but the commands cannot find the owner folders of an app that is not in the library any more. To delete the data, use `uninstall`.
+
+### 7.3 Quota
+
+Each app has a data quota. The default is 100 MiB. The quota applies to each of the three stores alone, not to their sum: the private files (the sum of the file sizes), `store.kv` (the bytes of all keys and values) and the `store.sql` database (the file size). So the worst case for one app is 3 times the quota.
+
+The host reads the number from `PLINTH_DATA_QUOTA_MIB`, else from `dataQuotaMib` in `policy.json` in the Hub directory (`plinth hub policy quota <MiB>`, `plinth hub policy quota default`), else the default. The host reads it when it starts an app.
+
+| Store | How the host enforces it | What the app sees |
+|---|---|---|
+| Files | Before each `write`, the worker thread adds the sizes of all files (a walk of the folder, at most the quota) and refuses a write that makes the total bigger than the quota. | `Error("quota")` (as before; the old default was 50 MiB). |
+| `store.kv` | The store counts the bytes of keys and values and checks it in memory on each `set`. A `set` that does not make the store bigger always works, so the app can free space. | The `set` does nothing and `kv.lastError()` returns `"denied:refused"`. This is the answer that the web host also gives. The WIT `denied-reason` has no `quota` value. |
+| `store.sql` | SQLite `max_page_count`, set from the quota when the database opens. SQLite counts pages, so the limit holds also for index and free pages. | `Error("sql: the database is full")` (before: 256 MiB). |
+
+The web host has its own fixed limits for each app: 512 Ki characters for `store.kv` in a frame, 50 MiB for files and 256 MiB for `store.sql`, and the browser's own limit for the whole origin. It does not use `navigator.storage.estimate()`: that number is for the whole origin and not for one app, so it cannot say which app is over. The web limits are not configurable yet.
+
+### 7.4 Export
+
+`plinth hub export <app id> <out.zip>` writes the data of the app to a zip file:
+
+| Entry | Content |
+|---|---|
+| `manifest.json` | `format` (`plinth.export/1`), `app`, `version` (the newest installed version), `exported` (UTC time), `kv`, `spaces`, and `"secrets": "not included"`. |
+| `kv.json` | The `store.kv` file as it is. |
+| `sql/<owner>/store.sqlite` | A consistent copy of the database, made with SQLite `VACUUM INTO` (the app can run at the same time). |
+| `files/<owner>/<path>` | The private files. |
+
+**Secrets are not exported.** The command says so. A secret must not leave the keychain in a file that the user can copy. The file must not be inside the data of the app. There is no import yet. The web host has no export yet.
+
+### 7.5 Web
+
+`HubStore.uninstall(id, { sql })` (`web/hub-storage.js`) deletes the kv data and the data version, the secrets, the files in IndexedDB (`clearAppFiles`), the OPFS database (`SqlWorkerHost.drop`, which closes the connection and unlinks the database and its journal in the OPFS pool), and last the grant records. Every step runs, also if one fails. If a step fails, the call rejects with all failures and the grant records stay, so the user can try again. `HubHost.uninstall(id, { keepData })` hides the app like `remove`, refuses while the app has a window, deletes the Hub's own records (grants, pin, groups, accepted version), and keeps the block list. `install` then shows the app again as a new app. The web Hub shell gives `HubHost` these two functions. The browser test is `web/test/run-uninstall.mjs`.
+
+### 7.6 Not built, and open questions
+
+- A button in the Hub UI and a `plinth:hub` call (`uninstall(id, keepData)`). The WIT interface, the cores and the typings need a change for this.
+- A total quota for the sum of the three stores. A cheap sum needs the stores to share one counter.
+- Import of an export, and a backup of all apps.
+- Instances (§2.2): the commands work on the default instance only. `remove_app_secrets` also removes the default instance only.
+- Linux and macOS: the commands are not tested there (`docs/PLATFORM-TODO.md`).

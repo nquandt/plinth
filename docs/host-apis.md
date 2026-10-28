@@ -74,6 +74,12 @@ kv.lastError();        // the reason the last call was denied, or null
 On the desktop host, the store is a JSON file at
 `%APPDATA%\plinth\apps\<app id>\kv.json`.
 
+**Quota.** Each app has a data quota (100 MiB by default; `docs/STORAGE.md`
+§7.3). A `kv.set` that would make the keys and values bigger than the quota
+does nothing, and `kv.lastError()` returns `"denied:refused"`. A `set` that
+does not make the store bigger works. The web host answers the same way over
+its own quota.
+
 ### `sql` (core 1.13)
 
 A SQLite database for each app (`docs/SQL.md`). Needs the `store.sql`
@@ -109,7 +115,7 @@ await sql.batch([
   Steps are append-only.
 - A SQL error rejects with `Error("sql: <message>")`, for example
   `"sql: the query took too long"` (2 s), `"sql: the database is full"`
-  (256 MiB) or `"sql: not authorized"` (`ATTACH`, `BEGIN`, `VACUUM` and
+  (the data quota: 100 MiB on the desktop by default, 256 MiB on the web) or `"sql: not authorized"` (`ATTACH`, `BEGIN`, `VACUUM` and
   most `PRAGMA`s). Use `batch` for a transaction.
 - The compiler gives warning `PL2026` when a statement is not a string
   literal or a `const`. Give values as `?` parameters: a statement built
@@ -258,8 +264,10 @@ case-sensitive on the web and not on Windows and macOS.
   messages (`web/README.md`). On the stand-alone page and in Node tests:
   in memory.
 
-**Limits.** 8 MiB for one file; 50 MiB for the private space of one app
-(the sum of the file sizes).
+**Limits.** 8 MiB for one file; the data quota for the private space of one
+app (the sum of the file sizes): 100 MiB on the desktop by default (a host
+setting, `docs/STORAGE.md` §7.3), 50 MiB on the web. A `write` over the quota
+rejects with `Error("quota")`.
 
 ## `plinth:notify`
 
@@ -466,7 +474,11 @@ that the update adds).
 
 `search`, `install`, `checkUpdates` and `update` use the same request id
 and `completion` event as `plinth:dialog`. Without `done`, each returns a
-`Promise<string | null>` of the same value, for `await`. The web host answers every
+`Promise<string | null>` of the same value, for `await`.
+
+`remove(id)` hides the app and keeps its data. There is no call that deletes
+the data of an app yet. The user does that with `plinth hub uninstall`
+(`docs/STORAGE.md` §7.2). The web host answers every
 `plinth:hub` call with "unsupported" and does not trap (the web Hub is
 phase H6).
 
@@ -595,12 +607,12 @@ covers it. There are three hosts:
 | `time`: timers | The host wakes at the next timer deadline, and at least every 15 ms. A late repeating timer fires one time, then keeps its period. | Same as wasmtime. | JS `setTimeout` and `setInterval`. A browser slows the timers of a hidden tab. |
 | `time`: dates | The time zone offset comes from the OS. | Same as wasmtime. | The offset is `-Date.getTimezoneOffset()`. |
 | `time`: `onFrame` | The host fires frame timers in the gpui frame. While a frame timer runs, the host asks for the next frame. | Same as wasmtime. | One `requestAnimationFrame` loop for all frame timers. The loop stops when the last frame timer stops. The browser sends no frames in a hidden tab. |
-| `store` (kv) | One JSON file for each app id, `%APPDATA%\plinth\apps\<app id>\kv.json`. Each write writes the file again. No quota. A failed write answers `denied:unsupported`. If the host cannot open the file, the app gets an empty store in memory for this run (the log has a warning). | Same as wasmtime. | In a frame: the page `localStorage`, keys `plinth-hub:kv:<app id>:<key>`. The frame gets a snapshot at start and sends each write to the page. Quota: 512 Ki characters of keys and values for each app; a `set` over the quota answers `denied:refused`. Stand-alone: `localStorage`, keys `plinth:<app id>:<key>`. Node: a `Map` in memory. |
+| `store` (kv) | One JSON file for each app id, `%APPDATA%\plinth\apps\<app id>\kv.json`. Each write writes the file again. Quota: the data quota (100 MiB by default); a `set` over it answers `denied:refused`. A failed write answers `denied:unsupported`. If the host cannot open the file, the app gets an empty store in memory for this run (the log has a warning). | Same as wasmtime. | In a frame: the page `localStorage`, keys `plinth-hub:kv:<app id>:<key>`. The frame gets a snapshot at start and sends each write to the page. Quota: 512 Ki characters of keys and values for each app; a `set` over the quota answers `denied:refused`. Stand-alone: `localStorage`, keys `plinth:<app id>:<key>`. Node: a `Map` in memory. |
 | `clipboard`: write | The system clipboard (gpui). | Same as wasmtime. | `navigator.clipboard.writeText`, in a frame through the page. The call does not wait for the browser. |
 | `clipboard`: read | The system clipboard, at once. | Same as wasmtime. | **Different.** The browser API is asynchronous and the host call is not. `readText()` returns the last value that the host knows (or `null`), and starts a read for the next call. Thus the first read can return `null`. The browser can ask the user for permission. The browser gives the clipboard only to a secure page (HTTPS or `localhost`). |
 | `dialog` | A modal overlay that the desktop host draws, one request at a time. Escape cancels; Enter confirms. | Same as wasmtime. | Stand-alone: the browser's `alert`, `confirm` and `prompt`. In a frame: a dialog that the page draws (`hostDialog`), because a sandboxed frame cannot show a browser dialog. In Node: a declined answer. |
 | `net` | `ureq` on a worker thread. Time limit 20 s. Body limit 8 MiB (`MAX_BODY`). No redirects. The private-address check runs on the host text and again on the addresses after DNS resolution. | Same as wasmtime. | **Different.** `fetch` with a 20 s time limit, `redirect: "manual"` and `credentials: "omit"`. The host code has no body limit. The private-address check runs only on the host text (`docs/THREAT-MODEL.md` §6 item 1). In a frame, the page makes the request, so the request has the origin of the page. The server must allow CORS. |
-| `files` | A folder for each owner and app id under `%APPDATA%\plinth\spaces\private\`. One worker thread for each app, in call order. 8 MiB for one file, 50 MiB for the space. | Same as wasmtime. | In a frame: the page IndexedDB (database `plinth-files`). Stand-alone and in Node: in memory, so the files go away at a reload. The same path rules and limits as the desktop (`web/files.js`). |
+| `files` | A folder for each owner and app id under `%APPDATA%\plinth\spaces\private\`. One worker thread for each app, in call order. 8 MiB for one file, the data quota (100 MiB by default) for the space. | Same as wasmtime. | In a frame: the page IndexedDB (database `plinth-files`). Stand-alone and in Node: in memory, so the files go away at a reload. The same path rules and limits as the desktop (`web/files.js`). |
 | `store` (sql) | SQLite (`rusqlite`, bundled, with FTS5): `store.sqlite` in `<private space folder>+sql`. One worker thread for each app, in call order. 2 s for one statement, 256 MiB for the database, 16 MiB for a query result. | Same as wasmtime. | **Different.** The official SQLite Wasm build in one Worker of the page for all apps (`web/sql.js`), with the OPFS VFS `opfs-sahpool` (folder `.plinth-sql`, one database for each app id in lower case). The same authorizer, limits and error texts; the memory limit is the Wasm memory of the Worker (512 MiB). Without OPFS: in memory. The folder form of a web export has it; a single-file export answers `denied:unsupported`. `docs/SQL.md` §9. |
 | `notify` | Windows: a WinRT toast; the tag replaces and `cancel` removes. Linux and macOS: `show` answers "unsupported". | Same as wasmtime. | **Different.** The browser's `Notification` API, shown by the page for the app frame. The tag replaces, `cancel` closes. A browser-denied permission answers `denied:refused`; no permission question or no API answers "unsupported". |
 | `locale` | The OS locale (`sys-locale`), or `PLINTH_LOCALE`. The host reads it again when the window comes to the foreground, and sends the locale event if it changed. | Same as wasmtime. | In a frame: the locale of the page (`navigator.languages`), from the `start` message, and the page's `languagechange`. Stand-alone: the page's own locale, or `?locale=`. The host sets `lang` and `dir` on the root element of the app. |

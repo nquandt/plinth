@@ -27,7 +27,7 @@ const all = await names();            // Promise<string[]>, sorted
 
 1. **One app, one namespace.** The host builds the key from the app id and the instance (`docs/STORAGE.md`, "Instances": the instance is `default`) and the name. An app can never reach another app's secrets. The package digest does not matter: an update keeps the secrets. Another publisher with the same app id cannot exist (the registry enforces it).
 2. **The host never logs a value.** Not in the log, not in the trace, not in an error message. Tests check this.
-3. **Uninstall removes the secrets.** The host deletes all secrets of the app, with its data (STORAGE S13).
+3. **Uninstall removes the secrets.** The host deletes all secrets of the app, with its data (STORAGE S13). Done on the desktop: `plinth hub uninstall <app id>` calls `remove_app_secrets` after it deletes the other data, and fails, with the app still in the library, if the keychain call fails. With `--keep-data`, the secrets stay. Done on the web: `HubStore.uninstall` (and `kvClear`) delete the secrets of the app in IndexedDB. Only the default instance is removed. The export of app data never holds secrets (STORAGE §7.4).
 4. **No cross-device copy.** A secret stays on the device. Sync of app data (STORAGE S2) never carries secrets in 1.0. The user enters the secret again on a new device.
 5. **The value is a string.** For binary data, the app encodes it (for example Base64).
 6. **Secrets are not in the manifest.** `plinth.toml` has only `capabilities = ["secrets"]`.

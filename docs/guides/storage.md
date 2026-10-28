@@ -188,7 +188,7 @@ A denied call never stops your app. Show the problem to the user as a normal sta
 
 | API | On denial | How to find the reason |
 |---|---|---|
-| `kv` | `get` returns `null`, `set` and `remove` do nothing, `keys` returns `[]`. | `kv.lastError()` returns `"denied:undeclared"`, `"denied:refused"` or `"denied:unsupported"`, or `null` after a call that worked. Read it right after the call. |
+| `kv` | `get` returns `null`, `set` and `remove` do nothing, `keys` returns `[]`. | `kv.lastError()` returns `"denied:undeclared"`, `"denied:refused"` or `"denied:unsupported"`, or `null` after a call that worked. Read it right after the call. A `set` over the quota also returns `"denied:refused"`. |
 | `sql` | The promise rejects with an `Error`. | `message` is `"denied:<reason>"`, or `"sql: <detail>"` for a SQL error, for example `"sql: the query took too long"`, `"sql: the database is full"` or a syntax error. |
 | Files | The promise rejects with an `Error`. | `message` is the reason: `"denied:<reason>"`, `"invalid-path: <rule>"`, `"not-found"`, `"not-a-file"`, `"not-a-directory"`, `"not-text"`, `"too-large"`, `"quota"` or `"io: <detail>"`. |
 
@@ -198,10 +198,10 @@ An uncaught rejection does not stop the app. The host reports it as an uncaught 
 
 | Limit | Desktop | Web |
 |---|---|---|
-| `kv` size | No quota. | In a sandboxed frame (the web Hub, a web export): 512 Ki characters of keys and values for each app. A `set` over the quota does nothing and `kv.lastError()` returns `"denied:refused"`. A key longer than 1024 characters gets the same result. |
+| `kv` size | The data quota (100 MiB by default; the user can change it with `plinth hub policy quota`). A `set` over it does nothing and `kv.lastError()` returns `"denied:refused"`. | In a sandboxed frame (the web Hub, a web export): 512 Ki characters of keys and values for each app. A `set` over the quota does nothing and `kv.lastError()` returns `"denied:refused"`. A key longer than 1024 characters gets the same result. |
 | One file | 8 MiB (`"too-large"`). | 8 MiB. |
-| All files of one app | 50 MiB (`"quota"`). | 50 MiB. |
-| One SQL database | 256 MiB (`"sql: the database is full"`). | 256 MiB. |
+| All files of one app | The data quota, 100 MiB by default (`"quota"`). | 50 MiB (`"quota"`). |
+| One SQL database | The data quota, 100 MiB by default (`"sql: the database is full"`). | 256 MiB. |
 | One SQL statement | 2 s (`"sql: the query took too long"`). | 2 s. One SQLite Worker runs the calls of all apps of the page in turn. |
 | One `query` result | 16 MiB of JSON. | 16 MiB. |
 
