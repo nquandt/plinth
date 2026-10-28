@@ -20,6 +20,7 @@ pub const FILES: &[(&str, &[u8])] = &[
     ("plinth-app.js", include_bytes!("../../../web/plinth-app.js")),
     ("plinth.js", include_bytes!("../../../web/plinth.js")),
     ("dom-renderer.js", include_bytes!("../../../web/dom-renderer.js")),
+    ("theme.js", include_bytes!("../../../web/theme.js")),
     ("protocol.js", include_bytes!("../../../web/protocol.js")),
     ("zip.js", include_bytes!("../../../web/zip.js")),
     ("files.js", include_bytes!("../../../web/files.js")),
