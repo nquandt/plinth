@@ -5710,6 +5710,7 @@ dependencies = [
  "icu_locale_core",
  "icu_plurals",
  "icu_time",
+ "libc",
  "log",
  "plinth-link",
  "plinth-protocol",
