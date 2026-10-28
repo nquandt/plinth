@@ -216,3 +216,68 @@ fn the_poll_loop_runs_on_its_own() {
     cx.run_until_parked();
     assert_eq!(cx.windows().len(), 3, "the Hub and the two launched apps");
 }
+
+/// `plinth:hub` `uninstall` through the backend that the host gives a Hub UI
+/// window (`HubHost::backend_with`, a temporary data directory and a secrets
+/// double): the app goes with its data and its secrets, or alone with
+/// `keep_data`. An app that runs and the Hub app itself are refused with a
+/// clear error, and nothing changes.
+#[test]
+fn the_host_backend_uninstalls_apps() {
+    use plinth_hub::{AppDataLayout, RunLock};
+    use plinth_runner_wasmtime::hub::HubBackend;
+
+    let hub = temp_hub();
+    let t = std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos();
+    let data = std::env::temp_dir().join(format!("plinth-hub-host-data-{}-{t}", std::process::id()));
+    let hub_ui = hub.add_package(&package("dev.plinth.hub-ui", "0.1.0", &[])).unwrap();
+    let victim = hub.add_package(&package("com.example.victim", "0.1.0", &[])).unwrap();
+    let keeper = hub.add_package(&package("com.example.keeper", "0.1.0", &[])).unwrap();
+    let put = |id: &str| -> AppDataLayout {
+        let layout = hub.data_layout(id, &data).unwrap();
+        std::fs::create_dir_all(&layout.kv).unwrap();
+        std::fs::write(layout.kv.join("kv.json"), r#"{"k":"v"}"#).unwrap();
+        for space in &layout.spaces {
+            std::fs::create_dir_all(space.files.join("d")).unwrap();
+            std::fs::write(space.files.join("d/f.txt"), "file").unwrap();
+        }
+        layout
+    };
+    let (victim_data, keeper_data) = (put(&victim), put(&keeper));
+    assert!(victim_data.exists() && keeper_data.exists());
+
+    let host = HubHost { hub: hub.clone(), runner: Arc::new(Runner::new().unwrap()), sources: None };
+    let secrets: Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let log = secrets.clone();
+    let backend = host.backend_with(
+        &hub_ui,
+        data.clone(),
+        Arc::new(move |app| {
+            log.lock().unwrap().push(app.to_owned());
+            Ok(())
+        }),
+    );
+
+    // The Hub app cannot uninstall itself.
+    let err = backend.uninstall(&hub_ui, false)().unwrap_err();
+    assert!(err.contains("cannot uninstall itself"), "{err}");
+    assert!(hub.get(&hub_ui).unwrap().is_some());
+
+    // The app runs (its run lock): refused, nothing changes, the text says what to do.
+    let running = RunLock::running(&data, &victim).unwrap();
+    let err = backend.uninstall(&victim, false)().unwrap_err();
+    assert!(err.contains("is running") && err.contains("close"), "{err}");
+    assert!(victim_data.exists() && hub.get(&victim).unwrap().is_some() && secrets.lock().unwrap().is_empty());
+    drop(running);
+
+    // Closed: the app, its data and its secrets go.
+    backend.uninstall(&victim, false)().unwrap();
+    assert!(!victim_data.exists() && hub.get(&victim).unwrap().is_none());
+    assert_eq!(*secrets.lock().unwrap(), vec![victim.clone()]);
+
+    // "Keep my data": the app goes, the data stays, the secrets are not touched.
+    backend.uninstall(&keeper, true)().unwrap();
+    assert!(keeper_data.exists() && hub.get(&keeper).unwrap().is_none());
+    assert_eq!(secrets.lock().unwrap().len(), 1);
+    std::fs::remove_dir_all(&data).ok();
+}

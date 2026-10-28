@@ -53,6 +53,8 @@ struct Library {
     apps: Vec<FakeApp>,
     groups: Vec<String>,
     launches: Vec<String>,
+    /// The `uninstall` calls that succeeded: (id, keep_data).
+    uninstalled: Vec<(String, bool)>,
 }
 
 /// The source lists Notes 1.1.0, which adds one capability.
@@ -224,6 +226,20 @@ impl HubBackend for FakeHub {
             Ok(NOTES_UPDATE.to_owned())
         })
     }
+    fn uninstall(&self, id: &str, keep_data: bool) -> HubJob {
+        let lib = self.0.clone();
+        let id = id.to_owned();
+        Box::new(move || {
+            // The Weather app "runs": the host refuses, as `Hub::uninstall` does.
+            if id == "com.example.weather" {
+                return Err("com.example.weather is running; close all its windows first, then try again".into());
+            }
+            let mut lib = lib.lock().unwrap();
+            lib.apps.retain(|a| a.id != id);
+            lib.uninstalled.push((id, keep_data));
+            Ok(String::new())
+        })
+    }
     fn install(&self, id: &str) -> HubJob {
         let lib = self.0.clone();
         let id = id.to_owned();
@@ -368,7 +384,7 @@ impl Harness {
 
 #[test]
 fn the_hub_ui_manages_the_library() {
-    let lib = Arc::new(Mutex::new(Library { apps: vec![notes(), weather()], groups: vec!["Work".into()], launches: Vec::new() }));
+    let lib = Arc::new(Mutex::new(Library { apps: vec![notes(), weather()], groups: vec!["Work".into()], launches: Vec::new(), uninstalled: Vec::new() }));
     let mut h = Harness::start(lib.clone());
     // The Hub checks for updates when it starts (`docs/HUB.md` §9.2).
     h.deliver_completions(1);
@@ -532,4 +548,77 @@ fn the_hub_ui_without_a_backend_shows_the_denial() {
     let h = Harness { guest, tree, _runner: runner };
     assert!(h.texts().iter().any(|t| t == "The host refused to show your apps (denied:unsupported)."), "{:?}", h.texts());
     assert!(h.row_titles().is_empty());
+}
+
+impl Harness {
+    /// The nodes of `kind` below `root` (the Dialog keeps its actions and form there).
+    fn below(&self, root: NodeId, kind: ControlKind, label: &str) -> NodeId {
+        let mut found = Vec::new();
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            let node = self.tree.get(id).unwrap();
+            if node.kind == Some(kind) && node.str_prop(prop::LABEL) == Some(label) {
+                found.push(id);
+            }
+            stack.extend(node.children.iter().rev());
+        }
+        assert_eq!(found.len(), 1, "expected one {kind:?} {label:?} in the dialog");
+        found[0]
+    }
+}
+
+/// Uninstall (`docs/STORAGE.md` §7): the action opens a confirmation that says
+/// what is deleted and has a "Keep my data" choice; Cancel changes nothing;
+/// the host's refusal (the app runs) shows as an error on the app page; a
+/// good uninstall goes back to the library and says what happened.
+#[test]
+fn the_hub_ui_uninstalls_an_app_after_a_confirmation() {
+    let lib = Arc::new(Mutex::new(Library { apps: vec![notes(), weather()], ..Library::default() }));
+    let mut h = Harness::start(lib.clone());
+    h.deliver_completions(1); // the update check at start
+
+    // An app that runs: the host refuses; the page shows the text; nothing is deleted.
+    h.fire(h.row("Weather"), event::PRESS, Value::Null);
+    assert_eq!(h.screen_title(), "Weather");
+    let dialog = h.one(ControlKind::Dialog, |_| true);
+    assert!(!h.tree.get(dialog).unwrap().bool_prop(prop::VALUE), "the dialog is closed at first");
+    h.fire(h.labeled(ControlKind::Action, "Uninstall"), event::PRESS, Value::Null);
+    assert!(h.tree.get(dialog).unwrap().bool_prop(prop::VALUE));
+    assert_eq!(h.tree.get(dialog).unwrap().str_prop(prop::TITLE), Some("Uninstall Weather?"));
+    let message = h.tree.get(dialog).unwrap().str_prop(prop::MESSAGE).unwrap().to_owned();
+    assert!(message.contains("Its data and its secrets") && message.contains("deleted too") && message.contains("cannot undo"), "{message}");
+    h.fire(h.below(dialog, ControlKind::Action, "Uninstall"), event::PRESS, Value::Null);
+    assert!(!h.tree.get(dialog).unwrap().bool_prop(prop::VALUE), "the dialog closes");
+    h.deliver_completions(1);
+    assert!(
+        h.texts().iter().any(|t| t == "Could not uninstall: com.example.weather is running; close all its windows first, then try again"),
+        "{:?}",
+        h.texts()
+    );
+    assert_eq!(h.screen_title(), "Weather", "an error keeps the page");
+    assert!(lib.lock().unwrap().uninstalled.is_empty());
+
+    // Cancel: nothing is called. Back to the library; open Notes.
+    h.fire(h.labeled(ControlKind::Action, "Uninstall"), event::PRESS, Value::Null);
+    h.fire(h.below(dialog, ControlKind::Action, "Cancel"), event::PRESS, Value::Null);
+    assert!(!h.tree.get(dialog).unwrap().bool_prop(prop::VALUE));
+    assert!(lib.lock().unwrap().uninstalled.is_empty());
+    h.fire(h.labeled(ControlKind::Action, "Remove from your apps"), event::PRESS, Value::Null);
+    assert_eq!(h.row_titles(), ["Notes"]);
+    h.fire(h.row("Notes"), event::PRESS, Value::Null);
+
+    // "Keep my data": the message changes, and the call carries `keep_data`.
+    let dialog = h.one(ControlKind::Dialog, |_| true);
+    h.fire(h.labeled(ControlKind::Action, "Uninstall"), event::PRESS, Value::Null);
+    let keep = h.below(dialog, ControlKind::Checkbox, "Keep my data");
+    assert!(!h.tree.get(keep).unwrap().bool_prop(prop::VALUE), "the data is deleted unless the user says otherwise");
+    h.fire(keep, event::CHANGE, Value::Bool(true));
+    let message = h.tree.get(dialog).unwrap().str_prop(prop::MESSAGE).unwrap().to_owned();
+    assert!(message.contains("Your data and your secrets stay"), "{message}");
+    h.fire(h.below(dialog, ControlKind::Action, "Uninstall"), event::PRESS, Value::Null);
+    h.deliver_completions(1);
+    assert_eq!(lib.lock().unwrap().uninstalled, vec![("com.example.notes".to_owned(), true)]);
+    assert_eq!(h.screen_title(), "Your apps");
+    assert!(h.row_titles().is_empty());
+    assert!(h.texts().iter().any(|t| t == "Notes is uninstalled. Its data stays on this device."), "{:?}", h.texts());
 }

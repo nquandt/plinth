@@ -58,7 +58,7 @@ The page uses HTTPS through the tunnel. A browser gives the clipboard and WebCry
 2. It downloads the latest version of the Hub app (`hub.json` `hub`, normally `dev.plinth.hub`) and a core that can run it (`SPEC.md` §10.5).
 3. It checks the package and the core (§4.3).
 4. It gives `hub.manage` to the Hub app only if the signature is correct and a key in `hub.json` `trustedKeys` made it (`docs/HUB.md` §4.1). If not, the page shows the reason and does not run the Hub. A browser that cannot check Ed25519 cannot trust the Hub app.
-5. It runs the Hub app in a sandboxed frame (`#hub-frame`, the same `AppFrame` as every app) with the `plinth:hub` backend (`hub-host.js`). The frame runs `plinth:hub` on a copy (`FrameHub`): a snapshot at the start, each change to the page (`hub-save`), launches to the page (`hub-launch`), the registry calls in the page (`hub-call`), and the page's changes back to the frame (`hub-state`). See `web/README.md`, "The app-frame bridge".
+5. It runs the Hub app in a sandboxed frame (`#hub-frame`, the same `AppFrame` as every app) with the `plinth:hub` backend (`hub-host.js`). The frame runs `plinth:hub` on a copy (`FrameHub`): a snapshot at the start, each change to the page (`hub-save`), launches to the page (`hub-launch`), the registry calls and `uninstall` in the page (`hub-call`: only the page can erase the data of an app), and the page's changes back to the frame (`hub-state`). See `web/README.md`, "The app-frame bridge".
 
 ### 3.1 Browse mode: the library is the registry
 
@@ -120,7 +120,7 @@ Before the page runs a package (the Hub app and each app), it checks:
 | `net:<host>`, `net:*`, `net.local` | Limited. The page makes the request for the frame (after the same capability check), so the request has the origin of the page, not `null`. The server must allow requests from this origin (CORS). The request has no cookies. |
 | `notify` | Works. The page shows the notification for the frame with the browser's `Notification` API (an opaque origin cannot), after the same capability check. The browser asks the user for the permission one time for the page origin (it can need a click first). A tag replaces an earlier notification; `cancel` closes it. A permission that the browser denied answers `denied:refused`. |
 | `secrets` | Works. The page keeps the secrets for the frame and checks the capability again. It stores only encrypted values in IndexedDB: an AES-GCM key that the browser cannot export, and a new IV for each write. This protects against a copy of the profile, not against code that runs in the page. A browser with no IndexedDB or no WebCrypto answers `denied:unsupported`. An uninstall deletes the secrets of the app. |
-| `hub.manage` | Only the Hub app, signed by a trusted key (§3). An app that runs in a frame never gets it. |
+| `hub.manage` | Only the Hub app, signed by a trusted key (§3). An app that runs in a frame never gets it. `uninstall(id, keepData)` goes to the page (`HubHost.uninstall`, `docs/STORAGE.md` §7.5): it refuses the Hub app itself and an app that has a window, and the error text shows in the Hub app. |
 | Other names | Not supported. Calls are refused. |
 
 A sandboxed frame without `allow-modals` cannot show `alert`, `confirm` or `prompt`. The page draws these dialogs for `plinth:dialog`.

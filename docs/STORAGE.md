@@ -179,7 +179,7 @@ Editor: Markdown source in a `TextArea`, with a new `Markdown` display control f
 
 ## 7. S13: quotas, export, and removal on uninstall (state)
 
-Status 2026-10-27. The desktop part is a command line (`plinth hub ...`). The web part is the storage layer of the web Hub. There is no button in the Hub UI yet, and the `plinth:hub` API has no uninstall call yet.
+Status 2026-10-27. The desktop part is a command line (`plinth hub ...`). The web part is the storage layer of the web Hub. The Hub UI has an **Uninstall** action for each app, which uses the `plinth:hub` call `uninstall(id, keepData)` (§7.7).
 
 ### 7.1 Where the data of an app is
 
@@ -242,9 +242,16 @@ The web host has its own fixed limits for each app: 512 Ki characters for `store
 
 `HubStore.uninstall(id, { sql })` (`web/hub-storage.js`) deletes the kv data and the data version, the secrets, the files in IndexedDB (`clearAppFiles`), the OPFS database (`SqlWorkerHost.drop`, which closes the connection and unlinks the database and its journal in the OPFS pool), and last the grant records. Every step runs, also if one fails. If a step fails, the call rejects with all failures and the grant records stay, so the user can try again. `HubHost.uninstall(id, { keepData })` hides the app like `remove`, refuses while the app has a window, deletes the Hub's own records (grants, pin, groups, accepted version), and keeps the block list. `install` then shows the app again as a new app. The web Hub shell gives `HubHost` these two functions. The browser test is `web/test/run-uninstall.mjs`.
 
-### 7.6 Not built, and open questions
+### 7.6 The Hub UI and the `plinth:hub` call
 
-- A button in the Hub UI and a `plinth:hub` call (`uninstall(id, keepData)`). The WIT interface, the cores and the typings need a change for this.
+`uninstall(id, keepData, done)` (core 1.13, capability `hub.manage` only) is asynchronous: a request id now, and a `completion` event with `null` (done) or the error text. On the desktop, `HubService` runs `Hub::uninstall` on a worker thread, with the data directory and the keychain of the host (`remove_app_secrets`). The same rules as the command apply: the exclusive run lock, so an app that runs is refused with "`<app id>` is running; close all its windows first, then try again", and no change. The Hub app cannot uninstall itself: its own id gives the error "the Hub cannot uninstall itself", and the call changes nothing. On the web, the Hub app frame sends the call to the page (`hub-call`), because only the page can reach IndexedDB and the OPFS database; the page runs `HubHost.uninstall`, which refuses the Hub app and an app that has a window.
+
+The Hub app (`examples/hub`) has an **Uninstall** action on the App screen. It opens a dialog. The dialog says what is deleted: the app, its data and its secrets (saved passwords and tokens), and that the user cannot undo this. The check box **Keep my data** keeps the data, the grants and the secrets (the message changes to say this). **Cancel** changes nothing. An error, for example that the app runs, shows on the App screen in red and the app stays. After a good uninstall the Hub goes back to the Your apps screen and says what happened. **Remove from your apps** is not changed: it only hides the app.
+
+The tests are `crates/plinth-compiler/tests/hub_api.rs` (the call on the engine, with a fake backend), `hub_ui.rs` (the dialog flow in the Hub app), `crates/plinth-hub` (`HubService`), `crates/plinth-host-desktop/tests/hub_host.rs` (the host backend with a temporary data directory) and `web/test/run-uninstall.mjs`.
+
+### 7.7 Not built, and open questions
+
 - A total quota for the sum of the three stores. A cheap sum needs the stores to share one counter.
 - Import of an export, and a backup of all apps.
 - Instances (§2.2): the commands work on the default instance only. `remove_app_secrets` also removes the default instance only.

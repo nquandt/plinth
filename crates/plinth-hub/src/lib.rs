@@ -2255,6 +2255,57 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// `plinth:hub` `uninstall` (`HubService`): data and secrets go unless `keep_data`; an app that
+    /// runs, an unknown app and the Hub app itself give an error and change nothing.
+    #[test]
+    fn the_hub_service_uninstalls_with_or_without_the_data() {
+        use plinth_runner_wasmtime::hub::HubBackend;
+        let (hub, dir) = temp_hub();
+        let data = dir.join("data");
+        let hub_app = hub.add_package(&fake_package("com.example.hub", "0.1.0")).unwrap();
+        let id = hub.add_package(&fake_package("com.example.victim", "0.1.0")).unwrap();
+        let keep = hub.add_package(&fake_package("com.example.keeper", "0.1.0")).unwrap();
+        let layout = put_app_data(&hub, &id, &data);
+        let keep_layout = put_app_data(&hub, &keep, &data);
+        let secrets: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let log = secrets.clone();
+        let svc = HubService::new(hub.clone()).with_uninstall(
+            data.clone(),
+            &hub_app,
+            std::sync::Arc::new(move |app| {
+                log.lock().unwrap().push(app.to_owned());
+                Ok(())
+            }),
+        );
+
+        // The Hub app itself: refused before anything is touched.
+        let err = svc.uninstall(&hub_app, false)().unwrap_err();
+        assert!(err.contains("cannot uninstall itself"), "{err}");
+        assert!(hub.get(&hub_app).unwrap().is_some());
+        // An unknown app.
+        assert!(svc.uninstall("com.example.nope", false)().unwrap_err().contains("not in the library"));
+        // A running app: the error says to close it; nothing changes.
+        let running = RunLock::running(&data, &id).unwrap();
+        let err = svc.uninstall(&id, false)().unwrap_err();
+        assert!(err.contains("is running") && err.contains("close"), "{err}");
+        assert!(layout.exists() && hub.get(&id).unwrap().is_some() && secrets.lock().unwrap().is_empty());
+        drop(running);
+
+        // With the data.
+        svc.uninstall(&id, false)().unwrap();
+        assert!(!layout.exists() && hub.get(&id).unwrap().is_none());
+        assert_eq!(*secrets.lock().unwrap(), vec![id.clone()]);
+        // Keeping the data: the app goes, the data and the secrets stay.
+        svc.uninstall(&keep, true)().unwrap();
+        assert!(keep_layout.exists() && hub.get(&keep).unwrap().is_none());
+        assert_eq!(secrets.lock().unwrap().len(), 1);
+
+        // A service the host did not set up for uninstall says so.
+        let plain = HubService::new(hub.clone());
+        assert!(plain.uninstall(&hub_app, true)().unwrap_err().contains("cannot uninstall apps"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// Ids that point outside the app's folders never delete anything.
     #[test]
     fn uninstall_refuses_ids_that_look_like_paths() {

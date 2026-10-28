@@ -1,7 +1,7 @@
 # Plinth Hub UI
 
 The Hub UI (`docs/HUB.md` §4.1, §15 phase H3) as a Plinth app. It uses the
-privileged `plinth:hub` module (core 1.9) and has three screens:
+privileged `plinth:hub` module (core 1.13) and has three screens:
 
 - **Library**: every app in the library, with group tabs, a text filter,
   and the highest risk of each app. The **New group** action makes a group.
@@ -12,8 +12,12 @@ privileged `plinth:hub` module (core 1.9) and has three screens:
 - **App** (push it from a library row): the publisher and the signature,
   the capability label (`docs/HUB.md` §7.2) with a risk level, the reason
   of the app and a toggle for each grant, the text "This app cannot …",
-  the groups of the app, and **Open**, **Block**/**Unblock** and
-  **Remove from library**. If the app is signed, **Block publisher**
+  the groups of the app, and **Open**, **Block**/**Unblock**,
+  **Remove from your apps** and **Uninstall**. **Uninstall** opens a dialog
+  that says the app, its data and its secrets are deleted; the check box
+  **Keep my data** keeps the data and the secrets (core 1.13,
+  `docs/STORAGE.md` §7). The host refuses while the app runs, and the Hub
+  cannot uninstall itself; the page shows the error. If the app is signed, **Block publisher**
   blocks every app of that publisher key. If an update is available,
   **Update to <version>** installs it and shows the capabilities that it
   adds; the Hub asks for them before the new version opens. The

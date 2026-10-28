@@ -11,7 +11,11 @@
 // still run, the grant records stay, the call rejects), and `HubHost.uninstall`
 // (refuses while the app runs, refuses without an eraser, keeps the state when
 // the eraser fails, clears the Hub's records, keeps the block list, and
-// `install` shows the app again as a new app).
+// `install` shows the app again as a new app). Then the `plinth:hub` call
+// `uninstall(id, keepData)` of the Hub app (core 1.13): the Hub app itself is
+// refused ("the Hub cannot uninstall itself"), and the Hub app frame
+// (`FrameHub`) sends the call to the page (`hub-call`), which erases the data
+// and answers with a new snapshot; the bridge accepts only the right shape.
 //
 // Needs the Playwright npm package (found with `require`, or in the folder of
 // the environment variable PLAYWRIGHT_PATH) and a Chromium that Playwright
@@ -317,6 +321,73 @@ try {
   assert.equal(hostChecks.newKnown, "1.0.0");
   assert.deepEqual(hostChecks.newGrants, ["store.kv"], "the low-risk default is granted again, as for a new app");
   console.log("HubHost.uninstall: refuses while running and without an eraser, keeps state when the eraser fails, clears the records, install starts new");
+
+  // -- The Hub app frame: `uninstall` goes to the page (the `hub-call` bridge) ----
+  const framed = await inPage(
+    `const { HubHost, FrameHub, memoryPersist } = await import("/web/hub-host.js");
+     const { checkFrameMessage, CHANNEL } = H;
+     const hubId = "dev.plinth.test.hub-app";
+     const entry = (id) => ({ id, name: id, publisher: "me", source: "s", registry: {}, versions: [{ version: "1.0.0", sha256: "x", core: null, signer: "", capabilities: ["store.kv"], rationales: {} }] });
+     const erased = [];
+     let running = new Set();
+     const host = new HubHost({ persist: memoryPersist(), hide: [hubId], erase: async (id) => { erased.push(id); }, isRunning: (id) => running.has(id) });
+     for (const id of [arg + "-1", arg + "-2", arg + "-3"]) {
+       host.catalog.set(id, entry(id));
+       host.grantLowRisk(id, entry(id).versions[0]);
+       host.state.known[id] = "1.0.0";
+     }
+     // The bridge of frame-host.js: checks the message, calls the page host.
+     const calls = [];
+     const ask = async (type, { method, args }) => {
+       const msg = checkFrameMessage({ channel: CHANNEL, type, id: 1, method, args });
+       if (!msg) return { ok: false, error: "refused by the bridge" };
+       calls.push([method, ...args]);
+       try {
+         const value = msg.method === "uninstall" ? await host.uninstall(msg.args[0], { keepData: msg.args[1] === true }) : await host[msg.method](...msg.args);
+         return { ok: true, value: value ?? null, snapshot: host.snapshot() };
+       } catch (err) {
+         return { ok: false, error: err.message, snapshot: host.snapshot() };
+       }
+     };
+     const frame = new FrameHub(host.snapshot(), { send: () => {}, ask });
+     const out = {};
+     // With the data.
+     out.deleteResult = await frame.uninstall(arg + "-1", { keepData: false });
+     out.erased = [...erased];
+     out.frameHidden = frame.get(arg + "-1") === null;
+     out.pageHidden = host.get(arg + "-1") === null;
+     // Keep my data: no erase.
+     await frame.uninstall(arg + "-2", { keepData: true });
+     out.erasedAfterKeep = [...erased];
+     out.keepHidden = frame.get(arg + "-2") === null;
+     out.keepGrants = Object.keys(host.grants(arg + "-2"));
+     // An app that runs: the text of the page reaches the frame; nothing changes.
+     running.add(arg + "-3");
+     try { await frame.uninstall(arg + "-3"); } catch (e) { out.runningError = e.message; }
+     out.runningStillListed = frame.get(arg + "-3") !== null && host.get(arg + "-3") !== null;
+     // The Hub app itself (the page hides it) and an unknown app.
+     try { await frame.uninstall(hubId); } catch (e) { out.selfError = e.message; }
+     try { await frame.uninstall("dev.plinth.test.nothing"); } catch (e) { out.unknownError = e.message; }
+     out.calls = calls.map((c) => c.join("|"));
+     // The bridge shape: id and a boolean.
+     const ok = (args) => !!checkFrameMessage({ channel: CHANNEL, type: "hub-call", id: 1, method: "uninstall", args });
+     out.shape = [ok(["a", true]), ok(["a", false]), ok(["a"]), ok(["a", "yes"]), ok([1, true]), ok(["a", true, "b"]), ok([])];
+     return out;`,
+    "dev.plinth.test.frame-uninstall",
+  );
+  assert.equal(framed.deleteResult, null);
+  assert.deepEqual(framed.erased, ["dev.plinth.test.frame-uninstall-1"], "the page erased the data");
+  assert.equal(framed.frameHidden, true, "the frame has the new state");
+  assert.equal(framed.pageHidden, true);
+  assert.deepEqual(framed.erasedAfterKeep, framed.erased, "keep my data erases nothing");
+  assert.equal(framed.keepHidden, true);
+  assert.deepEqual(framed.keepGrants, ["store.kv"]);
+  assert.match(framed.runningError, /is running; close it first/);
+  assert.equal(framed.runningStillListed, true);
+  assert.equal(framed.selfError, "the Hub cannot uninstall itself");
+  assert.match(framed.unknownError, /is not in the library/);
+  assert.deepEqual(framed.shape, [true, true, false, false, false, false, false], "the bridge takes an app id and a boolean only");
+  console.log("Hub app frame: uninstall goes to the page, keep data erases nothing, a running app and the Hub itself are refused");
 
   // Clean up the data of the test apps.
   await inPage(`for (const app of arg) await store.uninstall(app, { sql: sqlHost });`, [A, B]);

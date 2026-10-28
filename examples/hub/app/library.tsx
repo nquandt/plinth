@@ -16,6 +16,7 @@ import {
   riskLabel,
   updateCount,
   updateStatus,
+  notice,
   checkingUpdates,
   checkForUpdates,
 } from "./model";
@@ -67,6 +68,7 @@ export default function Library() {
     >
       {loadError() !== "" ? <Text tone="danger">{loadError()}</Text> : null}
       {updateCount() > 0 ? <Badge label={updateCount() === 1 ? "1 update available" : `${updateCount()} updates available`} tone="success" /> : null}
+      {notice() !== "" ? <Text tone="muted">{notice()}</Text> : null}
       {updateStatus() !== "" ? <Text tone="muted">{checkingUpdates() ? "Checking for updates…" : updateStatus()}</Text> : null}
       <Tabs items={groupTabs()} value={groupFilter} />
       <TextField label="Find in your apps" placeholder="App name" value={filterText} />
