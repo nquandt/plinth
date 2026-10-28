@@ -108,6 +108,9 @@ async function start(msg) {
   });
   renderer = new DomRenderer(tree, container, app, assets);
   renderer.setLocale(locale);
+  // The app theme applies to this frame's app root only (the Hub page
+  // around the frame keeps the host theme).
+  renderer.setTheme(manifestText);
   await app.init([]);
   // For tests (web/test/run-a11y.mjs): how many kv entries the start message had.
   document.body.dataset.kvEntries = String(Object.keys(msg.kv ?? {}).length);

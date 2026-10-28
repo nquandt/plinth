@@ -33,6 +33,7 @@ import {
   EnumPosition,
 } from "./ui-api.js";
 import { normalizeLocale, isRtlLocale } from "./plinth-web.js";
+import { applyAppTheme } from "./theme.js";
 
 const ASPECT_RATIO = { [EnumAspect.square]: "1 / 1", [EnumAspect.wide]: "16 / 9", [EnumAspect.tall]: "3 / 4" };
 
@@ -875,6 +876,15 @@ export class DomRenderer {
     app.onStop = (reason) => this.showStopped(reason);
     app.onError = (message) => this.showError(message);
     this.watchForeground(container.ownerDocument);
+  }
+
+  /**
+   * Per-app theme token values (docs/ui.md, "Theming an app"): applies the
+   * `[theme]` of `manifestText` to the app root only. An override that
+   * fails a check is ignored (a log line), and the host theme stays.
+   */
+  setTheme(manifestText, warn) {
+    return applyAppTheme(this.container, manifestText, warn);
   }
 
   /**

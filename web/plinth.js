@@ -9,7 +9,7 @@
 
 function plinthBundle(mode, baseUrl) {
   "use strict";
-  const STYLE_CSS = "/* Minimal, runtime-owned look for the web host spike (SPEC.md §3: apps\n   declare intent, the runtime owns layout, spacing and color). */\n\n/* The renderer hides optional parts (an empty label, the back button) with\n   the `hidden` attribute; a class's `display` must not show them again. */\n[hidden] {\n  display: none !important;\n}\n\n:root {\n  --pl-bg: #0b0c0f;\n  --pl-surface: #15171c;\n  --pl-text: #e7e9ec;\n  --pl-muted: #9aa0a8;\n  --pl-accent: #3b63d1;\n  --pl-accent-text: #ffffff;\n  --pl-danger: #e5484d;\n  --pl-border: #262a31;\n  /* Level 2 tokens (UI API 1.6). */\n  --pl-surface-alt: #1f2229;\n  --pl-accent-fg: #8fa8ff;\n  --pl-success: #4cc38a;\n  --pl-hover: #22262e;\n  --pl-selected: rgb(59 99 209 / 0.2);\n  color-scheme: dark;\n  font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif;\n}\n\n/* Light mode: the desktop host's light theme tokens (SPEC.md §3). Only\n   applied when the OS/browser prefers light AND the page has not been\n   forced dark some other way, matching how the desktop theme follows the\n   system setting. */\n@media (prefers-color-scheme: light) {\n  :root {\n    --pl-bg: #f5f6f8;\n    --pl-surface: #ffffff;\n    --pl-text: #1b1d21;\n    --pl-muted: #5b6168;\n    --pl-accent: #2f54c7;\n    --pl-accent-text: #ffffff;\n    --pl-danger: #c62828;\n    --pl-border: #d8dbe0;\n    --pl-surface-alt: #eceef2;\n    --pl-accent-fg: #2f54c7;\n    --pl-success: #2e7d32;\n    --pl-hover: #e6e8ec;\n    --pl-selected: rgb(47 84 199 / 0.12);\n    color-scheme: light;\n  }\n}\n\n/* High contrast (PRODUCTION U7, `prefers-contrast: more`): text and its\n   background at least 7:1, borders in the text color, no faint muted text\n   and a 3 px focus ring, as the desktop high-contrast tokens\n   (crates/plinth-ui/src/theme.rs). Dark first, then light. */\n@media (prefers-contrast: more) {\n  :root {\n    --pl-bg: #000000;\n    --pl-surface: #000000;\n    --pl-text: #ffffff;\n    --pl-muted: #e6e6e6;\n    --pl-accent: #a8b8ff;\n    --pl-accent-text: #000000;\n    --pl-danger: #ff9e94;\n    --pl-border: #ffffff;\n    --pl-surface-alt: #141414;\n    --pl-accent-fg: #a8b8ff;\n    --pl-success: #7ee787;\n    --pl-hover: #2a2a2a;\n    --pl-selected: rgb(168 184 255 / 0.25);\n  }\n}\n@media (prefers-contrast: more) and (prefers-color-scheme: light) {\n  :root {\n    --pl-bg: #ffffff;\n    --pl-surface: #ffffff;\n    --pl-text: #000000;\n    --pl-muted: #1f1f1f;\n    --pl-accent: #1f3fa8;\n    --pl-accent-text: #ffffff;\n    --pl-danger: #9b0000;\n    --pl-border: #000000;\n    --pl-surface-alt: #f0f0f0;\n    --pl-accent-fg: #1f3fa8;\n    --pl-success: #0b5d1e;\n    --pl-hover: #e0e0e0;\n    --pl-selected: rgb(31 63 168 / 0.14);\n  }\n}\n/* Reduced motion (PRODUCTION U7, `prefers-reduced-motion: reduce`): no\n   transitions, no animations and no smooth scroll. */\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    animation-duration: 0s !important;\n    animation-iteration-count: 1 !important;\n    transition-duration: 0s !important;\n    transition-delay: 0s !important;\n    scroll-behavior: auto !important;\n  }\n}\n\n/* Text size: all type is in rem, so the user's default font size in the\n   browser scales it (PRODUCTION U7). Buttons do not inherit the font by\n   default (a fixed 13.33 px in Chromium); give them a rem size too. */\nbutton,\nselect {\n  font-family: inherit;\n  font-size: 0.875rem;\n}\n\nbody {\n  margin: 0;\n  background: var(--pl-bg);\n  color: var(--pl-text);\n}\n\n#app {\n  display: flex;\n  min-height: 100vh;\n}\n\n.pl-nav {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  padding: 12px;\n  border-right: 1px solid var(--pl-border);\n  min-width: 160px;\n}\n\n.pl-nav-item {\n  text-align: left;\n  background: transparent;\n  color: var(--pl-text);\n  border: none;\n  border-radius: 6px;\n  padding: 8px 10px;\n  cursor: pointer;\n}\n.pl-nav-item:disabled {\n  background: var(--pl-surface);\n  color: var(--pl-accent);\n  cursor: default;\n}\n\n*, *::before, *::after {\n  box-sizing: border-box;\n}\n\n/* Visible keyboard focus on every interactive element (SPEC.md §6: keyboard\n   parity with the desktop host). */\n:focus-visible {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n\n.pl-row-pressable {\n  cursor: pointer;\n}\n\n.pl-screen {\n  flex: 1;\n  min-width: 0;\n  padding: 24px;\n  max-width: 640px;\n}\n\n.pl-title {\n  font-size: 1.5rem;\n  margin: 0 0 16px;\n}\n\n.pl-section {\n  /* A fieldset is min-content wide by default; let it shrink on compact. */\n  min-width: 0;\n  border: 1px solid var(--pl-border);\n  border-radius: 10px;\n  padding: 12px 16px 16px;\n  margin: 0 0 16px;\n}\n\n.pl-section-title {\n  color: var(--pl-muted);\n  font-size: 0.8rem;\n  text-transform: uppercase;\n  letter-spacing: 0.04em;\n  padding: 0 4px;\n}\n\n.pl-text {\n  margin: 4px 0;\n}\n\n.pl-heading {\n  margin: 8px 0;\n}\n\n.pl-button {\n  background: var(--pl-accent);\n  color: var(--pl-accent-text);\n  border: none;\n  border-radius: 6px;\n  padding: 8px 14px;\n  cursor: pointer;\n  margin: 4px 4px 4px 0;\n}\n.pl-button:disabled {\n  opacity: 0.5;\n  cursor: default;\n}\n\n.pl-field {\n  display: block;\n  margin: 8px 0;\n}\n.pl-field-label {\n  display: block;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n  margin-bottom: 4px;\n}\n/* A text field's input and its error message, one under the other. */\n.pl-input-col {\n  display: flex;\n  flex-direction: column;\n  flex: 1;\n  min-width: 0;\n}\n.pl-field-error {\n  color: var(--pl-danger);\n  font-size: 0.8rem;\n  margin-top: 4px;\n}\n.pl-field .pl-input-col .pl-input {\n  flex: none;\n}\n.pl-input[aria-invalid=\"true\"] {\n  border-color: var(--pl-danger);\n}\n.pl-input,\n.pl-select,\n.pl-textarea {\n  width: 100%;\n  box-sizing: border-box;\n  background: var(--pl-surface);\n  color: var(--pl-text);\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  padding: 8px 10px;\n  font: inherit;\n  color-scheme: inherit;\n}\n\n.pl-checkbox,\n.pl-slider {\n  accent-color: var(--pl-accent);\n  color-scheme: inherit;\n}\n\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin: 8px 0;\n}\n\n.pl-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.pl-row {\n  display: flex;\n  justify-content: space-between;\n  align-items: center;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  padding: 10px 12px;\n}\n.pl-row-header {\n  display: flex;\n  flex-direction: column;\n}\n.pl-row-title {\n  font-weight: 600;\n}\n.pl-row-subtitle {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-row-trailing {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n  flex: none;\n  white-space: nowrap;\n}\n.pl-row-actions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.pl-empty {\n  color: var(--pl-muted);\n  text-align: center;\n  padding: 24px;\n}\n\n/* UI API 1.2 controls (SPEC.md §6.3) */\n.pl-screen-header {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n}\n.pl-back {\n  border: none;\n  background: transparent;\n  color: var(--pl-accent, #3b7);\n  cursor: pointer;\n  font-size: 0.95rem;\n}\n.pl-toolbar {\n  display: flex;\n  gap: 8px;\n  margin-bottom: 12px;\n}\n.pl-action {\n  border: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n  border-radius: 6px;\n  padding: 6px 10px;\n  cursor: pointer;\n}\n.pl-action-destructive {\n  color: var(--pl-danger);\n  border-color: var(--pl-danger);\n}\n.pl-checkbox-field,\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.pl-textarea {\n  min-height: 72px;\n}\n.pl-slider-field,\n.pl-progress-field {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.pl-slider {\n  width: 100%;\n}\n.pl-segmented {\n  display: flex;\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  overflow: hidden;\n}\n.pl-segment {\n  flex: 1;\n  text-align: center;\n  padding: 6px 8px;\n  cursor: pointer;\n  color: var(--pl-text);\n}\n.pl-segment-input {\n  position: absolute;\n  opacity: 0;\n}\n/* Selected segment: accent background with contrasting text, as the\n   desktop host shows the selected Picker option (SPEC.md §6.3). Updates\n   live because the renderer rebuilds the segment markup on every op-stream\n   commit, including the `value` change the app sends back after `change`. */\n.pl-segment:has(.pl-segment-input:checked) {\n  background: var(--pl-accent);\n  color: var(--pl-accent-text);\n}\n.pl-segment-input:focus-visible ~ .pl-segment-label {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n.pl-badge {\n  display: inline-block;\n  background: var(--pl-accent, #3b7);\n  color: var(--pl-accent-text);\n  border-radius: 999px;\n  padding: 2px 8px;\n  font-size: 0.8rem;\n}\n.pl-image {\n  width: 100%;\n  overflow: hidden;\n  border-radius: 8px;\n}\n.pl-image-img {\n  width: 100%;\n  height: 100%;\n  object-fit: cover;\n  display: block;\n}\n/* Regular/wide: cap the image height and center it horizontally, keeping\n   the aspect ratio (SPEC.md §6.3). Compact keeps the full-width default. */\n@media (min-width: 600px) {\n  .pl-image-square,\n  .pl-image-tall {\n    width: auto;\n    max-width: 100%;\n    max-height: 360px;\n    margin: 0 auto;\n  }\n  .pl-image-wide {\n    width: auto;\n    max-width: 100%;\n    max-height: 280px;\n    margin: 0 auto;\n  }\n}\n.pl-image-placeholder {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: var(--pl-surface-alt, #eee);\n  border: 1px solid var(--pl-border, #ccc);\n  color: var(--pl-text-muted, #666);\n  font-size: 0.8rem;\n  text-align: center;\n  padding: 8px;\n}\n\n/* <Chart> (SPEC.md §6.3, UI API 1.5): the app never picks these colors.\n   The chart palette is derived from the accent, hue-rotated with the CSS\n   relative color syntax, so it stays distinguishable in light and dark\n   without the app or this file naming a single fixed hex value. */\n.pl-chart {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.pl-chart-empty {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  height: 120px;\n  border-radius: 8px;\n  background: var(--pl-surface-alt, #eee);\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-chart-svg {\n  width: 100%;\n  height: 160px;\n}\n.pl-chart-axis-label {\n  font-size: 7px;\n  fill: var(--pl-muted);\n}\n/* `fill: none` here, not as an SVG attribute: the palette class below sets\n   `fill`, and CSS wins over presentation attributes. */\n.pl-chart-line {\n  stroke-width: 2;\n  stroke: currentColor;\n  fill: none !important;\n}\n.pl-chart-c0 { fill: var(--pl-accent); color: var(--pl-accent); stroke: var(--pl-accent); }\n.pl-chart-c1 { fill: hsl(from var(--pl-accent) calc(h + 180) s l); color: hsl(from var(--pl-accent) calc(h + 180) s l); }\n.pl-chart-c2 { fill: hsl(from var(--pl-accent) calc(h + 45) s l); color: hsl(from var(--pl-accent) calc(h + 45) s l); }\n.pl-chart-c3 { fill: hsl(from var(--pl-accent) calc(h + 223) s l); color: hsl(from var(--pl-accent) calc(h + 223) s l); }\n.pl-chart-c4 { fill: hsl(from var(--pl-accent) calc(h + 108) s l); color: hsl(from var(--pl-accent) calc(h + 108) s l); }\n.pl-chart-c5 { fill: var(--pl-muted); color: var(--pl-muted); }\n.pl-chart-legend {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 4px 12px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n}\n.pl-chart-legend-item {\n  display: flex;\n  align-items: center;\n  gap: 4px;\n}\n.pl-chart-legend-swatch {\n  width: 10px;\n  height: 10px;\n  border-radius: 2px;\n  background: currentColor;\n}\n.pl-chart-legend-label {\n  color: var(--pl-text);\n}\n.pl-chart-legend-value {\n  color: var(--pl-muted);\n}\n/* The zero line of bar and line charts: negative values go below it. */\n.pl-chart-zero {\n  stroke: var(--pl-muted);\n  stroke-width: 1;\n}\n/* An all-zero pie: a neutral disc, as on the desktop. */\n.pl-chart-track {\n  fill: var(--pl-border);\n}\n/* Visually hidden but still reachable by a screen reader: the Chart's\n   exact-value data table (SPEC.md §6.3). */\n.pl-sr-only {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n.pl-icon {\n  display: inline-block;\n  color: var(--pl-text);\n}\n.pl-icon.pl-tone-muted {\n  color: var(--pl-muted);\n}\n.pl-icon.pl-tone-danger {\n  color: var(--pl-danger);\n}\n.pl-icon.pl-tone-success {\n  color: #2e7d32;\n}\n.pl-tabs {\n  display: flex;\n  gap: 4px;\n  border-bottom: 1px solid var(--pl-border);\n  margin-bottom: 8px;\n}\n.pl-tab {\n  border: none;\n  background: transparent;\n  padding: 8px 12px;\n  cursor: pointer;\n  color: var(--pl-muted);\n  font: inherit;\n}\n.pl-tab-selected {\n  border-bottom: 2px solid var(--pl-accent, #3b7);\n  font-weight: 600;\n}\n.pl-sheet,\n.pl-dialog {\n  border: none;\n  border-radius: 10px;\n  padding: 20px;\n  max-width: 480px;\n}\n/* A Dialog: the message, a small form (UI API 1.13), the actions. */\n.pl-dialog-message {\n  margin: 0 0 12px;\n  color: var(--pl-muted);\n}\n.pl-dialog-body {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  margin: 0 0 12px;\n}\n.pl-dialog-actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n/* Drag and drop in one app (UI API 1.13). The host draws the drop target\n   and the line where a row goes. */\n.pl-draggable {\n  -webkit-touch-callout: none;\n  -webkit-user-select: none;\n  user-select: none;\n}\n.pl-dragging {\n  opacity: 0.5;\n}\n.pl-drag-ghost {\n  position: fixed;\n  z-index: 1000;\n  pointer-events: none;\n  padding: 4px 12px;\n  border: 1px solid var(--pl-accent);\n  border-radius: 6px;\n  background: var(--pl-surface);\n  color: var(--pl-text);\n  font-size: 0.85rem;\n  opacity: 0.9;\n}\n.pl-drop-over {\n  background: var(--pl-selected) !important;\n  outline: 2px solid var(--pl-accent);\n  outline-offset: -2px;\n}\n.pl-drop-before {\n  box-shadow: inset 0 2px 0 var(--pl-accent);\n}\n.pl-drop-after {\n  box-shadow: inset 0 -2px 0 var(--pl-accent);\n}\n.pl-menu {\n  position: relative;\n  display: inline-block;\n}\n.pl-menu-popover {\n  position: absolute;\n  top: 100%;\n  left: 0;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);\n  display: flex;\n  flex-direction: column;\n  padding: 4px;\n  z-index: 10;\n}\n.pl-menu-item {\n  text-align: left;\n  border: none;\n  background: transparent;\n}\n.pl-grid {\n  display: grid;\n  grid-template-columns: repeat(2, 1fr);\n  gap: 12px;\n}\n@media (min-width: 640px) {\n  .pl-grid {\n    grid-template-columns: repeat(3, 1fr);\n  }\n}\n@media (min-width: 1024px) {\n  .pl-grid {\n    grid-template-columns: repeat(4, 1fr);\n  }\n}\n\n/* Width classes (SPEC.md §6.1): compact < 600px <= regular < 1200px <= wide.\n   Compact: a bottom tab bar. Regular: a narrow icon/label rail. Wide: a\n   full sidebar (the default styles above already give this). */\n@media (max-width: 599.98px) {\n  #app {\n    flex-direction: column;\n  }\n  .pl-nav {\n    position: fixed;\n    left: 0;\n    right: 0;\n    bottom: 0;\n    flex-direction: row;\n    justify-content: space-around;\n    align-items: stretch;\n    gap: 0;\n    padding: 4px;\n    min-width: 0;\n    width: 100%;\n    box-sizing: border-box;\n    border-right: none;\n    border-top: 1px solid var(--pl-border);\n    background: var(--pl-bg);\n    order: 2;\n  }\n  .pl-nav-item {\n    flex: 1;\n    text-align: center;\n    font-size: 0.8rem;\n  }\n  .pl-screen {\n    order: 1;\n    padding: 16px;\n    /* Leave room above the fixed bottom tab bar. */\n    padding-bottom: 72px;\n  }\n}\n\n@media (min-width: 600px) and (max-width: 1199.98px) {\n  .pl-nav {\n    min-width: 72px;\n    padding: 12px 6px;\n  }\n  .pl-nav-item {\n    text-align: center;\n    font-size: 0.78rem;\n    padding: 8px 4px;\n  }\n}\n\n/* Fields (SPEC.md §6.4): label above the input on compact, beside it on\n   regular/wide. */\n@media (min-width: 600px) {\n  .pl-field:not(.pl-slider-field) {\n    display: flex;\n    align-items: baseline;\n    gap: 12px;\n  }\n  .pl-field:not(.pl-slider-field) .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n  .pl-field .pl-input,\n  .pl-field .pl-select,\n  .pl-field .pl-textarea,\n  .pl-field .pl-segmented {\n    flex: 1;\n  }\n  .pl-picker-field .pl-segmented {\n    flex: 1;\n  }\n  /* The slider field has its own column layout (label above the track) so\n     the value stays readable; put its label beside the track instead,\n     matching every other field (SPEC.md §6.4). */\n  .pl-slider-field {\n    flex-direction: row;\n    align-items: center;\n    gap: 12px;\n  }\n  .pl-slider-field .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n}\n\n/* The bar above an app that the web App Hub opened (docs/web-hub.md). */\n.pl-host-bar {\n  padding: 8px 16px;\n  border-bottom: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n}\n.pl-host-bar a {\n  color: var(--pl-text);\n}\n\n/* Level 2 styled primitives (UI API 1.6, docs/UI-ADVANCED.md). The layout,\n   the space and the colors come from inline styles (dom-renderer.js\n   primitiveStyle); these rules give only what every primitive has. */\n.pl-box,\n.pl-scroll,\n.pl-pressable {\n  box-sizing: border-box;\n  min-width: 0;\n  /* An absolute child is placed in its parent primitive, as in gpui. */\n  position: relative;\n}\n.pl-span {\n  overflow-wrap: anywhere;\n}\n/* The items of a List child (also the node of .map() children) take part\n   in the layout of the box, as on the desktop. */\n.pl-box > .pl-list,\n.pl-scroll > .pl-list,\n.pl-pressable > .pl-list {\n  display: contents;\n}\n.pl-pressable {\n  cursor: pointer;\n}\n.pl-pressable[aria-disabled=\"true\"] {\n  cursor: default;\n  opacity: 0.5;\n}\n.pl-pressable-plain:not([aria-disabled=\"true\"]):hover {\n  background: var(--pl-hover);\n}\n.pl-pressable:not(.pl-pressable-plain):not(.pl-pressable-own-hover):not([aria-disabled=\"true\"]):hover {\n  opacity: 0.88;\n}\n.pl-pressable:focus-visible,\n.pl-scroll:focus-visible {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n\n/* Canvas (UI API 1.10): the drawing scales to the width. */\n.pl-canvas {\n  display: block;\n  height: auto;\n  font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif;\n}\n\n/* The selected row of a list (UI API 1.8). */\n.pl-row-selected {\n  background: var(--pl-selected);\n}\n\n/* Host-owned banners above the screen (dom-renderer.js renderBanner), as\n   on the desktop: \"This app stopped\" and the last uncaught app error. */\n.pl-host-banner {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 4px 12px;\n  margin: 0 0 16px;\n  padding: 12px 16px;\n  border-radius: 8px;\n  background: var(--pl-danger);\n  color: var(--pl-accent-text);\n}\n.pl-host-banner-title {\n  font-weight: 600;\n}\n.pl-host-banner-detail {\n  flex: 1 1 100%;\n  font-size: 0.85rem;\n  overflow-wrap: anywhere;\n}\n.pl-host-banner-error .pl-host-banner-detail {\n  flex: 1 1 0;\n}\n.pl-host-banner-dismiss {\n  border: 1px solid var(--pl-accent-text);\n  background: transparent;\n  color: var(--pl-accent-text);\n  border-radius: 6px;\n  padding: 4px 12px;\n  cursor: pointer;\n  font: inherit;\n}\n\n/* High contrast and forced colors (PRODUCTION U7): last in the file, so\n   that they win over the rules of each control above. */\n@media (prefers-contrast: more) {\n  :focus-visible,\n  .pl-pressable:focus-visible,\n  .pl-scroll:focus-visible {\n    outline-width: 3px;\n  }\n  .pl-row,\n  .pl-section,\n  .pl-input,\n  .pl-select,\n  .pl-textarea,\n  .pl-action,\n  .pl-segmented {\n    border-width: 2px;\n  }\n}\n\n/* Windows high contrast and other forced colors (`forced-colors: active`):\n   the browser colors win. The tokens become system colors, and controls\n   that have no border of their own get one, so that they stay visible\n   when the browser removes their background. */\n@media (forced-colors: active) {\n  :root {\n    --pl-bg: Canvas;\n    --pl-surface: Canvas;\n    --pl-surface-alt: Canvas;\n    --pl-text: CanvasText;\n    --pl-muted: CanvasText;\n    --pl-accent: Highlight;\n    --pl-accent-text: HighlightText;\n    --pl-accent-fg: LinkText;\n    --pl-danger: CanvasText;\n    --pl-success: CanvasText;\n    --pl-border: CanvasText;\n    --pl-hover: Canvas;\n    --pl-selected: Highlight;\n  }\n  .pl-button,\n  .pl-nav-item,\n  .pl-tab,\n  .pl-back,\n  .pl-menu-item,\n  .pl-badge,\n  .pl-host-banner {\n    border: 1px solid ButtonText;\n  }\n  .pl-nav-item:disabled,\n  .pl-tab-selected,\n  .pl-segment:has(.pl-segment-input:checked),\n  .pl-row-selected {\n    forced-color-adjust: none;\n    background: Highlight;\n    color: HighlightText;\n  }\n  :focus-visible,\n  .pl-pressable:focus-visible,\n  .pl-scroll:focus-visible {\n    outline: 3px solid Highlight;\n  }\n}\n\n/* The app frame of a web export. Height \"content\": the frame takes the\n   height of the app, so the app must not take the height of the frame. */\n.pl-frame-content #app { min-height: 0; }\n.pl-frame-error { padding: 24px; color: var(--pl-danger); white-space: pre-wrap; }\n";
+  const STYLE_CSS = "/* Minimal, runtime-owned look for the web host spike (SPEC.md §3: apps\n   declare intent, the runtime owns layout, spacing and color). */\n\n/* The renderer hides optional parts (an empty label, the back button) with\n   the `hidden` attribute; a class's `display` must not show them again. */\n[hidden] {\n  display: none !important;\n}\n\n:root {\n  --pl-bg: #0b0c0f;\n  --pl-surface: #15171c;\n  --pl-text: #e7e9ec;\n  --pl-muted: #9aa0a8;\n  --pl-accent: #3b63d1;\n  --pl-accent-text: #ffffff;\n  --pl-danger: #e5484d;\n  --pl-border: #262a31;\n  /* Level 2 tokens (UI API 1.6). */\n  --pl-surface-alt: #1f2229;\n  --pl-accent-fg: #8fa8ff;\n  --pl-success: #4cc38a;\n  --pl-hover: #22262e;\n  --pl-selected: rgb(59 99 209 / 0.2);\n  /* The colors of host-owned parts inside the app root (the banners). They\n     are computed here, on the root, so an app theme (`[data-pl-theme]`,\n     theme.js) does not change them. */\n  --pl-host-danger: var(--pl-danger);\n  --pl-host-on-danger: var(--pl-accent-text);\n  color-scheme: dark;\n  font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif;\n}\n\n/* Light mode: the desktop host's light theme tokens (SPEC.md §3). Only\n   applied when the OS/browser prefers light AND the page has not been\n   forced dark some other way, matching how the desktop theme follows the\n   system setting. */\n@media (prefers-color-scheme: light) {\n  :root {\n    --pl-bg: #f5f6f8;\n    --pl-surface: #ffffff;\n    --pl-text: #1b1d21;\n    --pl-muted: #5b6168;\n    --pl-accent: #2f54c7;\n    --pl-accent-text: #ffffff;\n    --pl-danger: #c62828;\n    --pl-border: #d8dbe0;\n    --pl-surface-alt: #eceef2;\n    --pl-accent-fg: #2f54c7;\n    --pl-success: #2e7d32;\n    --pl-hover: #e6e8ec;\n    --pl-selected: rgb(47 84 199 / 0.12);\n    color-scheme: light;\n  }\n}\n\n/* High contrast (PRODUCTION U7, `prefers-contrast: more`): text and its\n   background at least 7:1, borders in the text color, no faint muted text\n   and a 3 px focus ring, as the desktop high-contrast tokens\n   (crates/plinth-ui/src/theme.rs). Dark first, then light. */\n@media (prefers-contrast: more) {\n  :root {\n    --pl-bg: #000000;\n    --pl-surface: #000000;\n    --pl-text: #ffffff;\n    --pl-muted: #e6e6e6;\n    --pl-accent: #a8b8ff;\n    --pl-accent-text: #000000;\n    --pl-danger: #ff9e94;\n    --pl-border: #ffffff;\n    --pl-surface-alt: #141414;\n    --pl-accent-fg: #a8b8ff;\n    --pl-success: #7ee787;\n    --pl-hover: #2a2a2a;\n    --pl-selected: rgb(168 184 255 / 0.25);\n  }\n}\n@media (prefers-contrast: more) and (prefers-color-scheme: light) {\n  :root {\n    --pl-bg: #ffffff;\n    --pl-surface: #ffffff;\n    --pl-text: #000000;\n    --pl-muted: #1f1f1f;\n    --pl-accent: #1f3fa8;\n    --pl-accent-text: #ffffff;\n    --pl-danger: #9b0000;\n    --pl-border: #000000;\n    --pl-surface-alt: #f0f0f0;\n    --pl-accent-fg: #1f3fa8;\n    --pl-success: #0b5d1e;\n    --pl-hover: #e0e0e0;\n    --pl-selected: rgb(31 63 168 / 0.14);\n  }\n}\n/* Reduced motion (PRODUCTION U7, `prefers-reduced-motion: reduce`): no\n   transitions, no animations and no smooth scroll. */\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    animation-duration: 0s !important;\n    animation-iteration-count: 1 !important;\n    transition-duration: 0s !important;\n    transition-delay: 0s !important;\n    scroll-behavior: auto !important;\n  }\n}\n\n/* Text size: all type is in rem, so the user's default font size in the\n   browser scales it (PRODUCTION U7). Buttons do not inherit the font by\n   default (a fixed 13.33 px in Chromium); give them a rem size too. */\nbutton,\nselect {\n  font-family: inherit;\n  font-size: 0.875rem;\n}\n\nbody {\n  margin: 0;\n  background: var(--pl-bg);\n  color: var(--pl-text);\n}\n\n#app {\n  display: flex;\n  min-height: 100vh;\n}\n\n.pl-nav {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  padding: 12px;\n  border-right: 1px solid var(--pl-border);\n  min-width: 160px;\n}\n\n.pl-nav-item {\n  text-align: left;\n  background: transparent;\n  color: var(--pl-text);\n  border: none;\n  border-radius: 6px;\n  padding: 8px 10px;\n  cursor: pointer;\n}\n.pl-nav-item:disabled {\n  background: var(--pl-surface);\n  color: var(--pl-accent);\n  cursor: default;\n}\n\n*, *::before, *::after {\n  box-sizing: border-box;\n}\n\n/* Visible keyboard focus on every interactive element (SPEC.md §6: keyboard\n   parity with the desktop host). */\n:focus-visible {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n\n.pl-row-pressable {\n  cursor: pointer;\n}\n\n.pl-screen {\n  flex: 1;\n  min-width: 0;\n  padding: 24px;\n  max-width: 640px;\n}\n\n.pl-title {\n  font-size: 1.5rem;\n  margin: 0 0 16px;\n}\n\n.pl-section {\n  /* A fieldset is min-content wide by default; let it shrink on compact. */\n  min-width: 0;\n  border: 1px solid var(--pl-border);\n  border-radius: 10px;\n  padding: 12px 16px 16px;\n  margin: 0 0 16px;\n}\n\n.pl-section-title {\n  color: var(--pl-muted);\n  font-size: 0.8rem;\n  text-transform: uppercase;\n  letter-spacing: 0.04em;\n  padding: 0 4px;\n}\n\n.pl-text {\n  margin: 4px 0;\n}\n\n.pl-heading {\n  margin: 8px 0;\n}\n\n.pl-button {\n  background: var(--pl-accent);\n  color: var(--pl-accent-text);\n  border: none;\n  border-radius: 6px;\n  padding: 8px 14px;\n  cursor: pointer;\n  margin: 4px 4px 4px 0;\n}\n.pl-button:disabled {\n  opacity: 0.5;\n  cursor: default;\n}\n\n.pl-field {\n  display: block;\n  margin: 8px 0;\n}\n.pl-field-label {\n  display: block;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n  margin-bottom: 4px;\n}\n/* A text field's input and its error message, one under the other. */\n.pl-input-col {\n  display: flex;\n  flex-direction: column;\n  flex: 1;\n  min-width: 0;\n}\n.pl-field-error {\n  color: var(--pl-danger);\n  font-size: 0.8rem;\n  margin-top: 4px;\n}\n.pl-field .pl-input-col .pl-input {\n  flex: none;\n}\n.pl-input[aria-invalid=\"true\"] {\n  border-color: var(--pl-danger);\n}\n.pl-input,\n.pl-select,\n.pl-textarea {\n  width: 100%;\n  box-sizing: border-box;\n  background: var(--pl-surface);\n  color: var(--pl-text);\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  padding: 8px 10px;\n  font: inherit;\n  color-scheme: inherit;\n}\n\n.pl-checkbox,\n.pl-slider {\n  accent-color: var(--pl-accent);\n  color-scheme: inherit;\n}\n\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin: 8px 0;\n}\n\n.pl-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.pl-row {\n  display: flex;\n  justify-content: space-between;\n  align-items: center;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  padding: 10px 12px;\n}\n.pl-row-header {\n  display: flex;\n  flex-direction: column;\n}\n.pl-row-title {\n  font-weight: 600;\n}\n.pl-row-subtitle {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-row-trailing {\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n  flex: none;\n  white-space: nowrap;\n}\n.pl-row-actions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.pl-empty {\n  color: var(--pl-muted);\n  text-align: center;\n  padding: 24px;\n}\n\n/* UI API 1.2 controls (SPEC.md §6.3) */\n.pl-screen-header {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n}\n.pl-back {\n  border: none;\n  background: transparent;\n  color: var(--pl-accent, #3b7);\n  cursor: pointer;\n  font-size: 0.95rem;\n}\n.pl-toolbar {\n  display: flex;\n  gap: 8px;\n  margin-bottom: 12px;\n}\n.pl-action {\n  border: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n  border-radius: 6px;\n  padding: 6px 10px;\n  cursor: pointer;\n}\n.pl-action-destructive {\n  color: var(--pl-danger);\n  border-color: var(--pl-danger);\n}\n.pl-checkbox-field,\n.pl-toggle {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.pl-textarea {\n  min-height: 72px;\n}\n.pl-slider-field,\n.pl-progress-field {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.pl-slider {\n  width: 100%;\n}\n.pl-segmented {\n  display: flex;\n  border: 1px solid var(--pl-border);\n  border-radius: 6px;\n  overflow: hidden;\n}\n.pl-segment {\n  flex: 1;\n  text-align: center;\n  padding: 6px 8px;\n  cursor: pointer;\n  color: var(--pl-text);\n}\n.pl-segment-input {\n  position: absolute;\n  opacity: 0;\n}\n/* Selected segment: accent background with contrasting text, as the\n   desktop host shows the selected Picker option (SPEC.md §6.3). Updates\n   live because the renderer rebuilds the segment markup on every op-stream\n   commit, including the `value` change the app sends back after `change`. */\n.pl-segment:has(.pl-segment-input:checked) {\n  background: var(--pl-accent);\n  color: var(--pl-accent-text);\n}\n.pl-segment-input:focus-visible ~ .pl-segment-label {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n.pl-badge {\n  display: inline-block;\n  background: var(--pl-accent, #3b7);\n  color: var(--pl-accent-text);\n  border-radius: 999px;\n  padding: 2px 8px;\n  font-size: 0.8rem;\n}\n.pl-image {\n  width: 100%;\n  overflow: hidden;\n  border-radius: 8px;\n}\n.pl-image-img {\n  width: 100%;\n  height: 100%;\n  object-fit: cover;\n  display: block;\n}\n/* Regular/wide: cap the image height and center it horizontally, keeping\n   the aspect ratio (SPEC.md §6.3). Compact keeps the full-width default. */\n@media (min-width: 600px) {\n  .pl-image-square,\n  .pl-image-tall {\n    width: auto;\n    max-width: 100%;\n    max-height: 360px;\n    margin: 0 auto;\n  }\n  .pl-image-wide {\n    width: auto;\n    max-width: 100%;\n    max-height: 280px;\n    margin: 0 auto;\n  }\n}\n.pl-image-placeholder {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: var(--pl-surface-alt, #eee);\n  border: 1px solid var(--pl-border, #ccc);\n  color: var(--pl-text-muted, #666);\n  font-size: 0.8rem;\n  text-align: center;\n  padding: 8px;\n}\n\n/* <Chart> (SPEC.md §6.3, UI API 1.5): the app never picks these colors.\n   The chart palette is derived from the accent, hue-rotated with the CSS\n   relative color syntax, so it stays distinguishable in light and dark\n   without the app or this file naming a single fixed hex value. */\n.pl-chart {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.pl-chart-empty {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  height: 120px;\n  border-radius: 8px;\n  background: var(--pl-surface-alt, #eee);\n  color: var(--pl-muted);\n  font-size: 0.85rem;\n}\n.pl-chart-svg {\n  width: 100%;\n  height: 160px;\n}\n.pl-chart-axis-label {\n  font-size: 7px;\n  fill: var(--pl-muted);\n}\n/* `fill: none` here, not as an SVG attribute: the palette class below sets\n   `fill`, and CSS wins over presentation attributes. */\n.pl-chart-line {\n  stroke-width: 2;\n  stroke: currentColor;\n  fill: none !important;\n}\n.pl-chart-c0 { fill: var(--pl-accent); color: var(--pl-accent); stroke: var(--pl-accent); }\n.pl-chart-c1 { fill: hsl(from var(--pl-accent) calc(h + 180) s l); color: hsl(from var(--pl-accent) calc(h + 180) s l); }\n.pl-chart-c2 { fill: hsl(from var(--pl-accent) calc(h + 45) s l); color: hsl(from var(--pl-accent) calc(h + 45) s l); }\n.pl-chart-c3 { fill: hsl(from var(--pl-accent) calc(h + 223) s l); color: hsl(from var(--pl-accent) calc(h + 223) s l); }\n.pl-chart-c4 { fill: hsl(from var(--pl-accent) calc(h + 108) s l); color: hsl(from var(--pl-accent) calc(h + 108) s l); }\n.pl-chart-c5 { fill: var(--pl-muted); color: var(--pl-muted); }\n.pl-chart-legend {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 4px 12px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 0.8rem;\n  color: var(--pl-muted);\n}\n.pl-chart-legend-item {\n  display: flex;\n  align-items: center;\n  gap: 4px;\n}\n.pl-chart-legend-swatch {\n  width: 10px;\n  height: 10px;\n  border-radius: 2px;\n  background: currentColor;\n}\n.pl-chart-legend-label {\n  color: var(--pl-text);\n}\n.pl-chart-legend-value {\n  color: var(--pl-muted);\n}\n/* The zero line of bar and line charts: negative values go below it. */\n.pl-chart-zero {\n  stroke: var(--pl-muted);\n  stroke-width: 1;\n}\n/* An all-zero pie: a neutral disc, as on the desktop. */\n.pl-chart-track {\n  fill: var(--pl-border);\n}\n/* Visually hidden but still reachable by a screen reader: the Chart's\n   exact-value data table (SPEC.md §6.3). */\n.pl-sr-only {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n.pl-icon {\n  display: inline-block;\n  color: var(--pl-text);\n}\n.pl-icon.pl-tone-muted {\n  color: var(--pl-muted);\n}\n.pl-icon.pl-tone-danger {\n  color: var(--pl-danger);\n}\n.pl-icon.pl-tone-success {\n  color: #2e7d32;\n}\n.pl-tabs {\n  display: flex;\n  gap: 4px;\n  border-bottom: 1px solid var(--pl-border);\n  margin-bottom: 8px;\n}\n.pl-tab {\n  border: none;\n  background: transparent;\n  padding: 8px 12px;\n  cursor: pointer;\n  color: var(--pl-muted);\n  font: inherit;\n}\n.pl-tab-selected {\n  border-bottom: 2px solid var(--pl-accent, #3b7);\n  font-weight: 600;\n}\n.pl-sheet,\n.pl-dialog {\n  border: none;\n  border-radius: 10px;\n  padding: 20px;\n  max-width: 480px;\n}\n/* A Dialog: the message, a small form (UI API 1.13), the actions. */\n.pl-dialog-message {\n  margin: 0 0 12px;\n  color: var(--pl-muted);\n}\n.pl-dialog-body {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  margin: 0 0 12px;\n}\n.pl-dialog-actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n/* Drag and drop in one app (UI API 1.13). The host draws the drop target\n   and the line where a row goes. */\n.pl-draggable {\n  -webkit-touch-callout: none;\n  -webkit-user-select: none;\n  user-select: none;\n}\n.pl-dragging {\n  opacity: 0.5;\n}\n.pl-drag-ghost {\n  position: fixed;\n  z-index: 1000;\n  pointer-events: none;\n  padding: 4px 12px;\n  border: 1px solid var(--pl-accent);\n  border-radius: 6px;\n  background: var(--pl-surface);\n  color: var(--pl-text);\n  font-size: 0.85rem;\n  opacity: 0.9;\n}\n.pl-drop-over {\n  background: var(--pl-selected) !important;\n  outline: 2px solid var(--pl-accent);\n  outline-offset: -2px;\n}\n.pl-drop-before {\n  box-shadow: inset 0 2px 0 var(--pl-accent);\n}\n.pl-drop-after {\n  box-shadow: inset 0 -2px 0 var(--pl-accent);\n}\n.pl-menu {\n  position: relative;\n  display: inline-block;\n}\n.pl-menu-popover {\n  position: absolute;\n  top: 100%;\n  left: 0;\n  background: var(--pl-surface);\n  border: 1px solid var(--pl-border);\n  border-radius: 8px;\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);\n  display: flex;\n  flex-direction: column;\n  padding: 4px;\n  z-index: 10;\n}\n.pl-menu-item {\n  text-align: left;\n  border: none;\n  background: transparent;\n}\n.pl-grid {\n  display: grid;\n  grid-template-columns: repeat(2, 1fr);\n  gap: 12px;\n}\n@media (min-width: 640px) {\n  .pl-grid {\n    grid-template-columns: repeat(3, 1fr);\n  }\n}\n@media (min-width: 1024px) {\n  .pl-grid {\n    grid-template-columns: repeat(4, 1fr);\n  }\n}\n\n/* Width classes (SPEC.md §6.1): compact < 600px <= regular < 1200px <= wide.\n   Compact: a bottom tab bar. Regular: a narrow icon/label rail. Wide: a\n   full sidebar (the default styles above already give this). */\n@media (max-width: 599.98px) {\n  #app {\n    flex-direction: column;\n  }\n  .pl-nav {\n    position: fixed;\n    left: 0;\n    right: 0;\n    bottom: 0;\n    flex-direction: row;\n    justify-content: space-around;\n    align-items: stretch;\n    gap: 0;\n    padding: 4px;\n    min-width: 0;\n    width: 100%;\n    box-sizing: border-box;\n    border-right: none;\n    border-top: 1px solid var(--pl-border);\n    background: var(--pl-bg);\n    order: 2;\n  }\n  .pl-nav-item {\n    flex: 1;\n    text-align: center;\n    font-size: 0.8rem;\n  }\n  .pl-screen {\n    order: 1;\n    padding: 16px;\n    /* Leave room above the fixed bottom tab bar. */\n    padding-bottom: 72px;\n  }\n}\n\n@media (min-width: 600px) and (max-width: 1199.98px) {\n  .pl-nav {\n    min-width: 72px;\n    padding: 12px 6px;\n  }\n  .pl-nav-item {\n    text-align: center;\n    font-size: 0.78rem;\n    padding: 8px 4px;\n  }\n}\n\n/* Fields (SPEC.md §6.4): label above the input on compact, beside it on\n   regular/wide. */\n@media (min-width: 600px) {\n  .pl-field:not(.pl-slider-field) {\n    display: flex;\n    align-items: baseline;\n    gap: 12px;\n  }\n  .pl-field:not(.pl-slider-field) .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n  .pl-field .pl-input,\n  .pl-field .pl-select,\n  .pl-field .pl-textarea,\n  .pl-field .pl-segmented {\n    flex: 1;\n  }\n  .pl-picker-field .pl-segmented {\n    flex: 1;\n  }\n  /* The slider field has its own column layout (label above the track) so\n     the value stays readable; put its label beside the track instead,\n     matching every other field (SPEC.md §6.4). */\n  .pl-slider-field {\n    flex-direction: row;\n    align-items: center;\n    gap: 12px;\n  }\n  .pl-slider-field .pl-field-label {\n    flex: 0 0 160px;\n    margin-bottom: 0;\n    text-align: right;\n  }\n}\n\n/* The bar above an app that the web App Hub opened (docs/web-hub.md). */\n.pl-host-bar {\n  padding: 8px 16px;\n  border-bottom: 1px solid var(--pl-border);\n  background: var(--pl-surface);\n}\n.pl-host-bar a {\n  color: var(--pl-text);\n}\n\n/* Level 2 styled primitives (UI API 1.6, docs/UI-ADVANCED.md). The layout,\n   the space and the colors come from inline styles (dom-renderer.js\n   primitiveStyle); these rules give only what every primitive has. */\n.pl-box,\n.pl-scroll,\n.pl-pressable {\n  box-sizing: border-box;\n  min-width: 0;\n  /* An absolute child is placed in its parent primitive, as in gpui. */\n  position: relative;\n}\n.pl-span {\n  overflow-wrap: anywhere;\n}\n/* The items of a List child (also the node of .map() children) take part\n   in the layout of the box, as on the desktop. */\n.pl-box > .pl-list,\n.pl-scroll > .pl-list,\n.pl-pressable > .pl-list {\n  display: contents;\n}\n.pl-pressable {\n  cursor: pointer;\n}\n.pl-pressable[aria-disabled=\"true\"] {\n  cursor: default;\n  opacity: 0.5;\n}\n.pl-pressable-plain:not([aria-disabled=\"true\"]):hover {\n  background: var(--pl-hover);\n}\n.pl-pressable:not(.pl-pressable-plain):not(.pl-pressable-own-hover):not([aria-disabled=\"true\"]):hover {\n  opacity: 0.88;\n}\n.pl-pressable:focus-visible,\n.pl-scroll:focus-visible {\n  outline: 2px solid var(--pl-accent);\n  outline-offset: 2px;\n}\n\n/* Canvas (UI API 1.10): the drawing scales to the width. */\n.pl-canvas {\n  display: block;\n  height: auto;\n  font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif;\n}\n\n/* The selected row of a list (UI API 1.8). */\n.pl-row-selected {\n  background: var(--pl-selected);\n}\n\n/* Host-owned banners above the screen (dom-renderer.js renderBanner), as\n   on the desktop: \"This app stopped\" and the last uncaught app error. */\n.pl-host-banner {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 4px 12px;\n  margin: 0 0 16px;\n  padding: 12px 16px;\n  border-radius: 8px;\n  background: var(--pl-host-danger);\n  color: var(--pl-host-on-danger);\n}\n.pl-host-banner-title {\n  font-weight: 600;\n}\n.pl-host-banner-detail {\n  flex: 1 1 100%;\n  font-size: 0.85rem;\n  overflow-wrap: anywhere;\n}\n.pl-host-banner-error .pl-host-banner-detail {\n  flex: 1 1 0;\n}\n.pl-host-banner-dismiss {\n  border: 1px solid var(--pl-host-on-danger);\n  background: transparent;\n  color: var(--pl-host-on-danger);\n  border-radius: 6px;\n  padding: 4px 12px;\n  cursor: pointer;\n  font: inherit;\n}\n\n/* High contrast and forced colors (PRODUCTION U7): last in the file, so\n   that they win over the rules of each control above. */\n@media (prefers-contrast: more) {\n  :focus-visible,\n  .pl-pressable:focus-visible,\n  .pl-scroll:focus-visible {\n    outline-width: 3px;\n  }\n  .pl-row,\n  .pl-section,\n  .pl-input,\n  .pl-select,\n  .pl-textarea,\n  .pl-action,\n  .pl-segmented {\n    border-width: 2px;\n  }\n}\n\n/* Windows high contrast and other forced colors (`forced-colors: active`):\n   the browser colors win. The tokens become system colors, and controls\n   that have no border of their own get one, so that they stay visible\n   when the browser removes their background. */\n@media (forced-colors: active) {\n  :root {\n    --pl-bg: Canvas;\n    --pl-surface: Canvas;\n    --pl-surface-alt: Canvas;\n    --pl-text: CanvasText;\n    --pl-muted: CanvasText;\n    --pl-accent: Highlight;\n    --pl-accent-text: HighlightText;\n    --pl-accent-fg: LinkText;\n    --pl-danger: CanvasText;\n    --pl-success: CanvasText;\n    --pl-border: CanvasText;\n    --pl-hover: Canvas;\n    --pl-selected: Highlight;\n  }\n  .pl-button,\n  .pl-nav-item,\n  .pl-tab,\n  .pl-back,\n  .pl-menu-item,\n  .pl-badge,\n  .pl-host-banner {\n    border: 1px solid ButtonText;\n  }\n  .pl-nav-item:disabled,\n  .pl-tab-selected,\n  .pl-segment:has(.pl-segment-input:checked),\n  .pl-row-selected {\n    forced-color-adjust: none;\n    background: Highlight;\n    color: HighlightText;\n  }\n  :focus-visible,\n  .pl-pressable:focus-visible,\n  .pl-scroll:focus-visible {\n    outline: 3px solid Highlight;\n  }\n}\n\n/* The app frame of a web export. Height \"content\": the frame takes the\n   height of the app, so the app must not take the height of the frame. */\n.pl-frame-content #app { min-height: 0; }\n.pl-frame-error { padding: 24px; color: var(--pl-danger); white-space: pre-wrap; }\n";
 
   // ---- zip.js
   const __zip = (() => {
@@ -3076,6 +3076,333 @@ function plainReason(err, lastTrap) {
   return { INIT_RANDOM_SEED, MEMORY_LIMIT_PAGES, CALL_TIME_LIMIT_MS, TIME_LIMIT_REASON, capCoreMemory, SRCMAP_SECTION, moduleBodies, decodeSrcMap, trapPlace, readPlnt, MAX_SQL_TEXT, browserNotify, isPrivateNetHost, netDenied, httpFetch, mapKvStore, localStorageKvStore, parseManifest, cmpVersions, shouldStoreDataVersion, defaultAskDialog, FALLBACK_LOCALE, normalizeLocale, isRtlLocale, pageLocale, formatNumberIntl, formatDateIntl, pluralCategoryIntl, formatListIntl, compareIntl, loadCore, linkApp, PlinthApp, stopReason };
   })();
 
+  // ---- theme.js
+  const __theme = (() => {
+// Per-app theme token values on the web host (docs/ui.md, "Theming an app").
+//
+// An app can set the VALUES of the host color tokens in the `[theme]` table
+// of its manifest. This module reads the table from `manifest.toml`, checks
+// it again (a package is never trusted) and turns it into CSS custom
+// properties for the app's root element only.
+//
+// The rules are the rules of crates/plinth-package/src/theme.rs: the same
+// keys, the same hex-only values, the same host palette and the same
+// contrast guard. `web/test/fixtures/theme-golden.json` is checked by a test
+// on each side, so both hosts give the same colors for the same manifest.
+// Keep the two files in sync.
+//
+// High contrast (`prefers-contrast: more`) and forced colors ignore the
+// override: the CSS that this module writes is inside a media query that
+// does not match then, so the host tokens of style.css win.
+
+/** The color tokens that an app can override. */
+const THEME_KEYS = ["background", "surface", "surface-alt", "border", "hover", "selected", "text", "text-muted", "accent", "on-accent", "danger", "success"];
+/** The most keys in a `[theme]` table. */
+const THEME_MAX_KEYS = 12;
+const DEFAULT_ACCENT = "teal";
+
+/** The named accents: [light, dark]. */
+const ACCENTS = {
+  teal: [0x0b8a7e, 0x2ec4b6],
+  blue: [0x1a63d6, 0x5b9cff],
+  indigo: [0x4f46c8, 0x8c86ff],
+  purple: [0x8a3ec9, 0xc08cff],
+  pink: [0xc8327a, 0xff7ab8],
+  red: [0xc93a2f, 0xff7a6e],
+  orange: [0xc25a00, 0xff9f45],
+  green: [0x2e8540, 0x5fd27a],
+};
+
+/** The opacity of the `selected` tint that the host derives from the accent. */
+const SELECTED_ALPHA = { light: 0.12, dark: 0.16 };
+
+/** The host palette for an appearance and a named accent (the desktop palette). */
+function defaultPalette(dark, accent) {
+  const [lightAccent, darkAccent] = ACCENTS[accent] ?? ACCENTS[DEFAULT_ACCENT];
+  return dark
+    ? {
+        background: 0x161618,
+        surface: 0x232326,
+        "surface-alt": 0x2e2e32,
+        border: 0x37373c,
+        hover: 0x34343a,
+        selected: null,
+        text: 0xf2f2f5,
+        "text-muted": 0x9a9aa2,
+        accent: darkAccent,
+        "on-accent": 0x0b0b0c,
+        danger: 0xff6b5e,
+        success: 0x5fd27a,
+      }
+    : {
+        background: 0xf4f4f6,
+        surface: 0xffffff,
+        "surface-alt": 0xececf0,
+        border: 0xdedee4,
+        hover: 0xe4e4ea,
+        selected: null,
+        text: 0x1b1b1f,
+        "text-muted": 0x6b6b74,
+        accent: lightAccent,
+        "on-accent": 0xffffff,
+        danger: 0xc93a2f,
+        success: 0x2e8540,
+      };
+}
+
+/** Parses exactly `#rrggbb`; `null` for anything else. */
+function parseHex(s) {
+  return typeof s === "string" && /^#[0-9a-fA-F]{6}$/.test(s) ? parseInt(s.slice(1), 16) : null;
+}
+
+/** The WCAG 2 relative luminance of `0xRRGGBB`. */
+function luminance(rgb) {
+  const lin = (v) => {
+    v /= 255;
+    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * lin((rgb >> 16) & 0xff) + 0.7152 * lin((rgb >> 8) & 0xff) + 0.0722 * lin(rgb & 0xff);
+}
+
+/** The WCAG 2 contrast ratio of two colors (1 to 21). */
+function contrast(a, b) {
+  const [la, lb] = [luminance(a), luminance(b)];
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+/** The pairs of the contrast guard: [text token, background token, least ratio]. */
+const PAIRS = [
+  ["text", "background", 4.5],
+  ["text", "surface", 4.5],
+  ["on-accent", "accent", 4.5],
+  ["text-muted", "background", 3],
+  ["danger", "background", 3],
+  ["success", "background", 3],
+];
+
+// -- Reading `[theme]` from manifest.toml ---------------------------------------
+
+/** A TOML basic string like `"#112233"`; `null` for any other value. */
+function tomlString(text) {
+  const m = text.trim().match(/^"([^"\\]*)"$/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Reads the `accent` and the `[theme]` table from the text of `manifest.toml`.
+ * Returns `{ accent, theme, error }`: `theme` is `null` when the manifest has
+ * no `[theme]`, else an object key -> a hex string or `{ light, dark }`
+ * (values are not checked here). `error` is a text when a line is not a form
+ * that this reader knows (then the theme is ignored). It reads the forms that the Rust writer makes (`[theme]` and
+ * `[theme.key]` tables) and inline tables.
+ */
+function parseManifestTheme(manifestText) {
+  const lines = String(manifestText).replace(/\r\n/g, "\n").split("\n");
+  let accent = null;
+  let section = null; // null | { key: null | string }: inside `[theme]` or `[theme.key]`
+  let seen = false;
+  const theme = Object.create(null);
+  let sawHeader = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    const header = line.match(/^\[\s*([^\]]*?)\s*\]$/);
+    if (header && !line.startsWith("[[")) {
+      sawHeader = true;
+      const name = header[1];
+      if (name === "theme") {
+        section = { key: null };
+        seen = true;
+      } else if (name.startsWith("theme.")) {
+        const key = name.slice(6);
+        if (!/^[A-Za-z0-9_-]+$/.test(key) || Object.hasOwn(theme, key)) return { accent, theme: null, error: "a `[theme]` table that this reader does not know" };
+        section = { key };
+        theme[key] = {};
+        seen = true;
+      } else {
+        section = null;
+      }
+      continue;
+    }
+    if (line.startsWith("[[")) {
+      sawHeader = true;
+      section = null;
+      continue;
+    }
+    const kv = line.match(/^([A-Za-z0-9_-]+)\s*=\s*(.*)$/);
+    if (!kv) {
+      if (section) return { accent, theme: null, error: "a `[theme]` line that this reader does not know" };
+      continue;
+    }
+    const [, k, v] = kv;
+    if (!sawHeader && k === "accent") {
+      accent = tomlString(v);
+      continue;
+    }
+    if (!section) continue;
+    if (section.key !== null) {
+      // Inside `[theme.key]`: `light` and `dark`.
+      const s = tomlString(v);
+      if (s === null) return { accent, theme: null, error: `\`[theme] ${section.key}\` must be a hex string or a table with \`light\` and \`dark\` hex strings` };
+      theme[section.key][k] = s;
+    } else {
+      const s = tomlString(v);
+      if (s !== null) {
+        theme[k] = s;
+        continue;
+      }
+      const inline = v.trim().match(/^\{\s*(.*?)\s*\}$/);
+      const entry = {};
+      if (inline) {
+        for (const part of inline[1].split(",")) {
+          const pair = part.trim().match(/^([A-Za-z0-9_-]+)\s*=\s*(.*)$/);
+          const ps = pair ? tomlString(pair[2]) : null;
+          if (ps === null) return { accent, theme: null, error: `\`[theme] ${k}\` must be a hex string or a table with \`light\` and \`dark\` hex strings` };
+          entry[pair[1]] = ps;
+        }
+      } else {
+        return { accent, theme: null, error: `\`[theme] ${k}\` must be a hex string or a table with \`light\` and \`dark\` hex strings` };
+      }
+      theme[k] = entry;
+    }
+  }
+  return { accent, theme: seen ? theme : null, error: null };
+}
+
+// -- Checks and merge -------------------------------------------------------------
+
+/** The text of an override color for an appearance; `null` when it has none. */
+function colorText(color, dark) {
+  if (typeof color === "string") return color;
+  if (color && typeof color === "object") {
+    const keys = Object.keys(color);
+    if (keys.length === 2 && typeof color.light === "string" && typeof color.dark === "string") return dark ? color.dark : color.light;
+  }
+  return null;
+}
+
+/**
+ * Checks an override and merges it with the host palette, for both
+ * appearances, as `ThemeOverride::resolve` does. Returns `{ ok: true,
+ * light, dark }` (the palettes) or `{ ok: false, reason }`.
+ *
+ * A contrast pair is checked when the override sets one of its tokens.
+ */
+function resolveOverride(theme, namedAccent) {
+  if (theme === null || typeof theme !== "object" || Array.isArray(theme)) return { ok: false, reason: "`[theme]` must be a table of color tokens" };
+  const keys = Object.keys(theme);
+  if (keys.length > THEME_MAX_KEYS) return { ok: false, reason: `\`[theme]\` has ${keys.length} keys; the most is ${THEME_MAX_KEYS}` };
+  for (const key of keys) {
+    if (!THEME_KEYS.includes(key)) return { ok: false, reason: `\`[theme]\` has an unknown key \`${key}\`` };
+    for (const dark of [false, true]) {
+      const text = colorText(theme[key], dark);
+      if (text === null) return { ok: false, reason: `\`[theme] ${key}\` must be a hex string or a table with \`light\` and \`dark\` hex strings` };
+      if (parseHex(text) === null) return { ok: false, reason: `\`[theme] ${key}\` has the value "${text}"; use a hex color like "#1a2b3c"` };
+    }
+  }
+  const accent = namedAccent && ACCENTS[namedAccent] ? namedAccent : DEFAULT_ACCENT;
+  const out = {};
+  for (const dark of [false, true]) {
+    const p = defaultPalette(dark, accent);
+    for (const key of keys) p[key] = parseHex(colorText(theme[key], dark));
+    for (const [fg, bg, min] of PAIRS) {
+      if (!Object.hasOwn(theme, fg) && !Object.hasOwn(theme, bg)) continue;
+      const ratio = contrast(p[fg], p[bg]);
+      if (ratio < min) return { ok: false, reason: `\`[theme]\` ${dark ? "dark" : "light"} mode: \`${fg}\` on \`${bg}\` has a contrast of ${ratio.toFixed(2)}:1; the least is ${min}:1` };
+    }
+    out[dark ? "dark" : "light"] = p;
+  }
+  return { ok: true, light: out.light, dark: out.dark };
+}
+
+const hex = (rgb) => `#${rgb.toString(16).padStart(6, "0")}`;
+
+/** The CSS custom properties for a palette: `{ "--pl-bg": "#161618", ... }` (as `web_vars` in Rust). */
+function themeVars(p, dark) {
+  const alpha = SELECTED_ALPHA[dark ? "dark" : "light"];
+  const selected = p.selected === null ? `rgb(${(p.accent >> 16) & 0xff} ${(p.accent >> 8) & 0xff} ${p.accent & 0xff} / ${alpha})` : hex(p.selected);
+  return {
+    "--pl-bg": hex(p.background),
+    "--pl-surface": hex(p.surface),
+    "--pl-surface-alt": hex(p["surface-alt"]),
+    "--pl-border": hex(p.border),
+    "--pl-hover": hex(p.hover),
+    "--pl-selected": selected,
+    "--pl-text": hex(p.text),
+    "--pl-muted": hex(p["text-muted"]),
+    "--pl-accent": hex(p.accent),
+    "--pl-accent-text": hex(p["on-accent"]),
+    "--pl-accent-fg": hex(p.accent),
+    "--pl-danger": hex(p.danger),
+    "--pl-success": hex(p.success),
+  };
+}
+
+/**
+ * Reads, checks and resolves the theme of a manifest. Returns
+ * `{ state: "none" }` (no `[theme]`), `{ state: "ok", light, dark }` (the
+ * CSS variables of each appearance) or `{ state: "ignored", reason }`.
+ */
+function resolveManifestTheme(manifestText) {
+  const { accent, theme, error } = parseManifestTheme(manifestText);
+  if (error) return { state: "ignored", reason: error };
+  if (theme === null) return { state: "none" };
+  const r = resolveOverride(theme, accent);
+  if (!r.ok) return { state: "ignored", reason: r.reason };
+  return { state: "ok", light: themeVars(r.light, false), dark: themeVars(r.dark, true) };
+}
+
+const declarations = (vars, scheme) =>
+  `${Object.entries(vars).map(([k, v]) => `${k}: ${v};`).join(" ")} color-scheme: ${scheme}; background: var(--pl-bg); color: var(--pl-text);`;
+
+/**
+ * The CSS for the app root `selector`. Dark is the default, as in style.css;
+ * light applies when the browser prefers light. Both rules are inside a
+ * media query that does not match in high contrast or forced colors, so
+ * the host tokens win there.
+ */
+function themeCss(selector, resolved) {
+  const normal = "(not (prefers-contrast: more)) and (not (forced-colors: active))";
+  return (
+    `@media ${normal} { ${selector} { ${declarations(resolved.dark, "dark")} } }\n` +
+    `@media (prefers-color-scheme: light) and ${normal} { ${selector} { ${declarations(resolved.light, "light")} } }\n`
+  );
+}
+
+/** The attribute that marks the themed app root, and the id of its `<style>`. */
+const THEME_ATTR = "data-pl-theme";
+const STYLE_ID = "pl-app-theme";
+
+/**
+ * Applies the theme of `manifestText` to the app root `container` and to
+ * nothing else: the host page, the Hub chrome, the consent UI and the
+ * host banners keep the host theme. An override that fails a check is
+ * ignored: `warn` gets a line and the host theme stays. Never throws.
+ * Returns the state of `resolveManifestTheme`.
+ */
+function applyAppTheme(container, manifestText, warn = (m) => console.warn(m)) {
+  let result;
+  try {
+    result = resolveManifestTheme(manifestText);
+  } catch (e) {
+    result = { state: "ignored", reason: String(e?.message ?? e) };
+  }
+  const doc = container.ownerDocument;
+  const old = doc?.getElementById?.(STYLE_ID);
+  if (old) old.remove();
+  container.removeAttribute(THEME_ATTR);
+  if (result.state === "ignored") warn(`plinth: the app theme is ignored: ${result.reason}`);
+  if (result.state !== "ok" || !doc) return result;
+  const style = doc.createElement("style");
+  style.id = STYLE_ID;
+  style.textContent = themeCss(`[${THEME_ATTR}]`, result);
+  (doc.head ?? doc.documentElement).appendChild(style);
+  container.setAttribute(THEME_ATTR, "");
+  return result;
+}
+  return { THEME_KEYS, THEME_MAX_KEYS, defaultPalette, parseHex, luminance, contrast, parseManifestTheme, resolveOverride, themeVars, resolveManifestTheme, themeCss, THEME_ATTR, applyAppTheme };
+  })();
+
   // ---- dom-renderer.js
   const __dom_renderer = (() => {
 // The DOM renderer of the web host (SPEC.md §8.2, M5). `Tree` applies the
@@ -3094,6 +3421,7 @@ function plainReason(err, lastTrap) {
 
 const { ControlKind, Prop, Event, EnumAspect, EnumTone, EnumDatePickerMode, EnumChartKind, EnumAxis, EnumCrossAlign, EnumJustify, EnumFraction, EnumColor, EnumRadius, EnumTextSize, EnumWeight, EnumPressableRole, EnumTextAlign, EnumPosition } = __ui_api;
 const { normalizeLocale, isRtlLocale } = __plinth_web;
+const { applyAppTheme } = __theme;
 
 const ASPECT_RATIO = { [EnumAspect.square]: "1 / 1", [EnumAspect.wide]: "16 / 9", [EnumAspect.tall]: "3 / 4" };
 
@@ -3936,6 +4264,15 @@ class DomRenderer {
     app.onStop = (reason) => this.showStopped(reason);
     app.onError = (message) => this.showError(message);
     this.watchForeground(container.ownerDocument);
+  }
+
+  /**
+   * Per-app theme token values (docs/ui.md, "Theming an app"): applies the
+   * `[theme]` of `manifestText` to the app root only. An override that
+   * fails a check is ignored (a log line), and the host theme stays.
+   */
+  setTheme(manifestText, warn) {
+    return applyAppTheme(this.container, manifestText, warn);
   }
 
   /**
@@ -7126,6 +7463,9 @@ async function start(msg) {
   });
   renderer = new DomRenderer(tree, container, app, assets);
   renderer.setLocale(locale);
+  // The app theme applies to this frame's app root only (the Hub page
+  // around the frame keeps the host theme).
+  renderer.setTheme(manifestText);
   await app.init([]);
   // For tests (web/test/run-a11y.mjs): how many kv entries the start message had.
   document.body.dataset.kvEntries = String(Object.keys(msg.kv ?? {}).length);

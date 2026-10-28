@@ -1,0 +1,218 @@
+{
+  "_note": "Input cases for the app theme ([theme] in plinth.toml / manifest.toml). Checked by crates/plinth-package/tests/web_golden.rs and web/test/run-theme.mjs: both hosts must give the same CSS variables for the same input. The `light` and `dark` maps are written by `PLINTH_BLESS=1 cargo test -p plinth-package --test web_golden`.",
+  "fail": [
+    {
+      "accent": null,
+      "error_contains": [
+        "`text` on `background`",
+        "light mode",
+        "4.5:1"
+      ],
+      "name": "text too faint on the background (light)",
+      "theme_toml": "[theme]\ntext = \"#eeeeee\"\n"
+    },
+    {
+      "accent": null,
+      "error_contains": [
+        "`text` on `background`",
+        "dark mode"
+      ],
+      "name": "only a light background: the host dark text fails",
+      "theme_toml": "[theme]\nbackground = \"#fffaf0\"\n"
+    },
+    {
+      "accent": null,
+      "error_contains": [
+        "`on-accent` on `accent`"
+      ],
+      "name": "accent without on-accent",
+      "theme_toml": "[theme]\naccent = \"#ffffff\"\n"
+    },
+    {
+      "accent": null,
+      "error_contains": [
+        "unknown key `brand`"
+      ],
+      "name": "unknown key",
+      "theme_toml": "[theme]\nbrand = \"#112233\"\n"
+    },
+    {
+      "accent": null,
+      "error_contains": [
+        "`[theme] text`",
+        "hex color"
+      ],
+      "name": "bad hex",
+      "theme_toml": "[theme]\ntext = \"navy\"\n"
+    },
+    {
+      "accent": null,
+      "error_contains": [
+        "`[theme] text`",
+        "white"
+      ],
+      "name": "bad hex in one half of a pair",
+      "theme_toml": "[theme.text]\nlight = \"#000000\"\ndark = \"white\"\n"
+    },
+    {
+      "accent": null,
+      "error_contains": [
+        "13 keys",
+        "12"
+      ],
+      "name": "too many keys",
+      "theme_toml": "[theme]\nbackground = \"#808080\"\nsurface = \"#808080\"\nsurface-alt = \"#808080\"\nborder = \"#808080\"\nhover = \"#808080\"\nselected = \"#808080\"\ntext = \"#808080\"\ntext-muted = \"#808080\"\naccent = \"#808080\"\non-accent = \"#808080\"\ndanger = \"#808080\"\nsuccess = \"#808080\"\nextra = \"#808080\"\n"
+    },
+    {
+      "accent": null,
+      "error_contains": [
+        "`[theme] text`",
+        "hex string or a table"
+      ],
+      "name": "wrong shape",
+      "theme_toml": "[theme]\ntext = 5\n"
+    }
+  ],
+  "ok": [
+    {
+      "accent": null,
+      "dark": {
+        "--pl-accent": "#ff9a4d",
+        "--pl-accent-fg": "#ff9a4d",
+        "--pl-accent-text": "#1b1410",
+        "--pl-bg": "#1b1410",
+        "--pl-border": "#4a382b",
+        "--pl-danger": "#ff8a80",
+        "--pl-hover": "#3d2d22",
+        "--pl-muted": "#c9b29c",
+        "--pl-selected": "rgb(255 154 77 / 0.16)",
+        "--pl-success": "#7bd88f",
+        "--pl-surface": "#2a201a",
+        "--pl-surface-alt": "#33261d",
+        "--pl-text": "#f7eadb"
+      },
+      "light": {
+        "--pl-accent": "#b4440a",
+        "--pl-accent-fg": "#b4440a",
+        "--pl-accent-text": "#ffffff",
+        "--pl-bg": "#fff8ee",
+        "--pl-border": "#e2cdb2",
+        "--pl-danger": "#a4221a",
+        "--pl-hover": "#f1e0c8",
+        "--pl-muted": "#6a5444",
+        "--pl-selected": "rgb(180 68 10 / 0.12)",
+        "--pl-success": "#1b6e2e",
+        "--pl-surface": "#ffffff",
+        "--pl-surface-alt": "#f6ead9",
+        "--pl-text": "#2b1a0c"
+      },
+      "name": "brand, inline tables, no named accent",
+      "theme_toml": "[theme]\nsurface-alt = { light = \"#f6ead9\", dark = \"#33261d\" }\nborder = { light = \"#e2cdb2\", dark = \"#4a382b\" }\nhover = { light = \"#f1e0c8\", dark = \"#3d2d22\" }\nbackground = { light = \"#fff8ee\", dark = \"#1b1410\" }\nsurface = { light = \"#ffffff\", dark = \"#2a201a\" }\ntext = { light = \"#2b1a0c\", dark = \"#f7eadb\" }\ntext-muted = { light = \"#6a5444\", dark = \"#c9b29c\" }\naccent = { light = \"#b4440a\", dark = \"#ff9a4d\" }\non-accent = { light = \"#ffffff\", dark = \"#1b1410\" }\ndanger = { light = \"#a4221a\", dark = \"#ff8a80\" }\nsuccess = { light = \"#1b6e2e\", dark = \"#7bd88f\" }\n"
+    },
+    {
+      "accent": "pink",
+      "dark": {
+        "--pl-accent": "#6ea8ff",
+        "--pl-accent-fg": "#6ea8ff",
+        "--pl-accent-text": "#0b0b0c",
+        "--pl-bg": "#161618",
+        "--pl-border": "#37373c",
+        "--pl-danger": "#ff6b5e",
+        "--pl-hover": "#e0e0ff",
+        "--pl-muted": "#9a9aa2",
+        "--pl-selected": "rgb(110 168 255 / 0.16)",
+        "--pl-success": "#5fd27a",
+        "--pl-surface": "#232326",
+        "--pl-surface-alt": "#2e2e32",
+        "--pl-text": "#f2f2f5"
+      },
+      "light": {
+        "--pl-accent": "#0b4fa8",
+        "--pl-accent-fg": "#0b4fa8",
+        "--pl-accent-text": "#ffffff",
+        "--pl-bg": "#f4f4f6",
+        "--pl-border": "#dedee4",
+        "--pl-danger": "#c93a2f",
+        "--pl-hover": "#e0e0ff",
+        "--pl-muted": "#6b6b74",
+        "--pl-selected": "rgb(11 79 168 / 0.12)",
+        "--pl-success": "#2e8540",
+        "--pl-surface": "#ffffff",
+        "--pl-surface-alt": "#ececf0",
+        "--pl-text": "#1b1b1f"
+      },
+      "name": "written form: one hex for both, sub-tables, named accent pink",
+      "theme_toml": "[theme]\nhover = \"#E0E0FF\"\n\n[theme.accent]\nlight = \"#0b4fa8\"\ndark = \"#6ea8ff\"\n\n[theme.on-accent]\nlight = \"#ffffff\"\ndark = \"#0b0b0c\"\n"
+    },
+    {
+      "accent": "blue",
+      "dark": {
+        "--pl-accent": "#5b9cff",
+        "--pl-accent-fg": "#5b9cff",
+        "--pl-accent-text": "#0b0b0c",
+        "--pl-bg": "#161618",
+        "--pl-border": "#37373c",
+        "--pl-danger": "#ff6b5e",
+        "--pl-hover": "#34343a",
+        "--pl-muted": "#9a9aa2",
+        "--pl-selected": "#ccddee",
+        "--pl-success": "#5fd27a",
+        "--pl-surface": "#232326",
+        "--pl-surface-alt": "#2e2e32",
+        "--pl-text": "#f2f2f5"
+      },
+      "light": {
+        "--pl-accent": "#1a63d6",
+        "--pl-accent-fg": "#1a63d6",
+        "--pl-accent-text": "#ffffff",
+        "--pl-bg": "#f4f4f6",
+        "--pl-border": "#dedee4",
+        "--pl-danger": "#c93a2f",
+        "--pl-hover": "#e4e4ea",
+        "--pl-muted": "#6b6b74",
+        "--pl-selected": "#ccddee",
+        "--pl-success": "#2e8540",
+        "--pl-surface": "#ffffff",
+        "--pl-surface-alt": "#ececf0",
+        "--pl-text": "#1b1b1f"
+      },
+      "name": "explicit selected, named accent blue",
+      "theme_toml": "[theme]\nselected = \"#ccddee\"\n"
+    },
+    {
+      "accent": "orange",
+      "dark": {
+        "--pl-accent": "#ff9f45",
+        "--pl-accent-fg": "#ff9f45",
+        "--pl-accent-text": "#0b0b0c",
+        "--pl-bg": "#161618",
+        "--pl-border": "#999999",
+        "--pl-danger": "#ff6b5e",
+        "--pl-hover": "#34343a",
+        "--pl-muted": "#9a9aa2",
+        "--pl-selected": "rgb(255 159 69 / 0.16)",
+        "--pl-success": "#5fd27a",
+        "--pl-surface": "#232326",
+        "--pl-surface-alt": "#2e2e32",
+        "--pl-text": "#f2f2f5"
+      },
+      "light": {
+        "--pl-accent": "#c25a00",
+        "--pl-accent-fg": "#c25a00",
+        "--pl-accent-text": "#ffffff",
+        "--pl-bg": "#f4f4f6",
+        "--pl-border": "#999999",
+        "--pl-danger": "#c93a2f",
+        "--pl-hover": "#e4e4ea",
+        "--pl-muted": "#6b6b74",
+        "--pl-selected": "rgb(194 90 0 / 0.12)",
+        "--pl-success": "#2e8540",
+        "--pl-surface": "#ffffff",
+        "--pl-surface-alt": "#ececf0",
+        "--pl-text": "#1b1b1f"
+      },
+      "name": "border only, named accent orange: the tints follow the named accent",
+      "theme_toml": "[theme]\nborder = \"#999999\"\n"
+    }
+  ]
+}

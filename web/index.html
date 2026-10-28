@@ -68,6 +68,7 @@
 
         const renderer = new DomRenderer(tree, container, app, assets);
         renderer.setLocale(locale);
+        renderer.setTheme(manifestText);
         if (fixedLocale === undefined || fixedLocale === null) window.addEventListener("languagechange", () => renderer.setLocale(pageLocale()));
         await app.init([]);
       }
