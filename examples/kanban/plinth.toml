@@ -1,0 +1,22 @@
+id = "dev.plinth.examples.kanban"
+name = "Kanban"
+version = "0.1.0"
+publisher = "plinth"
+
+[[capabilities]]
+name = "store.sql"
+rationale = "Save your issues on this device and search them."
+
+# The brand colors of the board. The app code uses token names only.
+[theme]
+background = { light = "#f4f6fb", dark = "#11141d" }
+surface = { light = "#ffffff", dark = "#1a1f2c" }
+surface-alt = { light = "#e9edf7", dark = "#232a3b" }
+border = { light = "#cfd6e6", dark = "#38425c" }
+hover = { light = "#dfe6f7", dark = "#2b3550" }
+text = { light = "#172033", dark = "#e8ecf6" }
+text-muted = { light = "#566079", dark = "#a3aec9" }
+accent = { light = "#3b5bdb", dark = "#8ea2ff" }
+on-accent = { light = "#ffffff", dark = "#11141d" }
+danger = { light = "#c92a2a", dark = "#ff8787" }
+success = { light = "#2b8a3e", dark = "#69db7c" }
