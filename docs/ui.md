@@ -540,24 +540,48 @@ dark = "#ff9a4d"
   signed package. It needs no capability and shows no prompt.
 
 **The contrast guard.** `plinth build` and `plinth validate` merge your
-values with the host values for light and for dark, and check these pairs:
+values with the host values for light and for dark. Then they check ALL of
+these pairs on the merged result. A pair is checked even when you do not set
+its tokens, so the host values that fill the other tokens must work with
+yours.
 
 | Pair | Least ratio |
 |---|---|
 | `text` on `background` | 4.5:1 |
 | `text` on `surface` | 4.5:1 |
 | `on-accent` on `accent` | 4.5:1 |
+| `text` on `selected`, over `surface` | 4.5:1 |
+| `text` on `selected`, over `background` | 4.5:1 |
 | `text-muted` on `background` | 3:1 |
 | `danger` on `background` | 3:1 |
 | `success` on `background` | 3:1 |
+| toggle track on `surface` | 1.5:1 |
+| toggle knob on the track | 1.5:1 |
 
-A pair is checked when your table sets at least one of its two tokens, in
-the appearance where you set it. The error names the pair, the ratio and
-the least ratio, for example: ``[theme] light mode: `text` on `background`
-has a contrast of 1.17:1; the least is 4.5:1``. Because the host values fill
-the tokens that you do not set, an override of `background` alone usually
-fails in the other appearance: set `text`, `text-muted`, `danger` and
-`success` with it (`examples/themed`).
+- **`selected`.** The desktop paints `selected` with alpha over the row
+  below it. When you set `selected`, it is one opaque color. When you do not
+  set it, it is the accent at 12 % (light) or 16 % (dark). The guard uses
+  the color over `surface` and over `background`.
+- **Toggle.** The track and the knob are fixed host colors: you cannot set
+  them, and they are not derived from your tokens. The guard only stops a
+  theme from hiding the track on its `surface`. The ratio is 1.5:1, not the
+  3:1 of WCAG 1.4.11 for non-text parts, because the host track is a quiet
+  grey (1.6:1 on the default light `surface`) and 3:1 would reject the host
+  itself. The state of the toggle is also shown by the position of the knob
+  and the accent color.
+- **Host accents.** Each named accent has a light value with at least 4.5:1
+  against white `on-accent`, and a dark value with at least 4.5:1 against
+  the dark `on-accent`. The light teal (the default) and the light orange
+  are a little darker than in earlier versions for this reason. This
+  changes the look of every app that uses them.
+
+The error names the pair, the ratio and the least ratio, for example:
+``[theme] light mode: `text` on `background` has a contrast of 1.17:1; the
+least is 4.5:1``. The host values fill the tokens that you do not set, so an
+override of `background` alone passes only when the host `text` is readable
+on it in light AND in dark. For a light background, the host dark text is
+faint, so set `text`, `text-muted`, `danger` and `success` with it, or give
+`background` a value for each appearance (`examples/themed`).
 
 **At load time.** A host checks the table again (a package is never
 trusted). A table that fails any check is ignored, with one log line, and
