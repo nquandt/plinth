@@ -5760,6 +5760,7 @@ dependencies = [
  "gpui-ce",
  "gpui_ce_elements",
  "log",
+ "plinth-package",
  "plinth-protocol",
 ]
 
