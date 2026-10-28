@@ -22,12 +22,13 @@
 "gallery" = 20
 "gc-torture" = 90
 "hub" = 26
+"kanban" = 280
 "notes" = 47
 "notify-demo" = 20
-"secrets-demo" = 20
 "pong" = 25
 "primitives" = 62
 "quotes" = 20
+"secrets-demo" = 20
 "settings-gallery" = 126
 "themed" = 55
 "timer" = 20

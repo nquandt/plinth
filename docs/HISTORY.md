@@ -71,3 +71,7 @@
 - **Built:** the contrast guard checks every pair after the merge, in light and dark (`crates/plinth-package/src/theme.rs`, `web/theme.js`). New pairs: `text` on `selected` over `surface` and over `background` (4.5:1), toggle track on `surface` and knob on track (1.5:1). The host light accents that failed 4.5:1 with white `on-accent` are darker (teal `#0b857a`, orange `#bf5900`; the others already passed). Tests: every named accent at least 4.5:1 with its `on-accent` in light and dark, a background-only theme, a failing `selected`, a hidden track. The golden file has two new fail cases.
 - **Decisions:** (1) This replaces decision (1) and (2) of the first pass: no pair is skipped, and the host values must work with the app values. (2) The toggle track and knob stay fixed host colors (not derived from tokens); the guard uses 1.5:1 because 3:1 would reject the host track. (3) The `style.css` default accent of the web host (not a themed app) is a separate palette that already has at least 5:1 with white; it is not changed.
 - **Not tested:** macOS, Linux, iOS, Android, WebKit and Firefox.
+
+## 2026-10-28 (kanban probe)
+
+- **Built:** `examples/kanban`, an issue board made only from the public UI API, to find the limits of the UI model. Result and next UI work: `docs/KANBAN-FINDINGS.md`.
