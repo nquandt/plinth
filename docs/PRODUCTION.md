@@ -81,6 +81,7 @@ A production app needs contracts that do not break. Each contract needs a writte
 | U9 | Right-to-left layout | 1.0 | Open | `docs/I18N.md` §3.5. Risk: bidirectional text in gpui-ce (I18N-Q1). |
 | U10 | Motion: host-side transitions and springs | 1.0 | Open | UI-ADVANCED U2; HANDOFF §10 items 4, 7 |
 | U11 | Sound | 1.0 | Open | GAPS G7. 1.0 needs it (PR-Q2). |
+| U12 | App theme: an app sets the values of the color tokens | Beta | Partial | `[theme]` in `plinth.toml` (`docs/ui.md` "Theming an app"). Hex values for light and dark, a contrast guard in `plinth build` and `plinth validate`, a second check in each host, high contrast and forced colors ignore it, host banners and the consent UI keep the host theme. Evidence: `crates/plinth-package/src/theme.rs` tests (parse, contrast, merge), `plinth-ui` `theme.rs` tests (tokens, high contrast), `plinth-shoot/tests/app_theme.rs` (pixels of `examples/themed` in light, dark, high contrast, a failing override, the banner), `plinth-cli/tests/theme_build.rs`, `web/test/run-theme.mjs` (rules, the golden file shared with `crates/plinth-package/tests/web_golden.rs`, computed CSS variables in Chromium). Tested on Windows desktop and in Node and Chromium only. Open: macOS, Linux, iOS, WebKit and Firefox are not tested. |
 
 ## 6. Host APIs
 

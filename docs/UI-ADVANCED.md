@@ -51,7 +51,7 @@ Example:
 </Box>
 ```
 
-**Why tokens.** Colors and spacing come from the theme, so dark mode, high contrast, and the platform look still work. A raw color is a lint warning, not an error.
+**Why tokens.** Colors and spacing come from the theme, so dark mode, high contrast, and the platform look still work. A raw color is a lint warning, not an error. An app can set the VALUES of the tokens for its own look (`[theme]` in `plinth.toml`, `docs/ui.md` "Theming an app"); the code still uses token names.
 
 ## 3. The web host
 
