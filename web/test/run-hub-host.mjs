@@ -74,14 +74,17 @@ async function runApp(coreBytes, plnt, opts) {
   return {
     app,
     allText: () => [...text.values(), ...names.values()].join(" | "),
-    press(name) {
+    has: (name) => [...names.values()].includes(name),
+    // `nth`: which one, if several nodes have the name (the Uninstall action of the screen, then the one of the dialog).
+    press(name, nth = 0) {
+      let seen = 0;
       for (const [id, byEvent] of listen) {
-        if (byEvent.has(1) && names.get(id) === name) {
+        if (byEvent.has(1) && names.get(id) === name && seen++ === nth) {
           app.onEvent({ kind: "ui", handler: byEvent.get(1), event: 1, value: null });
           return settle();
         }
       }
-      throw new Error(`nothing to press with the name "${name}"`);
+      throw new Error(`nothing to press with the name "${name}" (number ${nth})`);
     },
   };
 }
@@ -331,6 +334,33 @@ async function main() {
     await framed.press("Notes");
     await framed.press("Open");
     await waitFor(() => launches.length === before + 1 && launches.at(-1) === "dev.plinth.examples.notes", "Open in the frame launches through the page");
+    host.onChange = () => {};
+
+    // Uninstall from the Hub app (core 1.13, docs/STORAGE.md §7.6) in the frame:
+    // the action opens the dialog, its Uninstall goes to the page (`hub-call`),
+    // which erases the data. An app that runs: the error shows, nothing changes.
+    const erased = [];
+    host.erase = async (id) => {
+      erased.push(id);
+    };
+    host.isRunning = (id) => id === "dev.plinth.examples.utility";
+    host.onChange = () => {
+      if (!applying) frameHub.applySnapshot({ state: host.snapshot().state });
+    };
+    await framed.press("Utility");
+    await framed.press("Uninstall", 0);
+    await waitFor(() => framed.allText().includes("Uninstall Utility?"), "the confirmation dialog names the app");
+    assert.equal(framed.has("Keep my data"), true, "the dialog has the Keep my data choice");
+    await framed.press("Uninstall", 1);
+    await waitFor(() => /Could not uninstall: .*is running; close it first/.test(framed.allText()), "the running app is refused with its reason");
+    assert.deepEqual(erased, [], "nothing was erased");
+    assert.ok(host.get("dev.plinth.examples.utility"), "the app stays");
+    host.isRunning = () => false;
+    await framed.press("Uninstall", 0);
+    await framed.press("Uninstall", 1);
+    await waitFor(() => host.get("dev.plinth.examples.utility") === null, "the page uninstalled the app");
+    assert.deepEqual(erased, ["dev.plinth.examples.utility"]);
+    await waitFor(() => /Utility and its data are deleted\./.test(framed.allText()), "the library says what happened");
     host.onChange = () => {};
 
     // Without the backend, or with hub.manage refused: denied, no trap.
