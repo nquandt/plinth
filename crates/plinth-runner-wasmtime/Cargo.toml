@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 log.workspace = true
-wasmtime.workspace = true
+wasmtime = { workspace = true, optional = true }
 plinth-protocol.workspace = true
 plinth-link.workspace = true
 serde.workspace = true
@@ -43,6 +43,11 @@ fixed_decimal = { version = "0.7.2", features = ["ryu"] }
 writeable = "0.6.4"
 
 [features]
+# `wasmtime` is the desktop and Android engine (on by default). An iOS build
+# turns it off (`--no-default-features --features wasmi`): wasmtime needs a
+# JIT, which iOS does not allow (PRODUCTION R5, docs/MAC-HANDOFF.md §5).
+default = ["wasmtime"]
+wasmtime = ["dep:wasmtime"]
 # The wasmi interpreter engine (SPEC.md §9.2), for iOS and tests. Pulls in
 # wasmparser to pull the linked core module out of the component, and
 # wasmi_core directly for `LimiterError` (the memory cap's `Limiter`),

@@ -44,14 +44,9 @@ use crate::bindings::plinth::app::secrets::Host as SecretsHost;
 use crate::bindings::plinth::app::store::Host as StoreHost;
 use crate::bindings::plinth::app::time::Host as TimeHost;
 use crate::bindings::plinth::app::ui::Host as UiHost;
-use crate::hub::HubBackend;
-use crate::kv::Kv;
-use crate::policy::Policy;
-use crate::timers::TimerQueue;
 use crate::wasmi_core::extract_core_module;
-use crate::{Clipboard, HostState, Limiter, Limits, requests::RequestQueue};
+use crate::{HostState, Limits};
 use anyhow::{Context as _, Result};
-use std::time::Instant;
 use wasmi::{Caller, Config, Engine, Error as WasmiError, Extern, Linker, Memory, Module, Store, TypedFunc};
 
 /// Fuel per millisecond of `Limits::call_timeout` (SPEC.md §9.2 step 3).
@@ -105,11 +100,8 @@ pub struct WasmiGuest {
 pub fn load(
     engine: &Engine,
     bytes: &[u8],
-    limits: Limits,
-    policy: Policy,
-    kv: Kv,
-    clipboard: Box<dyn Clipboard>,
-    hub: Option<Box<dyn HubBackend>>,
+    limits: &Limits,
+    state: HostState,
 ) -> Result<WasmiGuest> {
     let core = extract_core_module(bytes).context("extract the linked core module")?;
     let module = Module::new(engine, &core).context("the core module is not valid wasm")?;
@@ -117,35 +109,6 @@ pub fn load(
     let mut linker = Linker::<HostState>::new(engine);
     register_imports(&mut linker)?;
 
-    let state = HostState {
-        commits: Vec::new(),
-        logs: Vec::new(),
-        errors: Vec::new(),
-        limits: Limiter { memory_cap: limits.memory_bytes, memory: 0 },
-        policy,
-        kv,
-        timers: TimerQueue::new(),
-        last_frame: None,
-        clipboard,
-        monotonic_origin: Instant::now(),
-        requests: RequestQueue::new(),
-        dialogs: Vec::new(),
-        net_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-        fake_timezone_offset_minutes: None,
-        hub,
-        files: crate::files::Files::unavailable(),
-        notify: Box::new(crate::notify::MemoryNotify::default()),
-        secrets: Box::new(crate::secrets::UnsupportedSecrets),
-        secrets_scope: crate::secrets::SecretsScope::default(),
-        sql: None,
-        locale: None,
-        locale_fixed: false,
-        test_clock: None,
-        app_version: None,
-        data_version: None,
-        data_version_loaded: false,
-        upgrade_claimed: false,
-    };
     let mut store = Store::new(engine, state);
     store.limiter(|s| &mut s.limits);
     let fuel_budget = (limits.call_timeout.as_millis() as u64).saturating_mul(FUEL_PER_MS).max(1);
