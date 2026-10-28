@@ -165,8 +165,8 @@ export default function Board() {
       title="Board"
       actions={[
         <Action label="New issue" icon="plus" role="primary" onPress={() => startCreate("backlog")} />,
-        <Action label="Add 100 demo issues" onPress={() => addDemoIssues(100)} />,
-        <Action label="Add 500 demo issues" onPress={() => addDemoIssues(500)} />,
+        <Action label="Add 100 demo issues" onPress={() => { addDemoIssues(100); }} />,
+        <Action label="Add 500 demo issues" onPress={() => { addDemoIssues(500); }} />,
       ]}
     >
       <Section title="Issues">

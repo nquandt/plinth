@@ -6,7 +6,7 @@
 import { signal, computed, effect } from "plinth:ui";
 import type { ChartPoint } from "plinth:ui";
 import { parseNumber } from "plinth:core";
-import { openDatabase, allIssues, searchIds, insertIssue, changeIssue, removeIssue, savePlaces, insertMany } from "./storage";
+import { openDatabase, allIssues, searchIds, insertIssue, changeIssue, removeIssue, savePlaces, insertMany, countIssues } from "./storage";
 import { COLUMNS, columnIndex, statusOfName } from "./types";
 import type { Issue } from "./types";
 
@@ -332,12 +332,29 @@ export function deleteIssue(id: number): void {
   apply(removeIssue(id));
 }
 
-export function addDemoIssues(count: number): void {
-  let top = 0;
-  for (const i of issues()) {
-    top = i.id > top ? i.id : top;
+/** The most issues that the demo action makes. The board shows every card, so the memory of the app grows with the issues. */
+export const DEMO_LIMIT = 1000;
+
+/** True while a demo action runs: a second press waits for the first, so the limit holds. */
+let demoBusy = false;
+
+export async function addDemoIssues(count: number): Promise<void> {
+  if (demoBusy) {
+    return;
   }
-  apply(insertMany(count, top + 1));
+  demoBusy = true;
+  try {
+    const have = await countIssues();
+    if (have >= DEMO_LIMIT) {
+      status.set(`The demo stops at ${DEMO_LIMIT} issues`);
+    } else {
+      await insertMany(count < DEMO_LIMIT - have ? count : DEMO_LIMIT - have, have + 1);
+      await reload();
+    }
+  } catch (e) {
+    status.set(`The change was not saved: ${(e as Error).message}`);
+  }
+  demoBusy = false;
 }
 
 // -- The detail sheet and the card menu -----------------------------------

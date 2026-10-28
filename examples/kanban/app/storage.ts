@@ -56,6 +56,12 @@ export function allIssues(): Promise<Issue[]> {
   return sql.query<Issue>(ALL);
 }
 
+/** The number of issues in the table. */
+export async function countIssues(): Promise<number> {
+  const rows = await sql.query<{ n: number }>("SELECT count(*) AS n FROM issues");
+  return rows[0].n;
+}
+
 /** The ids of the issues that have each word of `text` (or a word that starts with it). */
 export async function searchIds(text: string): Promise<number[]> {
   const rows = await sql.query<{ n: number }>(SEARCH, [matchText(text)]);

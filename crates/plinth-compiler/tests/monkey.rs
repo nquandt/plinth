@@ -98,6 +98,18 @@ fn projects() -> Vec<Project> {
         .collect()
 }
 
+/// Controls that add a large amount of data at once, by their label (for
+/// example "Add 500 demo issues" in `examples/kanban`). The monkey presses
+/// one of these every few dozen steps, so the data of the app would only
+/// grow with the length of the run and the memory rule would measure the
+/// size of the data, not a leak. Such an action is bounded in the app itself
+/// (kanban stops at 1000 issues) and its own tests cover it.
+const BULK_LABELS: &[&str] = &["demo issues"];
+
+fn is_bulk(n: &plinth_ui::tree::Node) -> bool {
+    n.str_prop(prop::LABEL).is_some_and(|l| BULK_LABELS.iter().any(|b| l.contains(b)))
+}
+
 /// The listeners of the shown screen and its sheets: `(node, event, handler)`.
 fn listeners(tree: &Tree) -> Vec<(NodeId, u16, u32)> {
     let mut out = Vec::new();
@@ -110,8 +122,10 @@ fn listeners(tree: &Tree) -> Vec<(NodeId, u16, u32)> {
             continue;
         }
         let Some(n) = tree.get(id) else { continue };
-        for &(ev, h) in &n.listeners {
-            out.push((id, ev, h));
+        if !is_bulk(n) {
+            for &(ev, h) in &n.listeners {
+                out.push((id, ev, h));
+            }
         }
         stack.extend(n.children.iter().copied());
     }
@@ -206,9 +220,20 @@ impl Run<'_> {
                     let r = self.guest.answer_dialog(d, v);
                     self.apply(r, step);
                 }
-                for (id, v) in self.guest.poll_net_results() {
-                    let r = self.guest.answer_dialog(id, v);
-                    self.apply(r, step);
+                // Wait for the requests that a worker thread answers (for
+                // example `store.sql`), so the run does not depend on the
+                // speed of the machine: a database that opens late would
+                // otherwise load its data in the second half.
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    for (id, v) in self.guest.poll_net_results() {
+                        let r = self.guest.answer_dialog(id, v);
+                        self.apply(r, step);
+                    }
+                    if self.guest.open_host_requests() == 0 || Instant::now() > deadline {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
                 }
             }
             4 => {
@@ -246,6 +271,10 @@ fn monkey(project: &Project, runner: &Runner, stress: bool, steps: usize) {
         .load_with_policy(&artifact.component, Limits::default(), Policy::new(declared), Kv::in_memory(), Box::new(MemoryClipboard::default()))
         .unwrap();
     let space = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/monkey-files").join(project.name.replace('/', "-"));
+    // The `store.sql` database lives beside the files folder
+    // (`database_dir`). A database from an earlier run would make the app
+    // start with the issues that the monkey added then.
+    let _ = std::fs::remove_dir_all(plinth_runner_wasmtime::sql::database_dir(&space));
     let _ = std::fs::remove_dir_all(&space);
     guest.set_files(plinth_runner_wasmtime::files::Files::open(space, 1 << 20));
     let args = if stress { plinth_protocol::init_arg::one(plinth_protocol::init_arg::GC_STRESS, &[]) } else { Vec::new() };
@@ -262,7 +291,7 @@ fn monkey(project: &Project, runner: &Runner, stress: bool, steps: usize) {
             half_memory = run.guest.memory_bytes();
         }
         if std::env::var("PLINTH_MONKEY_TRACE").is_ok() && step % (steps / 10).max(1) == 0 {
-            eprintln!("  step {step}: memory {} KiB", run.guest.memory_bytes() >> 10);
+            eprintln!("  step {step}: memory {} KiB, {} nodes", run.guest.memory_bytes() >> 10, run.tree.len());
         }
     }
     let end_memory = run.guest.memory_bytes();

@@ -46,7 +46,13 @@ pub const HEADER: u32 = 8;
 const MARK: u32 = 1;
 const ALIGN: usize = 8;
 /// Collect after this many bytes were allocated since the last collection.
-const GC_THRESHOLD: usize = 1 << 20;
+/// The threshold follows the live size of the heap, between a floor and a
+/// ceiling: a small app does not keep up to 1 MiB of garbage before the first
+/// collection (the memory of a guest only grows, so that garbage would be
+/// its memory for good, and its first minutes would look like a leak), and a
+/// large heap is not collected after every few small allocations.
+const GC_MIN_THRESHOLD: usize = 1 << 18;
+const GC_MAX_THRESHOLD: usize = 1 << 20;
 
 struct TypeDesc {
     size: u32,
@@ -58,9 +64,11 @@ struct Heap {
     types: Vec<TypeDesc>,
     roots: Vec<u32>,
     allocated_since_gc: usize,
+    /// Bytes of objects (array data not counted) that the last collection kept.
+    live_bytes: usize,
 }
 
-static HEAP: Global<Heap> = Global::new(Heap { objects: Vec::new(), types: Vec::new(), roots: Vec::new(), allocated_since_gc: 0 });
+static HEAP: Global<Heap> = Global::new(Heap { objects: Vec::new(), types: Vec::new(), roots: Vec::new(), allocated_since_gc: 0, live_bytes: 0 });
 
 /// Test-only stress mode (SPEC.md §16): when on, `collect_if_needed` (in
 /// `lib.rs`) collects after every `init`/`on-event`, and `collect` poisons
@@ -186,7 +194,7 @@ fn object_size(h: &Heap, ptr: u32) -> usize {
 }
 
 pub fn should_collect() -> bool {
-    HEAP.read(|h| h.allocated_since_gc >= GC_THRESHOLD)
+    HEAP.read(|h| h.allocated_since_gc >= h.live_bytes.clamp(GC_MIN_THRESHOLD, GC_MAX_THRESHOLD))
 }
 
 /// Runs one full collection. `runtime_roots` gives every reference that the
@@ -233,10 +241,12 @@ pub fn collect(runtime_roots: impl FnOnce(&mut dyn FnMut(u32))) {
             }
         }
         let mut objects = core::mem::take(&mut h.objects);
+        let mut live = 0;
         objects.retain(|&p| {
             let flags = unsafe { load_u32(p + 4) };
             if flags & MARK != 0 {
                 unsafe { store_u32(p + 4, flags & !MARK) };
+                live += object_size(h, p);
                 true
             } else {
                 if matches!(type_of(p), T_ARR_F64 | T_ARR_I32 | T_ARR_REF) {
@@ -253,6 +263,7 @@ pub fn collect(runtime_roots: impl FnOnce(&mut dyn FnMut(u32))) {
             }
         });
         h.objects = objects;
+        h.live_bytes = live;
         h.allocated_since_gc = 0;
     });
 }
