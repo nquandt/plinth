@@ -119,13 +119,14 @@ impl HostApp {
 
 /// A future key id for the Plinth project itself (`docs/HUB.md` §4.1,
 /// §12.3): a package signed by it is trusted for `hub.manage` on every
-/// host, with no `PLINTH_HUB_TRUSTED_KEYS` setting needed. Left empty
-/// until that key exists; an empty string never matches a real signer.
+/// host, with no saved or environment setting needed. Left empty until
+/// that key exists; an empty string never matches a real signer.
 const PLINTH_PROJECT_HUB_KEY: &str = "";
 
 /// Checks the trusted-signer rule for `hub.manage` (`docs/HUB.md` §4.1):
 /// the host grants `hub.manage` only to a package signed by a key it
-/// trusts as a Hub key — for now, a key id listed in the comma-separated
+/// trusts as a Hub key: a key id that the user saved with
+/// `plinth hub policy trust-hub-key`, one in the comma-separated
 /// `PLINTH_HUB_TRUSTED_KEYS` environment variable, or the (currently
 /// empty) Plinth project key. A package that declares `hub.manage` but is
 /// not signed by a trusted key is refused outright, with a clear error,
@@ -133,12 +134,17 @@ const PLINTH_PROJECT_HUB_KEY: &str = "";
 /// unaffected (this is the only capability with an extra, signer-based
 /// rule — every other capability only needs the manifest and consent).
 fn check_hub_trust(pkg: &plinth_package::Package, declared: &[String]) -> Result<()> {
+    check_hub_trust_in(pkg, declared, &plinth_hub::hub_dir())
+}
+
+/// `check_hub_trust` with the Hub directory `dir` for the saved keys.
+fn check_hub_trust_in(pkg: &plinth_package::Package, declared: &[String], dir: &Path) -> Result<()> {
     if !declared.iter().any(|c| c == plinth_runner_wasmtime::capability::HUB_MANAGE) {
         return Ok(());
     }
     let signer = plinth_package::signature::verify(pkg).context("the package signature does not check out")?;
     let key = signer.map(|s| s.key).unwrap_or_default();
-    let trusted = key_is_trusted(&key);
+    let trusted = key_is_trusted(&key, dir);
     if trusted {
         Ok(())
     } else if key.is_empty() {
@@ -148,26 +154,35 @@ fn check_hub_trust(pkg: &plinth_package::Package, declared: &[String]) -> Result
         )
     } else {
         anyhow::bail!(
-            "{} declares `hub.manage` but is signed by `{key}`, which this host does not trust as a Hub key (set PLINTH_HUB_TRUSTED_KEYS, docs/HUB.md §4.1)",
+            "{} declares `hub.manage` but is signed by `{key}`, which this host does not trust as a Hub key. If you trust this key, run `plinth hub policy trust-hub-key {key}` or set PLINTH_HUB_TRUSTED_KEYS={key} (docs/HUB.md §4.1)",
             pkg.manifest.id
         )
     }
 }
 
 /// Whether `key` (a signer's key id, for example `ed25519:…`) is one this
-/// host trusts for `hub.manage`.
-fn key_is_trusted(key: &str) -> bool {
+/// host trusts for `hub.manage`: a saved key in `dir`, or one in the
+/// environment.
+fn key_is_trusted(key: &str, dir: &Path) -> bool {
     if key.is_empty() {
         return false;
     }
     if !PLINTH_PROJECT_HUB_KEY.is_empty() && key == PLINTH_PROJECT_HUB_KEY {
         return true;
     }
-    std::env::var("PLINTH_HUB_TRUSTED_KEYS")
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .any(|trusted| !trusted.is_empty() && trusted == key)
+    plinth_hub::trusted_hub_keys_in(dir).iter().any(|trusted| trusted == key)
+}
+
+/// For a package of the library: the error of an old-format signature names
+/// the fix (the library keeps the old bytes, so signing again does not help
+/// there).
+fn library_signature_hint(err: anyhow::Error, app_id: &str) -> anyhow::Error {
+    let text = format!("{err:#}");
+    if text.contains("signed with an old format") {
+        anyhow::anyhow!("{text}. {app_id} is in the library with this old signature: remove it with `plinth hub remove {app_id}` and install it again")
+    } else {
+        err
+    }
 }
 
 /// Links an app module into the installed core that it needs (SPEC.md
@@ -725,7 +740,7 @@ pub fn apply_consent(
 fn prepare(hub: &plinth_hub::Hub, app_id: &str, pkg: plinth_package::Package, bytes: &[u8]) -> Result<PreparedApp> {
     let owner = package_owner(&pkg, bytes);
     let declared: Vec<String> = pkg.manifest.capabilities.iter().map(|c| c.name.clone()).collect();
-    check_hub_trust(&pkg, &declared)?;
+    check_hub_trust_in(&pkg, &declared, hub.dir()).map_err(|e| library_signature_hint(e, app_id))?;
     let hub_manage = declared.iter().any(|c| c == plinth_runner_wasmtime::capability::HUB_MANAGE);
     let policy = hub.policy_for(app_id, &declared)?;
     let title = pkg.manifest.name;
@@ -1059,13 +1074,46 @@ mod hub_trust_tests {
         let pkg = hub_package(Some(&signer));
         // SAFETY: this test is the only one in this binary that reads the variable.
         unsafe { std::env::remove_var("PLINTH_HUB_TRUSTED_KEYS") };
-        let err = check_hub_trust(&pkg, &["hub.manage".to_owned()]).unwrap_err();
-        assert!(format!("{err:#}").contains("does not trust"), "{err:#}");
+        let none = std::env::temp_dir().join(format!("plinth-hub-trust-none-{}", std::process::id()));
+        let err = check_hub_trust_in(&pkg, &["hub.manage".to_owned()], &none).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("does not trust"), "{text}");
+        // The error names both ways to trust the key.
+        assert!(text.contains(&format!("plinth hub policy trust-hub-key {}", signer.key_id())), "{text}");
+        assert!(text.contains(&format!("PLINTH_HUB_TRUSTED_KEYS={}", signer.key_id())), "{text}");
 
         unsafe { std::env::set_var("PLINTH_HUB_TRUSTED_KEYS", signer.key_id()) };
-        let result = check_hub_trust(&pkg, &["hub.manage".to_owned()]);
+        let result = check_hub_trust_in(&pkg, &["hub.manage".to_owned()], &none);
         unsafe { std::env::remove_var("PLINTH_HUB_TRUSTED_KEYS") };
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    /// A key that the user saved in `policy.json` gives `hub.manage`; another
+    /// signer does not get it, and a key that was removed does not either.
+    #[test]
+    fn a_saved_hub_key_gives_hub_manage_and_another_signer_is_refused() {
+        let dir = std::env::temp_dir().join(format!("plinth-hub-trust-saved-{}", std::process::id()));
+        let hub = plinth_hub::Hub::open(&dir).unwrap();
+        let (trusted, other) = (identity("Saved Hub"), identity("Other Hub"));
+        let (trusted_pkg, other_pkg) = (hub_package(Some(&trusted)), hub_package(Some(&other)));
+        let declared = ["hub.manage".to_owned()];
+        assert!(check_hub_trust_in(&trusted_pkg, &declared, hub.dir()).is_err(), "not saved yet");
+        hub.trust_hub_key(&trusted.key_id()).unwrap();
+        assert!(check_hub_trust_in(&trusted_pkg, &declared, hub.dir()).is_ok());
+        let err = check_hub_trust_in(&other_pkg, &declared, hub.dir()).unwrap_err();
+        assert!(format!("{err:#}").contains("does not trust"), "{err:#}");
+        hub.untrust_hub_key(&trusted.key_id()).unwrap();
+        assert!(check_hub_trust_in(&trusted_pkg, &declared, hub.dir()).is_err(), "removed again");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_old_signature_error_of_a_library_package_names_the_fix() {
+        let err = library_signature_hint(anyhow::anyhow!("this package was signed with an old format (plinth.signature/1); sign it again with plinth sign"), "dev.plinth.hub");
+        let text = format!("{err:#}");
+        assert!(text.contains("plinth hub remove dev.plinth.hub") && text.contains("install it again"), "{text}");
+        let other = library_signature_hint(anyhow::anyhow!("something else"), "dev.plinth.hub");
+        assert_eq!(format!("{other:#}"), "something else");
     }
 
     #[test]
