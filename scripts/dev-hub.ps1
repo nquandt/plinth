@@ -9,8 +9,8 @@
 # then builds and signs that copy. Run it again after a change to the Hub app.
 #
 # Your publisher key must exist (`plinth publisher init --name "<name>"`).
-# PLINTH_HUB_TRUSTED_KEYS must contain your key id, for this session or as a
-# user environment variable.
+# Your key id must be a trusted Hub key. The script saves it for you with
+# `plinth hub policy trust-hub-key`, so no environment variable is needed.
 param([switch]$NoRun)
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
@@ -22,8 +22,9 @@ if ($show -notmatch '^(?<name>.+?)\s+(?<key>ed25519:\S+)') { throw "unexpected o
 $name = $Matches.name.Trim()
 $key = $Matches.key
 if (-not (($env:PLINTH_HUB_TRUSTED_KEYS -split ',') -contains $key)) {
-  Write-Host "PLINTH_HUB_TRUSTED_KEYS does not contain $key; adding it for this session."
-  $env:PLINTH_HUB_TRUSTED_KEYS = (@($env:PLINTH_HUB_TRUSTED_KEYS, $key) | Where-Object { $_ }) -join ','
+  Write-Host "Saving $key as a trusted Hub key."
+  & plinth hub policy trust-hub-key $key
+  if ($LASTEXITCODE -ne 0) { throw "could not save the trusted Hub key" }
 }
 
 # A copy of the Hub app with your publisher name.

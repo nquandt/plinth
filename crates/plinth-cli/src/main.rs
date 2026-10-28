@@ -969,11 +969,28 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
         }
         Some("search") => {
             let text = args.get(1).context("usage: plinth hub search <text>")?;
-            for (name, base) in hub.sources()? {
-                let source = plinth_host_desktop::source_headers::hub_sources(&hub).open(&base).with_context(|| format!("open source {name} ({base})"))?;
-                for app in source.search(text)? {
-                    println!("{}  {}  {}  [{name}]", app.id, app.name, app.latest);
+            // A source that fails gives a warning; the other sources still answer.
+            let sources = hub.sources()?;
+            let mut failed = 0;
+            for (name, base) in &sources {
+                let found = plinth_host_desktop::source_headers::hub_sources(&hub)
+                    .open(base)
+                    .with_context(|| format!("open source {name} ({base})"))
+                    .and_then(|source| source.search(text));
+                match found {
+                    Ok(apps) => {
+                        for app in apps {
+                            println!("{}  {}  {}  [{name}]", app.id, app.name, app.latest);
+                        }
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        eprintln!("[plinth] source {name} skipped: {e:#}");
+                    }
                 }
+            }
+            if failed > 0 && failed == sources.len() {
+                bail!("every source failed");
             }
             return Ok(ExitCode::SUCCESS);
         }
