@@ -119,8 +119,8 @@ test("a drop on a card puts the issue before it or after it", async () => {
   expect(ids(0)).toBe("10,8,7,9");
   // The order is in the database too.
   await settle();
-  const rows = (await rows()).filter((i) => i.status === "backlog");
-  expect(rows.map((i) => `${i.id}`).join(",")).toBe("10,8,7,9");
+  const backlog = (await rows()).filter((i) => i.status === "backlog");
+  expect(backlog.map((i) => `${i.id}`).join(",")).toBe("10,8,7,9");
 });
 
 test("the keys move a card", async () => {
