@@ -194,6 +194,42 @@ export function idbFileBackend(space, idb = globalThis.indexedDB) {
 }
 
 /**
+ * Deletes every file of the app `appId` from the page's IndexedDB (an
+ * uninstall, docs/STORAGE.md S13). Other apps are not touched: the keys are
+ * `[space, path]`, so the range `[space, ""]` to `[space, []]` (an array sorts
+ * after every string) holds the files of this space only. Resolves with the
+ * number of files that it deleted; 0 when there is no IndexedDB.
+ */
+export async function clearAppFiles(appId, idb = globalThis.indexedDB) {
+  if (!idb) return 0;
+  const ns = String(appId).toLowerCase();
+  const db = await new Promise((resolve, reject) => {
+    const req = idb.open("plinth-files", 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("files");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction("files", "readwrite");
+      const store = tx.objectStore("files");
+      const range = IDBKeyRange.bound([ns, ""], [ns, []]);
+      let count = 0;
+      const counted = store.count(range);
+      counted.onsuccess = () => {
+        count = counted.result;
+        store.delete(range);
+      };
+      tx.oncomplete = () => resolve(count);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * The private space of one app on a backend. `call(op, path, text)` (op
  * "read", "write", "list", "stat" or "remove") answers `[ok, 0, text,
  * error]` and never throws. Calls run one at a time, in call order.

@@ -352,7 +352,15 @@ async function start() {
   } catch {
     persist = memoryPersist(); // private mode: the library lasts for this page only
   }
-  host = await new HubHost({ persist, sources: [[registry.name ?? location.host, base]], hide: [summary.id], onLaunch: (id) => launchApp(id) }).load();
+  host = await new HubHost({
+    persist,
+    sources: [[registry.name ?? location.host, base]],
+    hide: [summary.id],
+    onLaunch: (id) => launchApp(id),
+    // Uninstall with data (docs/STORAGE.md S13): kv, files, sql, secrets, grants.
+    erase: (id) => appData.uninstall(id, { sql: pageSql }),
+    isRunning: (id) => session?.id === id,
+  }).load();
 
   const hubFrame = new AppFrame({
     appId: summary.id,

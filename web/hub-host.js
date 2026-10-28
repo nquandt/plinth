@@ -141,8 +141,21 @@ export class HubHost {
    * `onLaunch(id)`: the shell opens the app (`launch` returns at once).
    * `hide`: app ids that are not in the library (the Hub app itself).
    */
-  constructor({ persist = memoryPersist(), sources = [], hide = [], onLaunch = () => {}, fetchImpl = globalThis.fetch, now = () => Math.floor(Date.now() / 1000) } = {}) {
+  constructor({
+    persist = memoryPersist(),
+    sources = [],
+    hide = [],
+    onLaunch = () => {},
+    erase = null,
+    isRunning = () => false,
+    fetchImpl = globalThis.fetch,
+    now = () => Math.floor(Date.now() / 1000),
+  } = {}) {
     this.persist = persist;
+    // `uninstall`: `erase(id)` deletes the app data that the page keeps
+    // (`HubStore.uninstall`); `isRunning(id)` is true while the app has a window.
+    this.erase = erase;
+    this.isRunning = isRunning;
     this.sourceList = sources;
     this.hide = new Set(hide);
     this.onLaunch = onLaunch;
@@ -237,6 +250,8 @@ export class HubHost {
     this.sourceErrors = errors;
     let changed = false;
     for (const entry of catalog.values()) {
+      // An app that the user uninstalled has no records until `install`.
+      if (this.state.removed.includes(entry.id) && !this.state.known[entry.id]) continue;
       if (this.state.known[entry.id] && entry.versions.some((v) => v.version === this.state.known[entry.id])) continue;
       if (this.state.known[entry.id]) {
         // The known version is gone (withdrawn): accept the newest one that
@@ -469,6 +484,32 @@ export class HubHost {
     this.save();
   }
 
+  /**
+   * Uninstall (docs/STORAGE.md S13): hides the app like `remove` and, unless
+   * `keepData`, first deletes everything the browser keeps for it (`erase`:
+   * kv, files, sql, secrets, grant records) and then the Hub's own records of
+   * it (grants, pin, groups, the accepted version). Refuses while the app
+   * runs, and when this host has no `erase`. Nothing changes if `erase`
+   * rejects, so the user can try again. The block list stays.
+   */
+  async uninstall(id, { keepData = false } = {}) {
+    this.mustGet(id);
+    if (this.isRunning(id)) throw new Error(`${id} is running; close it first, then try again`);
+    if (!keepData) {
+      if (!this.erase) throw new Error("this host cannot delete app data");
+      await this.erase(id);
+    }
+    this.remove(id);
+    if (!keepData) {
+      delete this.state.grants[id];
+      delete this.state.pinned[id];
+      delete this.state.appGroups[id];
+      delete this.state.known[id];
+      this.save();
+    }
+    await this.flush();
+  }
+
   pin(id, version) {
     const entry = this.mustGet(id);
     if (version && !this.installedVersions(entry).some((v) => v.version === version)) throw new Error(`${id} has no version ${version}`);
@@ -521,6 +562,11 @@ export class HubHost {
     }
     if (this.isBlocked(id)) throw new Error(`${id} is blocked`);
     this.state.removed = this.state.removed.filter((r) => r !== id);
+    // An app that was uninstalled with its data starts as a new app.
+    if (!this.state.known[id]) {
+      this.state.known[id] = this.catalog.get(id).versions[0].version;
+      this.grantLowRisk(id, this.knownVersion(this.catalog.get(id)));
+    }
     this.save();
     return id;
   }
