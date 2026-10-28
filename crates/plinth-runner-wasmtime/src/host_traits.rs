@@ -6,8 +6,18 @@
 //! JIT), so the same paths, names and signatures are written here. The impls
 //! on `HostState` in `lib.rs` and the shims in `wasmi_engine.rs` then compile
 //! in both builds without a change. When `app.wit` changes, change this file
-//! too. `cargo build -p plinth-runner-wasmtime --no-default-features
-//! --features wasmi` shows a mismatch as a compile error.
+//! too.
+//!
+//! Two checks find a mismatch:
+//! - `cargo build -p plinth-runner-wasmtime --no-default-features --features
+//!   wasmi` shows it as a compile error.
+//! - The test `tests/host_traits_drift.rs` runs in the default build. It reads
+//!   `wit/plinth/app.wit` and this file as text and compares the interfaces,
+//!   the function names, the parameter names and types, the return types, and
+//!   the cases of each `enum` and `variant`. The order of the items does not
+//!   matter. Write each `fn` on one line, and write each type in the same
+//!   form as `bindgen!` does (`Result<(), HostError>`, `Vec<(String, String)>`).
+//!   If the WIT uses a new type, teach `rust_type` in the test about it.
 
 pub mod plinth {
     pub mod app {
@@ -88,13 +98,13 @@ pub mod plinth {
                 fn set_group(&mut self, id: String, group: String, member: bool) -> Result<(), HostError>;
                 fn remove(&mut self, id: String) -> Result<(), HostError>;
                 fn search(&mut self, query: String) -> u32;
-                fn install(&mut self, app: String) -> u32;
+                fn install(&mut self, id: String) -> u32;
                 fn app_info(&mut self, id: String) -> Result<String, HostError>;
                 fn pin(&mut self, id: String, version: String) -> Result<(), HostError>;
                 fn block_publisher(&mut self, key: String) -> Result<(), HostError>;
                 fn unblock_publisher(&mut self, key: String) -> Result<(), HostError>;
-                fn check_updates(&mut self, app: String) -> u32;
-                fn update(&mut self, app: String) -> u32;
+                fn check_updates(&mut self, id: String) -> u32;
+                fn update(&mut self, id: String) -> u32;
             }
         }
 
