@@ -1296,6 +1296,9 @@ impl Render for PlinthRoot {
             window.set_rem_size(rem);
         }
         let t = Tokens::themed_with(window.appearance(), &settings, &self.accent, self.theme.as_ref());
+        // The parts that the host owns keep the host theme, whatever the app
+        // theme is: the banners, the update prompt and the host dialogs.
+        let host = if self.theme.is_some() { Tokens::themed(window.appearance(), &settings, &self.accent) } else { t };
 
         let content = div()
             .flex_1()
@@ -1303,9 +1306,9 @@ impl Render for PlinthRoot {
             .min_w_0()
             .flex()
             .flex_col()
-            .child(self.render_stopped_banner(&t))
-            .children(self.render_error_banner(&t, cx))
-            .children(self.render_update_prompt(&t, cx))
+            .child(self.render_stopped_banner(&host))
+            .children(self.render_error_banner(&host, cx))
+            .children(self.render_update_prompt(&host, cx))
             .child(match self.tree.current_root() {
                 Some(root) => self.render_screen(root, &t, cx),
                 None => div().flex_1().into_any_element(),
@@ -1315,8 +1318,8 @@ impl Render for PlinthRoot {
         // action confirmation dialog render above everything else.
         let overlay_ids = self.tree.current_root().map(|root| self.overlay_ids(root.id)).unwrap_or_default();
         let mut overlays: Vec<AnyElement> = overlay_ids.into_iter().map(|id| self.render_overlay(id, &t, cx)).collect();
-        overlays.extend(self.render_confirm_overlay(&t, cx));
-        overlays.extend(self.render_host_dialog_overlay(&t, cx));
+        overlays.extend(self.render_confirm_overlay(&host, cx));
+        overlays.extend(self.render_host_dialog_overlay(&host, cx));
 
         let screens: Vec<(u32, NodeId)> = self.tree.primary_screens().collect();
         let shell = div()

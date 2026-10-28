@@ -476,7 +476,9 @@ with the files and the text of the operating system (`docs/GAPS.md` G4).
 ## Theme and system settings
 
 - The runtime owns the theme: the type scale, the color tokens, the
-  corner radii and the focus ring. An app chooses only its `accent`.
+  corner radii and the focus ring. An app chooses its `accent` and can
+  set the values of the color tokens in a `[theme]` table (see "Theming an
+  app" below). It never uses raw colors in its code.
 - The theme follows the system settings, at start and when they change
   (PRODUCTION U7):
   - **Dark mode:** the window appearance on the desktop,
@@ -499,6 +501,85 @@ with the files and the text of the operating system (`docs/GAPS.md` G4).
 - For tests: `PLINTH_THEME=dark|light`, `PLINTH_HIGH_CONTRAST=1|0`,
   `PLINTH_TEXT_SCALE=2` (or `200%`) and `PLINTH_REDUCED_MOTION=1|0` force
   a setting on the desktop (`plinth run`, `plinth shoot`).
+
+### Theming an app
+
+An app can change the VALUES of the color tokens. It does not change the
+token NAMES: the app code still writes `bg="surface"` or `fg="accent"`, and
+there are no raw colors in the code. Each app has its own values; the
+runtime owns everything else (the type scale, the spacing, the corner radii
+and the focus ring).
+
+Write a `[theme]` table in `plinth.toml`:
+
+```toml
+[theme]
+border = "#e2cdb2"                              # one value for light and dark
+background = { light = "#fff8ee", dark = "#1b1410" }
+text = { light = "#2b1a0c", dark = "#f7eadb" }
+
+[theme.accent]                                  # the same as an inline table
+light = "#b4440a"
+dark = "#ff9a4d"
+```
+
+- **Keys.** `background`, `surface`, `surface-alt`, `border`, `hover`,
+  `selected`, `text`, `text-muted`, `accent`, `on-accent`, `danger`,
+  `success`. A key that is not in this list is a build error. A table has at
+  most 12 keys.
+- **Values.** A hex string `"#rrggbb"` sets light and dark. A table
+  `{ light = "#rrggbb", dark = "#rrggbb" }` sets each. Nothing else is
+  allowed: no alpha, no names, no `rgb(...)`.
+- **What stays computed.** The host derives the hover tint of the accent,
+  the text selection color, the toggle track and knob, and the backdrop of
+  a dialog from the base tokens. `selected` follows the accent unless you
+  set it. A token that you do not set keeps the host value.
+- **Accent.** The named `accent` of `app({ accent })` still works. When
+  `[theme]` has an `accent`, it wins.
+- **No permission.** The table is data in the manifest, so it is in the
+  signed package. It needs no capability and shows no prompt.
+
+**The contrast guard.** `plinth build` and `plinth validate` merge your
+values with the host values for light and for dark, and check these pairs:
+
+| Pair | Least ratio |
+|---|---|
+| `text` on `background` | 4.5:1 |
+| `text` on `surface` | 4.5:1 |
+| `on-accent` on `accent` | 4.5:1 |
+| `text-muted` on `background` | 3:1 |
+| `danger` on `background` | 3:1 |
+| `success` on `background` | 3:1 |
+
+A pair is checked when your table sets at least one of its two tokens, in
+the appearance where you set it. The error names the pair, the ratio and
+the least ratio, for example: ``[theme] light mode: `text` on `background`
+has a contrast of 1.17:1; the least is 4.5:1``. Because the host values fill
+the tokens that you do not set, an override of `background` alone usually
+fails in the other appearance: set `text`, `text-muted`, `danger` and
+`success` with it (`examples/themed`).
+
+**At load time.** A host checks the table again (a package is never
+trusted). A table that fails any check is ignored, with one log line, and
+the host theme is used. The app never stops because of its theme.
+
+**What the override does not change:**
+
+- **High contrast** (Windows high contrast, `prefers-contrast: more`) and
+  web **forced colors**: the override is ignored. The host high-contrast
+  tokens win, so the 7:1 rule and the OS colors hold.
+- **Host-owned parts** keep the host theme: the consent dialog, the Hub
+  window around an app, the "This app stopped" banner and the error banner,
+  the update prompt and the dialogs of the host. Only the content of the
+  app window takes the override. On the web, the Hub page around the app
+  frame is a different document, so it is not affected.
+- **Charts** take their colors from the merged `accent` and `text-muted`.
+
+Both hosts give the same colors for the same manifest: the web host fills
+the tokens that the app does not set from the same host palette that the
+desktop uses. A web page of an app with no `[theme]` is unchanged. Tested
+on Windows desktop and in Node and Chromium only. macOS, Linux and iOS are
+not tested.
 
 ## Layout rules the runtime owns
 

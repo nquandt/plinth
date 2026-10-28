@@ -433,7 +433,7 @@ UI API 1.2 adds the controls `Checkbox`, `TextArea`, `Slider`, `NumberField`, `P
 ### 6.5 Theme
 
 - The runtime supplies the type scale, color tokens, elevation, corner radii, and motion, in light and dark.
-- Each app chooses one **accent** from a fixed named palette. No other theming exists.
+- Each app chooses one **accent** from a fixed named palette. An app can also set the values of the color tokens in the `[theme]` table of `plinth.toml`; the token names stay the only way to use a color in code, and there are no raw colors. The manifest carries the table, the build and the host check it (contrast guard), a failing table is ignored, and high contrast ignores it (`docs/ui.md` "Theming an app").
 - The runtime follows the OS settings at start and when they change, with no restart (`docs/ui.md` "Theme and system settings"):
   - **Dark mode:** the light or dark theme.
   - **High contrast:** text at least 7:1 against its background, borders in the text color, a 3 px focus ring. When the OS gives its own colors (Windows high contrast, the web `forced-colors` mode), those colors win.

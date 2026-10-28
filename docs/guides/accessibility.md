@@ -29,6 +29,7 @@ Level 1 controls (`Button`, `TextField`, `Toggle`, `List`, `Row`, `Dialog` and t
   - Text size: on Windows, the "Text size" setting (100 % to 225 %); on the web, the default font size of the browser. Text, buttons and the navigation grow; a row puts its controls on a second line when the title has no space.
   - Reduced motion: on Windows, "Animation effects" off; on the web, `prefers-reduced-motion: reduce`. The host shows no transitions, and the caret in a text field does not blink.
   - Use theme color tokens only (`"text"`, `"surface"`, `"accent"` ...). Then a `Box` and a `Canvas` follow the settings too.
+  - An app theme (`[theme]` in `plinth.toml`) must keep the contrast guard of `plinth build` (text 4.5:1, muted text 3:1). In high contrast and forced colors, the host ignores the app theme.
 
 ## 2. Level 2 primitives: what you must do
 

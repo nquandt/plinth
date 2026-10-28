@@ -166,6 +166,36 @@ fn high_contrast_ignores_the_app_theme() {
     }
 }
 
+/// The host-owned banner keeps the host colors inside a themed window.
+#[test]
+fn the_stopped_banner_keeps_the_host_theme() {
+    let component = compile();
+    let theme = theme();
+    let mut cx = headless();
+    set(&mut cx, SystemSettings::default());
+    let runner = Runner::new().unwrap();
+    let guest = runner.load(&component, Limits::default()).unwrap();
+    let port = Box::new(WasmGuest { guest, _runner: runner });
+    let window = cx
+        .open_window(size(px(900.), px(760.)), move |_, cx| {
+            cx.new(|cx| {
+                let mut root = PlinthRoot::stopped(port, "the app stopped for this test".into(), "teal", cx);
+                root.set_theme(Some(&theme));
+                root
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let image = shot(&mut cx, window, "banner");
+    let host = Tokens::new(gpui::WindowAppearance::Light, "teal");
+    // The page has the brand background, and the banner has the host danger color, not the brand one.
+    let corner = image.pixel(image.width - 3, (image.raw.len() as u32 / 4 / image.width) - 3);
+    assert!(close(corner, [0xff, 0xf8, 0xee]), "the window takes the app theme: {corner:?}");
+    assert!(image.share_of(as_rgb(host.danger)) > 0.005, "the banner has the host danger color");
+    assert_eq!(image.share_of([0xa4, 0x22, 0x1a]), 0.0, "the brand danger color is not in the banner");
+    close_window(&mut cx, window);
+}
+
 /// An override that fails the contrast guard is ignored; the window keeps
 /// the host theme (the host never crashes on package data).
 #[test]

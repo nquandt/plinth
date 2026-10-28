@@ -304,6 +304,32 @@ line to the log.
 `apply = "live"` (replace the running app with no restart) is not built
 yet; `plinth.toml` with it is rejected at build time.
 
+### 7.3 Brand colors (optional)
+
+An app can set the values of the theme color tokens. Your code does not
+change: it still uses token names such as `"surface"` and `"accent"`. Add a
+`[theme]` table to `plinth.toml`:
+
+```toml
+[theme]
+background = { light = "#fff8ee", dark = "#1b1410" }
+surface    = { light = "#ffffff", dark = "#2a201a" }
+text       = { light = "#2b1a0c", dark = "#f7eadb" }
+text-muted = { light = "#6a5444", dark = "#c9b29c" }
+danger     = { light = "#a4221a", dark = "#ff8a80" }
+success    = { light = "#1b6e2e", dark = "#7bd88f" }
+accent     = { light = "#b4440a", dark = "#ff9a4d" }
+on-accent  = { light = "#ffffff", dark = "#1b1410" }
+```
+
+A value is `"#rrggbb"` (light and dark) or `{ light, dark }`. `plinth build`
+checks the contrast of text on its background (4.5:1, muted text 3:1) in
+light and dark, and stops with a message that names the pair when a pair
+fails. A token that you do not set keeps the host value. High contrast and
+forced colors ignore your values. `plinth validate app.plnt` runs the same
+check on a package. `examples/themed` is a small working app, and
+[ui.md](ui.md) "Theming an app" has all the rules.
+
 ## 8. Put your app on the web
 
 ```sh
