@@ -8,7 +8,7 @@ The goal: the owner builds Plinth apps, publishes them to a personal registry, a
 
 | Part | Where | State |
 |---|---|---|
-| Publish script | `scripts/registry-publish.sh` | Built. Builds and signs apps and the Hub app, runs `plinth registry build`, copies the web host files, and can copy the result to Azure (`--sync`). |
+| Publish script | `scripts/registry-publish.sh` | Built. Calls `plinth publish` (§2.1) for the apps, builds and signs the Hub app, runs `plinth registry build`, copies the web host files, and can copy the result to Azure (`--sync`). |
 | Docker site and tunnel | `infra/registry/` | Built. Caddy serves the folder; `cloudflared` publishes it at `plinth.femur.dev`. Steps: `infra/registry/README.md`. |
 | Azure mirror | `infra/azure/provision.sh` | Built and run on 2026-10-27. |
 | Web App Hub | `docs/web-hub.md` | Built. The site root opens it. |
@@ -36,6 +36,39 @@ my-app/ ──plinth build --sign --release──▶ ~/plinth-registry/incoming/
                        https://plinth.femur.dev/          https://plinthreg36610.z19.web.core.windows.net/
 ```
 
+### 2.1 `plinth publish`
+
+One command does the first step and the registry build for one app:
+
+```bash
+plinth publish [<app dir>] [--registry <folder>] [--with-core] [--sync] [--check]
+```
+
+1. It reads `plinth.toml`. If `publisher` is not the name of the signing key, it stops with a message and writes nothing.
+2. It builds the app with `--sign --release` into a scratch folder, and runs the registry build there with a copy of the app document of your registry. All checks of `plinth registry build` run, and the registry is not changed. If the registry would refuse the package, the command stops here. (A different package with the same app id and version is refused. The same package again is "unchanged". A key that differs from the key of the previous version is refused.)
+3. It puts the package in `<registry>/incoming/<folder name>.plnt` and runs `plinth registry build` on the registry folder. `plinth-registry.json`, `apps/` and `packages/` change. With `--with-core` it also copies the built-in core to `cores/`.
+4. With `--sync`, it runs `sync_command` (§2.2).
+
+`--check` is a dry run: it builds, validates, prints what it would add or keep, and does not write to the registry. It cannot be used with `--sync`.
+
+The registry folder is, in this order: `--registry`, the variable `PLINTH_REGISTRY_DIR`, `registry_dir` in the config file, `~/plinth-registry`.
+
+### 2.2 The config file and `--sync`
+
+The config file is `%APPDATA%\plinth\publish.toml` on Windows and `$XDG_CONFIG_HOME/plinth/publish.toml` (or `~/.config/plinth/publish.toml`) elsewhere. `PLINTH_PUBLISH_CONFIG` sets another path. All keys are optional:
+
+```toml
+registry_dir = "~/plinth-registry"
+registry_url = "https://plinth.femur.dev"   # printed as an install hint
+sync_command = "bash /path/to/plinth/scripts/registry-publish.sh --sync"
+```
+
+`--sync` runs `sync_command` in a shell, in the current folder, after the publish, and shows the command before it runs. It sets `PLINTH_REGISTRY_DIR` to the registry folder. There is no default command: with `--sync` and no `sync_command`, `plinth publish` stops before it changes anything. The command above is the Azure example (§1). Plinth does not hardcode a host. Any command that uploads the folder works, for example `rsync -a --delete "$PLINTH_REGISTRY_DIR"/ host:/srv/registry/`.
+
+`scripts/registry-publish.sh` calls `plinth publish` for each app, and keeps the Hub app, the web host files and the Azure upload to itself. Run with `--sync` and no app folder, it rebuilds the Hub app and uploads.
+
+Tested on Windows: `crates/plinth-cli/tests/publish.rs` (two versions, a repeat, a refused change, the publisher rule, `--check`, the config and `--sync` with a command that writes a file), and the script with a scratch copy of `examples/counter` and a temporary registry folder. No test uploads to Azure.
+
 - A package is named by its SHA-256 digest and never changes. The index files change on each publish.
 - Two keys exist. The **publisher key** signs apps (its name must equal `publisher` in `plinth.toml`). The **Hub key** signs only the Hub app, and its id is the trusted key in `hub.json` (`docs/web-hub.md` §5). Keep both keys on the owner's machine. Never put a key in the registry folder or in Docker.
 - To install on a phone: add the registry URL as a source in the Hub, then install the app (`docs/HUB.md`).
@@ -60,7 +93,7 @@ Also possible: Cloudflare R2 with a custom domain, which removes the Host header
 
 ## 5. Plan: a registry that accepts uploads (not done)
 
-`plinth publish` (PRODUCTION T6) should send a signed package to a registry, so no folder copy is needed. Design:
+Today `plinth publish` (§2.1) writes to a registry folder. A later step should send a signed package to a registry, so no folder copy is needed. Design:
 
 1. A small service on Azure Container Apps (consumption plan, scale to zero) or a Cloudflare Worker. It runs `plinth-registry` code (library only; it does not need `gpui`, so a Linux image builds fast).
 2. The upload is the signed `.plnt`. The service checks the package signature and compares the signer with the allowed keys of the registry (`allowed-publishers.json`). No password and no token for the publisher: the signature is the proof.
