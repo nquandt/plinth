@@ -470,6 +470,51 @@ export default app({{ screens: {{ home: {{ title: "Home", component: Home }} }} 
         assert_eq!(out, "denied:limit;denied:limit;denied:limit;null");
     }
 
+    /// Hostile names and values from TypeScript: the limits hold, a bad name
+    /// rejects with `denied:limit`, a NUL, an emoji and a lone surrogate in a
+    /// value do not trap, and `names()` stays sorted and equal to the items.
+    #[test]
+    fn compiled_hostile_names_and_values_never_trap() {
+        let backend = MemorySecrets::new();
+        let out = run(
+            r#"
+  const bad = ["", "/", "..x/y", "a/b", "~", "x~1", "a b", "a\0b", "é", "😀", "n".repeat(65), "\\", "a:b"];
+  let rejected = 0;
+  for (const name of bad) {
+    try { await set(name, "v"); } catch (e) { if (e.message === "denied:limit") { rejected = rejected + 1; } }
+    try { await get(name); } catch (e) { if (e.message === "denied:limit") { rejected = rejected + 1; } }
+    try { await remove(name); } catch (e) { if (e.message === "denied:limit") { rejected = rejected + 1; } }
+  }
+  // These names look odd but follow the rule.
+  for (const name of ["..", ".", "__index__", "A", "a", "x_1", "n".repeat(64)]) { await set(name, "v:" + name.length); }
+  // Values: NUL, an emoji, a lone surrogate, and the edges of 16 KiB.
+  const values = ["a\0b", "😀", "x\uD800y", "\uDFFF", "é".repeat(8192), "y".repeat(16384)];
+  let same = 0;
+  for (const v of values) {
+    await set("v", v);
+    const back = await get("v");
+    if (back === v) { same = same + 1; }
+  }
+  let over = "none";
+  try { await set("v", "y".repeat(16385)); over = "accepted"; } catch (e) { over = e.message; }
+  try { await set("v", "é".repeat(8193)); over = over + "+accepted"; } catch (e) { over = over + "+" + e.message; }
+  const list = await names();
+  let sorted = true;
+  for (let i = 1; i < list.length; i = i + 1) { if (!(list[i - 1] < list[i])) { sorted = false; } }
+  result.set("done:" + rejected + ";" + same + ";" + over + ";" + sorted + ";" + list.join(","));
+"#,
+            &backend,
+            "app.one",
+        );
+        // 13 bad names, 3 calls each. A lone surrogate may come back as U+FFFD: it must not trap.
+        let parts: Vec<&str> = out.split(';').collect();
+        assert_eq!(parts[0], "39", "{out}");
+        assert!(parts[1].parse::<u32>().unwrap() >= 4, "values that did not round trip: {out}");
+        assert_eq!(parts[2], "denied:limit+denied:limit", "{out}");
+        assert_eq!(parts[3], "true", "{out}");
+        assert_eq!(parts[4], format!("..,.,A,__index__,a,{},v,x_1", "n".repeat(64)).split(',').map(String::from).collect::<std::collections::BTreeSet<_>>().into_iter().collect::<Vec<_>>().join(","), "{out}");
+    }
+
     #[test]
     fn compiled_denied_calls_reject_and_never_trap() {
         let body = r#"
