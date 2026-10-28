@@ -57,9 +57,24 @@ pub fn validate_file(path: &Path) -> Result<()> {
             Some(signer) => println!("signed by {} ({})", signer.publisher, signer.key),
             None => println!("unsigned"),
         }
+        check_theme(&pkg.manifest)?;
         validate_entry(&pkg.component, &pkg.manifest.capabilities)
     } else {
         validate_entry(&bytes, &[])
+    }
+}
+
+/// The `[theme]` of the manifest: the same checks that `plinth build` runs
+/// and that a host runs when it loads the package. A host ignores a failing
+/// theme; `plinth validate` reports it as an error.
+fn check_theme(manifest: &plinth_package::Manifest) -> Result<()> {
+    let Some(theme) = &manifest.theme else { return Ok(()) };
+    match theme.resolve(manifest.accent.as_deref()) {
+        Ok(_) => {
+            println!("theme: ok ({} tokens set)", theme.0.len());
+            Ok(())
+        }
+        Err(e) => bail!("the package theme is not valid: {e}"),
     }
 }
 

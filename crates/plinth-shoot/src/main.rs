@@ -57,8 +57,14 @@ fn main() -> Result<()> {
         let port = Box::new(WasmGuest { guest, _runner: runner });
         let accent = app.accent.clone();
         let assets = assets.clone();
-        let window =
-            cx.open_window(size(px(w), px(h)), move |_, cx| cx.new(|cx| PlinthRoot::with_assets(port, commits, accent, assets, cx)))?;
+        let theme = app.theme.clone();
+        let window = cx.open_window(size(px(w), px(h)), move |_, cx| {
+            cx.new(|cx| {
+                let mut root = PlinthRoot::with_assets(port, commits, accent, assets, cx);
+                root.set_theme(theme.as_ref());
+                root
+            })
+        })?;
         let screens: Vec<u32> = cx.update(|cx| window.read(cx).map(|r| r.tree().screens().map(|(s, _)| s).collect()))?;
         for screen in screens {
             cx.update(|cx| window.update(cx, |root, _, cx| root.select_screen(screen, cx)))?;

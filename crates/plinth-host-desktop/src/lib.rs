@@ -49,6 +49,10 @@ pub struct HostApp {
     /// (`docs/STORAGE.md` §3 rule 2): the verified signer of the package,
     /// else the package digest; `Owner::Dev` for `plinth dev`.
     pub owner: Owner,
+    /// The app's `[theme]` token values (`docs/ui.md`, "Theming an app"),
+    /// as the manifest has them. Not trusted: the window checks them again
+    /// (`PlinthRoot::set_theme`) and ignores an override that fails.
+    pub theme: Option<plinth_package::theme::ThemeOverride>,
 }
 
 /// The owner of a package's private space: its verified signer, else its
@@ -87,6 +91,7 @@ impl HostApp {
             let core_policy = pkg.manifest.core.clone();
             let core_digest = pkg.manifest.core_digest.clone();
             let core_built = pkg.manifest.core_built.clone();
+            let theme = pkg.manifest.theme.clone();
             let assets = pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
             Ok(HostApp {
                 component: with_runtime_policy(pkg.component, &capabilities, &core_policy, core_digest.as_deref(), core_built.as_deref())
@@ -98,6 +103,7 @@ impl HostApp {
                 capabilities,
                 assets,
                 owner,
+                theme,
             })
         } else {
             let title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -112,6 +118,7 @@ impl HostApp {
                 capabilities: Vec::new(),
                 assets: std::collections::HashMap::new(),
                 owner,
+                theme: None,
             })
         }
     }
@@ -470,7 +477,7 @@ pub fn open_app_reporting_init(
     hub: Option<Box<dyn plinth_runner_wasmtime::hub::HubBackend>>,
     on_init: impl FnOnce(bool),
 ) -> gpui::WindowHandle<PlinthRoot> {
-    let HostApp { component, title, accent, app_id, version, assets, owner, .. } = app;
+    let HostApp { component, title, accent, app_id, version, assets, owner, theme, .. } = app;
     let (port, init) = start_with_policy_and_hub(runner, &component, &app_id, &version, &owner, policy, hub, &[]);
     on_init(init.is_ok());
     let assets = Arc::new(assets);
@@ -481,9 +488,16 @@ pub fn open_app_reporting_init(
         .titlebar(Some(gpui::TitlebarOptions { title: Some(title.into()), ..Default::default() }));
     let window = cx
         .open_window(options, move |_, cx| {
-            cx.new(move |cx| match init {
-                Ok(commits) => PlinthRoot::with_assets(port, commits, accent, assets, cx),
-                Err(e) => PlinthRoot::stopped(port, e, accent, cx),
+            cx.new(move |cx| {
+                let mut root = match init {
+                    Ok(commits) => PlinthRoot::with_assets(port, commits, accent, assets, cx),
+                    Err(e) => PlinthRoot::stopped(port, e, accent, cx),
+                };
+                // Only the window content takes the app theme. The consent
+                // UI and the Hub chrome have their own roots and keep the
+                // host theme.
+                root.set_theme(theme.as_ref());
+                root
             })
         })
         .expect("open the window");
@@ -752,7 +766,8 @@ fn prepare(hub: &plinth_hub::Hub, app_id: &str, pkg: plinth_package::Package, by
     let assets: std::collections::HashMap<String, Vec<u8>> =
         pkg.assets.into_iter().filter_map(|(p, b)| Some((p.strip_prefix("assets/")?.to_owned(), b))).collect();
     let version = pkg.manifest.version.clone();
-    let app = HostApp { component, title, accent, app_id: app_id.to_owned(), version, capabilities: declared, assets, owner };
+    let theme = pkg.manifest.theme.clone();
+    let app = HostApp { component, title, accent, app_id: app_id.to_owned(), version, capabilities: declared, assets, owner, theme };
     Ok(PreparedApp { app, policy, hub_manage })
 }
 

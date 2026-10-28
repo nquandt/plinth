@@ -152,6 +152,7 @@ fn launcher() -> PreparedApp {
             capabilities: vec!["hub.manage".into()],
             assets: Default::default(),
             owner: plinth_host_desktop::Owner::Dev,
+            theme: None,
         },
         policy: Policy::new(["hub.manage".to_owned()]),
         hub_manage: true,

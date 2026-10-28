@@ -499,6 +499,9 @@ fn compile_ex(dir: &Path, dev: bool) -> Result<Option<Built>> {
             if w > 0 {
                 eprintln!("{}", summary(e, w));
             }
+            // The `[theme]` contrast guard needs the app's named accent, which
+            // the compile gives. A failing theme is a build error.
+            config.check_theme(a.accent.as_deref())?;
             Ok(Some(Built { config, app: a.app, runtime: a.runtime, component: a.component, accent: a.accent }))
         }
         None => {
@@ -731,6 +734,7 @@ fn dev(dir: &Path) -> Result<ExitCode> {
         // `plinth dev` runs a project from source: its private space is
         // keyed by the app id alone, apart from any installed package.
         owner: plinth_host_desktop::Owner::Dev,
+        theme: first.config.theme.clone(),
     };
     plinth_host_desktop::run(app, Some(rx))?;
     Ok(ExitCode::SUCCESS)
