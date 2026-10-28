@@ -6,7 +6,7 @@ import { keyOf, labelsOf, initials } from "./types";
 import type { Issue } from "./types";
 
 /** The height of a card, in spacing units. A fixed height lets the host build only the cards in view. */
-export const CARD_H = 34;
+export const CARD_H = 33;
 
 /** The token color of a priority. Danger, accent, success and muted text. */
 export function priorityColor(priority: string): "danger" | "accent" | "success" | "text.muted" {
@@ -89,11 +89,11 @@ export function card(i: Issue) {
         <Span size="xs" mono={true} fg="text.muted" grow={1}>{keyOf(i)}</Span>
         {typeBadge(i.kind)}
       </Box>
-      <Span weight="medium" lines={2}>{i.title}</Span>
+      <Box height={11}><Span weight="medium" lines={2}>{i.title}</Span></Box>
       <Box direction="row" gap={1} align="center" justify="between">
         <Span size="xs" weight="medium" fg={priorityColor(i.priority)}>{priorityMark(i.priority)}</Span>
         <Box direction="row" gap={1} align="center">
-          {labelsOf(i).slice(0, 2).map((l) => pill(l))}
+          {labelsOf(i).slice(0, 1).map((l) => pill(l))}
           {avatar(i.assignee)}
         </Box>
       </Box>

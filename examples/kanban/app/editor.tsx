@@ -1,6 +1,6 @@
 // The overlays of the board: the create/edit dialog, the issue detail sheet,
 // and the context menu of a card (the keyboard path of a drag).
-import { Dialog, Sheet, Menu, Action, Box, Span, Heading, Text, Button, Picker, TextField, TextArea } from "plinth:ui";
+import { Dialog, Sheet, Menu, Action, Box, Span, Heading, Text, Button, Pressable, Picker, TextField, TextArea } from "plinth:ui";
 import {
   editOpen,
   editingId,
@@ -25,6 +25,17 @@ import {
 } from "./model";
 import { columnName, keyOf, labelsOf } from "./types";
 import { priorityColor, priorityMark, typeBadge, avatar, pill } from "./cards";
+
+/** A chip that moves the issue of the sheet to a column. The current column shows as chosen. */
+function moveChip(name: string) {
+  const here = () => columnName(detail().status) === name;
+  return (
+    <Pressable label={`Move to ${name}`} role="button" paddingX={3} paddingY={1} radius="full" border={here() ? "accent" : "border"}
+               bg={here() ? "selected" : "surface"} focus={{ border: "accent" }} onPress={() => moveByName(detail().id, name)}>
+      <Span size="sm" weight={here() ? "semibold" : "regular"} fg={here() ? "accent" : "text"}>{here() ? `${name} (here)` : name}</Span>
+    </Pressable>
+  );
+}
 
 export function editor() {
   return (
@@ -58,7 +69,12 @@ export function editor() {
           {labelsOf(detail()).map((l) => pill(l))}
         </Box>
         <Text>{detail().description === "" ? "No description." : detail().description}</Text>
-        <Picker label="Column" options={["Backlog", "In Progress", "Review", "Done"]} value={columnName(detail().status)} onChange={(name) => moveByName(detail().id, name)} />
+        <Box direction="row" gap={2} wrap={true} label="Move to a column">
+          {moveChip("Backlog")}
+          {moveChip("In Progress")}
+          {moveChip("Review")}
+          {moveChip("Done")}
+        </Box>
         <Button label="Edit issue" role="primary" onPress={() => startEdit(detail().id)} />
         <Button label="Delete issue" role="destructive" onPress={() => deleteIssue(detail().id)} />
       </Sheet>

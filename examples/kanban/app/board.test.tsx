@@ -89,7 +89,7 @@ test("edits an issue from its detail sheet", async () => {
 test("moves an issue to another column from its sheet", async () => {
   const s = await start();
   await s.press("KAN-7: Export issues to CSV");
-  await s.select("Column", "Review");
+  await s.press("Move to Review");
   await settle();
   expect(s.get("Review issues").get("KAN-7: Export issues to CSV")).toExist();
   expect(ids(0)).toBe("8,9,10");
@@ -109,13 +109,13 @@ test("a drop on a column puts the issue at its end", async () => {
 test("a drop on a card puts the issue before it or after it", async () => {
   await start();
   // The upper half of KAN-8: before it.
-  dropOnCard("10", (await rows())[7], 3, 34);
+  dropOnCard("10", (await rows())[7], 3, 33);
   expect(ids(0)).toBe("7,10,8,9");
   // The lower half of KAN-8: after it.
-  dropOnCard("7", board()[0][2], 30, 34);
+  dropOnCard("7", board()[0][2], 28, 33);
   expect(ids(0)).toBe("10,8,7,9");
   // A drop on itself does nothing.
-  dropOnCard("8", board()[0][1], 3, 34);
+  dropOnCard("8", board()[0][1], 3, 33);
   expect(ids(0)).toBe("10,8,7,9");
   // The order is in the database too.
   await settle();
@@ -201,6 +201,8 @@ test("keeps the issues in the database", async () => {
   await readAgain();
   expect(s.get("In Progress issues").get("KAN-11: Saved for later")).toExist();
   expect(ids(1)).toBe("11,3,4");
+  // An expectation about the screen is checked at the next await: wait before the next change.
+  await settle();
   deleteIssue(11);
   await settle();
   await readAgain();

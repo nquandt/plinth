@@ -43,7 +43,7 @@ import { card } from "./cards";
 import { editor } from "./editor";
 
 /** The width of a column, in spacing units. */
-const COL_W = 72;
+const COL_W = 52;
 /** The most height of the cards of a column, in spacing units. */
 const COL_H = 150;
 
@@ -73,12 +73,8 @@ function priorityChip(priority: string) {
 function filterBar() {
   return (
     <Box gap={2} padding={3} radius="md" bg="surface" border="border" label="Filters">
-      <Box direction="row" gap={3} wrap={true} align="end" compact={{ direction: "column", align: "stretch" }}>
-        <Box grow={1}>
-          <TextField label="Search" placeholder="Search title, description, labels" value={search} />
-        </Box>
-        <Picker label="Assigned to" options={["Anyone", "Ada", "Grace", "Alan"]} value={assigneeFilter} />
-      </Box>
+      <TextField label="Search" placeholder="Search title, description, labels" value={search} />
+      <Picker label="Assigned to" options={["Anyone", "Ada", "Grace", "Alan"]} value={assigneeFilter} />
       <Box direction="row" gap={2} wrap={true} align="center">
         <Span size="sm" fg="text.muted">Show priority</Span>
         {priorityChip("Urgent")}
@@ -169,22 +165,10 @@ export default function Board() {
       title="Board"
       actions={[
         <Action label="New issue" icon="plus" role="primary" onPress={() => startCreate("backlog")} />,
-        <Action label="Add 100 demo issues" icon="more" onPress={() => addDemoIssues(100)} />,
-        <Action label="Add 500 demo issues" icon="more" onPress={() => addDemoIssues(500)} />,
+        <Action label="Add 100 demo issues" onPress={() => addDemoIssues(100)} />,
+        <Action label="Add 500 demo issues" onPress={() => addDemoIssues(500)} />,
       ]}
     >
-      <Section title="Summary">
-        <Box direction="row" gap={4} align="center" compact={{ direction: "column", align: "stretch" }}>
-          <Box grow={1}>
-            <Chart label="Issues per column" kind="bar" data={chartData()} />
-          </Box>
-          <Box grow={1} gap={2}>
-            <Text>{summary()}</Text>
-            <Progress label="Done" value={doneShare()} />
-            {status() !== "" ? <Text tone="danger">{status()}</Text> : null}
-          </Box>
-        </Box>
-      </Section>
       <Section title="Issues">
         {filterBar()}
         {columnSwitch()}
@@ -197,6 +181,18 @@ export default function Board() {
         <Span size="xs" fg="text.muted">
           On a card: Enter opens it, E edits, Delete removes, U and D move it up and down, the arrow keys move it to another column. The menu key opens the card menu.
         </Span>
+      </Section>
+      <Section title="Summary">
+        <Box direction="row" gap={4} align="center" compact={{ direction: "column", align: "stretch" }}>
+          <Box grow={1}>
+            <Chart label="Issues per column" kind="bar" data={chartData()} />
+          </Box>
+          <Box grow={1} gap={2}>
+            <Text>{summary()}</Text>
+            <Progress label="Done" value={doneShare()} />
+            {status() !== "" ? <Text tone={status().startsWith("Loading") ? "muted" : "danger"}>{status()}</Text> : null}
+          </Box>
+        </Box>
       </Section>
       {editor()}
     </Screen>

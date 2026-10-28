@@ -65,3 +65,7 @@
 - **Built:** per-app theme token values (`[theme]` in `plinth.toml`, `docs/ui.md` "Theming an app"). Owner decision: stay with tokens; limits are a feature; no raw colors. Data model, hex checks and the contrast guard in `crates/plinth-package/src/theme.rs`; the desktop host applies the merged tokens (`Tokens::themed_with`); the web host reads the manifest in `web/theme.js` and sets the `--pl-*` variables on the app root only. A golden file (`web/test/fixtures/theme-golden.json`) is checked by Rust and Node, so both hosts give the same colors. `examples/themed` shows it.
 - **Decisions:** (1) A contrast pair is checked only when the app sets one of its two tokens, because the host default light teal accent with white text is 4.2:1 and would fail every override. (2) An override of `background` alone fails in the other appearance, because the host dark text is faint on a light background; the error says so. (3) On the web, an app with a `[theme]` fills the tokens that it does not set from the desktop palette (the web host palette differs a little), so both hosts match. (4) The host banners use `--pl-host-danger` (computed on the root) so an app theme cannot change them.
 - **Not tested:** macOS, Linux, iOS, Android, WebKit and Firefox.
+
+## 2026-10-28 (kanban probe)
+
+- **Built:** `examples/kanban`, an issue board made only from the public UI API, to find the limits of the UI model. Result and next UI work: `docs/KANBAN-FINDINGS.md`.
