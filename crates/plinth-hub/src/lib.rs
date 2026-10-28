@@ -11,7 +11,11 @@
 //! file, then rename it over the target), so a crash mid-write cannot
 //! corrupt a store.
 
+pub mod appdata;
 pub mod os;
+
+pub use appdata::{AppDataLayout, DEFAULT_DATA_QUOTA, ExportReport, RunLock};
+pub use plinth_runner_wasmtime::files::Owner;
 
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -493,6 +497,119 @@ impl Hub {
         self.set_available_update(id, None)
     }
 
+    // -- Uninstall, export and the data quota (`docs/STORAGE.md` S13) ------
+
+    /// The owners of the private spaces of `id`: one for each installed
+    /// version (the signer's key, or the package digest of an unsigned
+    /// version). A key change or a new unsigned build gives a new space.
+    pub fn owners(&self, id: &str) -> Result<Vec<Owner>> {
+        let entry = self.get(id)?.with_context(|| format!("{id} is not in the library"))?;
+        let mut owners: Vec<Owner> = Vec::new();
+        for v in &entry.versions {
+            let owner = match v.signer.as_deref() {
+                Some(key) if !key.is_empty() => Owner::Publisher(key.to_owned()),
+                _ => Owner::Package(v.digest.clone()),
+            };
+            if !owners.contains(&owner) {
+                owners.push(owner);
+            }
+        }
+        Ok(owners)
+    }
+
+    /// The places where `id` keeps its data under `data_dir`.
+    pub fn data_layout(&self, id: &str, data_dir: &Path) -> Result<appdata::AppDataLayout> {
+        appdata::AppDataLayout::new(data_dir, id, &self.owners(id)?)
+    }
+
+    /// Uninstalls `id`: removes the app from the library and, unless
+    /// `keep_data`, deletes everything that it owns (`docs/STORAGE.md` S13):
+    /// the `store.kv` file, the `store.sql` databases, the private file
+    /// spaces, the grants of the app, and (through `remove_secrets`, which
+    /// the host gives because the keychain is not in this crate) its
+    /// secrets. It always removes the cached packages that no other app
+    /// uses.
+    ///
+    /// The operation first takes an exclusive run lock (`appdata::RunLock`):
+    /// if the app runs, it fails and changes nothing. The data goes first
+    /// and the library entry last, so after a failure the app is still in
+    /// the library and the same command can run again. The block list is not
+    /// changed: a block is a safety decision, not app data.
+    pub fn uninstall(
+        &self,
+        id: &str,
+        data_dir: &Path,
+        keep_data: bool,
+        remove_secrets: &mut dyn FnMut(&str) -> Result<()>,
+    ) -> Result<UninstallReport> {
+        appdata::check_app_id(id)?;
+        if id == HOST_SECRETS_APP {
+            bail!("`{id}` is not an app");
+        }
+        let lib = self.library()?;
+        let entry = lib.apps.get(id).with_context(|| format!("{id} is not in the library"))?.clone();
+        let layout = self.data_layout(id, data_dir)?;
+        let _lock = appdata::RunLock::exclusive(data_dir, id)?;
+
+        let mut report = UninstallReport { data_kept: keep_data, ..UninstallReport::default() };
+        if !keep_data {
+            report.deleted_bytes = layout.delete()?;
+            remove_secrets(id).with_context(|| format!("delete the secrets of {id}"))?;
+            report.secrets_removed = true;
+            let mut store = self.grants_store()?;
+            let prefix = format!("{id}\u{1f}");
+            let before = store.0.len();
+            store.0.retain(|k, _| !k.starts_with(&prefix));
+            report.grants_removed = before - store.0.len();
+            if report.grants_removed > 0 {
+                write_json(&self.grants_path(), &store)?;
+            }
+        }
+
+        let mut lib = self.library()?;
+        lib.apps.remove(id);
+        self.save_library(&lib)?;
+        self.set_available_update(id, None)?;
+        for v in &entry.versions {
+            let used_elsewhere = lib.apps.values().any(|e| e.versions.iter().any(|o| o.digest == v.digest));
+            let plain_hex = !v.digest.is_empty() && v.digest.bytes().all(|b| b.is_ascii_hexdigit());
+            if !used_elsewhere && plain_hex {
+                let path = self.packages_dir().join(format!("{}.plnt", v.digest));
+                if std::fs::remove_file(&path).is_ok() {
+                    report.packages_removed += 1;
+                }
+            }
+        }
+        let _ = std::fs::remove_file(self.dir.join("icons").join(format!("{id}.ico")));
+        Ok(report)
+    }
+
+    /// Writes the data of `id` to the zip file `out` (`appdata::AppDataLayout::export_zip`).
+    /// The secrets are not exported. The manifest names the newest installed version.
+    pub fn export_data(&self, id: &str, data_dir: &Path, out: &Path) -> Result<appdata::ExportReport> {
+        let layout = self.data_layout(id, data_dir)?;
+        let version = self.newest_installed(id)?.map(|v| v.version).unwrap_or_default();
+        layout.export_zip(&version, out)
+    }
+
+    /// The data quota of one app, in bytes, for each store (the private
+    /// files, `store.kv` and `store.sql`): `PLINTH_DATA_QUOTA_MIB`, else the
+    /// `dataQuotaMib` of `policy.json`, else `DEFAULT_DATA_QUOTA`.
+    pub fn data_quota(&self) -> u64 {
+        data_quota_in(&self.dir)
+    }
+
+    /// Sets (`Some`, in MiB; at least 1) or clears (`None`) the data quota
+    /// in `policy.json`.
+    pub fn set_data_quota_mib(&self, mib: Option<u64>) -> Result<()> {
+        if mib == Some(0) {
+            bail!("the data quota must be at least 1 MiB");
+        }
+        let mut store = self.policy_store()?;
+        store.data_quota_mib = mib;
+        write_json(&self.policy_path(), &store)
+    }
+
     /// The package bytes for the app's active version (`docs/HUB.md`
     /// §9.1).
     pub fn package(&self, id: &str) -> Result<Vec<u8>> {
@@ -937,7 +1054,48 @@ impl Hub {
 /// `policy.json`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct GlobalPolicy {
+    #[serde(default)]
     denied: Vec<String>,
+    /// The data quota of one app in MiB (`Hub::data_quota`); `None` is the default.
+    #[serde(default, rename = "dataQuotaMib", skip_serializing_if = "Option::is_none")]
+    data_quota_mib: Option<u64>,
+}
+
+/// What `Hub::uninstall` did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct UninstallReport {
+    /// True when the data stayed (`keep_data`).
+    pub data_kept: bool,
+    /// The bytes of app data that were deleted.
+    pub deleted_bytes: u64,
+    /// True when the secrets of the app were deleted.
+    pub secrets_removed: bool,
+    /// The number of grant records that were deleted.
+    pub grants_removed: usize,
+    /// The number of cached package files that were deleted.
+    pub packages_removed: usize,
+}
+
+/// The data quota of one app in bytes, for the Hub data directory `dir`
+/// (`Hub::data_quota`). It reads `policy.json` without making any folder, so
+/// the host can call it every time it starts an app. A value that does not
+/// parse or is 0 counts as not set.
+pub fn data_quota_in(dir: &Path) -> u64 {
+    let mib = |v: u64| (v > 0).then(|| v.saturating_mul(1 << 20));
+    if let Some(q) = std::env::var("PLINTH_DATA_QUOTA_MIB").ok().and_then(|v| v.trim().parse::<u64>().ok()).and_then(mib) {
+        return q;
+    }
+    std::fs::read_to_string(dir.join("policy.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<GlobalPolicy>(&t).ok())
+        .and_then(|p| p.data_quota_mib)
+        .and_then(mib)
+        .unwrap_or(DEFAULT_DATA_QUOTA)
+}
+
+/// The data quota of one app in bytes for the default Hub directory.
+pub fn data_quota() -> u64 {
+    data_quota_in(&hub_dir())
 }
 
 // -- plinth:hub backend -------------------------------------------------------
@@ -1953,6 +2111,189 @@ mod tests {
         // No icon: no file.
         let other = hub.add_package(&fake_package("com.example.plain", "0.1.0")).unwrap();
         assert_eq!(hub.write_app_icon(&other).unwrap(), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Writes sample data for `id` under `data` and returns its layout.
+    fn put_app_data(hub: &Hub, id: &str, data: &Path) -> appdata::AppDataLayout {
+        let layout = hub.data_layout(id, data).unwrap();
+        std::fs::create_dir_all(&layout.kv).unwrap();
+        std::fs::write(layout.kv.join("kv.json"), r#"{"k":"v"}"#).unwrap();
+        for space in &layout.spaces {
+            std::fs::create_dir_all(space.files.join("d")).unwrap();
+            std::fs::write(space.files.join("d/f.txt"), "file").unwrap();
+            std::fs::create_dir_all(&space.database).unwrap();
+            std::fs::write(space.database.join("store.sqlite"), "not really a database").unwrap();
+        }
+        layout
+    }
+
+    /// S13: uninstall with data deletes everything the app owns, the
+    /// secrets callback runs, the grants and the cached packages go, and
+    /// another app is not touched.
+    #[test]
+    fn uninstall_deletes_the_app_and_its_data() {
+        let (hub, dir) = temp_hub();
+        let data = dir.join("data");
+        let id = hub.add_package(&fake_package_with_capabilities("com.example.gone", "0.1.0", &[("store.kv", "k")])).unwrap();
+        let keep = hub.add_package(&fake_package_with_capabilities("com.example.stays", "0.1.0", &[("store.kv", "k")])).unwrap();
+        let layout = put_app_data(&hub, &id, &data);
+        let other = put_app_data(&hub, &keep, &data);
+        assert!(!hub.grants(&id).unwrap().is_empty());
+        let digest = hub.get(&id).unwrap().unwrap().versions[0].digest.clone();
+        let package_file = hub.packages_dir().join(format!("{digest}.plnt"));
+        assert!(package_file.exists());
+        hub.block_app("com.example.blocked").unwrap();
+
+        let mut secrets_for = Vec::new();
+        let report = hub
+            .uninstall(&id, &data, false, &mut |app| {
+                secrets_for.push(app.to_owned());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(secrets_for, vec![id.clone()]);
+        assert!(report.secrets_removed && !report.data_kept);
+        assert!(report.deleted_bytes > 0 && report.grants_removed >= 1 && report.packages_removed == 1);
+        assert!(!layout.exists());
+        assert!(hub.get(&id).unwrap().is_none());
+        assert!(hub.grants(&id).unwrap().is_empty());
+        assert!(!package_file.exists());
+        assert!(other.exists() && hub.get(&keep).unwrap().is_some() && !hub.grants(&keep).unwrap().is_empty());
+        assert!(hub.is_app_blocked("com.example.blocked").unwrap(), "the block list is not changed");
+        // The app is gone, so a second uninstall says so.
+        assert!(hub.uninstall(&id, &data, false, &mut |_| Ok(())).unwrap_err().to_string().contains("not in the library"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `--keep-data`: the app goes, the data and the grants stay, the secrets
+    /// callback does not run. A reinstall of the same package finds the data.
+    #[test]
+    fn uninstall_can_keep_the_data() {
+        let (hub, dir) = temp_hub();
+        let data = dir.join("data");
+        let bytes = fake_package("com.example.keeper", "0.1.0");
+        let id = hub.add_package(&bytes).unwrap();
+        let layout = put_app_data(&hub, &id, &data);
+        let report = hub.uninstall(&id, &data, true, &mut |_| panic!("the secrets stay")).unwrap();
+        assert!(report.data_kept && !report.secrets_removed && report.deleted_bytes == 0);
+        assert!(hub.get(&id).unwrap().is_none());
+        assert!(layout.exists());
+        hub.add_package(&bytes).unwrap();
+        assert_eq!(hub.data_layout(&id, &data).unwrap().spaces, layout.spaces, "the same package gets the same space");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A running app (a shared run lock) stops the uninstall before any change.
+    #[test]
+    fn uninstall_refuses_while_the_app_runs() {
+        let (hub, dir) = temp_hub();
+        let data = dir.join("data");
+        let id = hub.add_package(&fake_package("com.example.busy", "0.1.0")).unwrap();
+        let layout = put_app_data(&hub, &id, &data);
+        let running = RunLock::running(&data, &id).unwrap();
+        let err = hub.uninstall(&id, &data, false, &mut |_| panic!("nothing changes while it runs")).unwrap_err().to_string();
+        assert!(err.contains("is running") && err.contains("close"), "{err}");
+        assert!(layout.exists() && hub.get(&id).unwrap().is_some());
+        drop(running);
+        hub.uninstall(&id, &data, false, &mut |_| Ok(())).unwrap();
+        assert!(!layout.exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A failing secrets removal leaves the app in the library, so the user
+    /// can run the command again.
+    #[test]
+    fn uninstall_keeps_the_library_entry_when_the_secrets_fail() {
+        let (hub, dir) = temp_hub();
+        let data = dir.join("data");
+        let id = hub.add_package(&fake_package("com.example.fails", "0.1.0")).unwrap();
+        put_app_data(&hub, &id, &data);
+        let err = hub.uninstall(&id, &data, false, &mut |_| bail!("keychain locked")).unwrap_err();
+        assert!(format!("{err:#}").contains("keychain locked"));
+        assert!(hub.get(&id).unwrap().is_some());
+        hub.uninstall(&id, &data, false, &mut |_| Ok(())).unwrap();
+        assert!(hub.get(&id).unwrap().is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Ids that point outside the app's folders never delete anything.
+    #[test]
+    fn uninstall_refuses_ids_that_look_like_paths() {
+        let (hub, dir) = temp_hub();
+        let data = dir.join("data");
+        let victim = dir.join("victim");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("precious.txt"), "x").unwrap();
+        std::fs::create_dir_all(data.join("apps")).unwrap();
+        for bad in ["..", "../victim", "..\\victim", "a/b", "", ".", HOST_SECRETS_APP] {
+            let err = hub.uninstall(bad, &data, false, &mut |_| panic!("no secrets for {bad:?}")).unwrap_err().to_string();
+            assert!(err.contains("not a valid app id") || err.contains("not an app") || err.contains("not in the library"), "{bad:?}: {err}");
+            assert!(hub.export_data(bad, &data, &dir.join("x.zip")).is_err(), "{bad:?}");
+        }
+        assert!(victim.join("precious.txt").exists() && data.join("apps").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Two versions of an unsigned app have two spaces; uninstall deletes both.
+    #[test]
+    fn uninstall_deletes_every_space_of_an_unsigned_app() {
+        let (hub, dir) = temp_hub();
+        let data = dir.join("data");
+        let id = hub.add_package(&fake_package("com.example.twice", "0.1.0")).unwrap();
+        hub.add_package(&fake_package("com.example.twice", "0.2.0")).unwrap();
+        let layout = put_app_data(&hub, &id, &data);
+        assert_eq!(layout.spaces.len(), 2);
+        hub.uninstall(&id, &data, false, &mut |_| Ok(())).unwrap();
+        assert!(!layout.exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Export through the Hub names the newest version in the manifest.
+    #[test]
+    fn export_data_writes_a_zip_with_the_version() {
+        let (hub, dir) = temp_hub();
+        let data = dir.join("data");
+        let id = hub.add_package(&fake_package("com.example.export", "0.3.0")).unwrap();
+        let layout = hub.data_layout(&id, &data).unwrap();
+        std::fs::create_dir_all(&layout.kv).unwrap();
+        std::fs::write(layout.kv.join("kv.json"), r#"{"k":"v"}"#).unwrap();
+        std::fs::create_dir_all(&layout.spaces[0].files).unwrap();
+        std::fs::write(layout.spaces[0].files.join("f.txt"), "file").unwrap();
+        let out = dir.join("out").join("export.zip");
+        let report = hub.export_data(&id, &data, &out).unwrap();
+        assert_eq!((report.kv_entries, report.files, report.databases), (Some(1), 1, 0));
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut archive.by_name("manifest.json").unwrap(), &mut text).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(manifest["version"], "0.3.0");
+        assert_eq!(manifest["app"], "com.example.export");
+        // The data stays after an export.
+        assert!(layout.exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_data_quota_comes_from_the_policy_file() {
+        let (hub, dir) = temp_hub();
+        // PLINTH_DATA_QUOTA_MIB is read too, so this test does not set or
+        // rely on the environment: it only runs when the variable is unset.
+        if std::env::var_os("PLINTH_DATA_QUOTA_MIB").is_some() {
+            return;
+        }
+        assert_eq!(hub.data_quota(), DEFAULT_DATA_QUOTA);
+        assert_eq!(DEFAULT_DATA_QUOTA, 100 << 20);
+        hub.policy_deny("net").unwrap();
+        hub.set_data_quota_mib(Some(5)).unwrap();
+        assert_eq!(hub.data_quota(), 5 << 20);
+        assert_eq!(hub.policy_denied().unwrap(), vec!["net".to_string()], "the deny list stays");
+        assert!(hub.set_data_quota_mib(Some(0)).is_err());
+        std::fs::write(dir.join("policy.json"), r#"{"dataQuotaMib":0}"#).unwrap();
+        assert_eq!(hub.data_quota(), DEFAULT_DATA_QUOTA, "0 counts as not set");
+        std::fs::write(dir.join("policy.json"), "nonsense").unwrap();
+        assert_eq!(hub.data_quota(), DEFAULT_DATA_QUOTA);
+        hub.set_data_quota_mib(None).ok();
         std::fs::remove_dir_all(&dir).ok();
     }
 

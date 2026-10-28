@@ -37,3 +37,8 @@ wasm-opt.workspace = true
 # `plinth test` (docs/TESTING.md): the runner and the UI tree, with no window.
 plinth-runner-wasmtime.workspace = true
 plinth-ui.workspace = true
+
+[dev-dependencies]
+# `tests/uninstall_export.rs` reads the export zip and its manifest.
+zip.workspace = true
+serde_json.workspace = true
