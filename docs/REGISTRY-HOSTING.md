@@ -96,9 +96,22 @@ curl -s -o /dev/null -w "%{http_code}
 
 Without the headers the answer is 302. With a valid token it is 200.
 
+The native client sends the headers (built, 2026-10-27). A source can carry request headers, and the secret is in the system keychain, not in the sources file (`docs/HUB.md` §5.4). To use a device token:
+
+```bash
+set -a; . ~/.plinth-access/mac.env; set +a
+plinth hub source add femur https://plinth.femur.dev
+plinth hub source set-token femur      # reads CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET
+plinth hub search notes
+```
+
+The client sends the headers only to the host of the source. A redirect to another host does not get them. A redirect to a Cloudflare Access login page gives the error "the registry needs a login or a token (Cloudflare Access)". The web Hub needs no change: the browser keeps the Access cookie.
+
+Tested: a local test server that answers 302 unless both headers are present (`crates/plinth-registry/tests/source_headers.rs`), and the keychain on Windows. Not tested against the real `plinth.femur.dev`, and not on macOS or Linux.
+
 Not built yet:
 
-- The Hub client does not send the headers. A registry source needs a `headers` field (it is not in `docs/HUB.md` yet), and the secret must come from the keychain, not from the source list file.
+- The mobile hosts (iOS, Android) have no field for the token.
 - A second layer: a Cloudflare rate-limit rule for the name.
 
 The Azure mirror (§1) has **no** Access. Its URL is public. Do not put private apps there, and do not use `--sync` for an app that must stay private.

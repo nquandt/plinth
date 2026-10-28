@@ -159,6 +159,35 @@ A link that is not from a source gets a stronger warning on the consent screen (
 
 ---
 
+### 5.4 Request headers of a source
+
+A source can carry request headers. This is how a native host reads a registry behind Cloudflare Access (`docs/REGISTRY-HOSTING.md` §6). Each header in `sources.json` has a `name` and one of these:
+
+- a `value`: only for a value that is not secret;
+- a `secret`: the name of an entry in the host's secret store (`docs/SECRETS.md`). The scope is the reserved app id `plinth.host`, instance `default`. The name is `source.<source name>.<header name in lowercase>`. A source name or header name that does not fit the secret-name rule (letters, digits, `.`, `_`, `-`; 64 characters at most in all) is refused.
+
+Rules:
+
+1. The host reads the secret from the store at the time of each request. It does not keep the value. The value is never in `sources.json`, in a log, in an error text, or in the Hub UI. `plinth hub source list` shows the header names only.
+2. The client sends the headers only to the origin of the source (same scheme, host and port). It follows redirects itself. A redirect to another host does not get the headers.
+3. A host with no secret store (for example Linux without a Secret Service) cannot save a token. The command stops with an error. A token is never written to a file.
+4. When the registry answers with a redirect to a Cloudflare Access login page (`*.cloudflareaccess.com`), the error is "the registry needs a login or a token (Cloudflare Access)".
+5. `plinth hub source add` with a name that exists again replaces the base and removes the headers. `plinth hub source remove` also deletes the secrets.
+
+The commands, for a Cloudflare Access service token:
+
+```bash
+plinth hub source add corp https://plinth.femur.dev
+# Values from the flags, or from CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET,
+# or two lines on stdin (the id, then the secret).
+plinth hub source set-token corp --client-id <id> --client-secret <secret>
+plinth hub source clear-token corp
+```
+
+`set-token` stores the two headers `CF-Access-Client-Id` and `CF-Access-Client-Secret`. The desktop host and the `plinth hub` commands use the system keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service). The Hub app on the desktop (`plinth:hub`) uses the same client, so it reads the same sources. The mobile hosts need the same field with their own store (not built).
+
+The web Hub needs no change. A browser keeps the Access cookie after the owner logs in, and the web Hub does not use the headers.
+
 ## 6. Identity and authorship
 
 ### 6.1 Publisher keys and signatures

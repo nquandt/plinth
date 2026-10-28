@@ -17,6 +17,7 @@ use std::time::Duration;
 pub mod consent;
 pub mod notify;
 pub mod secrets;
+pub mod source_headers;
 pub mod system_settings;
 pub mod updater;
 

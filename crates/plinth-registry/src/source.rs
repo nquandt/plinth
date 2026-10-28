@@ -111,17 +111,31 @@ pub struct Source {
     index: ServiceIndex,
     /// The service index's own location, for resolving resource templates.
     index_loc: Loc,
+    /// The request headers, and the origin that gets them.
+    access: Access,
 }
 
 impl Source {
     /// Opens a registry at `base` by reading its service index.
     pub fn open(base: &str) -> Result<Source> {
+        Self::open_with(base, RequestHeaders::default())
+    }
+
+    /// `open` with request headers (`docs/HUB.md` §5.4). The client sends
+    /// them only to the origin of `base`: a redirect to another host does
+    /// not get them.
+    pub fn open_with(base: &str, headers: RequestHeaders) -> Result<Source> {
         let base_loc = Loc::parse_base(base)?;
+        let origin = match &base_loc {
+            Loc::Url(u) => origin_of(u),
+            Loc::Path(_) => None,
+        };
+        let access = Access { headers, origin };
         let index_loc = base_loc.join("plinth-registry.json")?;
-        let bytes = fetch(&index_loc)?;
+        let bytes = fetch(&index_loc, &access)?;
         let index: ServiceIndex = serde_json::from_slice(&bytes).with_context(|| format!("parse {}", index_loc.display()))?;
         check_schema(&index.schema)?;
-        Ok(Source { base: base_loc, index, index_loc })
+        Ok(Source { base: base_loc, index, index_loc, access })
     }
 
     /// The registry's display name, if it set one.
@@ -138,7 +152,7 @@ impl Source {
         let mut out = Vec::new();
         let mut loc = self.resource(&self.index.resources.apps, &[])?;
         loop {
-            let bytes = fetch(&loc)?;
+            let bytes = fetch(&loc, &self.access)?;
             let page: AppList = serde_json::from_slice(&bytes).with_context(|| format!("parse {}", loc.display()))?;
             check_schema(&page.schema)?;
             out.extend(page.apps);
@@ -153,7 +167,7 @@ impl Source {
     /// The app document for `id`.
     pub fn app(&self, id: &str) -> Result<AppDocument> {
         let loc = self.resource(&self.index.resources.app, &[("id", id)])?;
-        let bytes = fetch(&loc)?;
+        let bytes = fetch(&loc, &self.access)?;
         let doc: AppDocument = serde_json::from_slice(&bytes).with_context(|| format!("parse {}", loc.display()))?;
         check_schema(&doc.schema)?;
         Ok(doc)
@@ -166,7 +180,7 @@ impl Source {
         let doc = self.app(id)?;
         let entry = doc.versions.iter().find(|v| v.version == version).with_context(|| format!("{id} has no version {version}"))?;
         let loc = self.resource(&self.index.resources.package, &[("sha256", &entry.sha256)])?;
-        let bytes = fetch_limited(&loc, MAX_PACKAGE)?;
+        let bytes = fetch_limited(&loc, MAX_PACKAGE, &self.access)?;
         let digest = crate::hex_digest(&bytes);
         if digest != entry.sha256 {
             bail!("the package for {id}@{version} does not match its digest (expected {}, got {digest})", entry.sha256);
@@ -187,7 +201,7 @@ impl Source {
     pub fn search(&self, q: &str) -> Result<Vec<AppSummary>> {
         if let Some(template) = &self.index.resources.search {
             let loc = self.resource(template, &[("query", q)])?;
-            let bytes = fetch(&loc)?;
+            let bytes = fetch(&loc, &self.access)?;
             let page: AppList = serde_json::from_slice(&bytes).with_context(|| format!("parse {}", loc.display()))?;
             check_schema(&page.schema)?;
             return Ok(page.apps);
@@ -209,7 +223,7 @@ impl Source {
     pub fn cores(&self) -> Result<Vec<crate::CoreEntry>> {
         let Some(template) = &self.index.resources.cores else { return Ok(Vec::new()) };
         let loc = self.resource(template, &[])?;
-        let bytes = fetch(&loc)?;
+        let bytes = fetch(&loc, &self.access)?;
         let idx: CoresIndex = serde_json::from_slice(&bytes).with_context(|| format!("parse {}", loc.display()))?;
         check_schema(&idx.schema)?;
         Ok(idx.cores)
@@ -219,7 +233,7 @@ impl Source {
     pub fn core(&self, version: &str) -> Result<Vec<u8>> {
         let template = self.index.resources.core.as_deref().context("this registry serves no cores")?;
         let loc = self.resource(template, &[("version", version)])?;
-        fetch_limited(&loc, MAX_PACKAGE)
+        fetch_limited(&loc, MAX_PACKAGE, &self.access)
     }
 
     /// The base this source was opened with, as given.
@@ -228,11 +242,128 @@ impl Source {
     }
 }
 
-fn fetch(loc: &Loc) -> Result<Vec<u8>> {
-    fetch_limited(loc, MAX_JSON)
+/// The most redirects one request follows.
+const MAX_REDIRECTS: usize = 5;
+
+/// The error for a redirect to a Cloudflare Access login page.
+const ACCESS_MESSAGE: &str = "the registry needs a login or a token (Cloudflare Access); add a service token with `plinth hub source set-token <source>`";
+
+/// Request headers for one source. `Debug` shows the names only.
+#[derive(Clone, Default)]
+pub struct RequestHeaders(Vec<(String, String)>);
+
+impl RequestHeaders {
+    /// Checks each name and value. The error names the header, never the
+    /// value.
+    pub fn new(headers: Vec<(String, String)>) -> Result<Self> {
+        for (name, value) in &headers {
+            if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                bail!("`{name}` is not a valid header name");
+            }
+            if value.bytes().any(|b| b < 0x20 && b != b'\t' || b == 0x7f) {
+                bail!("the value of the header {name} has a control character");
+            }
+        }
+        Ok(Self(headers))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
-fn fetch_limited(loc: &Loc, limit: u64) -> Result<Vec<u8>> {
+impl std::fmt::Debug for RequestHeaders {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.0.iter().map(|(n, _)| n)).finish()
+    }
+}
+
+/// The scheme, host and port of an `http(s)://` URL, in lowercase.
+fn origin_of(url: &str) -> Option<(String, String, u16)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, a)| a);
+    let (host, port) = match authority.rfind(':') {
+        Some(i) if !authority[i..].contains(']') => (&authority[..i], authority[i + 1..].parse().ok()?),
+        _ => (authority, if scheme == "https" { 443 } else { 80 }),
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some((scheme, host.to_ascii_lowercase(), port))
+}
+
+/// The URL that a `Location` value means, from the URL it answered.
+fn redirect_target(from: &str, location: &str) -> String {
+    if location.starts_with("http://") || location.starts_with("https://") {
+        return location.to_owned();
+    }
+    let Some((scheme, rest)) = from.split_once("://") else { return location.to_owned() };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    if let Some(path) = location.strip_prefix('/') {
+        return format!("{scheme}://{authority}/{path}");
+    }
+    let dir_end = rest[authority_end..].split(['?', '#']).next().and_then(|p| p.rfind('/')).map_or(authority_end, |i| authority_end + i);
+    format!("{scheme}://{}/{location}", &rest[..dir_end])
+}
+
+/// True for the host of a Cloudflare Access login page.
+fn is_access_login(url: &str) -> bool {
+    origin_of(url).is_some_and(|(_, host, _)| host == "cloudflareaccess.com" || host.ends_with(".cloudflareaccess.com"))
+}
+
+/// What a fetch sends: the headers, and the one origin that gets them.
+#[derive(Clone, Default)]
+struct Access {
+    headers: RequestHeaders,
+    origin: Option<(String, String, u16)>,
+}
+
+fn fetch(loc: &Loc, access: &Access) -> Result<Vec<u8>> {
+    fetch_limited(loc, MAX_JSON, access)
+}
+
+/// Reads a URL. It follows the redirects itself, so the headers go only to
+/// the origin of the source (same scheme, host and port): a redirect to
+/// another origin does not get them.
+fn get_url(start: &str, limit: u64, access: &Access) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let agent = ureq::AgentBuilder::new().redirects(0).build();
+    let mut url = start.to_owned();
+    for _ in 0..=MAX_REDIRECTS {
+        let mut req = agent.get(&url);
+        if !access.headers.is_empty() && origin_of(&url).is_some() && origin_of(&url) == access.origin {
+            for (name, value) in &access.headers.0 {
+                req = req.set(name, value);
+            }
+        }
+        let resp = req.call().with_context(|| format!("fetch {url}"))?;
+        if matches!(resp.status(), 301 | 302 | 303 | 307 | 308) {
+            let location = resp.header("location").with_context(|| format!("fetch {url}: a redirect with no Location"))?;
+            let next = redirect_target(&url, location);
+            if is_access_login(&next) {
+                bail!("{ACCESS_MESSAGE}");
+            }
+            // The same rule as a source base: `http://` only for localhost.
+            match Loc::parse_base(&next) {
+                Ok(Loc::Url(next)) => url = next,
+                _ => bail!("fetch {url}: a redirect to a place that this client does not read"),
+            }
+            continue;
+        }
+        let mut buf = Vec::new();
+        resp.into_reader().take(limit + 1).read_to_end(&mut buf)?;
+        if buf.len() as u64 > limit {
+            bail!("{url} is larger than the {} MiB limit", limit >> 20);
+        }
+        return Ok(buf);
+    }
+    bail!("fetch {start}: too many redirects")
+}
+
+fn fetch_limited(loc: &Loc, limit: u64, access: &Access) -> Result<Vec<u8>> {
     match loc {
         Loc::Path(p) => {
             let meta = std::fs::metadata(p).with_context(|| format!("read {}", p.display()))?;
@@ -241,15 +372,6 @@ fn fetch_limited(loc: &Loc, limit: u64) -> Result<Vec<u8>> {
             }
             std::fs::read(p).with_context(|| format!("read {}", p.display()))
         }
-        Loc::Url(u) => {
-            let resp = ureq::get(u).call().with_context(|| format!("fetch {u}"))?;
-            let mut buf = Vec::new();
-            use std::io::Read;
-            resp.into_reader().take(limit + 1).read_to_end(&mut buf)?;
-            if buf.len() as u64 > limit {
-                bail!("{u} is larger than the {} MiB limit", limit >> 20);
-            }
-            Ok(buf)
-        }
+        Loc::Url(u) => get_url(u, limit, access),
     }
 }
