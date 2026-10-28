@@ -72,6 +72,9 @@ usage:
                                    list, or manage, library groups
   plinth hub source add <name> <base> | list | remove <name>
   plinth hub source set-token <name> [--client-id <id>] [--client-secret <secret>] | clear-token <name>
+  plinth hub source trust-hub <name> [--yes]
+                                   read hub.json of a source; with --yes save its Hub keys
+                                   as trusted (without --yes it only shows them)
                                    manage registry sources (docs/REGISTRY.md)
   plinth hub search <text>         search configured registry sources
   plinth hub install <id>[@version] [--source <name>]
@@ -81,6 +84,9 @@ usage:
                                    run one installed version, or the newest again
   plinth hub policy deny|allow <capability> | show
                                    a hub-wide switch for a capability
+  plinth hub policy trust-hub-key|untrust-hub-key <key id>
+                                   trust (or stop to trust) a key id as a Hub key: only a
+                                   package signed by it may use hub.manage (docs/HUB.md §4.1)
   plinth hub policy quota <MiB> | default
                                    the data quota of one app for each store (default 100 MiB)
   plinth registry build <folder> [--with-core] [--hub-trusted-key <key id>]
@@ -858,7 +864,37 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                     plinth_host_desktop::source_headers::clear_headers(&hub, name, &mut *plinth_host_desktop::secrets::system_secrets())?;
                     println!("removed the access token of source {name}");
                 }
-                Some(other) => bail!("unknown `plinth hub source {other}`; use add, list, remove, set-token or clear-token"),
+                Some("trust-hub") => {
+                    // `docs/HUB.md` §4.1: the user decides which key is a Hub
+                    // key. This reads `hub.json` of the source and saves its
+                    // keys only with `--yes`.
+                    let usage = "usage: plinth hub source trust-hub <name> [--yes]";
+                    let name = args.get(2).context(usage)?;
+                    let sources = hub.sources()?;
+                    let base = sources.get(*name).with_context(|| format!("no source named `{name}`; see `plinth hub source list`"))?;
+                    let source = plinth_host_desktop::source_headers::hub_sources(&hub).open(base).with_context(|| format!("open source {name} ({base})"))?;
+                    let config = source.hub_config().with_context(|| format!("read hub.json of source {name} ({base})"))?;
+                    if config.trusted_keys.is_empty() {
+                        bail!("hub.json of source {name} ({base}) lists no key");
+                    }
+                    for key in &config.trusted_keys {
+                        plinth_hub::validate_hub_key_id(key).with_context(|| format!("hub.json of source {name} lists a bad key"))?;
+                    }
+                    println!("source {name} ({base}) lists these Hub keys in hub.json:");
+                    for key in &config.trusted_keys {
+                        println!("  {key}");
+                    }
+                    if !raw.contains(&"--yes") {
+                        println!("nothing is saved");
+                        eprintln!("[plinth] if you trust {base}, run `plinth hub source trust-hub {name} --yes`");
+                        return Ok(ExitCode::FAILURE);
+                    }
+                    for key in &config.trusted_keys {
+                        let new = hub.trust_hub_key(key)?;
+                        println!("{} {key} as a Hub key", if new { "trusted" } else { "already trusted:" });
+                    }
+                }
+                Some(other) => bail!("unknown `plinth hub source {other}`; use add, list, remove, set-token, clear-token or trust-hub"),
             }
             return Ok(ExitCode::SUCCESS);
         }
@@ -1169,8 +1205,34 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                     }
                 }
             }
+            Some("trust-hub-key") => {
+                let usage = "usage: plinth hub policy trust-hub-key <key id>";
+                let key = args.get(2).context(usage)?;
+                if hub.trust_hub_key(key)? {
+                    println!("trusted {key} as a Hub key: a package signed by it may use hub.manage");
+                } else {
+                    println!("{key} is already a trusted Hub key");
+                }
+            }
+            Some("untrust-hub-key") => {
+                let key = args.get(2).context("usage: plinth hub policy untrust-hub-key <key id>")?;
+                if hub.untrust_hub_key(key)? {
+                    println!("{key} is not a trusted Hub key any more");
+                } else {
+                    println!("{key} was not a saved Hub key");
+                }
+            }
             Some("show") | None => {
                 println!("data quota of an app: {} for each store", format_bytes(hub.data_quota()));
+                let saved = hub.saved_hub_keys()?;
+                let all = plinth_hub::trusted_hub_keys_in(hub.dir());
+                if all.is_empty() {
+                    println!("no Hub key is trusted (`plinth hub policy trust-hub-key <key id>`)");
+                }
+                for key in &all {
+                    let from = if saved.contains(key) { "saved" } else { "PLINTH_HUB_TRUSTED_KEYS" };
+                    println!("{key}  trusted Hub key ({from})");
+                }
                 let denied = hub.policy_denied()?;
                 if denied.is_empty() {
                     println!("no capability is globally denied");
@@ -1180,7 +1242,7 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                     }
                 }
             }
-            Some(other) => bail!("unknown `plinth hub policy {other}`; use deny, allow, quota or show"),
+            Some(other) => bail!("unknown `plinth hub policy {other}`; use deny, allow, quota, trust-hub-key, untrust-hub-key or show"),
         },
         Some(other) => bail!("unknown `plinth hub {other}`; see `plinth --help`"),
     }

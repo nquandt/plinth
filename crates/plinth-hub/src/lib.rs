@@ -367,6 +367,11 @@ impl Hub {
         Self::open(hub_dir())
     }
 
+    /// The data directory of this Hub.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     fn packages_dir(&self) -> PathBuf {
         self.dir.join("packages")
     }
@@ -1048,6 +1053,78 @@ impl Hub {
         store.denied.retain(|c| c != capability);
         write_json(&self.policy_path(), &store)
     }
+
+    // -- Trusted Hub keys (`docs/HUB.md` §4.1) ------------------------------
+
+    /// The Hub keys that the user saved in `policy.json`. The environment
+    /// variable is not in this list (`trusted_hub_keys_in` merges both).
+    pub fn saved_hub_keys(&self) -> Result<Vec<String>> {
+        Ok(self.policy_store()?.hub_trusted_keys)
+    }
+
+    /// Saves `key` as a trusted Hub key. Only the user may call this, never
+    /// code that read a key from a package or a registry without a clear
+    /// user action. Gives `true` when the key was new.
+    pub fn trust_hub_key(&self, key: &str) -> Result<bool> {
+        let key = key.trim();
+        validate_hub_key_id(key)?;
+        let mut store = self.policy_store()?;
+        if store.hub_trusted_keys.iter().any(|k| k == key) {
+            return Ok(false);
+        }
+        store.hub_trusted_keys.push(key.to_owned());
+        write_json(&self.policy_path(), &store)?;
+        Ok(true)
+    }
+
+    /// Removes `key` from the saved Hub keys. Gives `true` when it was there.
+    pub fn untrust_hub_key(&self, key: &str) -> Result<bool> {
+        let key = key.trim();
+        let mut store = self.policy_store()?;
+        let before = store.hub_trusted_keys.len();
+        store.hub_trusted_keys.retain(|k| k != key);
+        if store.hub_trusted_keys.len() == before {
+            return Ok(false);
+        }
+        write_json(&self.policy_path(), &store)?;
+        Ok(true)
+    }
+}
+
+/// Checks that `key` is an `ed25519:` key id (`ed25519:` and the base64url of
+/// a 32-byte public key) for `trust_hub_key`.
+pub fn validate_hub_key_id(key: &str) -> Result<()> {
+    if !key.starts_with("ed25519:") {
+        bail!("`{key}` is not a key id; a key id starts with `ed25519:`");
+    }
+    plinth_package::publisher::parse_key_id(key).map(|_| ())
+}
+
+/// The Hub keys that the host trusts: the comma-separated
+/// `PLINTH_HUB_TRUSTED_KEYS` first, then the keys saved in `policy.json` in
+/// `dir`, with no key twice. It reads the file without making any folder. A
+/// file that does not parse adds no key (the host then trusts less, never
+/// more).
+pub fn trusted_hub_keys_in(dir: &Path) -> Vec<String> {
+    let env = std::env::var("PLINTH_HUB_TRUSTED_KEYS").unwrap_or_default();
+    let saved = std::fs::read_to_string(dir.join("policy.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<GlobalPolicy>(&t).ok())
+        .map(|p| p.hub_trusted_keys)
+        .unwrap_or_default();
+    merge_hub_keys(&env, saved)
+}
+
+/// The keys of the comma-separated `env` and the `saved` keys, in this
+/// order, with no empty key and no key twice.
+fn merge_hub_keys(env: &str, saved: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for key in env.split(',').map(str::trim).map(str::to_owned).chain(saved) {
+        if !key.is_empty() && !out.contains(&key) {
+            out.push(key);
+        }
+    }
+    out
 }
 
 /// The hub-wide capability policy (`docs/HUB.md` §7.4), stored in
@@ -1059,6 +1136,10 @@ struct GlobalPolicy {
     /// The data quota of one app in MiB (`Hub::data_quota`); `None` is the default.
     #[serde(default, rename = "dataQuotaMib", skip_serializing_if = "Option::is_none")]
     data_quota_mib: Option<u64>,
+    /// The key ids (`ed25519:…`) that the user trusts as Hub keys
+    /// (`docs/HUB.md` §4.1). Only an explicit user action adds one.
+    #[serde(default, rename = "hubTrustedKeys", skip_serializing_if = "Vec::is_empty")]
+    hub_trusted_keys: Vec<String>,
 }
 
 /// What `Hub::uninstall` did.
@@ -2384,6 +2465,63 @@ mod tests {
         assert_eq!(hub.data_quota(), DEFAULT_DATA_QUOTA);
         hub.set_data_quota_mib(None).ok();
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A valid key id, from a fixed signing key.
+    fn test_key(seed: u8) -> String {
+        plinth_package::publisher::key_id(&ed25519_dalek::SigningKey::from_bytes(&[seed; 32]).verifying_key())
+    }
+
+    #[test]
+    fn hub_keys_are_validated() {
+        assert!(validate_hub_key_id(&test_key(1)).is_ok());
+        for bad in ["", "ed25519:", "ed25519:abc", "rsa:AAAA", "AAAA", "ed25519:!!!!", " ed25519:x"] {
+            assert!(validate_hub_key_id(bad).is_err(), "{bad:?}");
+        }
+        let (hub, dir) = temp_hub();
+        assert!(hub.trust_hub_key("ed25519:nope").is_err());
+        assert!(!dir.join("policy.json").exists(), "a bad key writes nothing");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hub_keys_are_saved_in_the_policy_file_and_removed() {
+        let (hub, dir) = temp_hub();
+        let (a, b) = (test_key(1), test_key(2));
+        assert!(hub.saved_hub_keys().unwrap().is_empty());
+        assert!(hub.trust_hub_key(&a).unwrap(), "new");
+        assert!(!hub.trust_hub_key(&format!(" {a} ")).unwrap(), "known (and the space is cut)");
+        assert!(hub.trust_hub_key(&b).unwrap());
+        assert_eq!(hub.saved_hub_keys().unwrap(), vec![a.clone(), b.clone()]);
+        // The file has the other policy values too, and no temp file stays.
+        hub.policy_deny("net").unwrap();
+        hub.set_data_quota_mib(Some(5)).unwrap();
+        assert_eq!(hub.saved_hub_keys().unwrap().len(), 2, "other policy writes keep the keys");
+        assert_eq!(hub.policy_denied().unwrap(), vec!["net".to_string()]);
+        let text = std::fs::read_to_string(dir.join("policy.json")).unwrap();
+        assert!(text.contains("hubTrustedKeys") && text.contains(&a), "{text}");
+        assert!(std::fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains(".tmp-")));
+        // The host reads the same file (the env var may add keys, never remove).
+        let trusted = trusted_hub_keys_in(&dir);
+        assert!(trusted.contains(&a) && trusted.contains(&b));
+        assert!(hub.untrust_hub_key(&a).unwrap());
+        assert!(!hub.untrust_hub_key(&a).unwrap(), "not there any more");
+        assert_eq!(hub.saved_hub_keys().unwrap(), vec![b.clone()]);
+        assert!(!trusted_hub_keys_in(&dir).contains(&a));
+        // A file that does not parse gives no trusted key.
+        std::fs::write(dir.join("policy.json"), "nonsense").unwrap();
+        assert!(!trusted_hub_keys_in(&dir).contains(&b));
+        // No hub folder at all: nothing, and nothing is made.
+        assert!(!trusted_hub_keys_in(&dir.join("missing")).contains(&b));
+        assert!(!dir.join("missing").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hub_keys_of_the_env_var_and_the_file_merge_without_doubles() {
+        let merged = merge_hub_keys(" ed25519:a, ,ed25519:b,ed25519:a", vec!["ed25519:b".into(), "ed25519:c".into(), String::new()]);
+        assert_eq!(merged, vec!["ed25519:a", "ed25519:b", "ed25519:c"]);
+        assert!(merge_hub_keys("", vec![]).is_empty());
     }
 
     #[test]

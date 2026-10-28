@@ -236,6 +236,20 @@ impl Source {
         fetch_limited(&loc, MAX_PACKAGE, &self.access)
     }
 
+    /// `hub.json` at the root of the registry (`docs/web-hub.md` §5): the Hub
+    /// app id and the keys that the registry owner names as Hub keys. It is
+    /// read with the request headers of the source. Reading it trusts
+    /// nothing: the caller must ask the user before it saves a key.
+    pub fn hub_config(&self) -> Result<crate::build::WebHubConfig> {
+        let loc = self.index_loc.join("hub.json")?;
+        let bytes = fetch(&loc, &self.access).with_context(|| format!("this registry has no usable hub.json ({})", loc.display()))?;
+        let config: crate::build::WebHubConfig = serde_json::from_slice(&bytes).with_context(|| format!("parse {}", loc.display()))?;
+        if config.schema != "plinth.web-hub/1" {
+            bail!("{} has the unknown schema `{}`", loc.display(), config.schema);
+        }
+        Ok(config)
+    }
+
     /// The base this source was opened with, as given.
     pub fn base_display(&self) -> String {
         self.base.display()
