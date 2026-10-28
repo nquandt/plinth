@@ -1,6 +1,6 @@
 import { test, render, settle, expect } from "plinth:test";
 import Board from "./board";
-import { issues, board, reload, titleError, moveIssue, nudgeIssue, shiftIssue, dropOnCard, dropOnColumn, cardKey, deleteIssue, search, summary } from "./model";
+import { issues, board, reload, titleError, moveIssue, nudgeIssue, shiftIssue, dropOnCard, dropOnColumn, cardKey, deleteIssue, search, summary, addDemoIssues, DEMO_LIMIT } from "./model";
 import { allIssues, matchText } from "./storage";
 import type { Issue } from "./types";
 import { columnIndex } from "./types";
@@ -216,4 +216,20 @@ test("the search text is a quoted prefix for each word", async () => {
   expect(summary()).toBe("No issues yet");
   search.set("x");
   expect(search()).toBe("x");
+});
+
+test("the demo action stops at the limit, also when it is pressed again at once", async () => {
+  const s = await start();
+  // Three presses before the first one is done: the later ones do nothing.
+  addDemoIssues(500);
+  addDemoIssues(500);
+  addDemoIssues(500);
+  await settle();
+  expect((await rows()).length).toBe(510);
+  addDemoIssues(500);
+  await settle();
+  expect((await rows()).length).toBe(DEMO_LIMIT);
+  await s.press("Add 500 demo issues");
+  await settle();
+  expect((await rows()).length).toBe(DEMO_LIMIT);
 });

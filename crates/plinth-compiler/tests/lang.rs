@@ -3695,6 +3695,70 @@ function Home() {
     assert!(end <= allowed, "memory grew from {} KiB to {} KiB in the second half: RegExp objects leak", half >> 10, end >> 10);
 }
 
+/// A small app that makes garbage must not keep up to 1 MiB of it before
+/// the first collection: the memory of a guest only grows, so that garbage
+/// is its memory for good (and the monkey test saw the first minutes of an
+/// app as a leak). The threshold of `plinth-rt`'s GC follows the live heap,
+/// from 256 KiB. Each press makes about 100 KiB of strings and keeps none.
+#[test]
+fn small_apps_collect_early() {
+    let main = r#"import { app, Screen, Text, Button, signal } from "plinth:ui";
+const count = signal(0);
+function Home() {
+  return (
+    <Screen title="Home">
+      <Text>{"n" + count()}</Text>
+      <Button label="Run" onPress={() => {
+        let n = 0;
+        for (let i = 0; i < 100; i++) {
+          const s = "garbage-" + i + "-" + "x".repeat(900);
+          n += s.length;
+        }
+        count.set(n);
+      }} />
+    </Screen>
+  );
+}
+"#
+    .to_string()
+        + APP;
+    let fs = MemFs::default().with("app/main.tsx", &main);
+    let (front, artifact) = plinth_compiler::compile(&fs).expect("compile");
+    let artifact = artifact.unwrap_or_else(|| {
+        let diags: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+        panic!("compile errors:\n{}", diags.join("\n"))
+    });
+    let runner = Runner::new().unwrap();
+    let mut guest = runner.load(&artifact.component, Limits::default()).unwrap();
+    let mut tree = Tree::new();
+    for commit in guest.init(&[]).unwrap() {
+        assert!(tree.apply(&commit).unwrap().is_empty());
+    }
+    let button = {
+        let mut stack: Vec<_> = tree.screens().map(|(_, id)| id).collect();
+        loop {
+            let id = stack.pop().expect("no Button found");
+            let node = tree.get(id).unwrap();
+            if node.kind == Some(ControlKind::Button) {
+                break id;
+            }
+            stack.extend(node.children.iter());
+        }
+    };
+    let handler = tree.get(button).unwrap().handler(event::PRESS).unwrap();
+    let start = guest.memory_bytes();
+    for _ in 0..60 {
+        let mut w = Writer::new();
+        w.event(&Event::Ui { handler, event: event::PRESS, value: Value::Null });
+        for commit in guest.on_event(w.as_bytes()).unwrap() {
+            assert!(tree.apply(&commit).unwrap().is_empty());
+        }
+    }
+    let end = guest.memory_bytes();
+    eprintln!("small app memory: {} KiB at start, {} KiB at end", start >> 10, end >> 10);
+    assert!(end <= start + (640 << 10), "garbage stays too long: memory grew from {} KiB to {} KiB", start >> 10, end >> 10);
+}
+
 // -- String methods with a RegExp (PRODUCTION.md L4, step 3) -----------------
 
 /// Runs `body` (statements that set `out`) in a component and returns the

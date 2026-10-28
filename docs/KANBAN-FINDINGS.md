@@ -114,6 +114,8 @@ The card menu shows "Move to Backlog" also for a card that is in Backlog. An `Ac
 The fixed card height has a price: a title is cut at two lines (`lines={2}`), and a label row cannot wrap.
 - Proposal: virtualize a `Scroll` of cards with a known item height (`itemHeight`), not only children that each carry `height`.
 
+**H26b. Memory of the cards (found by the monkey test).** A card of the board costs about 12 guest nodes and about 20 KiB of guest memory, because the cards are `Scroll` children and not a `List`: the guest keeps every card, and a change of the `issues` signal builds all cards again (position-keyed `.map`). The host only builds the cards in view, but that does not lower the guest memory. About 2,800 cards (the "Add 500 demo issues" action pressed many times) used the 64 MiB of the guest and the app stopped with "out of memory". The fix is in the app: the demo action stops at 1,000 issues (`DEMO_LIMIT`), and a second press while one runs does nothing (two presses read the same count before either wrote). A `List` of cards (reuse of rows by key) would lower both the garbage and the live size; the drop targets inside a `List` row were not tried.
+
 **H27. App size.** `app.wasm` is 52 KB in a debug build (`examples/notes` is 22 KB). Every `Box`, `Span` and `Pressable` with style props costs code. The budget entry in `budgets.toml` is large for this reason. Not compared in a release build.
 
 ## 3. The next UI work, by value

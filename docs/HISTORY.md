@@ -75,3 +75,10 @@
 ## 2026-10-28 (kanban probe)
 
 - **Built:** `examples/kanban`, an issue board made only from the public UI API, to find the limits of the UI model. Result and next UI work: `docs/KANBAN-FINDINGS.md`.
+
+## 2026-10-28 (kanban and the monkey test)
+
+- **Found:** `examples/kanban` failed the monkey test ("memory grew", then "out of memory" at 64 MiB). Four causes. (1) The test did not remove the `store.sql` database (it is beside the files folder, `database_dir`), so the demo issues of earlier runs came back and the board had thousands of cards. (2) The test did not wait for host requests, so a slow database loaded its data in the second half of the run. (3) The app: "Add 500 demo issues" had no limit, and two presses before the first one ended read the same count. (4) The runtime: the GC threshold was always 1 MiB, so every app kept up to 1 MiB of garbage as memory, and a run showed a slow rise that is not a leak (a GC stress run was flat).
+- **Built:** the test removes the sql database and waits for host requests (`open_host_requests`) at the dialog step; it does not press controls with "demo issues" in the label (the app limits them; a cap of 1,000 issues is still 12,000 nodes). kanban: `DEMO_LIMIT`, one demo action at a time, a test. `plinth-rt`: the threshold is the live size of the heap between 256 KiB and 1 MiB; test `small_apps_collect_early` in `lang.rs`.
+- **Result:** all apps pass the default monkey test. kanban with 2,000 and 6,000 steps stays flat (2.0 MiB).
+- **Not tested:** the cost in time of the more frequent collections in a large app (big-list has a live heap above 1 MiB, so its threshold did not change); a real release build; macOS, Linux, iOS, Android.
