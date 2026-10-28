@@ -493,6 +493,7 @@ export class HubHost {
    * rejects, so the user can try again. The block list stays.
    */
   async uninstall(id, { keepData = false } = {}) {
+    if (this.hide.has(id)) throw new Error("the Hub cannot uninstall itself");
     this.mustGet(id);
     if (this.isRunning(id)) throw new Error(`${id} is running; close it first, then try again`);
     if (!keepData) {
@@ -621,7 +622,7 @@ export class HubHost {
 }
 
 /** The calls of `plinth:hub` that read the registries: the Hub app frame asks the page for them. */
-export const REMOTE_HUB_CALLS = ["search", "install", "checkUpdates", "update"];
+export const REMOTE_HUB_CALLS = ["search", "install", "checkUpdates", "update", "uninstall"];
 
 /**
  * The `plinth:hub` backend inside the sandboxed frame of the Hub app
@@ -675,6 +676,11 @@ export class FrameHub extends HubHost {
 
   update(id) {
     return this.remote("update", [String(id)]);
+  }
+
+  /** The page erases the data (the frame cannot reach IndexedDB), then sends the new state. */
+  uninstall(id, { keepData = false } = {}) {
+    return this.remote("uninstall", [String(id), Boolean(keepData)]);
   }
 
   refresh() {

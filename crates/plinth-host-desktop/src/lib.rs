@@ -752,12 +752,28 @@ pub struct HubHost {
 }
 
 impl HubHost {
-    /// The `plinth:hub` backend for a Hub UI window.
-    fn backend(&self) -> Box<dyn plinth_runner_wasmtime::hub::HubBackend> {
-        Box::new(match &self.sources {
+    /// The `plinth:hub` backend for a Hub UI window of the app `own_id`. Its
+    /// `uninstall` works on the data directory and the keychain of this host.
+    fn backend(&self, own_id: &str) -> Box<dyn plinth_runner_wasmtime::hub::HubBackend> {
+        let remove_secrets: plinth_hub::RemoveSecrets =
+            Arc::new(|app| secrets::remove_app_secrets(app).map_err(|e| anyhow::anyhow!("{e:?}")));
+        self.backend_with(own_id, plinth_runner_wasmtime::kv::data_dir(), remove_secrets)
+    }
+
+    /// Like `backend`, with the data directory and the secrets removal given
+    /// (a test uses a temporary directory and no keychain). The app `own_id`
+    /// cannot uninstall itself; an app that runs cannot be uninstalled.
+    pub fn backend_with(
+        &self,
+        own_id: &str,
+        data_dir: std::path::PathBuf,
+        remove_secrets: plinth_hub::RemoveSecrets,
+    ) -> Box<dyn plinth_runner_wasmtime::hub::HubBackend> {
+        let service = match &self.sources {
             Some(sources) => plinth_hub::HubService::with_sources(self.hub.clone(), sources.clone()),
             None => plinth_hub::HubService::new(self.hub.clone()),
-        })
+        };
+        Box::new(service.with_uninstall(data_dir, own_id, remove_secrets))
     }
 }
 
@@ -769,7 +785,7 @@ pub const HUB_LAUNCH_POLL: Duration = Duration::from_millis(100);
 /// each app that it launches (`poll_hub_launches`).
 pub fn open_prepared(cx: &mut App, host: &HubHost, prepared: PreparedApp) -> gpui::WindowHandle<PlinthRoot> {
     let PreparedApp { app, policy, hub_manage } = prepared;
-    let backend = hub_manage.then(|| host.backend());
+    let backend = hub_manage.then(|| host.backend(&app.app_id));
     let window = open_app_with_hub(cx, host.runner.clone(), app, policy, backend);
     if hub_manage {
         let host = host.clone();

@@ -143,6 +143,7 @@ pub const FUNCTION_CAPABILITIES: &[(&str, &str)] = &[
     ("hub_unblock_publisher", HUB_MANAGE),
     ("hub_check_updates", HUB_MANAGE),
     ("hub_update", HUB_MANAGE),
+    ("hub_uninstall", HUB_MANAGE),
     // `hub_last_error` needs no capability, like `kv_last_error` above.
 ];
 

@@ -342,7 +342,7 @@ const FRAME_TYPES = {
 };
 
 /** The `hub-call` methods (`REMOTE_HUB_CALLS` in hub-host.js). */
-const HUB_CALLS = ["search", "install", "checkUpdates", "update"];
+const HUB_CALLS = ["search", "install", "checkUpdates", "update", "uninstall"];
 
 /**
  * Checks a message from an app frame. The frame is not trusted: it runs
@@ -389,7 +389,10 @@ export function checkFrameMessage(data) {
   if (data.type === "hub-save" && (data.state === null || Array.isArray(data.state))) return null;
   if (data.type === "hub-call") {
     if (!HUB_CALLS.includes(data.method)) return null;
-    if (!Array.isArray(data.args) || data.args.length > 1 || !data.args.every((a) => typeof a === "string")) return null;
+    // At most one string; `uninstall` takes the app id and `keepData` (a boolean).
+    const shape = data.method === "uninstall" ? ["string", "boolean"] : ["string"];
+    const sized = data.method === "uninstall" ? data.args?.length === 2 : data.args?.length <= 1;
+    if (!Array.isArray(data.args) || !sized || !data.args.every((a, i) => typeof a === shape[i])) return null;
   }
   return data;
 }

@@ -124,6 +124,7 @@ pub const HUB_NAMES: &[&str] = &[
     "unblockPublisher",
     "checkUpdates",
     "update",
+    "uninstall",
 ];
 
 /// The capability names, from the shared map (`plinth-link`'s
@@ -283,6 +284,7 @@ pub fn lookup(m: StdModule, name: &str) -> Option<Binding> {
             "unblockPublisher" => Binding::Std(StdFn::HubUnblockPublisher),
             "checkUpdates" => Binding::Std(StdFn::HubCheckUpdates),
             "update" => Binding::Std(StdFn::HubUpdate),
+            "uninstall" => Binding::Std(StdFn::HubUninstall),
             _ => return None,
         }),
         StdModule::Ui => Some(match name {
@@ -899,6 +901,27 @@ impl Checker<'_> {
                 let key = self.expr_with(&args[0], &Type::String);
                 let key = self.coerce(key, &Type::String);
                 TExpr::new(TExprKind::Rt(rt_fn, vec![key]), Type::Void, span)
+            }
+            StdFn::HubUninstall => {
+                self.require_capability(CAP_HUB_MANAGE, span);
+                if args.len() < 2 || args.len() > 3 {
+                    self.err(code::ARG_COUNT, span, "`uninstall` takes an app id, `keepData` and an optional done callback");
+                    return TExpr::new(TExprKind::Null, Type::Error, span);
+                }
+                let id = self.expr_with(&args[0], &Type::String);
+                let id = self.coerce(id, &Type::String);
+                let keep = self.expr_with(&args[1], &Type::Bool);
+                let keep = self.coerce(keep, &Type::Bool);
+                // The same request/completion shape as `install`: the
+                // callback gets `string | null`; `SecretsCall` lowers to the
+                // runtime function with the callable first, then these
+                // arguments.
+                let call = |cb: TExpr| TExpr::new(TExprKind::SecretsCall("hub_uninstall", vec![id.clone(), keep.clone()], Box::new(cb)), Type::Void, span);
+                let Some(done) = args.get(2) else {
+                    return self.host_promise(Type::String.nullable(), span, |_, cb| call(cb));
+                };
+                let (cb, _) = self.callback(done, &[Type::String.nullable()], Some(Type::Void));
+                call(cb)
             }
             StdFn::FilesRead | StdFn::FilesWrite | StdFn::FilesList | StdFn::FilesStat | StdFn::FilesRemove => self.files_call(f, args, span),
             StdFn::NotifyShow => self.notify_show_call(args, span),

@@ -71,6 +71,9 @@ export const groupFilter = signal(ALL);
 /** Text that the library list must contain (name or id). */
 export const filterText = signal("");
 
+/** What the last uninstall did, for the library screen. */
+export const notice = signal("");
+
 /** The result of the last update check, for the library screen. */
 export const updateStatus = signal("");
 export const checkingUpdates = signal(false);

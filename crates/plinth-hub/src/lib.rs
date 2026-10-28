@@ -1109,19 +1109,42 @@ pub struct HubService {
     hub: Hub,
     launches: Vec<String>,
     sources: Option<std::sync::Arc<dyn SourceClient>>,
+    uninstall: Option<UninstallSetup>,
+}
+
+/// Removes the secrets of an app. The host gives this, because the
+/// keychain is not in this crate.
+pub type RemoveSecrets = std::sync::Arc<dyn Fn(&str) -> Result<()> + Send + Sync>;
+
+/// What `plinth:hub` `uninstall` needs from the host (`docs/STORAGE.md` §7).
+struct UninstallSetup {
+    data_dir: PathBuf,
+    /// The id of the Hub app that makes the calls. It cannot uninstall itself.
+    own_id: String,
+    remove_secrets: RemoveSecrets,
 }
 
 impl HubService {
     /// A service with no source client: `search` and `install` report that
     /// this host cannot read sources.
     pub fn new(hub: Hub) -> Self {
-        Self { hub, launches: Vec::new(), sources: None }
+        Self { hub, launches: Vec::new(), sources: None, uninstall: None }
     }
 
     /// A service that reads the configured sources (`sources.json`,
     /// `docs/REGISTRY.md` §9) through `client` for `search` and `install`.
     pub fn with_sources(hub: Hub, client: std::sync::Arc<dyn SourceClient>) -> Self {
-        Self { hub, launches: Vec::new(), sources: Some(client) }
+        Self { hub, launches: Vec::new(), sources: Some(client), uninstall: None }
+    }
+
+    /// Lets the service uninstall apps (`docs/STORAGE.md` §7). `data_dir` is
+    /// the data directory of the host; `own_id` is the id of the Hub app
+    /// that uses this service, which the service refuses to uninstall;
+    /// `remove_secrets` deletes the secrets of an app. Without this, the
+    /// `uninstall` call fails with a clear error.
+    pub fn with_uninstall(mut self, data_dir: PathBuf, own_id: &str, remove_secrets: RemoveSecrets) -> Self {
+        self.uninstall = Some(UninstallSetup { data_dir, own_id: own_id.to_owned(), remove_secrets });
+        self
     }
 }
 
@@ -1460,6 +1483,21 @@ impl plinth_runner_wasmtime::hub::HubBackend for HubService {
                 Err(e) => Err(format!("{e:#}")),
             },
             None => Err("this host cannot read sources".to_owned()),
+        })
+    }
+
+    fn uninstall(&self, id: &str, keep_data: bool) -> plinth_runner_wasmtime::hub::HubJob {
+        let hub = self.hub.clone();
+        let id = id.to_owned();
+        let setup = self.uninstall.as_ref().map(|s| (s.data_dir.clone(), s.own_id.clone(), s.remove_secrets.clone()));
+        Box::new(move || {
+            let Some((data_dir, own_id, remove_secrets)) = setup else {
+                return Err("this host cannot uninstall apps".to_owned());
+            };
+            if id == own_id {
+                return Err("the Hub cannot uninstall itself".to_owned());
+            }
+            hub.uninstall(&id, &data_dir, keep_data, &mut |app| remove_secrets(app)).map(|_| String::new()).map_err(|e| format!("{e:#}"))
         })
     }
 
@@ -2214,6 +2252,57 @@ mod tests {
         assert!(hub.get(&id).unwrap().is_some());
         hub.uninstall(&id, &data, false, &mut |_| Ok(())).unwrap();
         assert!(hub.get(&id).unwrap().is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `plinth:hub` `uninstall` (`HubService`): data and secrets go unless `keep_data`; an app that
+    /// runs, an unknown app and the Hub app itself give an error and change nothing.
+    #[test]
+    fn the_hub_service_uninstalls_with_or_without_the_data() {
+        use plinth_runner_wasmtime::hub::HubBackend;
+        let (hub, dir) = temp_hub();
+        let data = dir.join("data");
+        let hub_app = hub.add_package(&fake_package("com.example.hub", "0.1.0")).unwrap();
+        let id = hub.add_package(&fake_package("com.example.victim", "0.1.0")).unwrap();
+        let keep = hub.add_package(&fake_package("com.example.keeper", "0.1.0")).unwrap();
+        let layout = put_app_data(&hub, &id, &data);
+        let keep_layout = put_app_data(&hub, &keep, &data);
+        let secrets: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let log = secrets.clone();
+        let svc = HubService::new(hub.clone()).with_uninstall(
+            data.clone(),
+            &hub_app,
+            std::sync::Arc::new(move |app| {
+                log.lock().unwrap().push(app.to_owned());
+                Ok(())
+            }),
+        );
+
+        // The Hub app itself: refused before anything is touched.
+        let err = svc.uninstall(&hub_app, false)().unwrap_err();
+        assert!(err.contains("cannot uninstall itself"), "{err}");
+        assert!(hub.get(&hub_app).unwrap().is_some());
+        // An unknown app.
+        assert!(svc.uninstall("com.example.nope", false)().unwrap_err().contains("not in the library"));
+        // A running app: the error says to close it; nothing changes.
+        let running = RunLock::running(&data, &id).unwrap();
+        let err = svc.uninstall(&id, false)().unwrap_err();
+        assert!(err.contains("is running") && err.contains("close"), "{err}");
+        assert!(layout.exists() && hub.get(&id).unwrap().is_some() && secrets.lock().unwrap().is_empty());
+        drop(running);
+
+        // With the data.
+        svc.uninstall(&id, false)().unwrap();
+        assert!(!layout.exists() && hub.get(&id).unwrap().is_none());
+        assert_eq!(*secrets.lock().unwrap(), vec![id.clone()]);
+        // Keeping the data: the app goes, the data and the secrets stay.
+        svc.uninstall(&keep, true)().unwrap();
+        assert!(keep_layout.exists() && hub.get(&keep).unwrap().is_none());
+        assert_eq!(secrets.lock().unwrap().len(), 1);
+
+        // A service the host did not set up for uninstall says so.
+        let plain = HubService::new(hub.clone());
+        assert!(plain.uninstall(&hub_app, true)().unwrap_err().contains("cannot uninstall apps"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

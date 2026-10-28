@@ -942,6 +942,18 @@ pub fn hub_update(callable: Callable, id: i32) {
     }
 }
 
+/// `hub.uninstall(id, keepData, done)` (core 1.13, `docs/STORAGE.md` §7):
+/// the host uninstalls the app on a worker thread; `done` gets `null` on
+/// success, or the error text.
+pub fn hub_uninstall(callable: Callable, id: i32, keep_data: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id = strings::as_str(id as u32);
+        let request = host::hub::uninstall(id, keep_data != 0);
+        register_request(request, callable);
+    }
+}
+
 /// `app-info.data-version()` (core 1.13, PRODUCTION.md D4): the data
 /// version the host last stored for this app, as a heap string, or `0`
 /// (null) when the host has none.

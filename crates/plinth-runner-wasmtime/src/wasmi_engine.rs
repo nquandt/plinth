@@ -803,6 +803,14 @@ fn register_hub_imports(linker: &mut Linker<HostState>) -> Result<()> {
             Ok(HubHost::update(caller.data_mut(), app) as i32)
         },
     )?;
+    linker.func_wrap(
+        "plinth:app/hub@1.0.0",
+        "uninstall",
+        |mut caller: Caller<HostState>, id_ptr: i32, id_len: i32, keep_data: i32| -> Result<i32, WasmiError> {
+            let app = read_string(&mut caller, id_ptr, id_len)?;
+            Ok(HubHost::uninstall(caller.data_mut(), app, keep_data != 0) as i32)
+        },
+    )?;
 
     Ok(())
 }

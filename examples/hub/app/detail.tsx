@@ -1,10 +1,12 @@
 // One app (`docs/HUB.md` §5.2, §7.2, §7.4, §9.2): who made it, the
 // capability label with each grant, updates and versions, its groups, and
-// Open, Block (the app or its publisher) and Remove.
-import { signal, navigate, Screen, Section, Text, Badge, Button, List, Row, Toggle, Checkbox, Empty, Action, Progress } from "plinth:ui";
-import { launch, setGrant, block, unblock, setGroup, remove, pin, blockPublisher, unblockPublisher, update } from "plinth:hub";
+// Open, Block (the app or its publisher), Remove and Uninstall
+// (`docs/STORAGE.md` §7).
+import { signal, navigate, Screen, Section, Text, Badge, Button, List, Row, Toggle, Checkbox, Empty, Action, Progress, Dialog } from "plinth:ui";
+import { launch, setGrant, block, unblock, setGroup, remove, pin, blockPublisher, unblockPublisher, update, uninstall } from "plinth:hub";
 import {
   reload,
+  notice,
   refreshApp,
   groups,
   selectedApp,
@@ -110,9 +112,20 @@ function versionSubtitle(v: HubVersion): string {
   return `${running} · ${caps}`;
 }
 
+/** What an uninstall deletes, for the confirmation (`docs/STORAGE.md` §7). */
+function uninstallMessage(name: string, keepData: boolean): string {
+  if (keepData) {
+    return `${name} is deleted from this device. Your data and your secrets stay. If you install ${name} again, it finds them. You cannot undo this.`;
+  }
+  return `${name} is deleted from this device. Its data and its secrets (saved passwords and tokens) are deleted too. You cannot undo this. Select Keep my data to keep them.`;
+}
+
 export default function AppDetail() {
   const busy = signal(false);
   const status = signal("");
+  const failed = signal(false);
+  const uninstallOpen = signal(false);
+  const keepData = signal(false);
 
   const open = () => {
     launch(selectedId());
@@ -153,10 +166,40 @@ export default function AppDetail() {
     navigate.back();
   };
 
+  const askUninstall = () => {
+    keepData.set(false);
+    uninstallOpen.set(true);
+  };
+
+  // The host runs the uninstall off the UI thread. It refuses while the app
+  // runs, and it cannot uninstall the Hub itself; the error text shows here.
+  const doUninstall = () => {
+    const id = selectedId();
+    const name = title();
+    const keep = keepData();
+    uninstallOpen.set(false);
+    busy.set(true);
+    failed.set(false);
+    status.set(`Uninstalling ${name}…`);
+    uninstall(id, keep, (error) => {
+      busy.set(false);
+      if (error === null) {
+        notice.set(keep ? `${name} is uninstalled. Its data stays on this device.` : `${name} and its data are deleted.`);
+        reload();
+        navigate.back();
+      } else {
+        failed.set(true);
+        status.set(`Could not uninstall: ${error}`);
+        refreshApp(id);
+      }
+    });
+  };
+
   const installUpdate = () => {
     const id = selectedId();
     const version = availableUpdate();
     busy.set(true);
+    failed.set(false);
     status.set(`Getting version ${version}…`);
     update(id, (error) => {
       busy.set(false);
@@ -181,6 +224,7 @@ export default function AppDetail() {
       actions={[
         <Action label={isBlocked() ? "Unblock" : "Block"} icon="lock" onPress={toggleBlock} />,
         <Action label="Remove from your apps" icon="trash" role="destructive" onPress={removeApp} />,
+        <Action label="Uninstall" icon="trash" role="destructive" confirm={false} onPress={askUninstall} />,
       ]}
     >
       <Section title="About">
@@ -201,7 +245,7 @@ export default function AppDetail() {
         </Section>
       ) : null}
       {busy() ? <Progress label="Working" /> : null}
-      {status() !== "" ? <Text tone="muted">{status()}</Text> : null}
+      {status() !== "" ? <Text tone={failed() ? "danger" : "muted"}>{status()}</Text> : null}
       <Section title="Permissions" footer={footer()}>
         <List
           items={capabilities()}
@@ -235,6 +279,18 @@ export default function AppDetail() {
           <Checkbox label={g} value={inGroup(g)} onChange={(v) => changeGroup(g, v)} />
         ))}
       </Section>
+      <Dialog
+        open={uninstallOpen}
+        title={`Uninstall ${title()}?`}
+        message={uninstallMessage(title(), keepData())}
+        onClose={() => uninstallOpen.set(false)}
+        actions={[
+          <Action label="Cancel" onPress={() => uninstallOpen.set(false)} />,
+          <Action label="Uninstall" role="destructive" confirm={false} onPress={doUninstall} />,
+        ]}
+      >
+        <Checkbox label="Keep my data" value={keepData} />
+      </Dialog>
     </Screen>
   );
 }

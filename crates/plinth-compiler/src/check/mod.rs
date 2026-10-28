@@ -146,6 +146,7 @@ pub enum StdFn {
     HubUnblockPublisher,
     HubCheckUpdates,
     HubUpdate,
+    HubUninstall,
     FilesRead,
     FilesWrite,
     FilesList,

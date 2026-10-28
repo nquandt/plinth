@@ -464,6 +464,7 @@ refuses every other package that declares it, before the package runs.
 | `blockPublisher(key)`, `unblockPublisher(key)` | 1.9 | Block or unblock a publisher key (the `signer` of an app). No app that the key signed opens or installs. |
 | `checkUpdates(id, done)` | 1.9 | Checks the source of the app for a newer version, off the UI thread. An empty `id` checks every app. `done` gets `{ updates, errors }` as JSON text, or `null` if denied. The host keeps the result, so `listApps` shows it. |
 | `update(id, done)` | 1.9 | Installs the newest version from the source of the app, off the UI thread. `done` gets `null` on success (also when the app is up to date), or the error text. The new version opens only after the user decides its new capabilities. |
+| `uninstall(id, keepData, done)` | 1.13 | Removes the app from the library and, unless `keepData` is `true`, deletes its data, its grants and its secrets (`docs/STORAGE.md` §7), off the UI thread. `done` gets `null` on success, or the error text. The error text says why nothing changed: the app runs (the user must close its windows), the app is not in the library, or the app is the Hub app itself (the Hub cannot uninstall itself). `denied:<reason>` if the call is denied. |
 | `lastError()` | 1.7 | The reason the last synchronous call was denied, or `null`. |
 
 From core 1.9, each element of `listApps` also has these fields:
@@ -472,15 +473,15 @@ installed versions, newest first), `update` (the newer version that the
 last check found, or `""`), and `updateCapabilities` (the capabilities
 that the update adds).
 
-`search`, `install`, `checkUpdates` and `update` use the same request id
-and `completion` event as `plinth:dialog`. Without `done`, each returns a
-`Promise<string | null>` of the same value, for `await`.
+`search`, `install`, `checkUpdates`, `update` and `uninstall` use the same
+request id and `completion` event as `plinth:dialog`. Without `done`, each
+returns a `Promise<string | null>` of the same value, for `await`.
 
-`remove(id)` hides the app and keeps its data. There is no call that deletes
-the data of an app yet. The user does that with `plinth hub uninstall`
-(`docs/STORAGE.md` §7.2). The web host answers every
-`plinth:hub` call with "unsupported" and does not trap (the web Hub is
-phase H6).
+`remove(id)` hides the app and keeps its data. `uninstall(id, keepData)`
+deletes the app and, unless `keepData`, its data (`docs/STORAGE.md` §7.2).
+The command `plinth hub uninstall` does the same. A host with no Hub backend
+answers every `plinth:hub` call with "unsupported" and does not trap. The
+web Hub gives the Hub app a backend (`docs/web-hub.md`).
 
 ## Uncaught errors
 

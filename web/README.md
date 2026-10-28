@@ -130,7 +130,7 @@ Frame to page:
 | `size` | `height` | The content height in CSS pixels; the page sizes the iframe if `autoHeight`. |
 | `hub-save` | `state` | Hub app only (`hub.manage` and the `hub` option): the new `plinth:hub` state of the frame's copy; the page stores it. |
 | `hub-launch` | `id` | Hub app only: opens the app (consent window, app window). |
-| `hub-call` | `id`, `method` (`search`, `install`, `checkUpdates`, `update`), `args` | Hub app only: the page runs the call; `answer` with `{ ok, value, error, snapshot }`. |
+| `hub-call` | `id`, `method` (`search`, `install`, `checkUpdates`, `update`, `uninstall`), `args` (one string; for `uninstall`, the app id and `keepData`, a boolean) | Hub app only: the page runs the call; `answer` with `{ ok, value, error, snapshot }`. |
 
 Page to frame:
 

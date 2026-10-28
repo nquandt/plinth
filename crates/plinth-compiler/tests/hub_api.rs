@@ -377,3 +377,133 @@ fn core_1_9_calls_are_denied_without_the_capability_or_a_backend() {
     h.deliver_completions(1);
     assert_eq!(h.text("updated:"), "updated: denied:unsupported");
 }
+
+// -- Core 1.13 (`docs/STORAGE.md` §7): uninstall ------------------------------
+
+const APP_113: &str = r#"
+import { app, signal, Screen, Text, Button } from "plinth:ui";
+import { uninstall } from "plinth:hub";
+
+function Home() {
+  const done = signal("");
+  const awaited = signal("");
+  return (
+    <Screen title="Home">
+      <Text>{"done: " + done()}</Text>
+      <Text>{"awaited: " + awaited()}</Text>
+      <Button label="Uninstall" onPress={() => uninstall("com.example.a", false, (error) => done.set(error ?? "ok"))} />
+      <Button label="Keep data" onPress={() => uninstall("com.example.b", true, (error) => done.set(error ?? "ok"))} />
+      <Button label="Busy" onPress={() => uninstall("com.example.busy", false, (error) => done.set(error ?? "ok"))} />
+      <Button label="Await" onPress={async () => { const e = await uninstall("com.example.a", true); awaited.set(e ?? "ok"); }} />
+    </Screen>
+  );
+}
+
+export default app({ screens: { home: { title: "Home", component: Home } } });
+"#;
+
+struct FakeHub113(Arc<Mutex<Vec<(String, bool)>>>);
+
+impl HubBackend for FakeHub113 {
+    fn list_apps_json(&self) -> Result<String, String> {
+        Ok("[]".into())
+    }
+    fn launch(&mut self, _id: &str) {}
+    fn set_grant(&mut self, _id: &str, _capability: &str, _allowed: bool) -> Result<(), String> {
+        Ok(())
+    }
+    fn block(&mut self, _id: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn unblock(&mut self, _id: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn uninstall(&self, id: &str, keep_data: bool) -> HubJob {
+        let (id, calls) = (id.to_owned(), self.0.clone());
+        Box::new(move || {
+            if id == "com.example.busy" {
+                return Err("com.example.busy is running; close all its windows first, then try again".into());
+            }
+            calls.lock().unwrap().push((id, keep_data));
+            Ok(String::new())
+        })
+    }
+}
+
+#[test]
+fn the_core_1_13_app_needs_core_1_13() {
+    let artifact = build_src(APP_113, &["hub.manage"]);
+    assert_eq!(plinth_link::split::app_core_version(&artifact.app), Some((1, 13)));
+}
+
+#[test]
+fn uninstall_reaches_the_backend_with_keep_data_and_reports_an_error() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut h = Harness::start_src(APP_113, Policy::new(["hub.manage".to_owned()]), Some(Box::new(FakeHub113(calls.clone()))));
+    h.press("Uninstall");
+    h.deliver_completions(1);
+    assert_eq!(h.text("done:"), "done: ok");
+    h.press("Keep data");
+    h.deliver_completions(1);
+    h.press("Await");
+    h.deliver_completions(1);
+    assert_eq!(h.text("awaited:"), "awaited: ok");
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec![("com.example.a".to_owned(), false), ("com.example.b".to_owned(), true), ("com.example.a".to_owned(), true)]
+    );
+    // A backend error is the completion text, and nothing was recorded.
+    h.press("Busy");
+    h.deliver_completions(1);
+    assert_eq!(h.text("done:"), "done: com.example.busy is running; close all its windows first, then try again");
+    assert_eq!(calls.lock().unwrap().len(), 3);
+}
+
+#[test]
+fn uninstall_is_denied_without_the_capability_or_a_backend() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut policy = Policy::new(["hub.manage".to_owned()]);
+    policy.refuse("hub.manage");
+    let mut h = Harness::start_src(APP_113, policy, Some(Box::new(FakeHub113(calls.clone()))));
+    h.press("Uninstall");
+    h.deliver_completions(1);
+    assert_eq!(h.text("done:"), "done: denied:refused");
+    assert!(calls.lock().unwrap().is_empty(), "a refused guest reaches no backend");
+
+    let mut h = Harness::start_src(APP_113, Policy::new(["hub.manage".to_owned()]), None);
+    h.press("Uninstall");
+    h.deliver_completions(1);
+    assert_eq!(h.text("done:"), "done: denied:unsupported");
+
+    // A backend with no uninstall (the trait default) says so; nothing traps.
+    struct Plain;
+    impl HubBackend for Plain {
+        fn list_apps_json(&self) -> Result<String, String> {
+            Ok("[]".into())
+        }
+        fn launch(&mut self, _: &str) {}
+        fn set_grant(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn block(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn unblock(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+    let mut h = Harness::start_src(APP_113, Policy::new(["hub.manage".to_owned()]), Some(Box::new(Plain)));
+    h.press("Uninstall");
+    h.deliver_completions(1);
+    assert_eq!(h.text("done:"), "done: unsupported");
+}
+
+/// An app without `hub.manage` does not compile (the call needs the capability).
+#[test]
+fn uninstall_needs_the_hub_manage_capability_at_compile_time() {
+    let fs = MemFs::default().with("app/main.tsx", APP_113);
+    let (front, artifact) = plinth_compiler::compile_with_capabilities(&fs, &[]).expect("compile");
+    assert!(artifact.is_none());
+    let text: Vec<String> = front.diags.iter().map(|d| front.sources.render(d)).collect();
+    assert!(text.join("\n").contains("hub.manage"), "{text:?}");
+}

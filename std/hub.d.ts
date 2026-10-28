@@ -107,3 +107,15 @@ export declare function checkUpdates(id: string): Promise<string | null>;
 export declare function update(id: string, done: (error: string | null) => void): void;
 /** Without `done`: a `Promise` of the same value, for `await` (SPEC.md §4.5). */
 export declare function update(id: string): Promise<string | null>;
+
+// -- Core 1.13 (`docs/HUB.md` §4.1, `docs/STORAGE.md` §7) --------------------
+
+/** Uninstalls app `id`, off the UI thread: removes it from the library
+ * and, unless `keepData` is `true`, deletes its data, its grants and its
+ * secrets. `done` gets `null` on success, or the error text
+ * (`"denied:<reason>"` if denied). An app that runs, an app that is not in
+ * the library and the Hub app itself give an error text and change
+ * nothing. Core 1.13. */
+export declare function uninstall(id: string, keepData: boolean, done: (error: string | null) => void): void;
+/** Without `done`: a `Promise` of the same value, for `await` (SPEC.md §4.5). */
+export declare function uninstall(id: string, keepData: boolean): Promise<string | null>;

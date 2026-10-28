@@ -615,6 +615,11 @@ abi! {
         host::hub_update(Callable { thunk: thunk as u32, env: env as u32 }, id)
     }
 
+    // -- plinth:hub, core 1.13 (`docs/STORAGE.md` §7) ---------------------------
+    fn __plinth_rt_hub_uninstall(thunk: i32, env: i32, id: i32, keep_data: i32) {
+        host::hub_uninstall(Callable { thunk: thunk as u32, env: env as u32 }, id, keep_data)
+    }
+
     // -- JSON (plinth:core, SPEC.md §4.7) --------------------------------------
     fn __plinth_rt_json_num_str(v: f64) -> i32 { strings::from_str(&strings::json_number_to_string(v)) as i32 }
     fn __plinth_rt_json_quote_str(a: i32) -> i32 { strings::from_str(&strings::json_quote(strings::as_str(ptr(a)))) as i32 }
