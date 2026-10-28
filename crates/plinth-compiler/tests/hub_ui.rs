@@ -551,6 +551,21 @@ fn the_hub_ui_without_a_backend_shows_the_denial() {
 }
 
 impl Harness {
+    /// The screen action `label` (the dialog has an action with the same label).
+    fn screen_action(&self, label: &str) -> NodeId {
+        let dialog = self.one(ControlKind::Dialog, |_| true);
+        let mut inside = Vec::new();
+        let mut stack = vec![dialog];
+        while let Some(id) = stack.pop() {
+            inside.push(id);
+            stack.extend(self.tree.get(id).unwrap().children.iter().copied());
+        }
+        let found: Vec<_> =
+            self.find(ControlKind::Action, |n| n.str_prop(prop::LABEL) == Some(label)).into_iter().filter(|id| !inside.contains(id)).collect();
+        assert_eq!(found.len(), 1, "expected one screen action {label:?}");
+        found[0]
+    }
+
     /// The nodes of `kind` below `root` (the Dialog keeps its actions and form there).
     fn below(&self, root: NodeId, kind: ControlKind, label: &str) -> NodeId {
         let mut found = Vec::new();
@@ -582,7 +597,7 @@ fn the_hub_ui_uninstalls_an_app_after_a_confirmation() {
     assert_eq!(h.screen_title(), "Weather");
     let dialog = h.one(ControlKind::Dialog, |_| true);
     assert!(!h.tree.get(dialog).unwrap().bool_prop(prop::VALUE), "the dialog is closed at first");
-    h.fire(h.labeled(ControlKind::Action, "Uninstall"), event::PRESS, Value::Null);
+    h.fire(h.screen_action("Uninstall"), event::PRESS, Value::Null);
     assert!(h.tree.get(dialog).unwrap().bool_prop(prop::VALUE));
     assert_eq!(h.tree.get(dialog).unwrap().str_prop(prop::TITLE), Some("Uninstall Weather?"));
     let message = h.tree.get(dialog).unwrap().str_prop(prop::MESSAGE).unwrap().to_owned();
@@ -599,7 +614,7 @@ fn the_hub_ui_uninstalls_an_app_after_a_confirmation() {
     assert!(lib.lock().unwrap().uninstalled.is_empty());
 
     // Cancel: nothing is called. Back to the library; open Notes.
-    h.fire(h.labeled(ControlKind::Action, "Uninstall"), event::PRESS, Value::Null);
+    h.fire(h.screen_action("Uninstall"), event::PRESS, Value::Null);
     h.fire(h.below(dialog, ControlKind::Action, "Cancel"), event::PRESS, Value::Null);
     assert!(!h.tree.get(dialog).unwrap().bool_prop(prop::VALUE));
     assert!(lib.lock().unwrap().uninstalled.is_empty());
@@ -609,7 +624,7 @@ fn the_hub_ui_uninstalls_an_app_after_a_confirmation() {
 
     // "Keep my data": the message changes, and the call carries `keep_data`.
     let dialog = h.one(ControlKind::Dialog, |_| true);
-    h.fire(h.labeled(ControlKind::Action, "Uninstall"), event::PRESS, Value::Null);
+    h.fire(h.screen_action("Uninstall"), event::PRESS, Value::Null);
     let keep = h.below(dialog, ControlKind::Checkbox, "Keep my data");
     assert!(!h.tree.get(keep).unwrap().bool_prop(prop::VALUE), "the data is deleted unless the user says otherwise");
     h.fire(keep, event::CHANGE, Value::Bool(true));

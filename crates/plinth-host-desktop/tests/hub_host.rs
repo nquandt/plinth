@@ -225,8 +225,6 @@ fn the_poll_loop_runs_on_its_own() {
 #[test]
 fn the_host_backend_uninstalls_apps() {
     use plinth_hub::{AppDataLayout, RunLock};
-    use plinth_runner_wasmtime::hub::HubBackend;
-
     let hub = temp_hub();
     let t = std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos();
     let data = std::env::temp_dir().join(format!("plinth-hub-host-data-{}-{t}", std::process::id()));
