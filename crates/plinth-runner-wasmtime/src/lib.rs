@@ -1,15 +1,23 @@
-//! A Wasm runner adapter on wasmtime (SPEC.md §9.2).
+//! A Wasm runner adapter (SPEC.md §9.2): the host state and the host APIs of
+//! the `plinth:app` world, and two engines that run apps with them.
 //!
-//! The runner loads an app component, checks its imports against the
-//! `plinth:app` world, and calls `init` and `on-event`. Each call has a time
-//! limit (epoch interruption) and the guest has a memory cap.
+//! The runner loads an app, and calls `init` and `on-event`. Each call has a
+//! time limit and the guest has a memory cap. The engines:
+//!
+//! - `wasmtime` (feature `wasmtime`, on by default): the desktop and Android
+//!   engine. It runs the component, with an epoch time limit.
+//! - `wasmi` (feature `wasmi`): an interpreter, for iOS (no JIT there) and
+//!   for tests. It runs the linked core module, with a fuel time limit.
+//!
+//! `HostState` and all host APIs are the same for both engines. With
+//! `--no-default-features --features wasmi`, wasmtime is not in the
+//! dependency tree (`docs/PRODUCTION.md` R5).
 
-use anyhow::{Context as _, Result, bail};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(any(feature = "wasmtime", feature = "wasmi")))]
+compile_error!("plinth-runner-wasmtime needs at least one engine: enable feature `wasmtime` or `wasmi`");
+
+use anyhow::{Result, bail};
 use std::time::{Duration, Instant};
-use wasmtime::component::{Component, HasSelf, Linker, types::ComponentItem};
-use wasmtime::{Config, Engine, Store};
 
 pub mod app_info;
 pub mod files;
@@ -28,6 +36,11 @@ pub mod timers;
 pub mod wasmi_core;
 #[cfg(feature = "wasmi")]
 mod wasmi_engine;
+#[cfg(feature = "wasmtime")]
+mod wasmtime_engine;
+
+#[cfg(feature = "wasmtime")]
+pub use wasmtime_engine::WasmtimeGuest;
 
 use hub::HubBackend;
 use kv::Kv;
@@ -37,6 +50,7 @@ use requests::RequestQueue;
 use secrets::{SecretsBackend, SecretsScope};
 use timers::TimerQueue;
 
+#[cfg(feature = "wasmtime")]
 mod bindings {
     wasmtime::component::bindgen!({
         path: "../../wit/plinth",
@@ -44,7 +58,11 @@ mod bindings {
     });
 }
 
-use bindings::App;
+// Without wasmtime, the same traits and types, written by hand.
+#[cfg(not(feature = "wasmtime"))]
+#[path = "host_traits.rs"]
+mod bindings;
+
 use bindings::plinth::app::error::{DeniedReason as WitDeniedReason, HostError};
 
 /// Capability names (SPEC.md §11), from the shared map in `plinth-link`
@@ -128,45 +146,18 @@ impl Default for Limits {
 /// grows: the allocator never gives memory back), for `Guest::memory_bytes`.
 /// Plain numbers, not a wrapper over one engine's own `StoreLimits`: the
 /// wasmtime and wasmi `ResourceLimiter` traits take different error types,
-/// so `Limiter` gets two trait impls below (SPEC.md §9.2 step 3), both
-/// reading and updating these same fields.
+/// so `Limiter` gets two trait impls (SPEC.md §9.2 step 3; one in
+/// `wasmtime_engine.rs`, one below), both reading and updating these same
+/// fields.
 struct Limiter {
     memory_cap: usize,
     memory: usize,
 }
 
 /// Whether growing to `desired` is allowed under `cap` and the module's own
-/// declared `maximum`, shared by both `ResourceLimiter` impls below.
+/// declared `maximum`, shared by both `ResourceLimiter` impls.
 fn allow_growth(cap: usize, desired: usize, maximum: Option<usize>) -> bool {
     desired <= cap && maximum.is_none_or(|max| desired <= max)
-}
-
-impl wasmtime::ResourceLimiter for Limiter {
-    fn memory_growing(&mut self, _current: usize, desired: usize, maximum: Option<usize>) -> wasmtime::Result<bool> {
-        let ok = allow_growth(self.memory_cap, desired, maximum);
-        if ok {
-            self.memory = self.memory.max(desired);
-        }
-        Ok(ok)
-    }
-    fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
-        Ok(())
-    }
-    fn table_growing(&mut self, _current: usize, _desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
-        Ok(true)
-    }
-    fn table_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
-        Ok(())
-    }
-    fn instances(&self) -> usize {
-        4
-    }
-    fn tables(&self) -> usize {
-        10_000
-    }
-    fn memories(&self) -> usize {
-        10_000
-    }
 }
 
 /// `wasmi::ResourceLimiter` is a re-export of `wasmi_core::ResourceLimiter`
@@ -209,9 +200,6 @@ impl ::wasmi_core::ResourceLimiter for Limiter {
         10_000
     }
 }
-
-/// How often the epoch ticker increments the engine epoch.
-const EPOCH_TICK: Duration = Duration::from_millis(10);
 
 struct HostState {
     commits: Vec<Vec<u8>>,
@@ -291,6 +279,45 @@ struct HostState {
 }
 
 impl HostState {
+    /// The state of a new guest. Both engines make it the same way.
+    fn new(
+        limits: &Limits,
+        policy: Policy,
+        kv: Kv,
+        clipboard: Box<dyn Clipboard>,
+        hub: Option<Box<dyn HubBackend>>,
+    ) -> Self {
+        HostState {
+            commits: Vec::new(),
+            logs: Vec::new(),
+            errors: Vec::new(),
+            limits: Limiter { memory_cap: limits.memory_bytes, memory: 0 },
+            policy,
+            kv,
+            timers: TimerQueue::new(),
+            last_frame: None,
+            clipboard,
+            monotonic_origin: Instant::now(),
+            requests: RequestQueue::new(),
+            dialogs: Vec::new(),
+            net_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            fake_timezone_offset_minutes: None,
+            hub,
+            files: files::Files::unavailable(),
+            notify: Box::new(notify::MemoryNotify::default()),
+            secrets: Box::new(secrets::UnsupportedSecrets),
+            secrets_scope: SecretsScope::default(),
+            sql: None,
+            locale: None,
+            locale_fixed: false,
+            test_clock: None,
+            app_version: None,
+            data_version: None,
+            data_version_loaded: false,
+            upgrade_claimed: false,
+        }
+    }
+
     /// The time of the timers: the test clock, else the real time.
     fn instant_now(&self) -> Instant {
         self.test_clock.map_or_else(Instant::now, |(now, _)| now)
@@ -328,6 +355,27 @@ impl HostState {
         if let Some(path) = self.data_version_path() {
             let _ = app_info::write(&path, version);
         }
+    }
+}
+
+/// The local time zone offset of the OS at `secs` (Unix time), in minutes
+/// east of UTC. 0 if the OS does not know it.
+#[cfg(not(target_os = "ios"))]
+fn local_offset_minutes(secs: i64) -> i32 {
+    let dt = time::OffsetDateTime::from_unix_timestamp(secs).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    time::UtcOffset::local_offset_at(dt).map(|o| o.whole_minutes() as i32).unwrap_or(0)
+}
+
+/// As above, for iOS: the `time` crate does not build there (see
+/// `Cargo.toml`), so this calls `localtime_r` and reads `tm_gmtoff`.
+#[cfg(target_os = "ios")]
+fn local_offset_minutes(secs: i64) -> i32 {
+    let t = secs as libc::time_t;
+    // SAFETY: `tm` is plain data, so all-zero is valid; `localtime_r` writes
+    // only into `tm` and returns null on failure.
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&t, &mut tm).is_null() { 0 } else { (tm.tm_gmtoff / 60) as i32 }
     }
 }
 
@@ -401,9 +449,7 @@ impl bindings::plinth::app::time::Host for HostState {
         if let Some(fake) = self.fake_timezone_offset_minutes {
             return fake;
         }
-        let secs = ms.div_euclid(1000);
-        let dt = time::OffsetDateTime::from_unix_timestamp(secs).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
-        time::UtcOffset::local_offset_at(dt).map(|o| o.whole_minutes() as i32).unwrap_or(0)
+        local_offset_minutes(ms.div_euclid(1000))
     }
 }
 
@@ -869,51 +915,43 @@ impl bindings::plinth::app::files::Host for HostState {
 /// `PLINTH_ENGINE=wasmi` on desktop, for tests). `Runner::new` reads
 /// `PLINTH_ENGINE` once and keeps the engine for its own lifetime.
 enum Backend {
-    /// `last`: the last component that `load` compiled, with a hash of its
-    /// bytes. A host that loads the same app again (`plinth test` makes a
-    /// new instance for each test) does not compile it again.
-    Wasmtime { engine: Engine, stop_ticker: Arc<AtomicBool>, last: std::sync::Mutex<Option<(u64, usize, Component)>> },
+    #[cfg(feature = "wasmtime")]
+    Wasmtime(wasmtime_engine::WasmtimeBackend),
     #[cfg(feature = "wasmi")]
     Wasmi { engine: wasmi::Engine },
 }
 
 /// True when `PLINTH_ENGINE=wasmi` (SPEC.md §9.2).
+#[cfg(feature = "wasmtime")]
 fn wants_wasmi() -> bool {
     std::env::var("PLINTH_ENGINE").map(|v| v == "wasmi").unwrap_or(false)
 }
 
-/// The engine is shared by all guests. It owns the epoch ticker thread
-/// (wasmtime backend only).
+/// The engine is shared by all guests. The wasmtime backend owns the epoch
+/// ticker thread.
 pub struct Runner {
     backend: Backend,
 }
 
 impl Runner {
+    /// Makes the engine: wasmtime on desktop and Android; wasmi when
+    /// `PLINTH_ENGINE=wasmi`, and always in a build without the `wasmtime`
+    /// feature.
     pub fn new() -> Result<Self> {
-        if wants_wasmi() {
-            #[cfg(feature = "wasmi")]
-            return Ok(Self { backend: Backend::Wasmi { engine: wasmi_engine::new_engine() } });
-            #[cfg(not(feature = "wasmi"))]
-            bail!("PLINTH_ENGINE=wasmi, but this build has no `wasmi` feature (plinth-runner-wasmtime)");
-        }
-
-        let mut config = Config::new();
-        config.wasm_component_model(true);
-        config.epoch_interruption(true);
-        let engine = Engine::new(&config)?;
-
-        let stop_ticker = Arc::new(AtomicBool::new(false));
-        let (ticker_engine, stop) = (engine.weak(), stop_ticker.clone());
-        std::thread::Builder::new().name("plinth-epoch".into()).spawn(move || {
-            while !stop.load(Ordering::Relaxed) {
-                std::thread::sleep(EPOCH_TICK);
-                match ticker_engine.upgrade() {
-                    Some(engine) => engine.increment_epoch(),
-                    None => break,
-                }
+        #[cfg(feature = "wasmtime")]
+        {
+            if wants_wasmi() {
+                #[cfg(feature = "wasmi")]
+                return Ok(Self { backend: Backend::Wasmi { engine: wasmi_engine::new_engine() } });
+                #[cfg(not(feature = "wasmi"))]
+                bail!("PLINTH_ENGINE=wasmi, but this build has no `wasmi` feature (plinth-runner-wasmtime)");
             }
-        })?;
-        Ok(Self { backend: Backend::Wasmtime { engine, stop_ticker, last: std::sync::Mutex::new(None) } })
+            Ok(Self { backend: Backend::Wasmtime(wasmtime_engine::WasmtimeBackend::new()?) })
+        }
+        #[cfg(not(feature = "wasmtime"))]
+        {
+            Ok(Self { backend: Backend::Wasmi { engine: wasmi_engine::new_engine() } })
+        }
     }
 
     /// Compiles a component and checks its imports. Grants every capability
@@ -951,130 +989,30 @@ impl Runner {
         clipboard: Box<dyn Clipboard>,
         hub: Option<Box<dyn HubBackend>>,
     ) -> Result<Guest> {
+        let state = HostState::new(&limits, policy, kv, clipboard, hub);
         match &self.backend {
-            Backend::Wasmtime { engine, last, .. } => {
-                let hash = {
-                    use std::hash::{Hash, Hasher};
-                    let mut h = std::collections::hash_map::DefaultHasher::new();
-                    bytes.hash(&mut h);
-                    h.finish()
-                };
-                let cached = last.lock().unwrap().as_ref().filter(|(h, len, _)| *h == hash && *len == bytes.len()).map(|(_, _, c)| c.clone());
-                let component = match cached {
-                    Some(c) => c,
-                    None => {
-                        let c = Component::new(engine, bytes)
-                            .map_err(anyhow::Error::from)
-                            .context("the artifact is not a valid component")?;
-                        check_imports(engine, &c)?;
-                        *last.lock().unwrap() = Some((hash, bytes.len(), c.clone()));
-                        c
-                    }
-                };
-
-                let mut linker = Linker::<HostState>::new(engine);
-                App::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
-
-                let state = HostState {
-                    commits: Vec::new(),
-                    logs: Vec::new(),
-                    errors: Vec::new(),
-                    limits: Limiter { memory_cap: limits.memory_bytes, memory: 0 },
-                    policy,
-                    kv,
-                    timers: TimerQueue::new(),
-                    last_frame: None,
-                    clipboard,
-                    monotonic_origin: Instant::now(),
-                    requests: RequestQueue::new(),
-                    dialogs: Vec::new(),
-                    net_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-                    fake_timezone_offset_minutes: None,
-                    hub,
-                    files: files::Files::unavailable(),
-                    notify: Box::new(notify::MemoryNotify::default()),
-                    secrets: Box::new(secrets::UnsupportedSecrets),
-                    secrets_scope: SecretsScope::default(),
-                    sql: None,
-                    locale: None,
-                    locale_fixed: false,
-                    test_clock: None,
-                    app_version: None,
-                    data_version: None,
-                    data_version_loaded: false,
-                    upgrade_claimed: false,
-                };
-                let mut store = Store::new(engine, state);
-                store.limiter(|s| &mut s.limits);
-                store.epoch_deadline_trap();
-                let ticks = (limits.call_timeout.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64;
-                store.set_epoch_deadline(ticks);
-                let app = App::instantiate(&mut store, &component, &linker)
-                    .map_err(anyhow::Error::from)
-                    .context("instantiate the app")?;
-                // The source map of the app code, for the place of a trap
-                // (`docs/PRODUCTION.md` L9). An app built before it has none.
-                let srcmap = plinth_link::srcmap::find(bytes);
-                Ok(Guest::Wasmtime(WasmtimeGuest { store, app, deadline_ticks: ticks, poisoned: false, srcmap }))
-            }
+            #[cfg(feature = "wasmtime")]
+            Backend::Wasmtime(backend) => backend.load(bytes, &limits, state).map(Guest::Wasmtime),
             #[cfg(feature = "wasmi")]
-            Backend::Wasmi { engine } => {
-                wasmi_engine::load(engine, bytes, limits, policy, kv, clipboard, hub).map(Guest::Wasmi)
-            }
+            Backend::Wasmi { engine } => wasmi_engine::load(engine, bytes, &limits, state).map(Guest::Wasmi),
         }
     }
-}
-
-impl Drop for Runner {
-    // Without the `wasmi` feature, `Backend` has one variant, so this `if
-    // let` is irrefutable; that is expected, not a bug.
-    #[allow(irrefutable_let_patterns)]
-    fn drop(&mut self) {
-        if let Backend::Wasmtime { stop_ticker, .. } = &self.backend {
-            stop_ticker.store(true, Ordering::Relaxed);
-        }
-    }
-}
-
-/// Rejects any import outside the `plinth:app` world, `wasi:*` included.
-fn check_imports(engine: &Engine, component: &Component) -> Result<()> {
-    let ty = component.component_type();
-    for (name, item) in ty.imports(engine) {
-        if !name.starts_with(ALLOWED_IMPORT_PREFIX) {
-            bail!("the artifact imports `{name}`, which is not in the plinth:app world");
-        }
-        if !matches!(item.ty, ComponentItem::ComponentInstance(_)) {
-            bail!("the artifact import `{name}` is not an interface");
-        }
-    }
-    Ok(())
 }
 
 /// One running app instance. An enum, not a trait object: the host logic
 /// (`HostState`) is one type either way (SPEC.md §9.2); only how the guest
 /// is called differs.
 pub enum Guest {
+    #[cfg(feature = "wasmtime")]
     Wasmtime(WasmtimeGuest),
     #[cfg(feature = "wasmi")]
     Wasmi(wasmi_engine::WasmiGuest),
 }
 
-/// The wasmtime backend's own state, private so `HostState` (`pub(crate)`)
-/// does not have to be `pub` just because `Guest` is.
-pub struct WasmtimeGuest {
-    store: Store<HostState>,
-    app: App,
-    deadline_ticks: u64,
-    /// Set after a trap. A trapped instance is never called again.
-    poisoned: bool,
-    /// The source map of the linked module (`plinth_link::srcmap`), if the
-    /// app has one.
-    srcmap: Option<plinth_link::srcmap::SrcMap>,
-}
-
 impl Guest {
     fn data(&self) -> &HostState {
         match self {
+            #[cfg(feature = "wasmtime")]
             Guest::Wasmtime(g) => g.store.data(),
             #[cfg(feature = "wasmi")]
             Guest::Wasmi(g) => g.store.data(),
@@ -1083,6 +1021,7 @@ impl Guest {
 
     fn data_mut(&mut self) -> &mut HostState {
         match self {
+            #[cfg(feature = "wasmtime")]
             Guest::Wasmtime(g) => g.store.data_mut(),
             #[cfg(feature = "wasmi")]
             Guest::Wasmi(g) => g.store.data_mut(),
@@ -1105,6 +1044,7 @@ impl Guest {
     /// calibration of the fuel budget. `None` on wasmtime (no fuel).
     pub fn last_call_fuel(&self) -> Option<u64> {
         match self {
+            #[cfg(feature = "wasmtime")]
             Guest::Wasmtime(_) => None,
             #[cfg(feature = "wasmi")]
             Guest::Wasmi(g) => Some(g.last_fuel_used),
@@ -1128,7 +1068,8 @@ impl Guest {
             init_arg::push(&mut args, init_arg::RANDOM_SEED, &fresh_seed().to_le_bytes());
         }
         match self {
-            Guest::Wasmtime(_) => self.call_wasmtime(|app, store| app.call_init(store, &args)),
+            #[cfg(feature = "wasmtime")]
+            Guest::Wasmtime(g) => g.call_init(&args),
             #[cfg(feature = "wasmi")]
             Guest::Wasmi(_) => self.call_wasmi("init", &args),
         }
@@ -1137,7 +1078,8 @@ impl Guest {
     /// Calls `on-event` and returns the op buffers that the guest committed.
     pub fn on_event(&mut self, events: &[u8]) -> Result<Vec<Vec<u8>>> {
         match self {
-            Guest::Wasmtime(_) => self.call_wasmtime(|app, store| app.call_on_event(store, events)),
+            #[cfg(feature = "wasmtime")]
+            Guest::Wasmtime(g) => g.call_on_event(events),
             #[cfg(feature = "wasmi")]
             Guest::Wasmi(_) => self.call_wasmi("on-event", events),
         }
@@ -1361,36 +1303,11 @@ impl Guest {
         self.on_event(w.as_bytes())
     }
 
-    /// Calls `init`/`on-event` on the wasmtime backend. Only valid when
-    /// `self` is `Guest::Wasmtime`.
-    // Without the `wasmi` feature, `Guest` has one variant, so the `else`
-    // below is unreachable; that is expected, not a bug.
-    #[allow(irrefutable_let_patterns, unreachable_patterns)]
-    fn call_wasmtime(&mut self, f: impl FnOnce(&App, &mut Store<HostState>) -> wasmtime::Result<()>) -> Result<Vec<Vec<u8>>> {
-        let Guest::Wasmtime(WasmtimeGuest { store, app, deadline_ticks, poisoned, srcmap }) = self else {
-            unreachable!("call_wasmtime on a non-wasmtime guest")
-        };
-        if *poisoned {
-            bail!("the app stopped earlier");
-        }
-        store.set_epoch_deadline(*deadline_ticks);
-        let logs_before = store.data().logs.len();
-        let result = f(app, store);
-        let commits = std::mem::take(&mut store.data_mut().commits);
-        if let Err(e) = result {
-            *poisoned = true;
-            let mut reason = stop_reason(&e, &store.data().logs[logs_before..]);
-            if let Some(place) = srcmap.as_ref().and_then(|m| trap_place(m, &e)) {
-                reason = format!("{reason} ({place})");
-            }
-            log::error!(target: "plinth::app", "the app stopped: {reason}: {e:?}");
-            return Err(anyhow::Error::from(e).context(reason));
-        }
-        Ok(commits)
-    }
-
     /// Calls `init`/`on-event` (`export` is `"init"` or `"on-event"`) on
     /// the wasmi backend. Only valid when `self` is `Guest::Wasmi`.
+    // Without the `wasmtime` feature, `Guest` has one variant, so the `else`
+    // below is unreachable; that is expected, not a bug.
+    #[allow(irrefutable_let_patterns)]
     #[cfg(feature = "wasmi")]
     fn call_wasmi(&mut self, export: &str, bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
         let Guest::Wasmi(g) = self else { unreachable!("call_wasmi on a non-wasmi guest") };
@@ -1407,37 +1324,5 @@ impl Guest {
             return Err(e.context(reason));
         }
         Ok(commits)
-    }
-}
-
-/// The source place (`app/main.tsx:12`) of the innermost app frame of a
-/// trap, from the wasm backtrace and the source map. Frames of the core
-/// and of the component's own small modules have no map entry.
-fn trap_place(map: &plinth_link::srcmap::SrcMap, e: &wasmtime::Error) -> Option<String> {
-    let bt = e.downcast_ref::<wasmtime::WasmBacktrace>()?;
-    bt.frames().iter().find_map(|f| {
-        let (file, line) = map.lookup(f.func_index(), u32::try_from(f.func_offset()?).ok()?)?;
-        Some(format!("{file}:{line}"))
-    })
-}
-
-/// A short, plain reason for a failed guest call, for the host's "This
-/// app stopped" banner. The error keeps the wasm detail (`{e:#}`, `{e:?}`).
-/// The core logs `trap: <reason>` before it traps (`plinth_rt::trap`), so
-/// the last such log of the call is the best reason.
-fn stop_reason(e: &wasmtime::Error, logs: &[String]) -> String {
-    if let Some(msg) = logs.iter().rev().find_map(|l| l.strip_prefix("trap: ")) {
-        return msg.to_owned();
-    }
-    match e.downcast_ref::<wasmtime::Trap>() {
-        Some(wasmtime::Trap::Interrupt) => "the app is not responding (time limit reached)".into(),
-        Some(wasmtime::Trap::StackOverflow) => "too many nested calls (stack overflow)".into(),
-        Some(wasmtime::Trap::UnreachableCodeReached) => "a check in the app failed".into(),
-        Some(wasmtime::Trap::IntegerDivisionByZero) => "an integer division by zero".into(),
-        Some(wasmtime::Trap::MemoryOutOfBounds | wasmtime::Trap::HeapMisaligned | wasmtime::Trap::TableOutOfBounds) => {
-            "an invalid memory access".into()
-        }
-        Some(t) => t.to_string(),
-        None => "a host call failed".into(),
     }
 }

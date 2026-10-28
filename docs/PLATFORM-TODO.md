@@ -44,7 +44,7 @@ Status: 2026-10-08. Nothing in this file is started.
 | The release pipeline | D2 | Build, sign and test the macOS release (both `aarch64` and `x86_64`, or a universal binary). | A release build from CI runs on a clean Mac. |
 | CI for each release | Q3 | Run CI on macOS for each release, not only weekly. | The release workflow needs the macOS job. |
 | Safari | P4 | Run the web tests (`web/test/run-a11y.mjs` and the Node tests with a browser) in Safari. Check OPFS (`store.sql`), the Worker for each app, the sandboxed frame and `contextmenu` (Safari on iOS does not send it). | The web tests pass in Safari, or each difference is in `docs/LIMITS.md`. |
-| iOS | P8, R5 | Later, after the macOS window: the engine-free host state crate (R5), then gpui on iOS with wasmi. | `docs/PRODUCTION.md` P8. |
+| iOS | P8, R5 | Later, after the macOS window: check the engine-free host state (R5; the Windows part is done): run `cargo check --target aarch64-apple-ios -p plinth-runner-wasmtime --no-default-features --features wasmi` and the same for `aarch64-apple-ios-sim`; fix what fails in Rust code (the `localtime_r` function `local_offset_minutes` in `lib.rs` was never compiled for iOS); check that `rusqlite` (bundled SQLite) and `ring` build; then `default-features = false` for the runner in `plinth-hub` and `plinth-registry` (`docs/MAC-HANDOFF.md` §5.1, §5.2). Then gpui on iOS with wasmi. | `docs/PRODUCTION.md` P8, R5. |
 
 ## 4. Any machine
 

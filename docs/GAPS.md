@@ -1160,8 +1160,12 @@ owner's PC).
 
 **Left (next):**
 
-- Step 3 of the engine: move the engine-free host state into its own
-  crate, so that an iOS build does not depend on wasmtime (PRODUCTION R5).
+- Step 3 of the engine (PRODUCTION R5): **done on Windows, 2026-10-27.**
+  `wasmtime` is an optional dependency of the runner crate (feature
+  `wasmtime`, on by default), so the host state builds with
+  `--no-default-features --features wasmi` and no wasmtime. Left: the check
+  for iOS on the Mac, and `default-features = false` in the hub and registry
+  crates (`docs/MAC-HANDOFF.md` §5.1, §5.2).
 - Find out why opt-level 3 on the `wasmi` crate crashes a Windows debug
   build ("Build note"); report it upstream if it is a wasmi bug. A fix
   can make the debug wasmi build much faster, and then `lang`,
