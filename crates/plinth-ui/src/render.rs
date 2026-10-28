@@ -352,6 +352,8 @@ pub struct PlinthRoot {
     tree: Tree,
     guest: Box<dyn GuestPort>,
     accent: SharedString,
+    /// The app's merged `[theme]` token values (`None`: the host theme).
+    theme: Option<plinth_package::theme::Resolved>,
     fields: HashMap<NodeId, Field>,
     /// Set when the guest traps. The tree then stays read-only.
     stopped: Option<String>,
@@ -450,6 +452,7 @@ impl PlinthRoot {
             tree: Tree::new(),
             guest,
             accent: accent.into(),
+            theme: None,
             fields: HashMap::new(),
             stopped: None,
             app_errors: Vec::new(),
@@ -484,12 +487,31 @@ impl PlinthRoot {
         root
     }
 
+    /// Sets the app's `[theme]` token values. The host checks the override
+    /// again (a package is never trusted): a failing override is ignored,
+    /// with a log line, and the host theme stays. Returns whether it applies.
+    pub fn set_theme(&mut self, theme: Option<&plinth_package::theme::ThemeOverride>) -> bool {
+        self.theme = None;
+        let Some(theme) = theme else { return false };
+        match theme.resolve(Some(&self.accent)) {
+            Ok(resolved) => {
+                self.theme = Some(resolved);
+                true
+            }
+            Err(e) => {
+                log::warn!("the app theme is ignored: {e}");
+                false
+            }
+        }
+    }
+
     /// Makes the view for a guest that trapped in `init`.
     pub fn stopped(guest: Box<dyn GuestPort>, error: String, accent: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         Self {
             tree: Tree::new(),
             guest,
             accent: accent.into(),
+            theme: None,
             fields: HashMap::new(),
             stopped: Some(error),
             app_errors: Vec::new(),
@@ -1273,7 +1295,7 @@ impl Render for PlinthRoot {
         if window.rem_size() != rem {
             window.set_rem_size(rem);
         }
-        let t = Tokens::themed(window.appearance(), &settings, &self.accent);
+        let t = Tokens::themed_with(window.appearance(), &settings, &self.accent, self.theme.as_ref());
 
         let content = div()
             .flex_1()

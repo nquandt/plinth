@@ -1,6 +1,7 @@
 //! Runtime-owned theme tokens (SPEC.md §6.5) and width classes (SPEC.md §6.1).
 
 use gpui::{Hsla, Pixels, WindowAppearance, hsla, hsla_to_rgba, px, rgb, rgb_to_hsla};
+use plinth_package::theme::{self as tk, ACCENTS, Alphas, Palette};
 
 /// The window width class. Compact < 600 px ≤ regular < 1200 px ≤ wide.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,18 +51,6 @@ pub struct Tokens {
     pub reduced_motion: bool,
 }
 
-/// The named accent palette. Each entry is (name, light, dark).
-const ACCENTS: &[(&str, u32, u32)] = &[
-    ("teal", 0x0b8a7e, 0x2ec4b6),
-    ("blue", 0x1a63d6, 0x5b9cff),
-    ("indigo", 0x4f46c8, 0x8c86ff),
-    ("purple", 0x8a3ec9, 0xc08cff),
-    ("pink", 0xc8327a, 0xff7ab8),
-    ("red", 0xc93a2f, 0xff7a6e),
-    ("orange", 0xc25a00, 0xff9f45),
-    ("green", 0x2e8540, 0x5fd27a),
-];
-
 fn c(hex: u32) -> Hsla {
     rgb_to_hsla(rgb(hex))
 }
@@ -75,54 +64,35 @@ pub fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
 impl Tokens {
     pub fn new(appearance: WindowAppearance, accent: &str) -> Self {
         let dark = matches!(appearance, WindowAppearance::Dark | WindowAppearance::VibrantDark);
-        let (_, light_accent, dark_accent) =
-            ACCENTS.iter().find(|(name, _, _)| *name == accent).copied().unwrap_or(ACCENTS[0]);
-        if dark {
-            let accent = c(dark_accent);
-            Self {
-                background: c(0x161618),
-                surface: c(0x232326),
-                surface_alt: c(0x2e2e32),
-                border: c(0x37373c),
-                hover: c(0x34343a),
-                selected: with_alpha(accent, 0.16),
-                selection: with_alpha(accent, 0.35),
-                text: c(0xf2f2f5),
-                text_muted: c(0x9a9aa2),
-                accent,
-                accent_hover: with_alpha(accent, 0.85),
-                on_accent: c(0x0b0b0c),
-                danger: c(0xff6b5e),
-                success: c(0x5fd27a),
-                track: c(0x48484f),
-                knob: c(0xffffff),
-                backdrop: with_alpha(c(0x000000), 0.55),
-                focus_ring: FOCUS_RING,
-                reduced_motion: false,
-            }
-        } else {
-            let accent = c(light_accent);
-            Self {
-                background: c(0xf4f4f6),
-                surface: c(0xffffff),
-                surface_alt: c(0xececf0),
-                border: c(0xdedee4),
-                hover: c(0xe4e4ea),
-                selected: with_alpha(accent, 0.12),
-                selection: with_alpha(accent, 0.25),
-                text: c(0x1b1b1f),
-                text_muted: c(0x6b6b74),
-                accent,
-                accent_hover: with_alpha(accent, 0.88),
-                on_accent: c(0xffffff),
-                danger: c(0xc93a2f),
-                success: c(0x2e8540),
-                track: c(0xc9c9d0),
-                knob: c(0xffffff),
-                backdrop: with_alpha(c(0x000000), 0.35),
-                focus_ring: FOCUS_RING,
-                reduced_motion: false,
-            }
+        Self::from_palette(dark, &Palette::default_for(dark, accent))
+    }
+
+    /// The tokens for a palette (the host palette, or an app's merged
+    /// `[theme]`). The tints and the backdrop are computed from the base
+    /// tokens; the toggle track and knob are fixed for each appearance.
+    pub fn from_palette(dark: bool, p: &Palette) -> Self {
+        let a = Alphas::for_appearance(dark);
+        let accent = c(p.accent);
+        Self {
+            background: c(p.background),
+            surface: c(p.surface),
+            surface_alt: c(p.surface_alt),
+            border: c(p.border),
+            hover: c(p.hover),
+            selected: p.selected.map_or_else(|| with_alpha(accent, a.selected as f32), c),
+            selection: with_alpha(accent, a.selection as f32),
+            text: c(p.text),
+            text_muted: c(p.text_muted),
+            accent,
+            accent_hover: with_alpha(accent, a.accent_hover as f32),
+            on_accent: c(p.on_accent),
+            danger: c(p.danger),
+            success: c(p.success),
+            track: if dark { c(0x48484f) } else { c(0xc9c9d0) },
+            knob: c(0xffffff),
+            backdrop: with_alpha(c(0x000000), a.backdrop as f32),
+            focus_ring: FOCUS_RING,
+            reduced_motion: false,
         }
     }
 }
@@ -300,9 +270,18 @@ fn with_contrast(color: Hsla, background: Hsla, ratio: f32) -> Hsla {
 impl Tokens {
     /// The tokens for the window appearance and the OS settings.
     pub fn themed(appearance: WindowAppearance, settings: &SystemSettings, accent: &str) -> Self {
+        Self::themed_with(appearance, settings, accent, None)
+    }
+
+    /// Like [`Self::themed`], with the app's merged `[theme]` (see
+    /// `plinth_package::theme`). In high contrast the override is ignored:
+    /// the high-contrast tokens win.
+    pub fn themed_with(appearance: WindowAppearance, settings: &SystemSettings, accent: &str, theme: Option<&tk::Resolved>) -> Self {
         let dark = settings.is_dark(appearance);
         let mut t = if settings.high_contrast {
             Self::high_contrast(dark, settings.system_colors, accent)
+        } else if let Some(r) = theme {
+            Self::from_palette(dark, r.palette(dark))
         } else {
             Self::new(if dark { WindowAppearance::Dark } else { WindowAppearance::Light }, accent)
         };
@@ -576,5 +555,107 @@ mod tests {
         assert!(Tokens::themed(WindowAppearance::Light, &reduced, "teal").reduced_motion);
         let both = SystemSettings { high_contrast: true, ..reduced };
         assert!(Tokens::themed(WindowAppearance::Dark, &both, "teal").reduced_motion);
+    }
+
+    use plinth_package::theme::{ColorPair, ThemeColor, ThemeOverride};
+
+    fn brand() -> ThemeOverride {
+        let pair = |l: &str, d: &str| ThemeColor::Pair(ColorPair { light: l.into(), dark: d.into() });
+        let mut t = ThemeOverride::default();
+        t.0.insert("background".into(), pair("#fff8ee", "#1b1410"));
+        t.0.insert("surface".into(), pair("#ffffff", "#2a201a"));
+        t.0.insert("text".into(), pair("#2b1a0c", "#f7eadb"));
+        t.0.insert("text-muted".into(), pair("#6a5444", "#c9b29c"));
+        t.0.insert("danger".into(), pair("#a4221a", "#ff8a80"));
+        t.0.insert("success".into(), pair("#1b6e2e", "#7bd88f"));
+        t.0.insert("accent".into(), pair("#b4440a", "#ff9a4d"));
+        t.0.insert("on-accent".into(), pair("#ffffff", "#1b1410"));
+        t
+    }
+
+    /// Without a theme, `themed_with` is `themed`, and the host palette is
+    /// the one that the desktop always had.
+    #[test]
+    fn host_theme_is_unchanged() {
+        let base = SystemSettings::default();
+        for appearance in [WindowAppearance::Light, WindowAppearance::Dark] {
+            let (a, b) = (Tokens::themed(appearance, &base, "blue"), Tokens::themed_with(appearance, &base, "blue", None));
+            assert_eq!((a.background, a.accent, a.selected, a.track), (b.background, b.accent, b.selected, b.track));
+        }
+        let t = Tokens::new(WindowAppearance::Dark, "teal");
+        assert_eq!((t.background, t.surface, t.accent, t.on_accent, t.track), (c(0x161618), c(0x232326), c(0x2ec4b6), c(0x0b0b0c), c(0x48484f)));
+        assert_eq!(t.selected, with_alpha(c(0x2ec4b6), 0.16));
+        assert_eq!(t.backdrop, with_alpha(c(0x000000), 0.55));
+        let t = Tokens::new(WindowAppearance::Light, "teal");
+        assert_eq!((t.background, t.text, t.track), (c(0xf4f4f6), c(0x1b1b1f), c(0xc9c9d0)));
+        assert_eq!(t.accent_hover, with_alpha(c(0x0b8a7e), 0.88));
+    }
+
+    /// The override sets the base tokens, light and dark; the derived
+    /// tokens follow the merged accent.
+    #[test]
+    fn theme_override_sets_the_tokens() {
+        let resolved = brand().resolve(Some("blue")).unwrap();
+        let base = SystemSettings::default();
+        let light = Tokens::themed_with(WindowAppearance::Light, &base, "blue", Some(&resolved));
+        assert_eq!((light.background, light.text, light.accent, light.on_accent), (c(0xfff8ee), c(0x2b1a0c), c(0xb4440a), c(0xffffff)));
+        // Not in the override: the host palette.
+        assert_eq!((light.border, light.hover), (c(0xdedee4), c(0xe4e4ea)));
+        // Derived from the new accent.
+        assert_eq!(light.selected, with_alpha(c(0xb4440a), 0.12));
+        assert_eq!(light.accent_hover, with_alpha(c(0xb4440a), 0.88));
+        assert_eq!(light.selection, with_alpha(c(0xb4440a), 0.25));
+        let dark = SystemSettings { dark: Some(true), ..base };
+        let t = Tokens::themed_with(WindowAppearance::Light, &dark, "blue", Some(&resolved));
+        assert_eq!((t.background, t.accent, t.on_accent), (c(0x1b1410), c(0xff9a4d), c(0x1b1410)));
+        assert_eq!(t.selected, with_alpha(c(0xff9a4d), 0.16));
+        // The window appearance picks the half when the system does not force one.
+        let t = Tokens::themed_with(WindowAppearance::Dark, &base, "blue", Some(&resolved));
+        assert_eq!(t.background, c(0x1b1410));
+        // Reduced motion is not part of the theme.
+        let rm = SystemSettings { reduced_motion: true, ..base };
+        assert!(Tokens::themed_with(WindowAppearance::Light, &rm, "blue", Some(&resolved)).reduced_motion);
+        // A `selected` in the theme is used as it is (opaque).
+        let mut th = brand();
+        th.0.insert("selected".into(), ThemeColor::Same("#ffe0c2".into()));
+        let r = th.resolve(None).unwrap();
+        assert_eq!(Tokens::themed_with(WindowAppearance::Light, &base, "teal", Some(&r)).selected, c(0xffe0c2));
+    }
+
+    /// High contrast ignores the app theme: the host tokens win.
+    #[test]
+    fn high_contrast_ignores_the_theme() {
+        let resolved = brand().resolve(None).unwrap();
+        let hc = SystemSettings { high_contrast: true, ..SystemSettings::default() };
+        for appearance in [WindowAppearance::Light, WindowAppearance::Dark] {
+            let with = Tokens::themed_with(appearance, &hc, "teal", Some(&resolved));
+            let without = Tokens::themed(appearance, &hc, "teal");
+            assert_eq!((with.background, with.text, with.accent, with.border), (without.background, without.text, without.accent, without.border));
+            assert_eq!(with.focus_ring, FOCUS_RING_HIGH_CONTRAST);
+        }
+        // With OS colors too.
+        let colors = SystemColors { window: c(0x000000), window_text: c(0xffff00), highlight: c(0x1aebff), highlight_text: c(0x000000), button_face: c(0x000000) };
+        let os = SystemSettings { high_contrast: true, system_colors: Some(colors), ..SystemSettings::default() };
+        let t = Tokens::themed_with(WindowAppearance::Light, &os, "teal", Some(&resolved));
+        assert_eq!((t.background, t.text, t.accent), (colors.window, colors.window_text, colors.highlight));
+    }
+
+    /// A theme that would fail the guard never reaches the tokens: it does
+    /// not resolve, so the host theme stays.
+    #[test]
+    fn failing_theme_does_not_resolve() {
+        let mut bad = ThemeOverride::default();
+        bad.0.insert("text".into(), ThemeColor::Same("#f4f4f6".into()));
+        assert!(bad.resolve(None).is_err());
+    }
+
+    /// The chart palette and the canvas colors read the merged tokens.
+    #[test]
+    fn chart_palette_follows_the_theme_accent() {
+        let resolved = brand().resolve(None).unwrap();
+        let t = Tokens::themed_with(WindowAppearance::Light, &SystemSettings::default(), "teal", Some(&resolved));
+        assert_eq!(t.chart_palette()[0], c(0xb4440a));
+        assert_eq!(crate::canvas::token_color(&t, "accent"), Some(c(0xb4440a)));
+        assert_eq!(crate::canvas::token_color(&t, "background"), Some(c(0xfff8ee)));
     }
 }
