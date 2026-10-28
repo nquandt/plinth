@@ -687,6 +687,24 @@ impl bindings::plinth::app::hub::Host for HostState {
         }
         id
     }
+
+    fn uninstall(&mut self, app: String, keep_data: bool) -> u32 {
+        let id = self.requests.open();
+        match self.hub_job(|hub| hub.uninstall(&app, keep_data)) {
+            Err(reason) => self.net_results.lock().unwrap().push((id, plinth_protocol::Value::Str(denied_text(reason).to_owned()))),
+            Ok(job) => {
+                let tx = self.net_results.clone();
+                std::thread::spawn(move || {
+                    let result = match job() {
+                        Ok(_) => plinth_protocol::Value::Null,
+                        Err(e) => plinth_protocol::Value::Str(e),
+                    };
+                    tx.lock().unwrap().push((id, result));
+                });
+            }
+        }
+        id
+    }
 }
 
 impl HostState {

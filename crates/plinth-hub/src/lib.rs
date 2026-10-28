@@ -1109,19 +1109,42 @@ pub struct HubService {
     hub: Hub,
     launches: Vec<String>,
     sources: Option<std::sync::Arc<dyn SourceClient>>,
+    uninstall: Option<UninstallSetup>,
+}
+
+/// Removes the secrets of an app. The host gives this, because the
+/// keychain is not in this crate.
+pub type RemoveSecrets = std::sync::Arc<dyn Fn(&str) -> Result<()> + Send + Sync>;
+
+/// What `plinth:hub` `uninstall` needs from the host (`docs/STORAGE.md` §7).
+struct UninstallSetup {
+    data_dir: PathBuf,
+    /// The id of the Hub app that makes the calls. It cannot uninstall itself.
+    own_id: String,
+    remove_secrets: RemoveSecrets,
 }
 
 impl HubService {
     /// A service with no source client: `search` and `install` report that
     /// this host cannot read sources.
     pub fn new(hub: Hub) -> Self {
-        Self { hub, launches: Vec::new(), sources: None }
+        Self { hub, launches: Vec::new(), sources: None, uninstall: None }
     }
 
     /// A service that reads the configured sources (`sources.json`,
     /// `docs/REGISTRY.md` §9) through `client` for `search` and `install`.
     pub fn with_sources(hub: Hub, client: std::sync::Arc<dyn SourceClient>) -> Self {
-        Self { hub, launches: Vec::new(), sources: Some(client) }
+        Self { hub, launches: Vec::new(), sources: Some(client), uninstall: None }
+    }
+
+    /// Lets the service uninstall apps (`docs/STORAGE.md` §7). `data_dir` is
+    /// the data directory of the host; `own_id` is the id of the Hub app
+    /// that uses this service, which the service refuses to uninstall;
+    /// `remove_secrets` deletes the secrets of an app. Without this, the
+    /// `uninstall` call fails with a clear error.
+    pub fn with_uninstall(mut self, data_dir: PathBuf, own_id: &str, remove_secrets: RemoveSecrets) -> Self {
+        self.uninstall = Some(UninstallSetup { data_dir, own_id: own_id.to_owned(), remove_secrets });
+        self
     }
 }
 
@@ -1460,6 +1483,21 @@ impl plinth_runner_wasmtime::hub::HubBackend for HubService {
                 Err(e) => Err(format!("{e:#}")),
             },
             None => Err("this host cannot read sources".to_owned()),
+        })
+    }
+
+    fn uninstall(&self, id: &str, keep_data: bool) -> plinth_runner_wasmtime::hub::HubJob {
+        let hub = self.hub.clone();
+        let id = id.to_owned();
+        let setup = self.uninstall.as_ref().map(|s| (s.data_dir.clone(), s.own_id.clone(), s.remove_secrets.clone()));
+        Box::new(move || {
+            let Some((data_dir, own_id, remove_secrets)) = setup else {
+                return Err("this host cannot uninstall apps".to_owned());
+            };
+            if id == own_id {
+                return Err("the Hub cannot uninstall itself".to_owned());
+            }
+            hub.uninstall(&id, &data_dir, keep_data, &mut |app| remove_secrets(app)).map(|_| String::new()).map_err(|e| format!("{e:#}"))
         })
     }
 

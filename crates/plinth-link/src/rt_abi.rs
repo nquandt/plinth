@@ -248,6 +248,8 @@ pub const FUNCTIONS: &[(&str, &[ValType], &[ValType])] = &[
     ("secrets_remove", &[I32, I32, I32], &[]),
     ("secrets_names", &[I32, I32], &[]),
     ("secrets_last_error", &[], &[I32]),
+    // -- plinth:hub, core 1.13 (`docs/HUB.md` §4.1, `docs/STORAGE.md` §7) -----
+    ("hub_uninstall", &[I32, I32, I32, I32], &[]),
 ];
 
 /// Hot reload (SPEC.md §13): functions that only a dev build of
@@ -388,6 +390,8 @@ pub const ADDED_IN: &[(&str, u32)] = &[
     ("secrets_remove", 13),
     ("secrets_names", 13),
     ("secrets_last_error", 13),
+    // plinth:hub `uninstall(id, keepData, done)`: also in the unshipped 1.13.
+    ("hub_uninstall", 13),
 ];
 
 /// The minor version that added `name` (0 for the functions of 1.0).

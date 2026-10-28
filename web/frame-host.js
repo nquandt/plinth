@@ -311,7 +311,7 @@ export class AppFrame {
         }
         const hub = this.opts.hub;
         Promise.resolve()
-          .then(() => hub[msg.method](...msg.args))
+          .then(() => (msg.method === "uninstall" ? hub.uninstall(msg.args[0], { keepData: msg.args[1] === true }) : hub[msg.method](...msg.args)))
           .then(
             (value) => this.answer(msg.id, { ok: true, value: value ?? null, snapshot: hub.snapshot() }),
             (err) => this.answer(msg.id, { ok: false, error: String(err?.message ?? err), snapshot: hub.snapshot() }),

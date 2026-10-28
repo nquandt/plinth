@@ -79,3 +79,4 @@ interface secrets: get: func(name: string) -> u32
 interface secrets: remove: func(name: string) -> u32
 interface secrets: names: func() -> u32
 world app: import secrets
+interface hub: uninstall: func(id: string, keep-data: bool) -> u32

@@ -1519,6 +1519,11 @@ function hostImports(
         const app = readString(idPtr, idLen);
         return hubAsync("text", () => hub.update(app), () => null, (e) => e);
       },
+      // Core 1.13 (`docs/STORAGE.md` §7): the page erases the data.
+      uninstall(idPtr, idLen, keepData) {
+        const app = readString(idPtr, idLen);
+        return hubAsync("text", () => hub.uninstall(app, { keepData: Boolean(keepData) }), () => null, (e) => e);
+      },
     },
     // Not a WIT import: `loadCore` reads this off the imports object and
     // hands it to `PlinthApp` as `core.finishStart` (core 1.13,

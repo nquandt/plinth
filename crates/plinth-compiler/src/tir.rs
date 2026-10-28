@@ -421,7 +421,8 @@ pub enum TExprKind {
     NotifyShow(Box<TExpr>, Box<TExpr>, Box<TExpr>, Box<TExpr>),
     /// `plinth:secrets` (core 1.13): `(runtime function, arguments,
     /// wrapper)`. The runtime function is `secrets_set`, `secrets_get`,
-    /// `secrets_remove` or `secrets_names`. The arguments are the strings
+    /// `secrets_remove` or `secrets_names`. `plinth:hub` `uninstall` uses
+    /// this form too (`hub_uninstall`, with a string and a bool). The arguments are the strings
     /// that the function takes (none, one or two). `wrapper` is a synthetic
     /// 0-arg closure that reads the completion with `net_result_*`
     /// (`check/stdlib.rs`).

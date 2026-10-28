@@ -291,6 +291,16 @@ interface hub {
   /// once; the `completion` result is null on success (also when `id` is
   /// up to date), or an error string (`"denied:<reason>"` if denied).
   update: func(id: string) -> u32;
+
+  // -- Core 1.13 (`docs/HUB.md` §4.1, §12.2; `docs/STORAGE.md` §7) ---------
+
+  /// Uninstalls `id`: removes the app from the library and, unless
+  /// `keep-data`, deletes its data, its grants and its secrets. Runs on a
+  /// worker thread. Returns a request id at once; the `completion` result
+  /// is null on success, or an error string (`"denied:<reason>"` if
+  /// denied). An app that runs, an unknown app and the Hub app itself give
+  /// an error string and change nothing.
+  uninstall: func(id: string, keep-data: bool) -> u32;
 }
 
 /// The SQL store of the app (core 1.13, `docs/SQL.md`; capability:

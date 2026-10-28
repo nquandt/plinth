@@ -105,6 +105,7 @@ pub mod plinth {
                 fn unblock_publisher(&mut self, key: String) -> Result<(), HostError>;
                 fn check_updates(&mut self, id: String) -> u32;
                 fn update(&mut self, id: String) -> u32;
+                fn uninstall(&mut self, id: String, keep_data: bool) -> u32;
             }
         }
 

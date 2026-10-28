@@ -99,9 +99,20 @@ pub trait HubBackend: Send {
         let _ = id;
         Box::new(|| Err("unsupported".to_owned()))
     }
+
+    // -- Core 1.13 (`docs/STORAGE.md` §7). A default too.
+
+    /// A job that uninstalls library app `id` and, unless `keep_data`,
+    /// deletes its data, grants and secrets. `Ok` is empty. `Err` is the
+    /// text the Hub app shows (the app runs, it is unknown, or it is the
+    /// Hub app itself).
+    fn uninstall(&self, id: &str, keep_data: bool) -> HubJob {
+        let _ = (id, keep_data);
+        Box::new(|| Err("unsupported".to_owned()))
+    }
 }
 
 /// Work that a `plinth:hub` call does off the UI thread (network, disk):
-/// `search`, `install`, `check_updates` and `update`. The runner delivers its result to the guest as
+/// `search`, `install`, `check_updates`, `update` and `uninstall`. The runner delivers its result to the guest as
 /// a `completion` event (SPEC.md §8.4).
 pub type HubJob = Box<dyn FnOnce() -> Result<String, String> + Send>;
