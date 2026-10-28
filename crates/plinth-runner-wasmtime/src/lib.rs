@@ -462,6 +462,11 @@ impl bindings::plinth::app::store::Host for HostState {
     fn kv_set(&mut self, key: String, value: String) -> Result<(), HostError> {
         require(&self.policy, capability::STORE_KV)?;
         self.kv.set(key, value).map_err(|e| {
+            // A set over the quota answers `denied:refused`, as the web host
+            // does (`docs/STORAGE.md` S13); `kv.lastError()` shows it.
+            if e.is::<kv::QuotaExceeded>() {
+                return HostError::Denied(WitDeniedReason::Refused);
+            }
             log::warn!("kv write failed: {e:#}");
             HostError::Denied(WitDeniedReason::Unsupported)
         })
@@ -791,7 +796,10 @@ impl HostState {
     fn sql_store(&mut self) -> Option<&sql::SqlStore> {
         if self.sql.is_none() {
             let dir = sql::database_dir(self.files.root()?);
-            self.sql = Some(sql::SqlStore::open(dir, sql::Limits::default()));
+            // The database follows the quota of the private space (the host
+            // sets one per-app quota, `docs/STORAGE.md` S13).
+            let limits = sql::Limits { quota: self.files.quota(), ..sql::Limits::default() };
+            self.sql = Some(sql::SqlStore::open(dir, limits));
         }
         self.sql.as_ref()
     }

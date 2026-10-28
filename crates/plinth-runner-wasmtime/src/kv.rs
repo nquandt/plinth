@@ -4,6 +4,11 @@
 //! every write, keyed by app id: `<data-dir>/apps/<id>/kv.json` on
 //! desktop (`%APPDATA%\plinth` on Windows). Tests use a store with no
 //! backing file (`Kv::in_memory`).
+//!
+//! The host can give the store a quota (`Kv::with_quota`, `docs/STORAGE.md`
+//! S13): the bytes of all keys and values together. A `set` that would make
+//! the store bigger than the quota fails with `QuotaExceeded`; a `set` that
+//! does not make it bigger always works, so an app can free space.
 
 use anyhow::{Context as _, Result};
 use std::collections::BTreeMap;
@@ -13,7 +18,20 @@ use std::path::{Path, PathBuf};
 pub struct Kv {
     path: Option<PathBuf>,
     data: BTreeMap<String, String>,
+    quota: Option<u64>,
 }
+
+/// The error of `Kv::set` when the store would pass its quota.
+#[derive(Debug)]
+pub struct QuotaExceeded;
+
+impl std::fmt::Display for QuotaExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the kv store is over its quota")
+    }
+}
+
+impl std::error::Error for QuotaExceeded {}
 
 impl Kv {
     /// Loads (or creates) the store for `app_id` under `data_dir` (see
@@ -26,12 +44,23 @@ impl Kv {
         } else {
             BTreeMap::new()
         };
-        Ok(Self { path: Some(path), data })
+        Ok(Self { path: Some(path), data, quota: None })
     }
 
     /// A store with no backing file, for tests.
     pub fn in_memory() -> Self {
-        Self { path: None, data: BTreeMap::new() }
+        Self { path: None, data: BTreeMap::new(), quota: None }
+    }
+
+    /// The same store with a limit on the bytes of keys and values.
+    pub fn with_quota(mut self, bytes: u64) -> Self {
+        self.quota = Some(bytes);
+        self
+    }
+
+    /// The bytes of all keys and values.
+    pub fn used_bytes(&self) -> u64 {
+        self.data.iter().map(|(k, v)| (k.len() + v.len()) as u64).sum()
     }
 
     pub fn get(&self, key: &str) -> Option<String> {
@@ -39,6 +68,14 @@ impl Kv {
     }
 
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
+        if let Some(quota) = self.quota {
+            let old = self.data.get(&key).map_or(0, |v| key.len() + v.len()) as u64;
+            let new = (key.len() + value.len()) as u64;
+            let used = self.used_bytes();
+            if new > old && used - old + new > quota {
+                return Err(QuotaExceeded.into());
+            }
+        }
         self.data.insert(key, value);
         self.flush()
     }
@@ -118,6 +155,27 @@ mod tests {
         assert_eq!(kv.get("b"), Some("2".into()));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_quota_stops_a_set_that_makes_the_store_bigger() {
+        let mut kv = Kv::in_memory().with_quota(10);
+        kv.set("a".into(), "1234".into()).unwrap(); // 5 bytes
+        kv.set("b".into(), "1234".into()).unwrap(); // 10 bytes
+        let e = kv.set("c".into(), "1".into()).unwrap_err();
+        assert!(e.is::<QuotaExceeded>());
+        assert_eq!(kv.get("c"), None);
+        let e = kv.set("a".into(), "12345".into()).unwrap_err();
+        assert!(e.is::<QuotaExceeded>(), "a bigger value counts only its growth");
+        assert_eq!(kv.get("a"), Some("1234".into()));
+        // The same size, or smaller, always works; so does a delete, then a new key.
+        kv.set("a".into(), "4321".into()).unwrap();
+        kv.set("a".into(), "1".into()).unwrap();
+        kv.set("c".into(), "12".into()).unwrap();
+        assert_eq!(kv.used_bytes(), 2 + 5 + 3);
+        kv.delete("b").unwrap();
+        kv.set("d".into(), "1234".into()).unwrap();
+        assert!(Kv::in_memory().set("x".into(), "y".repeat(1000)).is_ok(), "no quota, no limit");
     }
 
     #[test]
