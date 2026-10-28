@@ -1,0 +1,22 @@
+id = "dev.plinth.examples.themed"
+name = "Brew & Bean"
+version = "0.1.0"
+publisher = "plinth"
+
+# Brand colors. Each key is a host color token. A hex string sets light and
+# dark. A { light, dark } table sets each. The app code uses token names only.
+# Setting a background also checks the muted text, danger and success on it,
+# so a full theme sets those too.
+
+[theme]
+surface-alt = { light = "#f6ead9", dark = "#33261d" }
+border = { light = "#e2cdb2", dark = "#4a382b" }
+hover = { light = "#f1e0c8", dark = "#3d2d22" }
+background = { light = "#fff8ee", dark = "#1b1410" }
+surface = { light = "#ffffff", dark = "#2a201a" }
+text = { light = "#2b1a0c", dark = "#f7eadb" }
+text-muted = { light = "#6a5444", dark = "#c9b29c" }
+accent = { light = "#b4440a", dark = "#ff9a4d" }
+on-accent = { light = "#ffffff", dark = "#1b1410" }
+danger = { light = "#a4221a", dark = "#ff8a80" }
+success = { light = "#1b6e2e", dark = "#7bd88f" }
