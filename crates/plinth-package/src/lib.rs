@@ -25,6 +25,7 @@ use std::io::{Cursor, Read, Write};
 pub mod feed;
 pub mod publisher;
 pub mod signature;
+pub mod theme;
 
 pub const PROFILE: &str = "plinth/1";
 /// The newest container format version that this build reads.
@@ -100,6 +101,10 @@ pub struct ProjectConfig {
     /// behavior of a `plinth.toml` written before this field existed).
     #[serde(default)]
     pub updates: Option<UpdatesConfig>,
+    /// `[theme]`: the app's values for the host color tokens
+    /// (`docs/ui.md`, "Theming an app"). `None`: the host theme.
+    #[serde(default)]
+    pub theme: Option<theme::ThemeOverride>,
 }
 
 /// `[updates]` in `plinth.toml`, carried into the manifest's `updates`
@@ -314,6 +319,25 @@ pub struct Manifest {
     /// or a `plinth.toml` with no `[updates]` section.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updates: Option<UpdatesConfig>,
+    /// The app's theme token values, carried from `plinth.toml`'s `[theme]`
+    /// unchanged. Data only: it grants nothing. A host checks it again
+    /// (`theme::ThemeOverride::resolve`) and ignores an override that fails.
+    /// A `theme` that cannot be read reads as `None` (and is logged), so a
+    /// bad theme never makes a package unreadable.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient_theme")]
+    pub theme: Option<theme::ThemeOverride>,
+}
+
+/// Reads the manifest's `theme`; a value of the wrong shape gives `None`.
+fn lenient_theme<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<theme::ThemeOverride>, D::Error> {
+    let raw = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(raw.and_then(|v| match serde_json::from_value::<theme::ThemeOverride>(v) {
+        Ok(t) => Some(t),
+        Err(e) => {
+            log::warn!("manifest.toml: `[theme]` is not valid ({e}); the host theme is used");
+            None
+        }
+    }))
 }
 
 fn default_core_field() -> String {
@@ -322,8 +346,12 @@ fn default_core_field() -> String {
 
 impl ProjectConfig {
     pub fn parse(text: &str) -> Result<Self> {
-        let c: ProjectConfig = toml::from_str(text).context("plinth.toml is not valid")?;
         let table: toml::Table = toml::from_str(text).context("plinth.toml is not valid")?;
+        // The theme first: its messages name the key that is wrong.
+        if let Some(t) = table.get("theme") {
+            theme::ThemeOverride::from_toml(t).map_err(|e| anyhow::anyhow!("plinth.toml: {e}"))?;
+        }
+        let c: ProjectConfig = toml::from_str(text).context("plinth.toml is not valid")?;
         Self::check_strict(&table)?;
         c.validate()?;
         Ok(c)
@@ -392,6 +420,17 @@ impl ProjectConfig {
         Ok(())
     }
 
+    /// Checks the `[theme]` against the app's named accent: merges it with
+    /// the host palette and runs the contrast guard in light and dark. The
+    /// accent is known only after the compile, so this is a separate step
+    /// from `validate`. `Ok` when there is no `[theme]`.
+    pub fn check_theme(&self, named_accent: Option<&str>) -> Result<()> {
+        if let Some(t) = &self.theme {
+            t.resolve(named_accent).map_err(|e| anyhow::anyhow!("plinth.toml: {e}"))?;
+        }
+        Ok(())
+    }
+
     /// The manifest for a built app module. `runtime` is the id of the
     /// runtime build that the app needs (SPEC.md §10.2). Equivalent to
     /// `manifest_with_core_digest` with no core digest; use that instead
@@ -423,6 +462,7 @@ impl ProjectConfig {
                 _ => None,
             },
             core_built: None,
+            theme: self.theme.clone(),
         }
     }
 }
@@ -746,6 +786,121 @@ mod tests {
         std::fs::write(&exe, bytes).unwrap();
         assert!(read_payload(&exe).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    const BASE: &str = "id = \"dev.plinth.test\"
+name = \"Test\"
+version = \"0.1.0\"
+publisher = \"me\"
+";
+
+    fn themed(extra: &str) -> Result<ProjectConfig> {
+        ProjectConfig::parse(&format!("{BASE}{extra}"))
+    }
+
+    #[test]
+    fn plinth_toml_theme_parses_and_reports_errors() {
+        let c = themed("[theme]
+background = \"#101820\"
+[theme.accent]
+light = \"#0a5cd6\"
+dark = \"#6ea8ff\"
+").unwrap();
+        assert_eq!(c.theme.as_ref().unwrap().0.len(), 2);
+        assert!(config().theme.is_none());
+        let msg = |extra: &str| format!("{:#}", themed(extra).unwrap_err());
+        assert!(msg("[theme]
+brand = \"#112233\"
+").contains("unknown key `brand`"));
+        assert!(msg("[theme]
+text = \"blue\"
+").contains("hex color"));
+        assert!(msg("[theme]
+text = 3
+").contains("hex string or a table"));
+        let many: String = (0..13).map(|i| format!("k{i} = \"#000000\"
+")).collect();
+        assert!(msg(&format!("[theme]
+{many}")).contains("13 keys"));
+    }
+
+    #[test]
+    fn check_theme_runs_the_contrast_guard() {
+        let ok = themed("[theme]
+[theme.text]
+light = \"#111111\"
+dark = \"#f0f0f0\"
+[theme.background]
+light = \"#fafafa\"
+dark = \"#101010\"
+").unwrap();
+        ok.check_theme(Some("blue")).unwrap();
+        let bad = themed("[theme]
+text = \"#dddddd\"
+background = \"#fafafa\"
+").unwrap();
+        let e = format!("{:#}", bad.check_theme(None).unwrap_err());
+        assert!(e.contains("`text` on `background`") && e.contains("4.5:1"), "{e}");
+        config().check_theme(None).unwrap();
+    }
+
+    /// An app with no `[theme]` gets the same manifest bytes as before.
+    #[test]
+    fn no_theme_leaves_the_manifest_bytes_unchanged() {
+        let wasm = b" asm x".to_vec();
+        let m = config().manifest("1.0", "plinth-rt/test", Some("teal".into()), &wasm);
+        let text = manifest_toml(&m).unwrap();
+        assert!(!text.contains("theme"), "{text}");
+    }
+
+    #[test]
+    fn manifest_theme_round_trips_through_a_package() {
+        let wasm = b" asm x".to_vec();
+        let c = themed("[theme]
+background = \"#101820\"
+[theme.accent]
+light = \"#0a5cd6\"
+dark = \"#6ea8ff\"
+").unwrap();
+        let pkg = Package::new(c.manifest("1.0", "plinth-rt/test", None, &wasm), wasm, vec![]);
+        let back = Package::read(&pkg.write().unwrap()).unwrap();
+        assert_eq!(back.manifest.theme, c.theme);
+        let text = manifest_toml(&back.manifest).unwrap();
+        assert!(text.contains("[theme]") && text.contains("[theme.accent]"), "{text}");
+    }
+
+    /// A package with a theme that cannot be read still opens; the host
+    /// theme is used (never crash on package data).
+    #[test]
+    fn unreadable_manifest_theme_reads_as_none() {
+        for theme in ["theme = 5
+", "[theme]
+text = 5
+", "[theme]
+text = { light = \"#000000\" }
+"] {
+            let wasm = b" asm x".to_vec();
+            let mut pkg = Package::new(config().manifest("1.0", "plinth-rt/test", None, &wasm), wasm, vec![]);
+            let good = pkg.write().unwrap();
+            // Rewrite manifest.toml with the bad theme.
+            let m = String::from_utf8(pkg.manifest_bytes().unwrap().into_owned()).unwrap();
+            let bad = format!("{m}{theme}");
+            let mut zip_in = zip::ZipArchive::new(Cursor::new(good)).unwrap();
+            let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            let opts = zip::write::SimpleFileOptions::default();
+            for i in 0..zip_in.len() {
+                let mut f = zip_in.by_index(i).unwrap();
+                let name = f.name().unwrap().into_owned();
+                let mut data = Vec::new();
+                f.read_to_end(&mut data).unwrap();
+                out.start_file(name.as_str(), opts).unwrap();
+                out.write_all(if name == "manifest.toml" { bad.as_bytes() } else { &data }).unwrap();
+            }
+            let bytes = out.finish().unwrap().into_inner();
+            let read = Package::read(&bytes).unwrap_or_else(|e| panic!("{theme}: {e:#}"));
+            assert!(read.manifest.theme.is_none(), "{theme}");
+            pkg.manifest.theme = None;
+        }
     }
 
     #[test]
