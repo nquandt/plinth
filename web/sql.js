@@ -264,6 +264,28 @@ export class SqlEngine {
   database(appId) {
     return this.open(appId);
   }
+
+  /**
+   * Deletes the database of `appId` (an uninstall, docs/STORAGE.md S13): it
+   * closes the open connection, then removes the database and its journal
+   * from the OPFS pool. The next call of the app starts with a new, empty
+   * database. Resolves with true if a stored database was deleted; an
+   * in-memory database (no OPFS) is only closed.
+   */
+  async drop(appId) {
+    const name = SqlEngine.databaseName(appId);
+    const open = this.dbs.get(name);
+    if (open) {
+      open.close();
+      this.dbs.delete(name);
+    }
+    if (!this.pool) return false;
+    let removed = false;
+    for (const file of [name, `${name}-journal`]) {
+      if (await this.pool.unlink(file)) removed = true;
+    }
+    return removed;
+  }
 }
 
 /** One open database (`Db` in sql.rs). */
@@ -658,7 +680,12 @@ export function serveSql(scope, start) {
     if (!m || typeof m.id !== "number") return;
     queue = queue
       .then(() => ready)
-      .then(() => (engine.failed ? fail(engine.failed) : engine.call(m.appId, m.kind, m.statement, m.params)))
+      .then(() => {
+        if (engine.failed) return fail(engine.failed);
+        // `{ id, appId, drop: true }`: delete the database of the app.
+        if (m.drop === true) return engine.drop(String(m.appId)).then((removed) => ok(removed ? 1 : 0, ""));
+        return engine.call(m.appId, m.kind, m.statement, m.params);
+      })
       .catch((e) => fail(`sql: ${e?.message ?? e}`))
       .then((result) => scope.postMessage({ id: m.id, result, memory: engine?.inMemory ?? null }));
   };
@@ -718,6 +745,23 @@ export class SqlWorkerHost {
   space(appId) {
     return { call: (kind, statement, params) => this.call(appId, kind, statement, params) };
   }
+
+  /**
+   * Deletes the database of `appId` (an uninstall). Resolves with true if a
+   * stored database was deleted. Rejects if the engine did not start or the
+   * delete failed.
+   */
+  async drop(appId) {
+    if (this.failed) throw new Error(this.failed);
+    const worker = this.start();
+    const id = this.nextId++;
+    const result = await new Promise((resolve) => {
+      this.pending.set(id, resolve);
+      worker.postMessage({ id, appId, drop: true });
+    });
+    if (!result[0]) throw new Error(result[3]);
+    return result[1] === 1;
+  }
 }
 
 /** The surface of `SqlWorkerHost` on an engine in this thread (Node tests); calls run in call order. */
@@ -728,5 +772,10 @@ export function localSqlHost(engine) {
     queue = run.catch(() => {});
     return run;
   };
-  return { call, space: (appId) => ({ call: (kind, statement, params) => call(appId, kind, statement, params) }) };
+  const drop = (appId) => {
+    const run = queue.then(() => engine.drop(appId));
+    queue = run.catch(() => {});
+    return run;
+  };
+  return { call, drop, space: (appId) => ({ call: (kind, statement, params) => call(appId, kind, statement, params) }) };
 }

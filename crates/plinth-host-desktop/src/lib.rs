@@ -4,7 +4,7 @@
 
 use anyhow::{Context as _, Result};
 use gpui::{App, AppContext, Bounds, KeyBinding, WindowBounds, WindowOptions, actions, px, size};
-use plinth_runner_wasmtime::files::{DEFAULT_QUOTA, Files, private_space_dir};
+use plinth_runner_wasmtime::files::{Files, private_space_dir};
 use plinth_runner_wasmtime::{Clipboard, Guest, Limits, Runner, kv::Kv, policy::Policy};
 use plinth_ui::{GuestPort, PlinthRoot};
 use std::cell::Cell;
@@ -60,9 +60,11 @@ pub fn package_owner(pkg: &plinth_package::Package, bytes: &[u8]) -> Owner {
 }
 
 /// The `plinth:files` private space of `app_id` owned by `owner`, under the
-/// host's data directory (`docs/STORAGE.md` §2, §3).
+/// host's data directory (`docs/STORAGE.md` §2, §3). The space has the data
+/// quota of the host (`plinth_hub::data_quota`, `docs/STORAGE.md` S13); the
+/// `store.sql` database of the app uses the same number as its size limit.
 pub fn private_files(owner: &Owner, app_id: &str) -> Files {
-    Files::open(private_space_dir(&plinth_runner_wasmtime::kv::data_dir(), owner, app_id), DEFAULT_QUOTA)
+    Files::open(private_space_dir(&plinth_runner_wasmtime::kv::data_dir(), owner, app_id), plinth_hub::data_quota())
 }
 
 impl HostApp {
@@ -223,6 +225,10 @@ impl Clipboard for SystemClipboard {
 
 struct WasmGuest {
     guest: Guest,
+    // "The app runs" for `plinth hub uninstall` (`plinth_hub::RunLock`). The
+    // lock lasts as long as the guest. `None` when the lock file is not
+    // available: the app still runs.
+    _run_lock: Option<plinth_hub::RunLock>,
     // The runner owns the engine's epoch ticker; several guests across
     // several windows share one runner (`docs/HUB.md` §4.2, §12.2), so it
     // is kept alive by reference count rather than owned here.
@@ -340,10 +346,24 @@ pub fn start_with_policy_and_hub(
     hub: Option<Box<dyn plinth_runner_wasmtime::hub::HubBackend>>,
     args: &[u8],
 ) -> (Box<dyn GuestPort>, Result<Vec<Vec<u8>>, String>) {
-    let kv = Kv::open(&plinth_runner_wasmtime::kv::data_dir(), app_id).unwrap_or_else(|e| {
-        log::warn!("store.kv unavailable for {app_id}: {e:#}");
-        Kv::in_memory()
-    });
+    let data_dir = plinth_runner_wasmtime::kv::data_dir();
+    let quota = plinth_hub::data_quota();
+    // A lock that an uninstall of this app respects. If the app is being
+    // uninstalled right now, the lock fails and the app does not start.
+    let run_lock = match plinth_hub::RunLock::running(&data_dir, app_id) {
+        Ok(lock) => Some(lock),
+        Err(e) if e.to_string().contains("being uninstalled") => return (Box::new(NoGuest), Err(format!("{e:#}"))),
+        Err(e) => {
+            log::warn!("run lock unavailable for {app_id}: {e:#}");
+            None
+        }
+    };
+    let kv = Kv::open(&data_dir, app_id)
+        .unwrap_or_else(|e| {
+            log::warn!("store.kv unavailable for {app_id}: {e:#}");
+            Kv::in_memory()
+        })
+        .with_quota(quota);
     let clipboard: Box<dyn Clipboard> = Box::new(SystemClipboard);
     let loaded = runner.load_with_policy_and_hub(component, Limits::default(), policy, kv, clipboard, hub);
     match loaded {
@@ -374,7 +394,7 @@ pub fn start_with_policy_and_hub(
                 guest.finish_start();
             }
             print_logs(&mut guest);
-            (Box::new(WasmGuest { guest, _runner: runner }), init)
+            (Box::new(WasmGuest { guest, _run_lock: run_lock, _runner: runner }), init)
         }
         Err(e) => (Box::new(NoGuest), Err(format!("{e:#}"))),
     }

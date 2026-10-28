@@ -272,7 +272,7 @@ A refused call returns `denied(refused)` and never traps (`SPEC.md` §8.5). Apps
 
 - An app page in the library shows each grant, when the user gave it, and when the app last used it. The user can change or revoke each grant.
 - The user can **block** an app (it does not start; its data stays), or block a **publisher** (all its apps and future apps).
-- The user can **reset** an app (remove its data and grants) and **export** its data.
+- The user can **uninstall** an app with its data (`plinth hub uninstall <app id>`: the kv data, the SQL database, the private files, the secrets and the grants; `--keep-data` keeps them), and **export** its data to a zip (`plinth hub export <app id> <out.zip>`; the secrets are not in it). The desktop commands refuse while the app runs. `remove` only hides the app and keeps its data. The web Hub has the storage part (`HubHost.uninstall`, `HubStore.uninstall`). The Hub UI has no button for this yet, and `plinth:hub` has no uninstall call yet. `docs/STORAGE.md` §7 has the details.
 - A global switch can turn off a capability for all apps (for example "no apps may use the network").
 
 ### 7.5 Policies for managed devices

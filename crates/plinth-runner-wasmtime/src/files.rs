@@ -14,7 +14,8 @@
 //! 4-element list: `[ok, 0, text, error]`.
 //!
 //! Files are UTF-8 text. A file can be at most `MAX_FILE` bytes, and all the
-//! files of one app at most its quota (`DEFAULT_QUOTA`, 50 MiB). Directories
+//! files of one app at most its quota (`DEFAULT_QUOTA`, 100 MiB; the host
+//! can give another one, `docs/STORAGE.md` S13). Directories
 //! exist only as parents of files: `write` makes them, and `remove` of the
 //! last file in a directory also removes the empty directories above it (the
 //! web host has the same model, so both hosts list the same entries).
@@ -29,8 +30,9 @@ use std::sync::{Arc, Mutex};
 /// The capability of the private space.
 pub use plinth_link::capabilities::FILES_PRIVATE;
 
-/// The quota of one app's private space, in bytes of file content.
-pub const DEFAULT_QUOTA: u64 = 50 << 20;
+/// The default quota of one app's private space, in bytes of file content
+/// (the same default as the `store.kv` and `store.sql` quotas of the host).
+pub const DEFAULT_QUOTA: u64 = 100 << 20;
 /// The largest file that `read` and `write` accept, in bytes.
 pub const MAX_FILE: u64 = 8 << 20;
 /// The longest path, in UTF-8 bytes.
@@ -186,6 +188,12 @@ impl Files {
     /// directory, and `Runner::load`).
     pub fn unavailable() -> Self {
         Self { root: None, quota: 0, worker: Mutex::new(None) }
+    }
+
+    /// The quota of this space in bytes. The `store.sql` database of the same
+    /// app uses it as its size limit (`HostState::sql_store`).
+    pub fn quota(&self) -> u64 {
+        self.quota
     }
 
     /// The root folder, if any.
@@ -401,7 +409,7 @@ fn run_op(root: &Path, quota: u64, op: Op) -> Result<String, String> {
 }
 
 /// The bytes that the files of the space use. A walk of the folder: a
-/// private space is small (the quota is 50 MiB), and the worker thread
+/// private space is small (the quota is 100 MiB by default), and the worker thread
 /// does it, not the UI thread.
 fn usage(root: &Path) -> u64 {
     let mut total = 0;

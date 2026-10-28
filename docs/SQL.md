@@ -77,7 +77,7 @@ await sql.batch([
    - The authorizer refuses `BEGIN`, `COMMIT`, `ROLLBACK` and `SAVEPOINT`. Use `sql.batch` for a transaction. (A transaction that an app starts and does not end would stop all later writes.)
    - Extension loading is off (the bundled SQLite turns it on by default), the connection is in defensive mode, and it does not trust the schema.
 3. **Time limit.** A statement stops after 2 s (an SQLite progress handler), the same limit as an app call. It rejects with `Error("sql: the query took too long")`; the app keeps running.
-4. **Size limit.** A quota for each database (`max_page_count`; a default of 256 MiB, and a host policy can change it). A write past the quota rejects with `Error("sql: the database is full")`.
+4. **Size limit.** A quota for each database (`max_page_count`). The desktop host uses the data quota of the app (100 MiB by default; `docs/STORAGE.md` §7.3), the web host 256 MiB. A write past the quota rejects with `Error("sql: the database is full")`.
 5. **Result size.** A query result over 16 MiB rejects (as `net` has a body limit).
 6. **Capability.** `store.sql` (SPEC §11), risk Low (the data stays in the app's own space), with a rationale in `plinth.toml`.
 

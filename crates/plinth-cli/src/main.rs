@@ -55,7 +55,12 @@ usage:
                                    register plinth:// links for this user (Windows)
   plinth hub shortcut <app id> [--start-menu] [--dir <folder>] [--url]
                                    write a shortcut (.lnk, app icon) that opens the app
-  plinth hub remove <app id>       remove an app from the library
+  plinth hub remove <app id>       remove an app from the library (its data stays)
+  plinth hub uninstall <app id> [--keep-data]
+                                   remove an app and, unless --keep-data, all its data
+                                   (kv, sql, files, grants, secrets); refuses while it runs
+  plinth hub export <app id> <out.zip>
+                                   write the data of an app to a zip (no secrets)
   plinth hub grants <app id> [allow|refuse <capability>]
                                    show or set a grant
   plinth hub block|unblock <app id>
@@ -75,6 +80,8 @@ usage:
                                    run one installed version, or the newest again
   plinth hub policy deny|allow <capability> | show
                                    a hub-wide switch for a capability
+  plinth hub policy quota <MiB> | default
+                                   the data quota of one app for each store (default 100 MiB)
   plinth registry build <folder> [--with-core] [--hub-trusted-key <key id>]
                                    generate a static registry from .plnt files
   plinth registry serve <folder> [--port N] [--web]
@@ -999,6 +1006,40 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
             hub.remove(id)?;
             println!("removed {id}");
         }
+        Some("uninstall") => {
+            // `docs/STORAGE.md` S13: the package and, unless `--keep-data`, all data.
+            let id = args.get(1).context("usage: plinth hub uninstall <app id> [--keep-data]")?;
+            let keep_data = raw.contains(&"--keep-data");
+            let data_dir = plinth_runner_wasmtime::kv::data_dir();
+            let report = hub.uninstall(id, &data_dir, keep_data, &mut |app| {
+                plinth_host_desktop::secrets::remove_app_secrets(app).map_err(|e| anyhow::anyhow!("{e:?}"))
+            })?;
+            if keep_data {
+                println!("uninstalled {id}; its data, grants and secrets stay");
+            } else {
+                println!(
+                    "uninstalled {id}; deleted {} of data, {} grant record(s) and the secrets",
+                    format_bytes(report.deleted_bytes),
+                    report.grants_removed
+                );
+            }
+        }
+        Some("export") => {
+            // `docs/STORAGE.md` S13. The secrets are never exported.
+            let usage = "usage: plinth hub export <app id> <out.zip>";
+            let id = args.get(1).context(usage)?;
+            let out = args.get(2).context(usage)?;
+            let data_dir = plinth_runner_wasmtime::kv::data_dir();
+            let report = hub.export_data(id, &data_dir, Path::new(out))?;
+            println!(
+                "exported {id} to {out}: {} file(s), {} database(s), {} key(s) of kv ({})",
+                report.files,
+                report.databases,
+                report.kv_entries.unwrap_or(0),
+                format_bytes(report.bytes)
+            );
+            println!("the secrets of the app are not in the export");
+        }
         Some("grants") => {
             let id = args.get(1).context("usage: plinth hub grants <app id> [allow|refuse <capability>]")?;
             match args.get(2).copied() {
@@ -1094,7 +1135,22 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                 hub.policy_allow(capability)?;
                 println!("allowed {capability} again");
             }
+            Some("quota") => {
+                let usage = "usage: plinth hub policy quota <MiB> | default";
+                match args.get(2).copied().context(usage)? {
+                    "default" => {
+                        hub.set_data_quota_mib(None)?;
+                        println!("the data quota of an app is {} again", format_bytes(plinth_hub::DEFAULT_DATA_QUOTA));
+                    }
+                    mib => {
+                        let mib: u64 = mib.parse().with_context(|| usage.to_owned())?;
+                        hub.set_data_quota_mib(Some(mib))?;
+                        println!("the data quota of an app is {mib} MiB for each store (private files, kv, sql)");
+                    }
+                }
+            }
             Some("show") | None => {
+                println!("data quota of an app: {} for each store", format_bytes(hub.data_quota()));
                 let denied = hub.policy_denied()?;
                 if denied.is_empty() {
                     println!("no capability is globally denied");
@@ -1104,11 +1160,22 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                     }
                 }
             }
-            Some(other) => bail!("unknown `plinth hub policy {other}`; use deny, allow or show"),
+            Some(other) => bail!("unknown `plinth hub policy {other}`; use deny, allow, quota or show"),
         },
         Some(other) => bail!("unknown `plinth hub {other}`; see `plinth --help`"),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// `12.3 MiB`, `512.0 KiB` or `7 bytes`.
+fn format_bytes(n: u64) -> String {
+    if n >= 1 << 20 {
+        format!("{:.1} MiB", n as f64 / (1 << 20) as f64)
+    } else if n >= 1 << 10 {
+        format!("{:.1} KiB", n as f64 / (1 << 10) as f64)
+    } else {
+        format!("{n} bytes")
+    }
 }
 
 /// Picks the registry source for `hub install`/`update`: the `--source`

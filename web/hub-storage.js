@@ -16,7 +16,7 @@
 // backing store is anything with the `Storage` interface (`localStorage`
 // in the browser, a small Map-backed object in the test).
 
-import { MAX_PATH as FILES_MAX_PATH, MAX_FILE as FILES_MAX_FILE } from "./files.js";
+import { MAX_PATH as FILES_MAX_PATH, MAX_FILE as FILES_MAX_FILE, clearAppFiles } from "./files.js";
 import { MAX_SQL_TEXT } from "./plinth-web.js";
 import { MAX_NAME as SECRETS_MAX_NAME, MAX_VALUE as SECRETS_MAX_VALUE, clearAppSecrets } from "./secrets.js";
 
@@ -94,9 +94,11 @@ function storageKeys(storage) {
  * the decisions that last for one session (`sessionStorage`).
  */
 export class HubStore {
-  constructor(storage, session = memoryStorage(), clearSecrets = clearAppSecrets) {
+  constructor(storage, session = memoryStorage(), clearSecrets = clearAppSecrets, clearFiles = clearAppFiles) {
     this.storage = storage;
     this.session = session;
+    // `plinth:files` keep their data in IndexedDB (`plinth-files`).
+    this.clearFiles = clearFiles;
     // `plinth:secrets` keep their data in IndexedDB, not in `storage`; an
     // uninstall deletes them too (docs/SECRETS.md §3 rule 3).
     this.clearSecrets = clearSecrets;
@@ -146,6 +148,32 @@ export class HubStore {
     for (const k of storageKeys(this.storage)) if (k.startsWith(prefix)) this.storage.removeItem(k);
     this.storage.removeItem(dataVersionKey(id));
     return Promise.resolve().then(() => this.clearSecrets?.(id));
+  }
+
+  /**
+   * Uninstall with data (docs/STORAGE.md S13): deletes everything that the
+   * page keeps for `id` and nothing of another app: the kv data and the data
+   * version (`localStorage`), the secrets and the files (IndexedDB), the
+   * `store.sql` database (OPFS, through `sql`: a `SqlWorkerHost` or
+   * `localSqlHost`, anything with `drop(appId)`), and last the grant records.
+   * Every step runs even if one fails. If a step failed, the promise
+   * rejects with all failures and the grant records stay, so the user can
+   * run the uninstall again.
+   */
+  async uninstall(id, { sql = null } = {}) {
+    const failures = [];
+    const step = async (what, fn) => {
+      try {
+        await fn();
+      } catch (err) {
+        failures.push(`${what}: ${err?.message ?? err}`);
+      }
+    };
+    await step("kv data and secrets", () => this.kvClear(id));
+    await step("files", () => this.clearFiles?.(id));
+    await step("sql database", () => sql?.drop?.(id));
+    if (failures.length) throw new Error(`could not delete all data of ${id} (${failures.join("; ")})`);
+    this.forgetGrants(id);
   }
 
   /** `plinth:app-info` (core 1.13, PRODUCTION.md D4): the stored data version of `id`, or null. */
