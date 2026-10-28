@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime};
 mod dev_tools;
 mod feed_cmd;
 mod optimize;
+mod publish_cmd;
 mod registry_cmd;
 mod test_cmd;
 mod web_export;
@@ -87,6 +88,10 @@ usage:
   plinth registry serve <folder> [--port N] [--web]
                                    serve a static registry on 127.0.0.1;
                                    --web also serves the web App Hub at /
+  plinth publish [dir] [--registry <folder>] [--with-core] [--sync] [--check]
+                                   build with --sign --release into a registry folder and
+                                   update its index (docs/REGISTRY-HOSTING.md §2); --check
+                                   builds and validates and writes nothing to the registry
   plinth feed add <feed-dir> <app.plnt> [--channel <name>] [--with-core]
                                    write or update a signed update feed (docs/UPDATES.md §8)
 
@@ -167,6 +172,21 @@ fn run(args: Vec<String>) -> Result<ExitCode> {
                 Some(t) => bail!("unknown target `{t}`; use `--target web`, or `plinth native` for an executable"),
             };
             Ok(if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+        }
+        Some("publish") => {
+            let registry = args.iter().position(|a| *a == "--registry").and_then(|i| args.get(i + 1)).copied();
+            if flag("--registry") && registry.is_none_or(|r| r.starts_with("--")) {
+                bail!("--registry needs a folder");
+            }
+            let app_dir = positional[1..].iter().find(|p| Some(**p) != registry).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+            let options = publish_cmd::Options {
+                app_dir,
+                registry: registry.map(PathBuf::from),
+                with_core: flag("--with-core"),
+                sync: flag("--sync"),
+                check: flag("--check"),
+            };
+            Ok(if publish_cmd::run(&options)? { ExitCode::SUCCESS } else { ExitCode::FAILURE })
         }
         Some("test") => {
             let filter = args.iter().position(|a| *a == "--filter").and_then(|i| args.get(i + 1)).copied();
