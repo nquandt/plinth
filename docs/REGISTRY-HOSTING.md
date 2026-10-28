@@ -142,6 +142,21 @@ The client sends the headers only to the host of the source. A redirect to anoth
 
 Tested: a local test server that answers 302 unless both headers are present (`crates/plinth-registry/tests/source_headers.rs`), and the keychain on Windows. Not tested against the real `plinth.femur.dev`, and not on macOS or Linux.
 
+### Use the registry from a desktop host
+
+Do these steps one time on a desktop host. The registry must have `hub.json` (`plinth registry build --hub-trusted-key <key id>`, `docs/web-hub.md` §5).
+
+1. Add the registry as a source: `plinth hub source add femur https://plinth.femur.dev`.
+2. If the registry is behind Cloudflare Access, save the device token: `plinth hub source set-token femur` (§6).
+3. Look at the Hub keys of the registry: `plinth hub source trust-hub femur`. The command reads `hub.json`, prints the key ids and the URL of the source, saves nothing, and exits with an error code.
+4. If you trust the registry owner, save the keys: `plinth hub source trust-hub femur --yes`. To trust one key by hand, run `plinth hub policy trust-hub-key <key id>`. `plinth hub policy show` lists the trusted keys.
+5. Install the Hub app: `plinth hub install dev.plinth.hub --source femur`.
+6. Start the Hub: `plinth hub ui`.
+
+Trust in the Hub key is trust in the registry owner: a package that this key signs can install and remove every app on the host. The host never saves a key by itself. Only step 4 saves one. `plinth hub policy untrust-hub-key <key id>` removes it.
+
+Tested with a local test server (`crates/plinth-cli/tests/hub_trust_keys.rs`): the commands of steps 3 and 4, with and without the Access headers. Not tested against the real `plinth.femur.dev`, and steps 5 and 6 were not run again after this change.
+
 Not built yet:
 
 - The mobile hosts (iOS, Android) have no field for the token.

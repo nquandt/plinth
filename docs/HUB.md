@@ -89,6 +89,14 @@ The Hub has two layers:
 
 **Exists** (cores 1.7 to 1.9 and 1.13, `std/hub.d.ts`, `docs/host-apis.md`): `listApps`, `appInfo`, `launch`, `setGrant`, `block`, `unblock`, `blockPublisher`, `unblockPublisher`, `pin`, `listGroups`, `createGroup`, `setGroup`, `remove`, `search`, `install`, `checkUpdates`, `update` and, in core 1.13, `uninstall(id, keepData)` (the last five are asynchronous: a request id now, a `completion` event later), and `lastError`. `listApps` and `appInfo` give each app with its capability label, its installed versions, its pin, the update that the last check found, and the publisher block. The host checks the trusted signer when it loads the package. Not yet: a version for `install`, `addShortcut`, `cores`.
 
+**Trusted Hub keys on the desktop (exists).** The host gives `hub.manage` only to a package signed by a key that the host trusts as a Hub key. A host trusts a key in these cases:
+
+- The user saved it: `plinth hub policy trust-hub-key <key id>` writes it to `hubTrustedKeys` in `policy.json` in the Hub directory (the file is written atomically, as the other Hub files). `plinth hub policy untrust-hub-key <key id>` removes it. `plinth hub policy show` lists the trusted keys. The command accepts only an `ed25519:` key id that parses.
+- The environment variable `PLINTH_HUB_TRUSTED_KEYS` lists it (comma-separated). The host uses the saved keys and the variable together.
+- A future Plinth project key (not set yet).
+
+A key is never trusted without an explicit user action. A registry can tell its Hub key in `hub.json` (`docs/web-hub.md` §5), and `plinth hub source trust-hub <source name>` reads it with the headers of the source and prints the key ids and the URL. It saves them only when you add `--yes`; without `--yes` it saves nothing and exits with an error code. A package that declares `hub.manage` with a key that is not trusted does not load, and the error gives both commands: `plinth hub policy trust-hub-key <key id>` and `PLINTH_HUB_TRUSTED_KEYS`. Key rotation is not supported: a Hub package that a different key signed does not replace the installed one (`plinth hub update` refuses it). A package in the library with the old signature format (`plinth.signature/1`) does not load either; run `plinth hub remove <id>` and install it again.
+
 Reasons for this split:
 - The Hub UI is written one time and runs on every host, like any Plinth app. It is also the largest test of the framework.
 - The privileged part is small and native, so it is easy to audit.

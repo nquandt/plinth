@@ -64,7 +64,7 @@ By hand:
    it:
 
    ```sh
-   export PLINTH_HUB_TRUSTED_KEYS="ed25519:<key id>"
+   plinth hub policy trust-hub-key "ed25519:<key id>"   # or: export PLINTH_HUB_TRUSTED_KEYS="ed25519:<key id>"
    plinth hub add examples/hub/dist/hub.plnt
    plinth hub grants dev.plinth.hub allow hub.manage   # or answer the consent window
    plinth hub add examples/notes/dist/notes.plnt
