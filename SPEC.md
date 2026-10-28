@@ -802,7 +802,7 @@ A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version i
 
 > `docs/HUB.md` is the full design of the Plinth Hub: discovery and sources, publisher identity and signing, the transparency log, the capability label and consent, the library and groups, shortcuts and OS integration, platforms, and the phases H0–H7. The summary below stays valid.
 
-- **Publishing:** `plinth publish` uploads a signed `.plnt`. The hub runs these checks:
+- **Publishing:** `plinth publish` adds a signed `.plnt` to a static registry folder today (§13). An upload to a remote hub is open. A hub runs these checks:
   1. the import validator,
   2. the manifest checks,
   3. a UI API compatibility check,
@@ -826,7 +826,7 @@ A **core** is one build of `plinth-rt`. It is a Wasm module, so a core version i
 | `plinth test [dir] [--filter <text>]` | Build the test build (§5.1) and run each test of `app/**/*.test.ts(x)` in a fresh app instance on the desktop runner. Prints one line for each test and a summary; the exit code is 1 when a test fails. |
 | `plinth run <file.plnt\|url>` | Run a package in the local runtime. |
 | `plinth validate <file.plnt>` | Validate the package structure, the manifest, and the Wasm imports. |
-| `plinth publish` | Sign and upload to the hub. |
+| `plinth publish [dir] [--registry <folder>] [--with-core] [--sync] [--check]` | Build with `--sign --release`, check the package, and add it to a static registry folder (`docs/REGISTRY-HOSTING.md` §2.1). `--check` writes nothing. An upload to a remote hub is open. |
 | `plinth shoot <file.plnt>` | Render each screen headless to PNGs (for review and tests). Today this is the separate dev tool `plinth-shoot <file.plnt> <out-dir>`, because it needs the `test-support` features of gpui-ce. It uses the headless WGPU renderer and writes one PNG for each screen and each width class. |
 
 **Hot reload (status).** `plinth dev` builds with a dev core (`plinth-rt` with its `dev` feature). Each module-level `signal(...)` gets a stable key (module and name) and a shape code (`number`, `int`, `boolean`, `string`, or one of these with `| null`). Before the host starts a new build, it sends a snapshot request through `on-event`, and the old instance answers with a `snapshot` op. The host gives the snapshot to `init(args)` of the new instance, which restores each signal whose key and shape match. Other signals start with their new initial values. A signal declared in a component or in a `List` row is kept too: its key is the function name and the position of the signal in that function, combined with the instance path of its scope (a row's path comes from its row key). Sibling rows keep their own state, and the state of a removed row is dropped. Signals with arrays, objects, `Map` or `Set` values are not kept yet. The selected screen and the navigation stack of each primary tab stay when their screens still exist. Release builds contain none of this code.

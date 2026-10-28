@@ -3,7 +3,8 @@
 #
 #   bash scripts/registry-publish.sh <app dir>... [--sync]
 #
-# 1. `plinth build --sign --release` for each app (needs `plinth publisher init`).
+# 1. `plinth publish <app> --registry $PLINTH_REGISTRY_DIR --with-core` for each app
+#    (it builds with --sign --release; needs `plinth publisher init`).
 # 2. Builds the Hub app (examples/hub) and signs it with a separate Hub key
 #    (made one time in $PLINTH_HUB_KEY_DIR, publisher name "you").
 # 3. `plinth registry build` makes the static registry in $PLINTH_REGISTRY_DIR,
@@ -24,7 +25,8 @@ dirs=()
 for a in "$@"; do
   if [ "$a" = "--sync" ]; then sync=yes; else dirs+=("$a"); fi
 done
-[ ${#dirs[@]} -gt 0 ] || { echo "usage: $0 <app dir>... [--sync]" >&2; exit 2; }
+# With --sync, no app dir is fine: the script then rebuilds the Hub app and syncs.
+[ ${#dirs[@]} -gt 0 ] || [ "$sync" = yes ] || { echo "usage: $0 <app dir>... [--sync]" >&2; exit 2; }
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HUBKEY="${PLINTH_HUB_KEY_DIR:-$HOME/.plinth-hub-key}"
@@ -38,10 +40,10 @@ HUBID="$(PLINTH_PUBLISHER_DIR="$HUBKEY" "$PLINTH" publisher show | awk '{print $
 echo "== build hub"
 PLINTH_PUBLISHER_DIR="$HUBKEY" "$PLINTH" build "$ROOT/examples/hub" --sign --release --out "$REG/incoming/hub.plnt"
 
+# The apps: `plinth publish` builds, signs, checks and adds each one.
 for d in "${dirs[@]}"; do
-  name="$(basename "$d")"
-  echo "== build $name"
-  "$PLINTH" build "$d" --sign --release --out "$REG/incoming/$name.plnt"
+  echo "== publish $d"
+  "$PLINTH" publish "$d" --registry "$REG" --with-core
 done
 
 echo "== registry build $REG"

@@ -407,7 +407,7 @@ The developer path stays short:
 npm create plinth@latest my-app      # or: plinth new my-app
 cd my-app && npm run dev             # window with hot reload
 plinth publisher init                # one time: make a publisher key
-plinth publish                       # sign, check, upload to the registry
+plinth publish                       # sign, check, add to the registry folder (built; upload to a remote registry is open)
 plinth native -o MyApp.exe           # optional: a standalone executable
 ```
 

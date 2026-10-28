@@ -95,7 +95,7 @@ When gpui works on iOS, retire the shell of track A, or keep it as a fallback.
 | Thing | Where | Notes |
 |---|---|---|
 | Registry source folder | The PC: `PLINTH_REGISTRY_DIR` (default `~/plinth-registry`) | Not in git. Copy it or publish again from the Mac. |
-| Publish script | `scripts/registry-publish.sh <app dir>... [--sync]` | Needs the `plinth` CLI, `az` for `--sync`. |
+| Publish script | `scripts/registry-publish.sh <app dir>... [--sync]` | Needs the `plinth` CLI (the script calls `plinth publish` for each app), `az` for `--sync`. For one app, `plinth publish <app dir>` is enough (`docs/REGISTRY-HOSTING.md` §2.1); it is tested on Windows only. |
 | Docker site and tunnel | `infra/registry/` | Needs `.env` with `TUNNEL_TOKEN` (a secret; not in git). |
 | Azure | Resource group `plinth-rg`, storage account `plinthreg36610`, `centralus` | `az login`, then `bash scripts/registry-publish.sh ... --sync` works from the Mac. The account name is in `infra/azure/.account-name` (not in git): run `echo plinthreg36610 > infra/azure/.account-name`. |
 | Access | `plinth.femur.dev` is behind Cloudflare Access (`docs/REGISTRY-HOSTING.md` §6) | Safari and the iOS shell: log in once with the owner e-mail. Native hosts need a service token: `scripts/secrets-pull.sh mac` restores `~/.plinth-access/mac.env` (use `iphone` for the phone). Load that file (`set -a; . ~/.plinth-access/mac.env; set +a`), then run `plinth hub source add femur https://plinth.femur.dev` and `plinth hub source set-token femur` (it reads the two variables of that file and stores them in the Keychain; `docs/HUB.md` §5.4). The code is tested on Windows only: try it on the Mac and fix what fails. |
