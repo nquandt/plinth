@@ -1,6 +1,6 @@
 # Self-hosted CI runners for nquandt/plinth
 
-The GitHub Actions minutes of this private repo ran out (2026-10-06). The CI jobs for Windows and Linux now run on the owner's PC, and they use no minutes. Only the macOS job (by hand since 2026-10-29; it was weekly) and `release.yml` (on a `v*` tag, with two macOS jobs) still use GitHub-hosted runners. October 2026 usage: 774 Windows, 284 Linux and 132 macOS minutes on 2026-10-06, before the move; after that only the weekly macOS run (8 to 16 minutes, billed 10x). A push while the runners are offline only queues and is later cancelled; that costs no minutes.
+The GitHub Actions minutes of this private repo ran out (2026-10-06). The CI jobs for Windows and Linux now run on the owner's PC, and they use no minutes. Since 2026-10-29 no job uses a GitHub-hosted runner: the macOS job and `release.yml` also run only on self-hosted runners and only by hand (`[self-hosted, macOS, plinth]` waits until the owner's Mac is a runner). October 2026 usage: 774 Windows, 284 Linux and 132 macOS minutes on 2026-10-06, before the move; after that only the weekly macOS run (8 to 16 minutes, billed 10x). A push while the runners are offline only queues and is later cancelled; that costs no minutes.
 
 | Job | Runner | Where | Mode |
 |---|---|---|---|

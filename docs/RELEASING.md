@@ -30,7 +30,7 @@ No other secret is needed. The release workflow does not sign binaries yet.
    git tag v0.2.0
    git push origin master v0.2.0
    ```
-5. The `release.yml` workflow runs on the tag. It:
+5. Start the `release.yml` workflow by hand (Actions tab, "Run workflow", on the tag). A tag does not start it (owner decision, 2026-10-29: no GitHub-hosted minutes). Every job runs on a self-hosted runner; a job with no online runner (macOS, until the owner's Mac is a runner) waits and costs nothing. The workflow:
    - builds the `plinth` binary on Windows, Linux, and macOS (arm64 and x64),
    - packs each platform package and the two meta packages
      (`@plinth/cli`, `create-plinth`),
