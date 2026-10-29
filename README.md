@@ -35,7 +35,7 @@ for the full, current state.
 | Area | State |
 |---|---|
 | Plinth TS compiler | works: types, unions and narrowing, generics, classes, `Map`/`Set`, tuples, destructuring, JSON, `try`/`catch`, `async`/`await`, the Promise API |
-| UI API 1.13 (Level 1 controls, Level 2 primitives, `Canvas`) | works on the desktop and web hosts |
+| UI API 1.14 (Level 1 controls, Level 2 primitives, `Canvas`) | works on the desktop and web hosts |
 | Host APIs: `time`, `store`, `clipboard`, `dialog`, `net`, `files`, `hub` | work on the desktop and web hosts ([docs/host-apis.md](docs/host-apis.md)) |
 | Desktop host (Windows) | works; the local gate tests it |
 | Desktop host (macOS, Linux) | compiler, runner and Hub tests pass; no GUI window yet |

@@ -419,6 +419,12 @@ UI API 1.2 adds the controls `Checkbox`, `TextArea`, `Slider`, `NumberField`, `P
   - On a touch screen, a drag starts with a long press and then a move. A long press with no move is a context menu.
   - Drag and drop between apps, or with the files and text of the OS, is not in 1.13.
 - **UI API 1.13** lets `Dialog` hold children: a small form between the message and the actions. The first field gets the focus, and Enter in a field does not close the dialog. `Dialog` also gets `onClose`.
+- **UI API 1.14** adds, with no new control and no change to an existing prop:
+  - `hidden` (bool, prop id 81) on `Box`, `Pressable`, `Scroll` and `Span`, and as a key of a partial style (`compact={{ hidden: true }}`). A hidden element has no layout space (no gap), no tab stop and no accessibility node. A partial style with `hidden: false` shows it again.
+  - `minWidth` and `minHeight` (ids 82 to 85, spacing units or a fraction, as `width`) on `Box`, `Pressable` and `Scroll`.
+  - `Screen` `layout` (id 87, enum `readable` or `full`). `full` uses the whole window width on every host.
+  - `Pressable` `pressed` (bool, id 86) and `selected` (bool, id 71, from UI API 1.8). `pressed` is valid only with the literal `role="button"` (`PL4010`). The host tells assistive technology the state, and draws the `selected` token as the background of a pressed or selected `Pressable` that has no `bg`.
+  - A host that does not know these props ignores them.
 - A modal layer (`Dialog`, `Sheet`, a host dialog, an open menu) blocks all pointer input to the controls under it, on every host. A drag cannot start under it, and nothing under it takes a drop.
 
 ### 6.4 Layout rules (runtime-owned)

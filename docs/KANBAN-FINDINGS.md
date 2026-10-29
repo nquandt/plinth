@@ -30,13 +30,13 @@ Each item has the workaround that the app uses, and a proposed change.
 
 ### Layout and width
 
-**H1. The app cannot read the width class, and no style can hide an element.**
+**H1. The app cannot read the width class, and no style can hide an element.** Fixed in UI API 1.14 (`hidden`, also in partial styles). The kanban board now uses `hidden` for the folded columns and for the switch; the `maxHeight={0}` hack is gone.
 The compact window must show one column. The wide window must show all of them.
 - Workaround: the column wrapper is a `Scroll` with `maxHeight={0}` (a `Scroll` clips). The chosen column has `maxHeight={400}`. The `regular` and `wide` partial styles set `maxHeight={400}` for all columns.
 - Side effects: the folded columns are still in the AccessKit tree and may be tab stops (not tested). Their `gap` still takes space. The switch has the same trick the other way.
 - Proposal: `hidden: true` in a partial style (`compact={{ hidden: true }}`), which removes the element from layout, focus and the accessibility tree. Or a reactive `widthClass()`.
 
-**H2. A `Screen` limits the content width, so a board never uses a wide window.**
+**H2. A `Screen` limits the content width, so a board never uses a wide window.** Fixed in UI API 1.14 (`Screen layout="full"`). At 1280 px the four columns share the width.
 At 1280 px, the board area is about 620 px wide. Three columns of 208 px show, and the fourth is behind a sideways scroll. The first design (288 px columns) showed two and a half.
 - Workaround: narrow columns (52 units = 208 px) and a sideways `Scroll`. The user must scroll to reach Done, also on a 1920 px window.
 - Proposal: a `Section` or `Scroll` prop to use the full window width (`bleed`), or a `Screen` `layout="full"` for boards, editors and tables.
@@ -46,7 +46,7 @@ This is real here: Done is out of view at 1280 px. The drag test could only drop
 - Workaround: the keys (`ArrowRight` moves to the next column), the card menu ("Move to Done") and the "Move to" chips in the detail sheet.
 - Proposal: auto-scroll of the nearest `Scroll` ancestor near its edge while a drag is active, in both directions.
 
-**H4. No sticky header, no `overflow`, no min size.**
+**H4. No sticky header, no `overflow`, no min size.** The min size is fixed in UI API 1.14 (`minWidth`, `minHeight`); sticky headers and `overflow` are still open.
 A column header cannot stay on top of its own scroll unless the header is outside the scroll. Nested scrolls were needed: a wrapper `Scroll` (for H1) around a box with the header and an inner `Scroll` for the cards. There is no `minWidth`, so a wide window cannot share the space between columns with a floor; columns have a fixed width instead.
 - Proposal: `minWidth`, `minHeight`, `overflow="hidden"`, and `sticky` on a child of a `Scroll`.
 
@@ -85,7 +85,7 @@ There is no `warning` color. The priority "Medium" uses `success` (green), as th
 
 ### Interaction and accessibility
 
-**H16. A `Pressable` has no pressed or selected state.** The filter chips and the column switch show their state with `bg`, `border` and a text mark "(on)" or "(here)". An assistive technology does not tell the state, except through the visible text.
+**H16. A `Pressable` has no pressed or selected state.** Fixed in UI API 1.14 (`pressed`, `selected`; the "(on)" and "(here)" marks are gone). The filter chips and the column switch show their state with `bg`, `border` and a text mark "(on)" or "(here)". An assistive technology does not tell the state, except through the visible text.
 - Proposal: `pressed?: boolean` (`aria-pressed`) and `role="tab"` with `selected`.
 
 **H17. `onKeyDown` has no modifier keys.** Alt+Up for "move the card up" is not possible, so the app uses plain letters (`u`, `d`). A plain letter on a focused card can clash with a text-entry habit. Proposal: give `(key, modifiers)`.
@@ -98,7 +98,7 @@ The card menu shows "Move to Backlog" also for a card that is in Backlog. An `Ac
 
 **H20. The drag image is the host's small label card, not the card.** (known, `docs/ui.md`). The source shows faded. Fine for a board, but a user cannot see the real card while dragging.
 
-**H21. Tab order of folded columns** (H1) and the `Pressable` count: a column with 100 cards has 100 tab stops. A roving tabindex (one tab stop for the list, arrows inside) is not available for Level 2.
+**H21. Still open after UI API 1.14 (roving focus is not built). Tab order of folded columns (fixed by `hidden`)** (H1) and the `Pressable` count: a column with 100 cards has 100 tab stops. A roving tabindex (one tab stop for the list, arrows inside) is not available for Level 2.
 - Proposal: `role="list"` or `"grid"` on a `Box` with roving focus.
 
 ### The test kit (`plinth:test`)
@@ -110,7 +110,7 @@ The card menu shows "Move to Backlog" also for a card that is in Backlog. An `Ac
 
 ### Performance and size
 
-**H26. 500 cards.** With fixed-height cards the host builds only the cards in view (W5). Without a fixed `height`, it would build all of them. The cost of a frame in a debug build at 1280 by 800, with AccessKit on: about 180 ms with 10 cards and about 280 ms with 510 cards (`kanban_layout.rs`). Every change reads the whole table again (up to 510 rows) and sets the `issues` signal; the move of a card is shown at once and written after. The time of the 500-row insert and reload was not measured separately.
+**H26. 500 cards.** With fixed-height cards the host builds only the cards in view (W5). Without a fixed `height`, it would build all of them. The cost of a frame in a debug build at 1280 by 800, with AccessKit on: about 180 ms with 10 cards and about 280 ms with 510 cards before UI API 1.14; with all four columns in view (full width) it is about 400 ms and 850 ms (`kanban_layout.rs`). Every change reads the whole table again (up to 510 rows) and sets the `issues` signal; the move of a card is shown at once and written after. The time of the 500-row insert and reload was not measured separately.
 The fixed card height has a price: a title is cut at two lines (`lines={2}`), and a label row cannot wrap.
 - Proposal: virtualize a `Scroll` of cards with a known item height (`itemHeight`), not only children that each carry `height`.
 
@@ -120,7 +120,7 @@ The fixed card height has a price: a title is cut at two lines (`lines={2}`), an
 
 ## 3. The next UI work, by value
 
-1. H1 `hidden` in partial styles (or a width class signal). It removes the hack in every adaptive Level 2 app.
+1. (Done in UI API 1.14) H1 `hidden` in partial styles (or a width class signal). It removes the hack in every adaptive Level 2 app.
 2. H2 full-width layout for boards, and H3 auto-scroll during a drag. Without them, a board is poor on wide windows.
 3. H16 `pressed` and `selected` on `Pressable`, and H21 roving focus. These are accessibility.
 4. H22 to H24 test kit steps for drop, key and context menu, and the deadlock on `await`.

@@ -118,7 +118,7 @@ Test-only env vars: `PLINTH_CORES_DIR`, `PLINTH_HUB_DIR`, `PLINTH_PUBLISHER_DIR`
 | `wit/plinth/app.wit` | Guest/host interfaces: `ui`, `dev`, `error`, `time`, `store`, `clipboard`, `dialog`, `notify`, `net`, `hub`, `files`, `sql`, `locale`. Append only (`app.wit.snapshot`). |
 | `docs/migrations/` | One guide for each core minor (`core-1.13.md`). |
 | `docs/PLATFORM-TODO.md` | The work for Linux and macOS machines. |
-| `wit/plinth/ui-api.toml` | Control, prop, event and enum ids (UI API 1.13). **Append only.** |
+| `wit/plinth/ui-api.toml` | Control, prop, event and enum ids (UI API 1.14). **Append only.** |
 | `std/*.d.ts` | Typings of the `plinth:*` modules; `std_typings_match` keeps them equal to the compiler (`check/stdlib.rs`). |
 | `crates/plinth-rt` | The core (Rust → wasm32, `no_std`): GC (`gc.rs`), allocator (`allocator.rs`), reactivity, UI ops, JSON, strings. |
 | `crates/plinth-link` | Embedded cores, `rt_abi.rs` (append-only, `ADDED_IN`, `CORE_MINOR`, `CORE_PATCH`), `link.rs`, `split.rs`, `cores.rs` (versions, digest, selection by policy). |

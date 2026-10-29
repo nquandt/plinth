@@ -330,6 +330,36 @@ the default, or `"row"`), `wrap`, `gap`, `padding`, `paddingX`, `paddingY`,
 - **Drag and drop (UI API 1.13).** `dragValue` on `Box`, `Pressable` and
   `Row`; `onDrop(value, x, y)` on `Box`, `Pressable`, `Scroll`, `Canvas`
   and `Row`. See "Drag and drop".
+- **Hide an element (UI API 1.14).** `hidden` is a style prop on `Box`,
+  `Pressable`, `Scroll` and `Span`. It is also a key of a partial style:
+  `compact={{ hidden: true }}`, `regular`, `wide`, `hover`, `active`,
+  `focus`. A hidden element is not in the layout (it leaves no gap), it is
+  not a tab stop, and it is not in the accessibility tree. The desktop
+  host does not build its children. On the web it is `display: none`. A
+  width class changes the state at once when the window changes. In a
+  partial style, `hidden: false` shows an element that the base props
+  hide.
+- **Full width (UI API 1.14).** A `Screen` keeps its content in a column
+  of a readable width. `<Screen layout="full">` uses the whole window
+  width, for a board, a table or an editor. `"readable"` is the default.
+- **Least size (UI API 1.14).** `minWidth` and `minHeight` on `Box`,
+  `Pressable` and `Scroll` take spacing units or a fraction, as `width`
+  does. The element does not get smaller than this size. Use `grow` with
+  `minWidth` to let columns share a row and keep a floor.
+- **Pressed and selected (UI API 1.14).** `pressed` (a boolean) on a
+  `Pressable` with `role="button"` makes it a toggle button, such as a
+  filter chip. Assistive technology tells "pressed" or "not pressed"
+  (web: `aria-pressed`; desktop: the AccessKit toggled state). The
+  compiler gives error `PL4010` when `pressed` is on a link, or when the
+  role is not the literal `"button"`. `selected` (a boolean) marks the
+  current item of a group, such as the column switch or a list of
+  choices. Assistive technology tells "selected" (web: `aria-selected`,
+  or `aria-current` on a link; desktop: the AccessKit selected state).
+  A pressed or selected `Pressable` without its own `bg` is drawn with
+  the `selected` token as its background. Do not use color as the only
+  mark: the text or a border can also change. Not built yet: a roving
+  focus for a list of `Pressable` (one tab stop, arrows inside; finding H21
+  in `docs/KANBAN-FINDINGS.md`).
 - The runtime gives a `Pressable` its hover and disabled states.
 - **Partial styles (UI API 1.7).** `hover`, `active` and `focus` (on `Box`,
   `Pressable`, `Scroll`) and `compact`, `regular`, `wide` (also on `Span`)
@@ -659,4 +689,4 @@ Your package declares the UI API version it was built against
 prop is a compile error; a host that sees a control kind newer than it
 supports renders a placeholder and logs an error — it does not crash.
 
-This page documents **UI API 1.13**, the version in `std/ui.d.ts` today. A heading that names a version tells when that control or prop came in.
+This page documents **UI API 1.14**, the version in `std/ui.d.ts` today. UI API 1.14 adds `hidden` (also in partial styles), `minWidth`, `minHeight`, `Screen` `layout`, and `pressed` and `selected` on `Pressable`; it adds no control and removes nothing. A heading that names a version tells when that control or prop came in.

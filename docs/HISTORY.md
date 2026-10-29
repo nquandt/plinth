@@ -82,3 +82,10 @@
 - **Built:** the test removes the sql database and waits for host requests (`open_host_requests`) at the dialog step; it does not press controls with "demo issues" in the label (the app limits them; a cap of 1,000 issues is still 12,000 nodes). kanban: `DEMO_LIMIT`, one demo action at a time, a test. `plinth-rt`: the threshold is the live size of the heap between 256 KiB and 1 MiB; test `small_apps_collect_early` in `lang.rs`.
 - **Result:** all apps pass the default monkey test. kanban with 2,000 and 6,000 steps stays flat (2.0 MiB).
 - **Not tested:** the cost in time of the more frequent collections in a large app (big-list has a live heap above 1 MiB, so its threshold did not change); a real release build; macOS, Linux, iOS, Android.
+
+## Session log 2026-10-29 (UI API 1.14)
+
+- **Built:** the three UI findings of the kanban probe. `hidden` in props and partial styles (H1), `Screen layout="full"` (H2), `minWidth` and `minHeight` (H4, minimum size only), `pressed` and `selected` on `Pressable` (H16). New ids 81 to 87 in `ui-api.toml`; no change to the WIT or the op stream. Compiler: error `PL4010` for `pressed` on a link. Desktop: a hidden element is not built (`display: none`) and is left out of the child list, so no gap. Web: `display: none`, `aria-pressed`, `aria-selected`, `aria-current`.
+- **Changed:** `examples/kanban` lost its hacks (`maxHeight={0}`, "(on)" and "(here)" marks, fixed narrow columns). At 1280 px all four columns show. Because all columns now show, the debug frame with 510 cards is about 850 ms (was about 280 ms, when two columns were out of view); the 10-card frame at 1000 px is about 150 ms and stays inside its budget.
+- **Open:** a roving focus (H21), auto-scroll during a drag (H3), a `hidden` Span that also has `lines` shows with the wrong display after `hidden: false` in a partial style on the web.
+- **Not tested:** macOS, Linux, iOS, WebKit, Firefox, a screen reader.
