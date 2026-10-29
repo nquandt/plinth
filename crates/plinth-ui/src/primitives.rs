@@ -33,7 +33,9 @@ pub fn units_f(n: f64) -> Pixels {
 
 /// The size props, each with its fraction prop. A style that sets one of a
 /// pair replaces the other.
-const SIZE_PAIRS: [(u16, u16); 4] = [
+const SIZE_PAIRS: [(u16, u16); 6] = [
+    (prop::MIN_WIDTH, prop::MIN_WIDTH_FRACTION),
+    (prop::MIN_HEIGHT, prop::MIN_HEIGHT_FRACTION),
     (prop::WIDTH, prop::WIDTH_FRACTION),
     (prop::HEIGHT, prop::HEIGHT_FRACTION),
     (prop::MAX_WIDTH, prop::MAX_WIDTH_FRACTION),
@@ -55,6 +57,8 @@ impl Style {
             .iter()
             .filter(|(id, _)| {
                 *id == prop::AXIS || *id == prop::ALIGN || (prop::WRAP..=prop::LINES).contains(id) || (prop::POSITION..=prop::BOTTOM).contains(id)
+                    // UI API 1.14: hidden, minWidth, minHeight.
+                    || (prop::HIDDEN..=prop::MIN_HEIGHT_FRACTION).contains(id)
             })
             .filter_map(|(id, v)| {
                 let n = match v {
@@ -208,6 +212,12 @@ pub fn is_row(s: &Style) -> bool {
     s.enum_(prop::AXIS) == axis::ROW
 }
 
+/// Whether the style hides the element (UI API 1.14): no layout, no focus,
+/// no accessibility node.
+pub fn is_hidden(s: &Style) -> bool {
+    s.flag(prop::HIDDEN)
+}
+
 /// The `grow` prop of any primitive: its share of the free space in a parent box.
 pub fn grow<S: Styled>(d: S, s: &Style) -> S {
     match s.get(prop::GROW) {
@@ -272,6 +282,13 @@ pub fn box_style<S: Styled>(d: S, s: &Style, t: &Tokens, partial: bool) -> S {
     }
     if let Some(h) = size(s, prop::MAX_HEIGHT, prop::MAX_HEIGHT_FRACTION) {
         d = d.max_h(h);
+    }
+    // UI API 1.14: a floor for the size. It replaces the zero floor of `grow`.
+    if let Some(w) = size(s, prop::MIN_WIDTH, prop::MIN_WIDTH_FRACTION).filter(|w| *w != Length::Auto) {
+        d = d.min_w(w);
+    }
+    if let Some(h) = size(s, prop::MIN_HEIGHT, prop::MIN_HEIGHT_FRACTION).filter(|h| *h != Length::Auto) {
+        d = d.min_h(h);
     }
     if let Some(c) = token(t, s.enum_(prop::BG)) {
         d = d.bg(c);
@@ -374,6 +391,17 @@ mod tests {
         assert_eq!(units_f(-1.5), px(0.));
         assert_eq!(units_f(f64::NAN), px(0.));
         assert_eq!(size(&s, prop::WIDTH, prop::WIDTH_FRACTION), Some(px(42.).into()));
+    }
+
+    #[test]
+    fn hidden_and_min_sizes_are_style_props() {
+        let mut s = Style::parse(&format!("{}:1,{}:20", prop::HIDDEN, prop::MIN_WIDTH));
+        assert!(is_hidden(&s));
+        s.overlay(&Style::parse(&format!("{}:0,{}:3", prop::HIDDEN, prop::MIN_WIDTH_FRACTION)));
+        assert!(!is_hidden(&s), "a partial style can show the element again");
+        assert_eq!(s.get(prop::MIN_WIDTH), None, "a fraction replaces the units");
+        assert_eq!(size(&s, prop::MIN_WIDTH, prop::MIN_WIDTH_FRACTION), Some(relative(1.0 / 2.0).into()));
+        assert_eq!(size(&s, prop::MIN_HEIGHT, prop::MIN_HEIGHT_FRACTION), None);
     }
 
     #[test]

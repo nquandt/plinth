@@ -19,7 +19,7 @@ use crate::calendar;
 use crate::primitives;
 use plinth_protocol::{
     ControlKind, Event, NodeId, Op, Value, Writer, aspect, axis, button_role, button_size, chart_kind, date_picker_mode,
-    cross_align, decode_ops, event, justify, lifecycle_kind, pressable_role, prop, text_align, text_style, tone,
+    cross_align, decode_ops, event, justify, layout, lifecycle_kind, pressable_role, prop, text_align, text_style, tone,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -1670,7 +1670,19 @@ impl PlinthRoot {
             .flex()
             .flex_col()
             .items_center()
-            .child(div().w_full().max_w(px(720.)).px(pad).py_6().flex().flex_col().gap_5().child(header).children(children))
+            .child(
+                div()
+                    .w_full()
+                    // UI API 1.14: `layout="full"` uses the whole window width.
+                    .when(screen.enum_prop(prop::LAYOUT) != layout::FULL, |d| d.max_w(px(720.)))
+                    .px(pad)
+                    .py_6()
+                    .flex()
+                    .flex_col()
+                    .gap_5()
+                    .child(header)
+                    .children(children),
+            )
             .into_any_element()
     }
 
@@ -1839,6 +1851,12 @@ impl PlinthRoot {
                 .child(format!("Unsupported control (kind {})", node.raw_kind))
                 .into_any_element();
         };
+        // UI API 1.14: a hidden element is not built at all: it has no layout
+        // space (`display: none` in gpui), no tab stop and no accessibility
+        // node, and neither have its children.
+        if self.is_hidden(node) {
+            return div().hidden().into_any_element();
+        }
         match kind {
             ControlKind::Screen => self.render_screen(node, t, cx),
             ControlKind::Section => self.render_section(node, t, cx),
@@ -1926,7 +1944,17 @@ impl PlinthRoot {
                 _ => ids.push(c),
             }
         }
+        // UI API 1.14: a hidden child takes no part in the layout (no gap).
+        ids.retain(|&c| !self.tree.get(c).is_some_and(|n| self.is_hidden(n)));
         ids
+    }
+
+    /// Whether `node` is a Level 2 primitive that its props or the partial
+    /// style of the width class hide (UI API 1.14).
+    fn is_hidden(&self, node: &Node) -> bool {
+        matches!(node.kind, Some(ControlKind::Box | ControlKind::Span | ControlKind::Pressable | ControlKind::Scroll))
+            && node.props.iter().any(|(id, _)| matches!(*id, prop::HIDDEN | prop::COMPACT | prop::REGULAR | prop::WIDE))
+            && primitives::is_hidden(&self.primitive_style(node))
     }
 
     /// Builds the child `id` with the visible x range `range` (in the
@@ -2347,8 +2375,21 @@ impl PlinthRoot {
         let own_bg = primitives::token(t, style.enum_(prop::BG)).is_some();
         let own_hover = primitives::partial(node, prop::HOVER).is_some();
         let hover = t.hover;
-        let d = div().id(eid("pressable", node.id)).role(role).aria_label(label).aria_disabled(disabled);
+        let mut d = div().id(eid("pressable", node.id)).role(role).aria_label(label).aria_disabled(disabled);
+        // UI API 1.14: `pressed` (a toggle button; the compiler allows it only
+        // on a button) and `selected` go to assistive technology. A pressed or
+        // selected `Pressable` without its own `bg` shows the `selected` token.
+        let pressed = node.prop(prop::PRESSED).and_then(Value::as_bool);
+        let selected = node.bool_prop(prop::SELECTED);
+        if let Some(on) = pressed.filter(|_| role == accesskit::Role::Button) {
+            d = d.aria_toggled(if on { accesskit::Toggled::True } else { accesskit::Toggled::False });
+        }
+        if node.prop(prop::SELECTED).is_some() {
+            d = d.aria_selected(selected);
+        }
+        let on = pressed == Some(true) || selected;
         let mut d = primitives::box_style(d, &style, t, false)
+            .when(on && !own_bg, |d| d.bg(t.selected))
             .children(self.pointer_layer(node, None, cx))
             .children(self.render_box_children(node, t, cx));
         if disabled {
@@ -2358,7 +2399,7 @@ impl PlinthRoot {
             d = if own_hover {
                 self.state_styles(d, node, t)
             } else {
-                let d = d.hover(move |s| if own_bg { s.opacity(0.88) } else { s.bg(hover) });
+                let d = d.hover(move |s| if own_bg || on { s.opacity(0.88) } else { s.bg(hover) });
                 match primitives::partial(node, prop::ACTIVE) {
                     Some(a) => {
                         let tokens = *t;
