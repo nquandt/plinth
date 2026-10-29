@@ -71,7 +71,7 @@ Plinth is a framework for cross-platform apps. Authors write a strict subset of 
 | Storage | `kv`, `files` (private space) and `store.sql` (SQLite on every host; `docs/SQL.md`). `examples/notes` keeps its notes in SQL with FTS5 search. |
 | Validation apps | 7GUIs 1–7, Pong, primitives, files-demo, notes, and 20 other examples. `examples/todo` and `examples/counter` have `plinth test` tests. |
 | Platforms | Windows: everything. Linux and macOS: compiler, cores, runner, hub and registry tests pass; no GUI window yet; all their work is listed in `docs/PLATFORM-TODO.md`. Mobile: not started (decided: gpui + wasmi on iOS; gpui-ce has no iOS platform yet, so the plan is in `docs/MAC-HANDOFF.md`). |
-| CI | `ci.yml` runs Windows and Linux on self-hosted runners (not online yet, §0.2), macOS weekly on GitHub. |
+| CI | `ci.yml` runs Windows and Linux on self-hosted runners (not online yet, §0.2), macOS by hand only (GitHub minutes; no weekly run since 2026-10-29). A `v*` tag runs `release.yml` on GitHub macOS runners (10x minutes). |
 
 ## 3. Build, run, test
 

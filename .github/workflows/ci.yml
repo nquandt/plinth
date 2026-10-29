@@ -5,7 +5,9 @@
 # Windows and 10x on macOS):
 # - a newer push to the same branch cancels the run in progress;
 # - changes to documentation only do not start CI;
-# - macOS runs only by hand (workflow_dispatch) and once a week.
+# - macOS runs only by hand (workflow_dispatch). The weekly schedule was
+#   removed on 2026-10-29: it used about 100 to 160 included minutes a week.
+#   When the owner's Mac is a self-hosted runner, move the job there.
 # Windows and Linux run on self-hosted runners on the owner's PC (no
 # minutes; infra/self-hosted-runner/README.md): Windows as a persistent
 # service (the build output stays warm), Linux as an ephemeral loop in WSL.
@@ -19,8 +21,6 @@ on:
   pull_request:
     paths-ignore: ["**.md", "docs/**", "LICENSE*"]
   workflow_dispatch:
-  schedule:
-    - cron: "0 6 * * 1" # Monday 06:00 UTC: the weekly macOS run
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -143,8 +143,8 @@ jobs:
         run: bash scripts/ci-local.sh deny
 
   macos:
-    name: macOS (no GUI, weekly or by hand)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: macOS (no GUI, by hand)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
       - name: Checkout plinth
