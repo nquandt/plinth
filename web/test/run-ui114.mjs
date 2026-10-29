@@ -44,8 +44,14 @@ assert.equal(
 );
 assert.equal(
   partialRule(ControlKind.span, Prop.regular, `${Prop.hidden}:0`, "pl-st-3"),
-  "@media (min-width: 600px) and (max-width: 1199.98px) { .pl-st-3 { display: revert !important; } }",
+  "@media (min-width: 600px) and (max-width: 1199.98px) { .pl-st-3 { display: var(--pl-show, revert) !important; } }",
 );
+// A line-clamped Span stores its display, so a shown Span is clamped again.
+assert.equal(primitiveStyle(node(ControlKind.span, { lines: 1, hidden: true }))["--pl-show"], "-webkit-box");
+assert.equal(primitiveStyle(node(ControlKind.span, { lines: 1, hidden: true })).display, "none");
+assert.equal(primitiveStyle(node(ControlKind.span, { lines: 2 })).display, "-webkit-box");
+assert.equal(primitiveStyle(node(ControlKind.span, {}))["--pl-show"], "revert");
+assert.equal(primitiveStyle(node(ControlKind.span, { hidden: false }), true).display, "var(--pl-show, revert)");
 assert.equal(
   partialRule(ControlKind.box, Prop.compact, `${Prop.minWidth}:30`, "pl-st-4"),
   "@media (max-width: 599.98px) { .pl-st-4 { min-width: 120px !important; } }",

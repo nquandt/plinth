@@ -265,13 +265,16 @@ export function primitiveStyle(n, partial = false) {
     else if (partial && has(Prop.align)) css["text-align"] = "start";
     const lines = p.get(Prop.lines);
     const clamped = typeof lines === "number" && lines > 0;
+    // A width class that shows the Span again (`hidden: false`) restores this
+    // display: a line clamp needs `-webkit-box`, not the default.
+    if (!partial) css["--pl-show"] = clamped ? "-webkit-box" : "revert";
     if (clamped) {
       css.display = "-webkit-box";
       css["-webkit-box-orient"] = "vertical";
       css["-webkit-line-clamp"] = String(Math.min(Math.trunc(lines), 1000));
       css.overflow = "hidden";
     }
-    hiddenStyle(css, p, partial, "revert");
+    hiddenStyle(css, p, partial, "var(--pl-show, revert)");
     return css;
   }
   const row = en(Prop.axis) === EnumAxis.row;
