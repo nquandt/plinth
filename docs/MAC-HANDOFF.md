@@ -34,6 +34,13 @@ Recommended order: do the macOS checks (§3), then track A to get apps on the ph
 5. `cargo build -p plinth-cli` and `target/debug/plinth run examples/counter`. If the window opens, P3 starts to be Done. If it fails, fix it in `gpui-ce` or `plinth-host-desktop` (not in app code).
 6. Open `https://plinth.femur.dev/` in macOS Safari and in the iPhone Safari. Run the examples. Write each difference in `docs/LIMITS.md` (P4). Check OPFS (`store.sql`), the Worker for each app, the sandboxed frame and the clipboard.
 
+7. Check what was built and tested on Windows only (2026-10-28 and 2026-10-29), and write each difference in `docs/PLATFORM-TODO.md`:
+   - `plinth:secrets` needs a Keychain backend (`docs/SECRETS.md` §4; the `keyring` crate behind `SecretsBackend`). `examples/secrets-demo` is the check. Item class on iOS: `kUSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`.
+   - `plinth hub source set-token` keeps the Access token in the Keychain on macOS. Then run the registry flow in `docs/REGISTRY-HOSTING.md` (add source, set token, trust the Hub key, install the Hub).
+   - UI API 1.14 on the gpui host: `hidden`, `Screen layout="full"`, `minWidth`/`minHeight`, `pressed`/`selected` (VoiceOver), and drag auto-scroll. `examples/kanban` is the check (`docs/KANBAN-FINDINGS.md`).
+   - App `[theme]` (`examples/themed`): colors must match Windows.
+   - Safari: the Playwright WebKit build on Windows passed `run-secrets.mjs` and `run-uninstall.mjs` (WebCrypto and IndexedDB work), but it has no OPFS sync access handle, so SQL was in memory. Check real Safari for OPFS.
+
 ## 4. Track A: the web shell
 
 Files: `hosts/ios-shell/` (`project.yml`, `Sources/PlinthHubApp.swift`). It was written on Windows and never built.

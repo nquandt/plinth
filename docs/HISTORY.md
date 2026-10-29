@@ -102,3 +102,9 @@
 - **Fixed:** (1) the `plinth publish` "built" line named the scratch folder; it names the registry package now (`build_package_quiet` in `crates/plinth-cli/src/main.rs`). (2) The key-change error of the Hub library says to run `plinth hub remove <id>` and install again, and says what happens to the data (`remove` keeps it; the new key has another private space; `uninstall` deletes it). (3) The data quota is one limit for the sum of the files, `store.kv` and `store.sql` on the desktop (`Others` in `files.rs`, `Kv::set_others`, `SqlStore::with_others`, wired in `Guest::set_files`). The test `the_quota_is_for_all_stores_together` failed before the change. `docs/STORAGE.md` §7.3 and `docs/LIMITS.md` are updated.
 - **Not a bug:** the leftover "`incoming/` in the Hub directory is never cleaned" has no code behind it. The Hub directory has no `incoming/` folder and the Hub keeps downloaded packages only in memory until `add_package` stores them in `packages/`. The only `incoming/` is in a registry folder (`plinth publish`, `plinth registry build`), and that folder is meant to stay: the next build reads it. Nothing was changed for this item.
 - **Not tested:** macOS, Linux, the web host (it has no combined quota), and two stores that write at the same time (the sum can pass the quota by one write).
+
+## 2026-10-29 (end of session)
+
+- **Docs:** `HANDOFF.md` state, decisions 18 to 20, open items and next steps updated. `docs/MAC-HANDOFF.md` has a new day-one step 7 (secrets, Access token, UI API 1.14, theme, Safari OPFS). `docs/PLATFORM-TODO.md` has Secrets and UI API 1.14 rows for Linux and macOS. `docs/NEXT-SESSION.md` has the prompt for the next agent session.
+- **State:** `master` pushed; the full gate passed on the last code commit.
+

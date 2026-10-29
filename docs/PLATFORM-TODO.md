@@ -22,6 +22,8 @@ Status: 2026-10-08. Nothing in this file is started.
 | Accessibility | U3 | Check the AccessKit tree with Orca (AT-SPI). | A manual check with Orca is recorded in `docs/guides/accessibility.md`. |
 | Notifications | H3 | A `NotifyBackend` for the freedesktop notification service (D-Bus), in `crates/plinth-host-desktop/src/notify.rs`. Today `show` answers "unsupported". | `examples/notify-demo` shows a notification. |
 | System settings | U7 | Dark mode, high contrast, text scale and reduced motion from the desktop settings (the XDG settings portal). | The theme follows each setting. |
+| Secrets | H7 | A `SecretsBackend` for the Secret Service (libsecret). With no service, the call answers `unsupported`. | `examples/secrets-demo` keeps and returns a secret. |
+| UI API 1.14 | U3 | Check `hidden`, `pressed`/`selected` (AT-SPI), `Screen layout="full"` and drag auto-scroll in `examples/kanban`. | As for macOS. |
 | Locale change | L5 | The OS locale is read at start and when the window comes to the front. Check `sys-locale` on Linux. | `tests/locale.rs` passes; a manual locale change works. |
 | SQL and files | H4 | Check the data folders (`$XDG_DATA_HOME/plinth/...`) and the `store.sql` database path. | The `sql`, `notes` and `files` suites pass. |
 | One package on all OSes | P6 | Run the same `.plnt` files that Windows runs, with the same results. | The `apps`, `e2e` and `sevenguis` suites pass, and a native export starts with a double-click. |
@@ -39,6 +41,8 @@ Status: 2026-10-08. Nothing in this file is started.
 | Text input with IME | U5 | Check Japanese and Chinese input in the gpui-ce text field. (Windows is checked on the Windows PC.) | Composition works in `TextField` and `TextArea`. |
 | Notifications | H3 | A `NotifyBackend` for the macOS notification center (`UNUserNotificationCenter`; it needs a signed app bundle). | `examples/notify-demo` shows a notification. |
 | System settings | U7 | Dark mode, increased contrast, text size and reduced motion from the macOS settings. | The theme follows each setting. |
+| Secrets | H7 | A `SecretsBackend` for the macOS Keychain (`docs/SECRETS.md` §4); the same for iOS. | `examples/secrets-demo` keeps and returns a secret; `plinth hub uninstall` removes it. |
+| UI API 1.14 | U3 | Check `hidden`, `pressed`/`selected` with VoiceOver, `Screen layout="full"` and drag auto-scroll in `examples/kanban`. | The Kanban board shows 4 columns at 1280 px, and a drag at the edge scrolls. |
 | Signing and notarization | P5 | Sign and notarize the `plinth` binary and native exports (Apple Developer ID; the owner's account). | Gatekeeper starts the binary with no warning. |
 | One package on all OSes | P6 | As for Linux. | As for Linux. |
 | The release pipeline | D2 | Build, sign and test the macOS release (both `aarch64` and `x86_64`, or a universal binary). | A release build from CI runs on a clean Mac. |
