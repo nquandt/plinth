@@ -31,6 +31,7 @@ import {
   EnumPressableRole,
   EnumTextAlign,
   EnumPosition,
+  EnumLayout,
 } from "./ui-api.js";
 import { normalizeLocale, isRtlLocale } from "./plinth-web.js";
 import { applyAppTheme } from "./theme.js";
@@ -226,6 +227,17 @@ const TEXT_SIZES = {
 const WEIGHTS = { [EnumWeight.regular]: "400", [EnumWeight.medium]: "500", [EnumWeight.semibold]: "600", [EnumWeight.bold]: "700" };
 
 /**
+ * UI API 1.14 `hidden`: `display: none` removes the element from the layout
+ * (no gap), the tab order and the accessibility tree. A partial style with
+ * `hidden: false` shows it again with the `shown` display value.
+ */
+function hiddenStyle(css, props, partial, shown) {
+  const h = props.get(Prop.hidden);
+  if (h === true) css.display = "none";
+  else if (h === false && partial) css.display = shown;
+}
+
+/**
  * The inline CSS of a Level 2 primitive (`Box`, `Pressable`, `Scroll`,
  * `Span`) from its props: the same mapping as
  * `crates/plinth-ui/src/primitives.rs`. Returns `{ property: value }`.
@@ -258,6 +270,7 @@ export function primitiveStyle(n, partial = false) {
       css["-webkit-line-clamp"] = String(Math.min(Math.trunc(lines), 1000));
       css.overflow = "hidden";
     }
+    hiddenStyle(css, p, partial, "revert");
     return css;
   }
   const row = en(Prop.axis) === EnumAxis.row;
@@ -289,10 +302,14 @@ export function primitiveStyle(n, partial = false) {
     [Prop.height, Prop.heightFraction, "height"],
     [Prop.maxWidth, Prop.maxWidthFraction, "max-width"],
     [Prop.maxHeight, Prop.maxHeightFraction, "max-height"],
+    // UI API 1.14: a floor for the size (after `grow`, whose floor is 0).
+    [Prop.minWidth, Prop.minWidthFraction, "min-width"],
+    [Prop.minHeight, Prop.minHeightFraction, "min-height"],
   ]) {
     const v = sizeOf(p, u, f);
-    if (v) css[name] = v;
+    if (v && v !== "auto") css[name] = v;
   }
+  hiddenStyle(css, p, partial, "flex");
   const bg = colorVar(en(Prop.bg));
   if (bg) css.background = bg;
   else if (partial && has(Prop.bg)) css.background = "transparent";
@@ -331,6 +348,8 @@ const ENUM_STYLE_PROPS = new Set([
   Prop.heightFraction,
   Prop.maxWidthFraction,
   Prop.maxHeightFraction,
+  Prop.minWidthFraction,
+  Prop.minHeightFraction,
   Prop.bg,
   Prop.fg,
   Prop.border,
@@ -338,7 +357,7 @@ const ENUM_STYLE_PROPS = new Set([
   Prop.textSize,
   Prop.weight,
 ]);
-const BOOL_STYLE_PROPS = new Set([Prop.wrap, Prop.italic, Prop.mono]);
+const BOOL_STYLE_PROPS = new Set([Prop.wrap, Prop.italic, Prop.mono, Prop.hidden]);
 
 /**
  * A partial style string from the compiler (`"56:11,42:4"`: prop id and
@@ -1121,6 +1140,8 @@ export class DomRenderer {
       // a screen that comes back.
       if (view) for (const d of view.el.querySelectorAll("dialog")) d._plSync?.();
     }
+    // UI API 1.14: `Screen layout="full"` lifts the width cap of the screen.
+    this.main.classList.toggle("pl-screen-full", rootId !== undefined && this.node(rootId)?.props.get(Prop.layout)?.enum === EnumLayout.full);
     if (navChanged && view) view.update(this.node(rootId)); // the back button
     if (navChanged) {
       // document.title follows the current screen, matching the desktop
@@ -1560,7 +1581,18 @@ export class DomRenderer {
           setAttr(e, "aria-disabled", disabled ? "true" : null);
           setAttr(e, "tabindex", disabled ? null : "0");
           // The runtime's hover, unless the app gives a background or its own hover.
-          e.classList.toggle("pl-pressable-plain", !colorVar(n.props.get(Prop.bg)?.enum) && !n.props.get(Prop.hover));
+          // UI API 1.14: `pressed` (a toggle button) and `selected` (a link gets
+          // `aria-current`). A pressed or selected Pressable without its own
+          // bg shows the `selected` token (`.pl-pressable-on`).
+          const pressed = n.props.get(Prop.pressed);
+          const selected = n.props.get(Prop.selected);
+          setAttr(e, "aria-pressed", !link && typeof pressed === "boolean" ? String(pressed) : null);
+          setAttr(e, link ? "aria-current" : "aria-selected", typeof selected === "boolean" ? String(selected) : null);
+          setAttr(e, link ? "aria-selected" : "aria-current", null);
+          const on = pressed === true || selected === true;
+          const ownBg = !!colorVar(n.props.get(Prop.bg)?.enum);
+          e.classList.toggle("pl-pressable-on", on && !ownBg);
+          e.classList.toggle("pl-pressable-plain", !ownBg && !on && !n.props.get(Prop.hover));
           e.classList.toggle("pl-pressable-own-hover", !!n.props.get(Prop.hover));
         } else {
           const keys =

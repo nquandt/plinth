@@ -788,6 +788,19 @@ body {
   outline-offset: 2px;
 }
 
+/* A pressed or selected Pressable without its own bg (UI API 1.14). */
+.pl-pressable-on {
+  background: var(--pl-selected);
+}
+.pl-pressable-on:not([aria-disabled="true"]):hover {
+  opacity: 0.88;
+}
+
+/* UI API 1.14: a screen with layout="full" uses the whole window width. */
+.pl-screen.pl-screen-full {
+  max-width: none;
+}
+
 /* Canvas (UI API 1.10): the drawing scales to the width. */
 .pl-canvas {
   display: block;

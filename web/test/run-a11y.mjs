@@ -348,6 +348,7 @@ async function main() {
       ["canvas pointer positions (7GUIs circle drawer)", checkCircleDrawer],
       ["context menu at the pointer, Shift+F10, a modal blocks the pointer (circle drawer)", checkContextMenu],
       ["drag and drop, Alt+Up/Down, a form in a Dialog (dnd-fixture)", checkDragDrop],
+      ["hidden, layout full, min sizes, pressed and selected (ui114-fixture)", checkUi114],
       ["drag and drop in the sandboxed app frame (dnd-fixture as a web export)", checkDragDropFrame],
       ["host banners: an uncaught error, then a stopped app (stop-fixture)", checkStopBanner],
       ["system settings: dark, high contrast, forced colors, reduced motion, text size (todo)", checkSystemSettings],
@@ -1049,6 +1050,68 @@ async function checkDragDrop(cdpPort, base) {
   try {
     await page.navigate(`${base}/web/index.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(`${base}/target/core.wasm`)}`);
     return await dragDropChecks(page, pageSurface(page));
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * UI API 1.14 in Edge (ui114-fixture): `hidden` is `display: none` (no space,
+ * no tab stop) and follows the width class live; `Screen layout="full"`
+ * lifts the width cap; `minWidth` and `minHeight` are floors; `pressed`,
+ * `selected` and the link `aria-current` reach the DOM, and a pressed
+ * Pressable without a bg shows the selected token.
+ */
+async function checkUi114(cdpPort, base) {
+  const appUrl = `${base}/web/test/fixtures/ui114-fixture/dist/ui114-fixture.plnt`;
+  const page = await openPage(cdpPort);
+  try {
+    await page.navigate(`${base}/web/index.html?app=${encodeURIComponent(appUrl)}&core=${encodeURIComponent(`${base}/target/core.wasm`)}`);
+    await page.waitFor(`document.querySelector("#app [aria-label=Chip]") ? true : null`, 30000);
+    const by = (label) => `document.querySelector('#app [aria-label="${label}"]')`;
+    const facts = (label) => page.eval(`(() => { const e = ${by(label)}; const r = e.getBoundingClientRect(); const s = getComputedStyle(e);
+      return { display: s.display, w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top), bottom: Math.round(r.bottom), bg: s.backgroundColor,
+        pressed: e.getAttribute("aria-pressed"), selected: e.getAttribute("aria-selected"), current: e.getAttribute("aria-current"), cls: e.className }; })()`);
+    const tabbable = (label) => page.eval(`(() => { const e = ${by(label)}; return !!e.offsetParent && e.tabIndex >= 0; })()`);
+
+    await page.send("Emulation.setDeviceMetricsOverride", { width: 1300, height: 1000, deviceScaleFactor: 1, mobile: false });
+    // Wide: "Not on wide" and "Never there" are gone, "Not on compact" shows.
+    if ((await facts("Not on wide")).display !== "none" || (await facts("Never there")).display !== "none") throw new Error("wide: a hidden element has a display");
+    if ((await tabbable("Not on wide")) || (await tabbable("Never there"))) throw new Error("a hidden element is a tab stop");
+    if (!(await tabbable("Not on compact"))) throw new Error("wide: 'Not on compact' is not shown");
+    const [first, shown, last] = [await facts("First"), await facts("Not on compact"), await facts("Last")];
+    if (shown.top - first.bottom !== 12) throw new Error(`wide: the gap above: ${JSON.stringify([first, shown])}`);
+    if (last.top <= shown.bottom) throw new Error("wide: Last is not below");
+    // layout="full": the screen has no width cap, so the box is wide.
+    const wide = await facts("Wide box");
+    if (wide.w < 900) throw new Error(`layout full: the box is ${wide.w} px wide`);
+    // minWidth: A has its 280 px, B the rest of the 400 px row; minHeight 80 px.
+    const [a, b] = [await facts("Floor A"), await facts("Floor B")];
+    if (a.w < 280 || Math.abs(b.w - 120) > 2 || a.h < 80) throw new Error(`min sizes: ${JSON.stringify([a, b])}`);
+
+    // Compact: the other pair, live (no reload).
+    await page.send("Emulation.setDeviceMetricsOverride", { width: 400, height: 1000, deviceScaleFactor: 1, mobile: false });
+    await page.waitFor(`getComputedStyle(${by("Not on compact")}).display === "none" ? true : null`, 3000);
+    if ((await facts("Not on wide")).display === "none" || !(await tabbable("Not on wide"))) throw new Error("compact: 'Not on wide' is not shown");
+    if (await tabbable("Not on compact")) throw new Error("compact: 'Not on compact' is a tab stop");
+    const [first2, wideOnly] = [await facts("First"), await facts("Not on wide")];
+    if (wideOnly.top - first2.bottom !== 12) throw new Error(`compact: a hidden element left a gap: ${JSON.stringify([first2, wideOnly])}`);
+    await page.send("Emulation.clearDeviceMetricsOverride");
+
+    // pressed, selected, aria-current.
+    const chip = await facts("Chip");
+    if (chip.pressed !== "false" || chip.cls.includes("pl-pressable-on")) throw new Error(`Chip before: ${JSON.stringify(chip)}`);
+    if ((await facts("Choice")).pressed !== null || (await facts("Choice")).selected !== "false") throw new Error("Choice: aria-pressed or no aria-selected");
+    const link = await facts("Current page");
+    if (link.current !== "true" || link.selected !== null) throw new Error(`the link: ${JSON.stringify(link)}`);
+    await page.eval(`${by("Chip")}.click()`);
+    await page.waitFor(`${by("Chip")}.getAttribute("aria-pressed") === "true" ? true : null`, 3000);
+    const [chipOn, own] = [await facts("Chip"), await facts("Own look")];
+    if (!chipOn.cls.includes("pl-pressable-on") || chipOn.bg === chip.bg) throw new Error(`a pressed Chip has no selected look: ${JSON.stringify([chip, chipOn])}`);
+    if (own.pressed !== "true" || own.cls.includes("pl-pressable-on")) throw new Error(`Own look: ${JSON.stringify(own)}`);
+    await page.eval(`${by("Choice")}.click()`);
+    await page.waitFor(`${by("Choice")}.getAttribute("aria-selected") === "true" ? true : null`, 3000);
+    return "hidden (display, tab stop, gap, live width class), layout full, min sizes, aria-pressed, aria-selected, aria-current, the selected look";
   } finally {
     await page.close();
   }
