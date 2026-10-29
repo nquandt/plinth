@@ -61,6 +61,50 @@ const CULL_OVERSCAN: f32 = 200.0;
 /// The viewport height to assume before the first frame, in pixels.
 const CULL_FIRST_FRAME: f32 = 1200.0;
 
+/// Auto-scroll during a drag: the edge zone of a `Scroll` in px, and the top
+/// speed in px/s. The web host has the same numbers (`DRAG_EDGE`, `DRAG_SPEED`).
+const DRAG_EDGE: f32 = 40.0;
+const DRAG_SPEED: f32 = 600.0;
+
+/// The scroll velocity (px/s, signed) for a pointer at `p` in the range
+/// `[lo, hi]`: 0 in the middle, up to `DRAG_SPEED` at an edge, in proportion
+/// to the depth in the edge zone. A small range has a zone of a third of its
+/// size. Outside the range: 0. The same as `edgeVelocity` of the web host.
+fn drag_edge_speed(p: f32, lo: f32, hi: f32) -> f32 {
+    let zone = DRAG_EDGE.min((hi - lo) / 3.0);
+    if !(zone > 0.0) || p < lo || p > hi {
+        return 0.0;
+    }
+    if p < lo + zone {
+        -DRAG_SPEED * (lo + zone - p) / zone
+    } else if p > hi - zone {
+        DRAG_SPEED * (p - (hi - zone)) / zone
+    } else {
+        0.0
+    }
+}
+
+#[cfg(test)]
+mod drag_scroll_tests {
+    use super::{DRAG_SPEED, drag_edge_speed};
+
+    #[test]
+    fn speed_grows_with_depth_in_the_edge_zone() {
+        assert_eq!(drag_edge_speed(200.0, 0.0, 400.0), 0.0);
+        assert_eq!(drag_edge_speed(40.0, 0.0, 400.0), 0.0);
+        assert_eq!(drag_edge_speed(360.0, 0.0, 400.0), 0.0);
+        assert_eq!(drag_edge_speed(380.0, 0.0, 400.0), DRAG_SPEED / 2.0);
+        assert_eq!(drag_edge_speed(20.0, 0.0, 400.0), -DRAG_SPEED / 2.0);
+        assert_eq!(drag_edge_speed(400.0, 0.0, 400.0), DRAG_SPEED);
+        assert_eq!(drag_edge_speed(0.0, 0.0, 400.0), -DRAG_SPEED);
+        assert_eq!(drag_edge_speed(-1.0, 0.0, 400.0), 0.0);
+        assert_eq!(drag_edge_speed(401.0, 0.0, 400.0), 0.0);
+        assert_eq!(drag_edge_speed(50.0, 0.0, 60.0), DRAG_SPEED / 2.0);
+        assert_eq!(drag_edge_speed(30.0, 0.0, 60.0), 0.0);
+        assert_eq!(drag_edge_speed(5.0, 10.0, 10.0), 0.0);
+    }
+}
+
 /// The host side of the guest connection. `dispatch` sends one event buffer
 /// and returns the op buffers that the guest committed while it ran.
 pub trait GuestPort {
@@ -394,6 +438,13 @@ pub struct PlinthRoot {
     /// The scroll position of each Level 2 `Scroll`, by node id: the
     /// renderer builds only the children near the viewport (`culled_scroll_children`).
     scroll_handles: std::cell::RefCell<HashMap<NodeId, gpui::ScrollHandle>>,
+    /// The frame in which each `Scroll` was last built (`render_epoch`): the
+    /// auto-scroll of a drag skips a Scroll that is hidden or gone.
+    scroll_seen: std::cell::RefCell<HashMap<NodeId, u64>>,
+    /// The number of frames built so far.
+    render_epoch: Cell<u64>,
+    /// The time of the last drag auto-scroll step; `None` when no drag goes on.
+    drag_scroll_at: Option<Instant>,
     /// While a box's children are built: the x range, in pixels from the
     /// box's left edge, that a horizontal `Scroll` above it shows (with
     /// overscan). A row box with fixed-width children builds only the ones
@@ -470,6 +521,9 @@ impl PlinthRoot {
             date_cursor: HashMap::new(),
             list_states: std::cell::RefCell::new(HashMap::new()),
             scroll_handles: std::cell::RefCell::new(HashMap::new()),
+            scroll_seen: std::cell::RefCell::new(HashMap::new()),
+            render_epoch: Cell::new(0),
+            drag_scroll_at: None,
             cull_x: Cell::new(None),
             update_prompt: None,
             focus_handles: std::cell::RefCell::new(HashMap::new()),
@@ -529,6 +583,9 @@ impl PlinthRoot {
             date_cursor: HashMap::new(),
             list_states: std::cell::RefCell::new(HashMap::new()),
             scroll_handles: std::cell::RefCell::new(HashMap::new()),
+            scroll_seen: std::cell::RefCell::new(HashMap::new()),
+            render_epoch: Cell::new(0),
+            drag_scroll_at: None,
             cull_x: Cell::new(None),
             update_prompt: None,
             focus_handles: std::cell::RefCell::new(HashMap::new()),
@@ -765,6 +822,70 @@ impl PlinthRoot {
     /// The host polls this and opens a window for each app id.
     pub fn take_hub_launches(&mut self) -> Vec<String> {
         self.guest.take_hub_launches()
+    }
+
+    /// Auto-scroll during a drag (finding H3): while a drag of a
+    /// `dragValue` goes on, each `Scroll` under the pointer scrolls when the
+    /// pointer is in its edge zone (`drag_edge_speed`), in each axis; the
+    /// innermost one that can still move wins an axis. A frame runs this, and
+    /// it asks for the next frame, so the scroll goes on while the pointer
+    /// rests. It is input, not animation: reduced motion does not stop it.
+    fn drive_drag_scroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let epoch = self.render_epoch.get();
+        self.render_epoch.set(epoch + 1);
+        let dragging = cx.active_drag().is_some_and(|a| a.value.downcast_ref::<PlinthDrag>().is_some_and(|d| d.value.is_some()));
+        if !dragging {
+            self.drag_scroll_at = None;
+            return;
+        }
+        let now = Instant::now();
+        let dt = self.drag_scroll_at.replace(now).map_or(0.0, |at| now.duration_since(at).as_secs_f32().min(0.05));
+        let pos = window.mouse_position();
+        let (x, y) = (f32::from(pos.x), f32::from(pos.y));
+        let mut under: Vec<(f32, gpui::ScrollHandle)> = Vec::new();
+        {
+            let seen = self.scroll_seen.borrow();
+            for (id, handle) in self.scroll_handles.borrow().iter() {
+                // Built in the last frame (it stored the epoch after this frame's increment), and the pointer is inside it.
+                if seen.get(id).copied() != Some(epoch) {
+                    continue;
+                }
+                let b = handle.bounds();
+                if b.contains(&pos) {
+                    under.push((f32::from(b.size.width) * f32::from(b.size.height), handle.clone()));
+                }
+            }
+        }
+        // The innermost (smallest) first.
+        under.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (mut done_x, mut done_y) = (false, false);
+        if dt > 0.0 {
+            for (_, handle) in &under {
+                let (b, max, off) = (handle.bounds(), handle.max_offset(), handle.offset());
+                let mut next = off;
+                if !done_x && f32::from(max.x) > 0.0 {
+                    let v = drag_edge_speed(x, f32::from(b.left()), f32::from(b.right()));
+                    let to = (f32::from(off.x) - v * dt).clamp(-f32::from(max.x), 0.0);
+                    if to != f32::from(off.x) {
+                        next.x = px(to);
+                        done_x = true;
+                    }
+                }
+                if !done_y && f32::from(max.y) > 0.0 {
+                    let v = drag_edge_speed(y, f32::from(b.top()), f32::from(b.bottom()));
+                    let to = (f32::from(off.y) - v * dt).clamp(-f32::from(max.y), 0.0);
+                    if to != f32::from(off.y) {
+                        next.y = px(to);
+                        done_y = true;
+                    }
+                }
+                if next != off {
+                    handle.set_offset(next);
+                }
+            }
+        }
+        // Ask for the next frame while the drag goes on: the pointer can rest.
+        window.request_animation_frame();
     }
 
     /// Pushes guest-side `value` changes into the text field states.
@@ -1276,6 +1397,7 @@ impl Render for PlinthRoot {
             self.appearance = Some(cx.observe_window_appearance(window, |_, _, cx| cx.notify()));
         }
         self.drive_frames(window, cx);
+        self.drive_drag_scroll(window, cx);
         self.class = WidthClass::from_width(window.viewport_size().width);
         self.ensure_fields(cx);
         if !self.focused_once {
@@ -2431,6 +2553,7 @@ impl PlinthRoot {
         let label = node.str_prop(prop::LABEL).map(str::to_owned);
         let style = self.primitive_style(node);
         let handle = self.scroll_handles.borrow_mut().entry(node.id).or_default().clone();
+        self.scroll_seen.borrow_mut().insert(node.id, self.render_epoch.get());
         let d = div().id(eid("scroll", node.id)).role(accesskit::Role::ScrollView).track_scroll(&handle);
         let d = primitives::box_style(d, &style, t, false);
         let d = if primitives::is_row(&style) { d.overflow_x_scroll() } else { d.overflow_y_scroll() };

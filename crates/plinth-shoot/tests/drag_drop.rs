@@ -27,7 +27,7 @@ impl GuestPort for WasmGuest {
 }
 
 const APP: &str = r#"
-import { app, signal, Screen, Text, Button, Box, Dialog, Action, List, Row, Slider, TextField } from "plinth:ui";
+import { app, signal, Screen, Text, Button, Box, Scroll, Dialog, Action, List, Row, Slider, TextField } from "plinth:ui";
 
 const items = signal(["Apple", "Banana", "Cherry"]);
 const log = signal("none");
@@ -60,6 +60,12 @@ function Home() {
       <List items={items()} key={(s) => s} row={(s) => <Row title={s} dragValue={s} />} onReorder={move} />
       <Box label="Basket" width={60} height={20} bg="surface" border="border"
            onDrop={(v, x, y) => log.set(`drop ${v} ${x > 0 && x < 60} ${y > 0 && y < 20}`)} />
+      <Scroll label="Strip" direction="row" width={60} height={14} bg="surface.alt">
+        <Box width={60} height={10} />
+        <Box width={60} height={10} />
+        <Box label="Far basket" width={30} height={10} bg="surface" border="border"
+             onDrop={(v) => log.set(`far drop ${v}`)} />
+      </Scroll>
       <Box label="Card" dragValue="card" width={20} height={8} bg="surface.alt" />
       <Button label="Open dialog" onPress={() => dialog.set(true)} />
       <Dialog open={dialog} title="Size" message="Pick a size." onClose={() => log.set("closed")}
@@ -344,6 +350,66 @@ fn a_drag_reorders_the_list() {
     h.release(point(banana.x + px(20.), banana.y));
     assert_eq!(h.order(), "order: Apple,Banana,Cherry");
     assert_eq!(h.log(), "log: reorder 2 0");
+}
+
+/// Auto-scroll (finding H3): a drag held at the right edge of a horizontal
+/// `Scroll` scrolls it, so a drop target that was off screen can take the
+/// drop. A drag in the middle of the Scroll does not scroll it.
+#[test]
+fn a_drag_at_the_edge_of_a_scroll_scrolls_it() {
+    let mut h = Harness::new();
+    let (sx0, sy0, sx1, sy1) = h.must_bounds(Role::ScrollView, "Strip");
+    let (fx0, _, _, _) = h.must_bounds(Role::Group, "Far basket");
+    assert!(fx0 > sx1, "the far basket starts off screen: {fx0} vs {sx1}");
+    let (cx0, cy0, _, _) = h.must_bounds(Role::Group, "Card");
+    let card = point(px((cx0 + 2.0) as f32), px((cy0 + 2.0) as f32));
+    let mid_y = ((sy0 + sy1) / 2.0) as f32;
+
+    // The middle of the strip: no scroll.
+    let middle = point(px(((sx0 + sx1) / 2.0) as f32), px(mid_y));
+    h.drag_to(card, middle);
+    for _ in 0..8 {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        h.input(PlatformInput::MouseMove(MouseMoveEvent {
+            position: middle,
+            pressed_button: Some(MouseButton::Left),
+            modifiers: Default::default(),
+        }));
+    }
+    let (still, _, _, _) = h.must_bounds(Role::Group, "Far basket");
+    assert!((still - fx0).abs() < 1.0, "the strip scrolled in the middle: {still} vs {fx0}");
+    h.release(middle);
+
+    // The right edge: it scrolls, though the pointer rests.
+    let edge = point(px((sx1 - 4.0) as f32), px(mid_y));
+    h.drag_to(card, edge);
+    let mut scrolled = false;
+    for _ in 0..120 {
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        h.input(PlatformInput::MouseMove(MouseMoveEvent {
+            position: edge,
+            pressed_button: Some(MouseButton::Left),
+            modifiers: Default::default(),
+        }));
+        if h.bounds(Role::Group, "Far basket").is_some_and(|b| b.2 <= sx1 + 1.0) {
+            scrolled = true;
+            break;
+        }
+    }
+    assert!(scrolled, "a drag at the edge did not scroll the strip to the far basket");
+    h.shot("drag-autoscroll");
+    h.release(edge);
+    assert_eq!(h.log(), "log: far drop card");
+    // After the drop the strip stays where it is.
+    let (a, _, _, _) = h.must_bounds(Role::Group, "Far basket");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    h.input(PlatformInput::MouseMove(MouseMoveEvent {
+        position: edge,
+        pressed_button: None,
+        modifiers: Default::default(),
+    }));
+    let (b, _, _, _) = h.must_bounds(Role::Group, "Far basket");
+    assert!((a - b).abs() < 0.5, "the strip scrolls on after the drop");
 }
 
 /// An element with `dragValue` dropped on an element with `onDrop` sends

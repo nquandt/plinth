@@ -41,7 +41,7 @@ At 1280 px, the board area is about 620 px wide. Three columns of 208 px show, a
 - Workaround: narrow columns (52 units = 208 px) and a sideways `Scroll`. The user must scroll to reach Done, also on a 1920 px window.
 - Proposal: a `Section` or `Scroll` prop to use the full window width (`bleed`), or a `Screen` `layout="full"` for boards, editors and tables.
 
-**H3. No auto-scroll during a drag (known, `docs/ui.md`), so a drag cannot reach a column that is out of view.**
+**H3. Fixed. No auto-scroll during a drag, so a drag could not reach a column that was out of view.** The host now scrolls the `Scroll` under the pointer near its edge (no new API; `docs/ui.md` "Drag and drop"). The text below is the finding as it was.
 This is real here: Done is out of view at 1280 px. The drag test could only drop on In Progress.
 - Workaround: the keys (`ArrowRight` moves to the next column), the card menu ("Move to Done") and the "Move to" chips in the detail sheet.
 - Proposal: auto-scroll of the nearest `Scroll` ancestor near its edge while a drag is active, in both directions.
@@ -121,7 +121,7 @@ The fixed card height has a price: a title is cut at two lines (`lines={2}`), an
 ## 3. The next UI work, by value
 
 1. (Done in UI API 1.14) H1 `hidden` in partial styles (or a width class signal). It removes the hack in every adaptive Level 2 app.
-2. H2 full-width layout for boards, and H3 auto-scroll during a drag. Without them, a board is poor on wide windows.
+2. (Done in UI API 1.14 and the host) H2 full-width layout for boards, and H3 auto-scroll during a drag. Without them, a board is poor on wide windows.
 3. H16 `pressed` and `selected` on `Pressable`, and H21 roving focus. These are accessibility.
 4. H22 to H24 test kit steps for drop, key and context menu, and the deadlock on `await`.
 5. H7 shadow and transitions; H6 a smaller `Chart`; H5 a `Picker` that fits.

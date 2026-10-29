@@ -499,9 +499,18 @@ with the files and the text of the operating system (`docs/GAPS.md` G4).
   sandboxed app frame. A host that does not know UI API 1.13 shows no drag
   and sends no event: keep another path (buttons) if the move is
   necessary there.
+- **Auto-scroll.** While a drag of a `dragValue` goes on, a `Scroll` under
+  the pointer scrolls when the pointer is within 40 px of its edge, in
+  each axis. The speed grows with the depth in this zone, up to 600 px/s
+  at the edge. It goes on while the pointer rests, and it stops at the
+  drop or when the drag stops. If a `Scroll` cannot move that way, the
+  next `Scroll` below the pointer (the outer one) scrolls. Reduced motion
+  does not stop it: it is input, not animation. A `Scroll` that is less
+  than 120 px wide or high has a smaller zone (a third of its size). The
+  app does nothing: there is no new prop. The desktop and the web host use
+  the same numbers.
 - Not built yet: drag and drop between apps and with the operating
-  system, a drag card that the app draws, auto-scroll of a `Scroll` near
-  its edge during a drag, reorder in a `Grid`. `examples/todo` moves its
+  system, a drag card that the app draws, reorder in a `Grid`. `examples/todo` moves its
   tasks.
 
 ## Theme and system settings

@@ -87,5 +87,12 @@
 
 - **Built:** the three UI findings of the kanban probe. `hidden` in props and partial styles (H1), `Screen layout="full"` (H2), `minWidth` and `minHeight` (H4, minimum size only), `pressed` and `selected` on `Pressable` (H16). New ids 81 to 87 in `ui-api.toml`; no change to the WIT or the op stream. Compiler: error `PL4010` for `pressed` on a link. Desktop: a hidden element is not built (`display: none`) and is left out of the child list, so no gap. Web: `display: none`, `aria-pressed`, `aria-selected`, `aria-current`.
 - **Changed:** `examples/kanban` lost its hacks (`maxHeight={0}`, "(on)" and "(here)" marks, fixed narrow columns). At 1280 px all four columns show. Because all columns now show, the debug frame with 510 cards is about 850 ms (was about 280 ms, when two columns were out of view); the 10-card frame at 1000 px is about 150 ms and stays inside its budget.
-- **Open:** a roving focus (H21), auto-scroll during a drag (H3), a `hidden` Span that also has `lines` shows with the wrong display after `hidden: false` in a partial style on the web.
+- **Open:** a roving focus (H21). (Fixed later the same day: auto-scroll during a drag (H3), and the wrong display of a `hidden` Span with `lines` after `hidden: false` on the web.)
 - **Not tested:** macOS, Linux, iOS, WebKit, Firefox, a screen reader.
+
+## Session log 2026-10-29, second part (fixes after UI API 1.14, drag auto-scroll)
+
+- **Fixed:** the web host set `aria-selected` on a `Pressable` (not valid ARIA on a button). It sets `aria-current` (`"true"` on a button, `"page"` on a link) and `aria-pressed` only when `pressed` is set. A line-clamped `Span` that a width class shows again keeps `-webkit-box` (the custom property `--pl-show` holds the display to restore). The kanban compact column switch shows the name on one line (`lines={1}`) and the count below it.
+- **Built:** auto-scroll during a drag (H3), with no new API. Desktop: `PlinthRoot::drive_drag_scroll` runs each frame while a `PlinthDrag` with a value is active, asks for the next frame, and moves the `ScrollHandle` of each `Scroll` that was built in the last frame and holds the pointer. Web: a `requestAnimationFrame` loop in `dragDrop`. Both use a 40 px edge zone and 600 px/s at the edge (`drag_edge_speed` and `edgeVelocity`, the same numbers).
+- **Tests:** `plinth-ui` `drag_scroll_tests`; `plinth-shoot` `drag_drop` (`a_drag_at_the_edge_of_a_scroll_scrolls_it`: a real mouse drag held at the right edge of a horizontal `Scroll` reveals a far drop target and drops on it); `web/test/run-dragscroll.mjs`; Edge: `run-a11y.mjs` `checkDragDrop` and `checkUi114`.
+- **Not tested:** macOS, Linux, iOS, WebKit, Firefox, touch auto-scroll on a phone, axe on the ui114 fixture (axe needs the CDN).
