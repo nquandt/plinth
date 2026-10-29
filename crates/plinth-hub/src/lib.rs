@@ -596,7 +596,7 @@ impl Hub {
         layout.export_zip(&version, out)
     }
 
-    /// The data quota of one app, in bytes, for each store (the private
+    /// The data quota of one app, in bytes, for all stores together (the private
     /// files, `store.kv` and `store.sql`): `PLINTH_DATA_QUOTA_MIB`, else the
     /// `dataQuotaMib` of `policy.json`, else `DEFAULT_DATA_QUOTA`.
     pub fn data_quota(&self) -> u64 {

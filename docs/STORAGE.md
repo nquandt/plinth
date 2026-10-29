@@ -213,7 +213,7 @@ Rules:
 
 ### 7.3 Quota
 
-Each app has a data quota. The default is 100 MiB. The quota applies to each of the three stores alone, not to their sum: the private files (the sum of the file sizes), `store.kv` (the bytes of all keys and values) and the `store.sql` database (the file size). So the worst case for one app is 3 times the quota.
+Each app has a data quota. The default is 100 MiB. It is one limit for the whole app: the private files (the sum of the file sizes), `store.kv` (the bytes of all keys and values) and the `store.sql` database (the file size) together stay under it. Each store also has the same limit alone, so a store never passes the quota by itself either. Before this change the quota applied to each store alone, and the worst case was 3 times the quota.
 
 The host reads the number from `PLINTH_DATA_QUOTA_MIB`, else from `dataQuotaMib` in `policy.json` in the Hub directory (`plinth hub policy quota <MiB>`, `plinth hub policy quota default`), else the default. The host reads it when it starts an app.
 
@@ -222,6 +222,8 @@ The host reads the number from `PLINTH_DATA_QUOTA_MIB`, else from `dataQuotaMib`
 | Files | Before each `write`, the worker thread adds the sizes of all files (a walk of the folder, at most the quota) and refuses a write that makes the total bigger than the quota. | `Error("quota")` (as before; the old default was 50 MiB). |
 | `store.kv` | The store counts the bytes of keys and values and checks it in memory on each `set`. A `set` that does not make the store bigger always works, so the app can free space. | The `set` does nothing and `kv.lastError()` returns `"denied:refused"`. This is the answer that the web host also gives. The WIT `denied-reason` has no `quota` value. |
 | `store.sql` | SQLite `max_page_count`, set from the quota when the database opens. SQLite counts pages, so the limit holds also for index and free pages. | `Error("sql: the database is full")` (before: 256 MiB). |
+
+The combined check works like this. Each store knows how many bytes the other two use now (`kv` keeps a counter; the files and the database folders are measured on disk). A write that makes its store bigger is refused when `this store + the other two` would pass the quota. A write that does not make its store bigger always works, so an app can free space. For `store.sql` the host sets `max_page_count` again before each call to the room that is left, and never below the current size of the database, so a database that is already full can still shrink or change rows in place. The errors are the same as above. The combined check runs where the host sets a quota (the desktop host). Rows of the database that the app wrote before the last check are counted by file size, so the sum can be a few pages too high or too low for a moment, and two stores that write at the same time can pass the quota by the size of one write.
 
 The web host has its own fixed limits for each app: 512 Ki characters for `store.kv` in a frame, 50 MiB for files and 256 MiB for `store.sql`, and the browser's own limit for the whole origin. It does not use `navigator.storage.estimate()`: that number is for the whole origin and not for one app, so it cannot say which app is over. The web limits are not configurable yet.
 
@@ -252,7 +254,7 @@ The tests are `crates/plinth-compiler/tests/hub_api.rs` (the call on the engine,
 
 ### 7.7 Not built, and open questions
 
-- A total quota for the sum of the three stores. A cheap sum needs the stores to share one counter.
+- A total quota on the web host. The web limits are fixed per store (§7.3).
 - Import of an export, and a backup of all apps.
 - Instances (§2.2): the commands work on the default instance only. `remove_app_secrets` also removes the default instance only.
 - Linux and macOS: the commands are not tested there (`docs/PLATFORM-TODO.md`).

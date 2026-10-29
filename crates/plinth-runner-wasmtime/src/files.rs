@@ -155,10 +155,18 @@ pub fn private_space_dir(data_dir: &Path, owner: &Owner, app_id: &str) -> PathBu
     data_dir.join("spaces").join("private").join(owner.segment()).join(id)
 }
 
+/// The bytes that the other stores of the same app use now (see
+/// `Files::with_others`, `Kv::set_others`, `sql::SqlStore::with_others`).
+pub type Others = std::sync::Arc<dyn Fn() -> u64 + Send + Sync>;
+
 /// One app's private space and its worker thread.
 pub struct Files {
     root: Option<PathBuf>,
     quota: u64,
+    /// The bytes that the other stores of the app use (`store.kv`,
+    /// `store.sql`). A write is refused when the app would pass the quota
+    /// with all stores together (`docs/STORAGE.md` §7).
+    others: Option<Others>,
     worker: Mutex<Option<Sender<Job>>>,
 }
 
@@ -181,13 +189,20 @@ pub enum Op {
 impl Files {
     /// A space at `root` (made at the first write) with `quota` bytes.
     pub fn open(root: PathBuf, quota: u64) -> Self {
-        Self { root: Some(root), quota, worker: Mutex::new(None) }
+        Self { root: Some(root), quota, others: None, worker: Mutex::new(None) }
+    }
+
+    /// The same space, also limited by the bytes that the other stores of
+    /// the app use (the quota is then for all stores together).
+    pub fn with_others(mut self, others: Others) -> Self {
+        self.others = Some(others);
+        self
     }
 
     /// No space: every call is `denied:unsupported` (a host with no data
     /// directory, and `Runner::load`).
     pub fn unavailable() -> Self {
-        Self { root: None, quota: 0, worker: Mutex::new(None) }
+        Self { root: None, quota: 0, others: None, worker: Mutex::new(None) }
     }
 
     /// The quota of this space in bytes. The `store.sql` database of the same
@@ -215,6 +230,7 @@ impl Files {
         }
         let root = self.root.clone().expect("checked above");
         let quota = self.quota;
+        let others = self.others.clone();
         let mut worker = self.worker.lock().unwrap();
         if worker.is_none() {
             let (tx, rx) = channel::<Job>();
@@ -222,7 +238,7 @@ impl Files {
                 .name("plinth-files".into())
                 .spawn(move || {
                     for job in rx {
-                        let result = run(&root, quota, job.op);
+                        let result = run(&root, quota, others.as_ref(), job.op);
                         job.results.lock().unwrap().push((job.id, result));
                     }
                 })
@@ -239,7 +255,7 @@ impl Files {
     /// Runs `op` on this thread (for tests of the provider).
     pub fn run_now(&self, op: Op) -> Value {
         match &self.root {
-            Some(root) => run(root, self.quota, op),
+            Some(root) => run(root, self.quota, self.others.as_ref(), op),
             None => failure(denied_text(DeniedReason::Unsupported)),
         }
     }
@@ -262,8 +278,8 @@ fn failure(error: String) -> Value {
     Value::List(vec![Value::Bool(false), Value::Int(0), Value::Str(String::new()), Value::Str(error)])
 }
 
-fn run(root: &Path, quota: u64, op: Op) -> Value {
-    match run_op(root, quota, op) {
+fn run(root: &Path, quota: u64, others: Option<&Others>, op: Op) -> Value {
+    match run_op(root, quota, others, op) {
         Ok(text) => success(text),
         Err(e) => failure(e),
     }
@@ -290,7 +306,7 @@ fn entry_json(name: &str, meta: &std::fs::Metadata) -> serde_json::Value {
     serde_json::json!({ "name": name, "kind": kind, "size": size })
 }
 
-fn run_op(root: &Path, quota: u64, op: Op) -> Result<String, String> {
+fn run_op(root: &Path, quota: u64, others: Option<&Others>, op: Op) -> Result<String, String> {
     let checked = |path: &str, allow_root: bool| -> Result<Vec<String>, String> {
         check_path(path, allow_root).map(|s| s.into_iter().map(str::to_owned).collect()).map_err(|r| format!("invalid-path: {r}"))
     };
@@ -331,6 +347,14 @@ fn run_op(root: &Path, quota: u64, op: Op) -> Result<String, String> {
             };
             let used = usage(root);
             if used.saturating_sub(old) + text.len() as u64 > quota {
+                return Err("quota".into());
+            }
+            // All stores of the app together stay under the same quota. A
+            // write that does not make the space bigger always works.
+            if let Some(others) = others
+                && text.len() as u64 > old
+                && used.saturating_sub(old) + text.len() as u64 + others() > quota
+            {
                 return Err("quota".into());
             }
             std::fs::create_dir_all(&dir).map_err(io_error)?;
@@ -411,7 +435,7 @@ fn run_op(root: &Path, quota: u64, op: Op) -> Result<String, String> {
 /// The bytes that the files of the space use. A walk of the folder: a
 /// private space is small (the quota is 100 MiB by default), and the worker thread
 /// does it, not the UI thread.
-fn usage(root: &Path) -> u64 {
+pub(crate) fn usage(root: &Path) -> u64 {
     let mut total = 0;
     let mut stack = vec![root.to_path_buf()];
     while let Some(d) = stack.pop() {

@@ -89,3 +89,9 @@
 - **Changed:** `examples/kanban` lost its hacks (`maxHeight={0}`, "(on)" and "(here)" marks, fixed narrow columns). At 1280 px all four columns show. Because all columns now show, the debug frame with 510 cards is about 850 ms (was about 280 ms, when two columns were out of view); the 10-card frame at 1000 px is about 150 ms and stays inside its budget.
 - **Open:** a roving focus (H21), auto-scroll during a drag (H3), a `hidden` Span that also has `lines` shows with the wrong display after `hidden: false` in a partial style on the web.
 - **Not tested:** macOS, Linux, iOS, WebKit, Firefox, a screen reader.
+
+## 2026-10-29 (Hub leftovers)
+
+- **Fixed:** (1) the `plinth publish` "built" line named the scratch folder; it names the registry package now (`build_package_quiet` in `crates/plinth-cli/src/main.rs`). (2) The key-change error of the Hub library says to run `plinth hub remove <id>` and install again, and says what happens to the data (`remove` keeps it; the new key has another private space; `uninstall` deletes it). (3) The data quota is one limit for the sum of the files, `store.kv` and `store.sql` on the desktop (`Others` in `files.rs`, `Kv::set_others`, `SqlStore::with_others`, wired in `Guest::set_files`). The test `the_quota_is_for_all_stores_together` failed before the change. `docs/STORAGE.md` §7.3 and `docs/LIMITS.md` are updated.
+- **Not a bug:** the leftover "`incoming/` in the Hub directory is never cleaned" has no code behind it. The Hub directory has no `incoming/` folder and the Hub keeps downloaded packages only in memory until `add_package` stores them in `packages/`. The only `incoming/` is in a registry folder (`plinth publish`, `plinth registry build`), and that folder is meant to stay: the next build reads it. Nothing was changed for this item.
+- **Not tested:** macOS, Linux, the web host (it has no combined quota), and two stores that write at the same time (the sum can pass the quota by one write).

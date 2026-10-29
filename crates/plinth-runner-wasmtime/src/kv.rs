@@ -19,6 +19,11 @@ pub struct Kv {
     path: Option<PathBuf>,
     data: BTreeMap<String, String>,
     quota: Option<u64>,
+    /// The bytes of the other stores of the app; with it, the quota is for
+    /// all stores together (`docs/STORAGE.md` §7).
+    others: Option<crate::files::Others>,
+    /// `used_bytes()`, kept current for the other stores to read.
+    published: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// The error of `Kv::set` when the store would pass its quota.
@@ -44,12 +49,33 @@ impl Kv {
         } else {
             BTreeMap::new()
         };
-        Ok(Self { path: Some(path), data, quota: None })
+        Ok(Self::make(Some(path), data))
     }
 
     /// A store with no backing file, for tests.
     pub fn in_memory() -> Self {
-        Self { path: None, data: BTreeMap::new(), quota: None }
+        Self::make(None, BTreeMap::new())
+    }
+
+    fn make(path: Option<PathBuf>, data: BTreeMap<String, String>) -> Self {
+        let kv = Self { path, data, quota: None, others: None, published: Default::default() };
+        kv.publish();
+        kv
+    }
+
+    fn publish(&self) {
+        self.published.store(self.used_bytes(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The bytes of the keys and values, kept current: the other stores of
+    /// the app read it for the combined quota.
+    pub fn used_handle(&self) -> std::sync::Arc<std::sync::atomic::AtomicU64> {
+        self.published.clone()
+    }
+
+    /// Makes the quota count the bytes of the other stores too.
+    pub fn set_others(&mut self, others: crate::files::Others) {
+        self.others = Some(others);
     }
 
     /// The same store with a limit on the bytes of keys and values.
@@ -75,13 +101,21 @@ impl Kv {
             if new > old && used - old + new > quota {
                 return Err(QuotaExceeded.into());
             }
+            if let Some(others) = &self.others
+                && new > old
+                && used - old + new + others() > quota
+            {
+                return Err(QuotaExceeded.into());
+            }
         }
         self.data.insert(key, value);
+        self.publish();
         self.flush()
     }
 
     pub fn delete(&mut self, key: &str) -> Result<()> {
         self.data.remove(key);
+        self.publish();
         self.flush()
     }
 
