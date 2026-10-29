@@ -1101,17 +1101,18 @@ async function checkUi114(cdpPort, base) {
     // pressed, selected, aria-current.
     const chip = await facts("Chip");
     if (chip.pressed !== "false" || chip.cls.includes("pl-pressable-on")) throw new Error(`Chip before: ${JSON.stringify(chip)}`);
-    if ((await facts("Choice")).pressed !== null || (await facts("Choice")).selected !== "false") throw new Error("Choice: aria-pressed or no aria-selected");
+    if ((await facts("Choice")).pressed !== null || (await facts("Choice")).selected !== null || (await facts("Choice")).current !== null) throw new Error("Choice: aria-pressed, aria-selected or aria-current before");
     const link = await facts("Current page");
-    if (link.current !== "true" || link.selected !== null) throw new Error(`the link: ${JSON.stringify(link)}`);
+    if (link.current !== "page" || link.selected !== null) throw new Error(`the link: ${JSON.stringify(link)}`);
     await page.eval(`${by("Chip")}.click()`);
     await page.waitFor(`${by("Chip")}.getAttribute("aria-pressed") === "true" ? true : null`, 3000);
     const [chipOn, own] = [await facts("Chip"), await facts("Own look")];
     if (!chipOn.cls.includes("pl-pressable-on") || chipOn.bg === chip.bg) throw new Error(`a pressed Chip has no selected look: ${JSON.stringify([chip, chipOn])}`);
     if (own.pressed !== "true" || own.cls.includes("pl-pressable-on")) throw new Error(`Own look: ${JSON.stringify(own)}`);
     await page.eval(`${by("Choice")}.click()`);
-    await page.waitFor(`${by("Choice")}.getAttribute("aria-selected") === "true" ? true : null`, 3000);
-    return "hidden (display, tab stop, gap, live width class), layout full, min sizes, aria-pressed, aria-selected, aria-current, the selected look";
+    await page.waitFor(`${by("Choice")}.getAttribute("aria-current") === "true" ? true : null`, 3000);
+    if ((await facts("Choice")).selected !== null) throw new Error("Choice: aria-selected on a button");
+    return "hidden (display, tab stop, gap, live width class), layout full, min sizes, aria-pressed, aria-current (no aria-selected), the selected look";
   } finally {
     await page.close();
   }

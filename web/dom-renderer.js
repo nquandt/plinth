@@ -264,7 +264,8 @@ export function primitiveStyle(n, partial = false) {
     else if (align === EnumTextAlign.end) css["text-align"] = "end";
     else if (partial && has(Prop.align)) css["text-align"] = "start";
     const lines = p.get(Prop.lines);
-    if (typeof lines === "number" && lines > 0) {
+    const clamped = typeof lines === "number" && lines > 0;
+    if (clamped) {
       css.display = "-webkit-box";
       css["-webkit-box-orient"] = "vertical";
       css["-webkit-line-clamp"] = String(Math.min(Math.trunc(lines), 1000));
@@ -1587,8 +1588,9 @@ export class DomRenderer {
           const pressed = n.props.get(Prop.pressed);
           const selected = n.props.get(Prop.selected);
           setAttr(e, "aria-pressed", !link && typeof pressed === "boolean" ? String(pressed) : null);
-          setAttr(e, link ? "aria-current" : "aria-selected", typeof selected === "boolean" ? String(selected) : null);
-          setAttr(e, link ? "aria-selected" : "aria-current", null);
+          // `aria-selected` is not valid on a button or link: use `aria-current`.
+          setAttr(e, "aria-selected", null);
+          setAttr(e, "aria-current", selected === true ? (link ? "page" : "true") : null);
           const on = pressed === true || selected === true;
           const ownBg = !!colorVar(n.props.get(Prop.bg)?.enum);
           e.classList.toggle("pl-pressable-on", on && !ownBg);

@@ -353,8 +353,9 @@ the default, or `"row"`), `wrap`, `gap`, `padding`, `paddingX`, `paddingY`,
   compiler gives error `PL4010` when `pressed` is on a link, or when the
   role is not the literal `"button"`. `selected` (a boolean) marks the
   current item of a group, such as the column switch or a list of
-  choices. Assistive technology tells "selected" (web: `aria-selected`,
-  or `aria-current` on a link; desktop: the AccessKit selected state).
+  choices. Assistive technology tells "selected" (web: `aria-current="true"` on a button and `aria-current="page"` on a
+  link, because `aria-selected` is not valid on them; desktop: the
+  AccessKit selected state).
   A pressed or selected `Pressable` without its own `bg` is drawn with
   the `selected` token as its background. Do not use color as the only
   mark: the text or a border can also change. Not built yet: a roving
