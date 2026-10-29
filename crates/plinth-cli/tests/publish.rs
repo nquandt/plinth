@@ -105,6 +105,13 @@ fn publish_two_versions_and_repeat() {
     assert!(text(&out).contains("added dev.plinth.examples.counter@0.1.0"), "{}", text(&out));
     assert_eq!(s.versions(), ["0.1.0"]);
 
+    // The "built" line names the registry package, not the scratch folder.
+    let built = text(&out).lines().find(|l| l.starts_with("built ")).expect("a built line").to_owned();
+    let target = s.registry.join("incoming").join("counter.plnt");
+    let target = target.to_string_lossy();
+    assert!(built.contains(target.as_ref()), "{built}");
+    assert_eq!(text(&out).lines().filter(|l| l.starts_with("built ") && l.contains(".plnt")).count(), 1, "{}", text(&out));
+
     // The same content again: nothing changes, and it is not an error.
     let out = s.publish(&[]);
     assert!(out.status.success(), "{}", text(&out));

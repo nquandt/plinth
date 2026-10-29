@@ -521,6 +521,16 @@ fn build(dir: &Path, out: Option<PathBuf>, sign: bool, release: bool) -> Result<
 /// the identity's name. `release`: optimizes the app module with
 /// `wasm-opt` (`optimize.rs`, SPEC.md §5.1 step 10).
 fn build_package(dir: &Path, out: Option<PathBuf>, sign: bool, release: bool) -> Result<Option<PathBuf>> {
+    Ok(build_package_quiet(dir, out, sign, release)?.map(|(path, summary)| {
+        println!("built {} {summary}", path.display());
+        path
+    }))
+}
+
+/// Like `build_package`, but prints nothing. Returns the path and the
+/// summary text ("in 12 ms (app ...)") so the caller can print the path
+/// that is useful to the user (`plinth publish` builds in a scratch folder).
+pub(crate) fn build_package_quiet(dir: &Path, out: Option<PathBuf>, sign: bool, release: bool) -> Result<Option<(PathBuf, String)>> {
     let started = std::time::Instant::now();
     let Some(mut b) = compile(dir)? else { return Ok(None) };
     let mut note = String::new();
@@ -561,14 +571,8 @@ fn build_package(dir: &Path, out: Option<PathBuf>, sign: bool, release: bool) ->
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&out, &bytes).with_context(|| format!("write {}", out.display()))?;
-    println!(
-        "built {} in {} ms (app {} B{note}, package {} KiB)",
-        out.display(),
-        started.elapsed().as_millis(),
-        pkg.component.len(),
-        bytes.len().div_ceil(1024)
-    );
-    Ok(Some(out))
+    let summary = format!("in {} ms (app {} B{note}, package {} KiB)", started.elapsed().as_millis(), pkg.component.len(), bytes.len().div_ceil(1024));
+    Ok(Some((out, summary)))
 }
 
 // -- web export (SPEC.md §10.3) -------------------------------------------------
