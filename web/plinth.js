@@ -3698,13 +3698,17 @@ function primitiveStyle(n, partial = false) {
     else if (align === EnumTextAlign.end) css["text-align"] = "end";
     else if (partial && has(Prop.align)) css["text-align"] = "start";
     const lines = p.get(Prop.lines);
-    if (typeof lines === "number" && lines > 0) {
+    const clamped = typeof lines === "number" && lines > 0;
+    // A width class that shows the Span again (`hidden: false`) restores this
+    // display: a line clamp needs `-webkit-box`, not the default.
+    if (!partial) css["--pl-show"] = clamped ? "-webkit-box" : "revert";
+    if (clamped) {
       css.display = "-webkit-box";
       css["-webkit-box-orient"] = "vertical";
       css["-webkit-line-clamp"] = String(Math.min(Math.trunc(lines), 1000));
       css.overflow = "hidden";
     }
-    hiddenStyle(css, p, partial, "revert");
+    hiddenStyle(css, p, partial, "var(--pl-show, revert)");
     return css;
   }
   const row = en(Prop.axis) === EnumAxis.row;
@@ -3839,6 +3843,24 @@ function partialRule(kind, propId, text, cls) {
 function isMenuKey(ev) {
   if (ev.ctrlKey || ev.altKey || ev.metaKey) return false;
   return (ev.key === "ContextMenu" && !ev.shiftKey) || (ev.key === "F10" && ev.shiftKey);
+}
+
+/** Auto-scroll during a drag: the edge zone of a `Scroll` in px, and the top speed in px/s. The desktop host has the same numbers. */
+const DRAG_EDGE = 40;
+const DRAG_SPEED = 600;
+
+/**
+ * The scroll velocity (px/s, signed) for a pointer at `p` in a range
+ * `[lo, hi]`: 0 in the middle, up to `DRAG_SPEED` at an edge, in
+ * proportion to the depth in the edge zone. A small range has a zone of a
+ * third of its size. Outside the range: 0.
+ */
+function edgeVelocity(p, lo, hi) {
+  const zone = Math.min(DRAG_EDGE, (hi - lo) / 3);
+  if (!(zone > 0) || p < lo || p > hi) return 0;
+  if (p < lo + zone) return (-DRAG_SPEED * (lo + zone - p)) / zone;
+  if (p > hi - zone) return (DRAG_SPEED * (p - (hi - zone))) / zone;
+  return 0;
 }
 
 /** The Plinth name of a browser key (UI API 1.9), the same names as the desktop (`primitives::key_name`); null for other keys. */
@@ -4765,6 +4787,7 @@ class DomRenderer {
       pending = null;
       if (!drag) return;
       clearTarget();
+      win.cancelAnimationFrame(drag.raf);
       drag.ghost.remove();
       drag.src.classList.remove("pl-dragging");
       drag = null;
@@ -4813,16 +4836,56 @@ class DomRenderer {
       src.classList.add("pl-dragging");
       if (pending.timer) win.clearTimeout(pending.timer);
       pending = null;
-      drag = { src, payload, ghost, target: null, pointerId: ev.pointerId };
+      drag = { src, payload, ghost, target: null, pointerId: ev.pointerId, tickAt: 0, carry: { x: 0, y: 0 }, raf: 0 };
       this.announce(`Dragging ${payload.label}`);
       move(ev);
+      drag.raf = win.requestAnimationFrame(scrollTick);
+    };
+    /**
+     * Auto-scroll: while a drag goes on, a `Scroll` under the pointer
+     * scrolls when the pointer is in its edge zone (`edgeVelocity`), in
+     * each axis. The innermost one that can still move wins an axis. A
+     * frame runs this, so the scroll goes on while the pointer rests. It is
+     * input, not animation: reduced motion does not stop it.
+     */
+    const scrollTick = (now) => {
+      if (!drag) return;
+      const dt = drag.tickAt ? Math.min((now - drag.tickAt) / 1000, 0.05) : 0;
+      drag.tickAt = now;
+      const { x, y } = drag.at;
+      const done = { x: false, y: false };
+      if (dt > 0) {
+        for (const e of doc.elementsFromPoint(x, y)) {
+          if (!e.classList.contains("pl-scroll")) continue;
+          const r = e.getBoundingClientRect();
+          for (const [axis, size, view, lo, hi, pos, prop] of [
+            ["x", e.scrollWidth, e.clientWidth, r.left, r.right, x, "scrollLeft"],
+            ["y", e.scrollHeight, e.clientHeight, r.top, r.bottom, y, "scrollTop"],
+          ]) {
+            if (done[axis] || size <= view) continue;
+            drag.carry[axis] += edgeVelocity(pos, lo, hi) * dt;
+            const whole = Math.trunc(drag.carry[axis]);
+            if (whole === 0) continue;
+            drag.carry[axis] -= whole;
+            const before = e[prop];
+            e[prop] = before + whole;
+            if (e[prop] !== before) done[axis] = true;
+          }
+        }
+      }
+      // The content moved under a resting pointer: find the target again.
+      if (done.x || done.y) retarget();
+      drag.raf = win.requestAnimationFrame(scrollTick);
     };
     const move = (ev) => {
       // The last point: the release of a finger can come with no position.
       drag.at = { x: ev.clientX, y: ev.clientY };
       drag.ghost.style.left = `${ev.clientX + 8}px`;
       drag.ghost.style.top = `${ev.clientY + 8}px`;
-      const t = targetAt(ev.clientX, ev.clientY);
+      retarget();
+    };
+    const retarget = () => {
+      const t = targetAt(drag.at.x, drag.at.y);
       if (t?.el === drag.target?.el && t?.to === drag.target?.to) return;
       clearTarget();
       drag.target = t;
@@ -5021,8 +5084,9 @@ class DomRenderer {
           const pressed = n.props.get(Prop.pressed);
           const selected = n.props.get(Prop.selected);
           setAttr(e, "aria-pressed", !link && typeof pressed === "boolean" ? String(pressed) : null);
-          setAttr(e, link ? "aria-current" : "aria-selected", typeof selected === "boolean" ? String(selected) : null);
-          setAttr(e, link ? "aria-selected" : "aria-current", null);
+          // `aria-selected` is not valid on a button or link: use `aria-current`.
+          setAttr(e, "aria-selected", null);
+          setAttr(e, "aria-current", selected === true ? (link ? "page" : "true") : null);
           const on = pressed === true || selected === true;
           const ownBg = !!colorVar(n.props.get(Prop.bg)?.enum);
           e.classList.toggle("pl-pressable-on", on && !ownBg);
@@ -5911,7 +5975,7 @@ class DomRenderer {
     };
   }
 }
-  return { piePath, niceScale, scaleFrac, barSpan, pieLegend, UNIT, colorVar, primitiveStyle, parsePartialStyle, PARTIAL_STYLE_PROPS, partialRule, isMenuKey, keyName, parseShapes, shapeColor, Tree, applyLocale, DomRenderer };
+  return { piePath, niceScale, scaleFrac, barSpan, pieLegend, UNIT, colorVar, primitiveStyle, parsePartialStyle, PARTIAL_STYLE_PROPS, partialRule, isMenuKey, DRAG_EDGE, DRAG_SPEED, edgeVelocity, keyName, parseShapes, shapeColor, Tree, applyLocale, DomRenderer };
   })();
 
   // ---- hub-storage.js
