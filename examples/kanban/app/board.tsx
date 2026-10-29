@@ -94,7 +94,7 @@ function filterBar() {
   );
 }
 
-/** One button of the switch: the column name and its count. */
+/** One button of the switch: the column name, and its count below it (the name never wraps). */
 function switchButton(c: number) {
   const name = COLUMN_NAMES[c];
   return (
@@ -110,7 +110,8 @@ function switchButton(c: number) {
       focus={{ border: "text" }}
       onPress={() => chosen.set(c)}
     >
-      <Span size="sm" weight="semibold" fg={chosen() === c ? "accent" : "text"}>{`${name} ${counts()[c]}`}</Span>
+      <Span size="sm" weight="semibold" lines={1} fg={chosen() === c ? "accent" : "text"}>{name}</Span>
+      <Span size="xs" lines={1} fg={chosen() === c ? "accent" : "text.muted"}>{`${counts()[c]}`}</Span>
     </Pressable>
   );
 }
