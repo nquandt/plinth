@@ -96,7 +96,17 @@ type TextContent = string | number | (string | number)[];
 
 export type Tone = "default" | "muted" | "danger" | "success";
 
-export declare function Screen(props: { title: string; actions?: Element[]; children?: Children }): Element;
+export declare function Screen(props: {
+  title: string;
+  actions?: Element[];
+  /**
+   * The content width (UI API 1.14). `"readable"` (the default) keeps the
+   * content in a column of a readable width. `"full"` uses the whole window
+   * width, for a board, a table or an editor.
+   */
+  layout?: "readable" | "full";
+  children?: Children;
+}): Element;
 export declare function Section(props: { title?: string; footer?: string; children?: Children }): Element;
 
 export type Align = "start" | "center" | "end";
@@ -406,6 +416,18 @@ interface BoxLook {
   height?: SizeValue;
   maxWidth?: SizeValue;
   maxHeight?: SizeValue;
+  /** A floor for the width (UI API 1.14): a share, or spacing units. The element does not get narrower. */
+  minWidth?: SizeValue;
+  /** A floor for the height (UI API 1.14). */
+  minHeight?: SizeValue;
+  /**
+   * The element is not there (UI API 1.14): it has no layout space (no gap
+   * either), no tab stop and no node for assistive technology. Use it in a
+   * partial style to show an element in some width classes only:
+   * `compact={{ hidden: true }}`. A `true` partial style hides it, a `false`
+   * one shows it again.
+   */
+  hidden?: boolean;
   bg?: ColorToken;
   border?: ColorToken;
   radius?: "none" | "sm" | "md" | "lg" | "full";
@@ -487,6 +509,8 @@ interface DragSource {
 export declare function Box(props: BoxStyle & KeyHandlers & PointerHandlers & DragSource & { label?: string }): Element;
 
 interface SpanLook {
+  /** The text is not there (UI API 1.14). See `BoxLook.hidden`. */
+  hidden?: boolean;
   size?: "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
   weight?: "regular" | "medium" | "semibold" | "bold";
   italic?: boolean;
@@ -511,12 +535,34 @@ export declare function Span(props: {
   /** The most lines to show (0: no limit). */
   lines?: number;
   grow?: number;
+  /** The text is not there (UI API 1.14). */
+  hidden?: boolean;
   children?: TextContent;
 }): Element;
 
-/** A box that the user can press: a button or a link. It is a tab stop; Enter and Space press it. */
+/**
+ * A box that the user can press: a button or a link. It is a tab stop; Enter and Space press it.
+ *
+ * UI API 1.14: `pressed` makes a button a toggle button (a filter chip, a
+ * switch): assistive technology hears "pressed" or "not pressed". It is valid
+ * only with `role="button"` (a compile error otherwise). `selected` marks the
+ * current item of a group (a column switch, a list of choices): assistive
+ * technology hears "selected" (on the web a link gets `aria-current`). The
+ * runtime draws the "selected" token as the background of a pressed or
+ * selected `Pressable` that has no `bg` of its own.
+ */
 export declare function Pressable(
-  props: BoxStyle & KeyHandlers & PointerHandlers & DragSource & { label: string; role: "button" | "link"; onPress: () => void; disabled?: boolean },
+  props: BoxStyle &
+    KeyHandlers &
+    PointerHandlers &
+    DragSource & {
+      label: string;
+      role: "button" | "link";
+      onPress: () => void;
+      disabled?: boolean;
+      pressed?: boolean;
+      selected?: boolean;
+    },
 ): Element;
 
 /** A box that scrolls along its direction. Give it a height or a max height. */

@@ -1,0 +1,4 @@
+app/main.tsx(2,83): error PL4010: `pressed` is valid only on a `Pressable` with `role="button"`
+  function Home() { return <Screen title="Home"><Pressable label="Docs" role="link" pressed={true} onPress={() => {}} /></Screen>; }
+                                                                                    ^^^^^^^^^^^^^^
+  help: a link has no pressed state; use `selected` for the current item

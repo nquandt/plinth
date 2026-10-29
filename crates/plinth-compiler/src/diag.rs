@@ -107,6 +107,8 @@ pub mod code {
     pub const BAD_NAVIGATE: &str = "PL4007";
     pub const BAD_ASSET: &str = "PL4008";
     pub const EMPTY_ALT: &str = "PL4009";
+    /// `pressed` on a `Pressable` whose `role` is not the literal `"button"` (UI API 1.14).
+    pub const PRESSED_ROLE: &str = "PL4010";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

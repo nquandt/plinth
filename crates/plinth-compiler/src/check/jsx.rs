@@ -422,6 +422,26 @@ impl Checker<'_> {
                 self.err(code::MISSING_PROP, el.name_span, format!("`<{}>` needs the prop `{}`", spec.name, ps.name));
             }
         }
+        // UI API 1.14: `pressed` is the state of a toggle button. A link has no
+        // pressed state (use `selected`, which is valid for both roles).
+        if spec.name == "Pressable"
+            && let Some(pressed) = el.attrs.iter().find(|a| a.name == "pressed")
+        {
+            let button = el
+                .attrs
+                .iter()
+                .find(|a| a.name == "role")
+                .and_then(|a| a.value.as_ref())
+                .is_some_and(|v| matches!(&v.kind, ExprKind::Str(s) if s == "button"));
+            if !button {
+                self.err_help(
+                    code::PRESSED_ROLE,
+                    pressed.span,
+                    "`pressed` is valid only on a `Pressable` with `role=\"button\"`",
+                    "a link has no pressed state; use `selected` for the current item",
+                );
+            }
+        }
         if has_bind && has_on_change {
             self.err_help(
                 code::BAD_BINDING,

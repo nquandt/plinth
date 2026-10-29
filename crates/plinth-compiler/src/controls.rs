@@ -4,7 +4,7 @@
 
 use plinth_protocol::{
     ControlKind, aspect, axis, button_role, button_size, chart_kind, color, cross_align, date_picker_mode, event, fraction, justify,
-    position, pressable_role, prop, radius, text_align, text_size, text_style, tone, weight,
+    layout, position, pressable_role, prop, radius, text_align, text_size, text_style, tone, weight,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +176,8 @@ const TEXT_SIZES: &[(&str, u16)] = &[
 const WEIGHTS: &[(&str, u16)] =
     &[("regular", weight::REGULAR), ("medium", weight::MEDIUM), ("semibold", weight::SEMIBOLD), ("bold", weight::BOLD)];
 const PRESSABLE_ROLES: &[(&str, u16)] = &[("button", pressable_role::BUTTON), ("link", pressable_role::LINK)];
+// -- UI API 1.14 --
+const LAYOUTS: &[(&str, u16)] = &[("readable", layout::READABLE), ("full", layout::FULL)];
 const POSITIONS: &[(&str, u16)] = &[("relative", position::RELATIVE), ("absolute", position::ABSOLUTE)];
 
 /// The props of a Level 2 box: the props of the control itself, the style
@@ -210,6 +212,10 @@ macro_rules! box_props {
             p("height", T::Size(prop::HEIGHT_FRACTION), false, P(prop::HEIGHT)),
             p("maxWidth", T::Size(prop::MAX_WIDTH_FRACTION), false, P(prop::MAX_WIDTH)),
             p("maxHeight", T::Size(prop::MAX_HEIGHT_FRACTION), false, P(prop::MAX_HEIGHT)),
+            // UI API 1.14: a floor for the size, and `hidden`.
+            p("minWidth", T::Size(prop::MIN_WIDTH_FRACTION), false, P(prop::MIN_WIDTH)),
+            p("minHeight", T::Size(prop::MIN_HEIGHT_FRACTION), false, P(prop::MIN_HEIGHT)),
+            p("hidden", T::Bool, false, P(prop::HIDDEN)),
             p("bg", T::Enum(COLORS), false, P(prop::BG)),
             p("border", T::Enum(COLORS), false, P(prop::BORDER)),
             p("radius", T::Enum(RADII), false, P(prop::RADIUS)),
@@ -236,6 +242,8 @@ pub const SPAN_STYLE: &[PropSpec] = &[
     p("align", T::Enum(ALIGNS), false, P(prop::ALIGN)),
     p("lines", T::Int, false, P(prop::LINES)),
     p("grow", T::Int, false, P(prop::GROW)),
+    // UI API 1.14
+    p("hidden", T::Bool, false, P(prop::HIDDEN)),
 ];
 
 
@@ -250,7 +258,12 @@ pub const CONTROLS: &[ControlSpec] = &[
     ControlSpec {
         name: "Screen",
         kind: ControlKind::Screen,
-        props: &[p("title", T::Str, true, P(prop::TITLE)), p("actions", T::ActionList, false, Target::List)],
+        props: &[
+            p("title", T::Str, true, P(prop::TITLE)),
+            p("actions", T::ActionList, false, Target::List),
+            // UI API 1.14: "readable" (default) or "full" (the whole window width).
+            p("layout", T::Enum(LAYOUTS), false, P(prop::LAYOUT)),
+        ],
         children: ChildKind::Nodes,
     },
     ControlSpec {
@@ -591,6 +604,7 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("align", T::Enum(ALIGNS), false, P(prop::ALIGN)),
             p("lines", T::Int, false, P(prop::LINES)),
             p("grow", T::Int, false, P(prop::GROW)),
+            p("hidden", T::Bool, false, P(prop::HIDDEN)),
             p("compact", T::PartialStyle(SPAN_STYLE), false, P(prop::COMPACT)),
             p("regular", T::PartialStyle(SPAN_STYLE), false, P(prop::REGULAR)),
             p("wide", T::PartialStyle(SPAN_STYLE), false, P(prop::WIDE)),
@@ -606,6 +620,10 @@ pub const CONTROLS: &[ControlSpec] = &[
             p("role", T::Enum(PRESSABLE_ROLES), true, P(prop::ROLE)),
             p("onPress", T::Callback0, true, Ev(event::PRESS)),
             p("disabled", T::Bool, false, P(prop::DISABLED)),
+            // UI API 1.14: the state of a toggle button (role "button" only) and
+            // the selected item of a list-like group.
+            p("pressed", T::Bool, false, P(prop::PRESSED)),
+            p("selected", T::Bool, false, P(prop::SELECTED)),
             p("onKeyDown", T::CallbackStr, false, Ev(event::KEY_DOWN)),
             p("onKeyUp", T::CallbackStr, false, Ev(event::KEY_UP)),
             p("onPointerDown", T::CallbackPoint, false, Ev(event::POINTER_DOWN)),

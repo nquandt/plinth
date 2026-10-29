@@ -140,6 +140,45 @@ function Home() {
     assert_eq!(codes(&bad), ["PL3001", "PL3001", "PL4002", "PL4002"]);
 }
 
+/// UI API 1.14: `hidden` (a prop and a key of a partial style), `minWidth`
+/// and `minHeight`, `Screen layout`, and `pressed` / `selected` on a
+/// `Pressable`.
+#[test]
+fn hidden_min_size_layout_pressed_and_selected() {
+    let good = r#"import { app, Screen, Box, Scroll, Span, Pressable, signal } from "plinth:ui";
+function Home() {
+  const on = signal(false);
+  const wide = signal(false);
+  return <Screen title="Home" layout="full">
+    <Box hidden={wide()} compact={{ hidden: true }} regular={{ hidden: false }} wide={{ hidden: true, minWidth: 40 }} minWidth="1/2" minHeight={10} />
+    <Scroll label="Cols" hidden minWidth={20} hover={{ minHeight: "1/4" }} />
+    <Span hidden={on()} compact={{ hidden: true }}>Hi</Span>
+    <Pressable label="Chip" role="button" pressed={on()} selected={wide()} hidden={false} onPress={() => on.set(!on())} />
+    <Pressable label="Tab" role="link" selected={true} onPress={() => {}} />
+  </Screen>;
+}"#
+    .to_owned()
+        + APP;
+    assert_eq!(codes(&good), Vec::<&str>::new());
+
+    // A wrong type, a non-literal in a partial style, an unknown layout, and a
+    // `pressed` on a link or on a role that is not a literal.
+    let bad = r#"import { app, Screen, Box, Pressable } from "plinth:ui";
+function Home() {
+  const h = true;
+  return <Screen title="Home" layout="wide">
+    <Box hidden="yes" minWidth="big" />
+    <Box compact={{ hidden: h }} />
+    <Box minHeight={true} />
+    <Pressable label="Link" role="link" pressed={true} onPress={() => {}} />
+    <Pressable label="Chip" role="button" pressed="on" onPress={() => {}} />
+  </Screen>;
+}"#
+    .to_owned()
+        + APP;
+    assert_eq!(codes(&bad), ["PL3001", "PL3001", "PL3001", "PL3001", "PL3001", "PL4010", "PL3001"]);
+}
+
 #[test]
 fn checkbox_and_text_area() {
     // Good usage: both controls check clean.

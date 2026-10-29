@@ -4,7 +4,14 @@
 # enum ids. The compiler, the guest runtime and the host all generate their
 # constants from it. Never reuse or renumber an id inside one major version.
 
-version = "1.13"
+version = "1.14"
+# UI API 1.14: the style prop `hidden` (a bool; also a key of a partial style):
+# a hidden element is removed from the layout, the focus order and the
+# accessibility tree. `min-width` and `min-height` (spacing units, or a
+# fraction) on Box, Pressable and Scroll. `layout` on Screen (enum layout:
+# `full` uses the whole window width). `pressed` on a Pressable with role
+# button (the state of a toggle button); `selected` (id 71, UI API 1.8) is also
+# valid on a Pressable. A host that does not know a prop ignores it.
 # UI API 1.13: Canvas shapes `strokeRect` (kind "R") and `strokeCircle`
 # (kind "C"): outlines with a line width. A host that does not know a kind
 # skips the shape. The event `context-menu` on Box, Pressable, Scroll, Canvas
@@ -150,6 +157,15 @@ shapes = 79            # string: shapes joined with U+001E; each shape is fields
                        # (colors are token names such as "accent" or "text.muted")
 # UI API 1.13, drag and drop in one app.
 drag-value = 80        # string: the element can be dragged; a drop target gets this string
+# UI API 1.14. `hidden`, `min-width` and `min-height` are style props (they
+# can be keys of a partial style); `pressed` and `layout` are not.
+hidden = 81            # bool, the element is not laid out, not focusable, not in the accessibility tree
+min-width = 82         # number, spacing units
+min-width-fraction = 83 # enum fraction
+min-height = 84        # number, spacing units
+min-height-fraction = 85 # enum fraction
+pressed = 86           # bool, a Pressable with role button is a toggle button and is on (aria-pressed)
+layout = 87            # enum layout (screen)
 
 [events]
 press = 1        # value: null
@@ -279,3 +295,9 @@ link = 1
 [enums.position]
 relative = 0
 absolute = 1
+
+# UI API 1.14: the content width of a screen. `readable` is the default (the
+# width of the text column); `full` uses the whole window width.
+[enums.layout]
+readable = 0
+full = 1
