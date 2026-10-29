@@ -990,6 +990,32 @@ async function dragDropChecks(page, surface) {
   await wait(text("log: "), "log: drop card true true");
   await wait(live, "Dropped Card");
 
+  // Auto-scroll (finding H3): a drag held at the right edge of the horizontal
+  // Scroll "Strip" scrolls it and reveals "Far basket", which takes the drop.
+  const strip = labeled("Strip");
+  const scrollLeft = `${strip}.scrollLeft`;
+  if ((await surface.eval(scrollLeft)) !== 0) throw new Error("the strip starts scrolled");
+  const edge = await point(strip, 0.97, 0.5);
+  await drag(await point(labeled("Card"), 0.2, 0.3), edge, async () => {
+    await surface.waitFor(`${scrollLeft} > 100 ? true : null`, 3000).catch(() => {
+      throw new Error("a drag held at the edge of the strip did not scroll it");
+    });
+    await surface.waitFor(`${labeled("Far basket")}.classList.contains("pl-drop-over") ? true : null`, 3000).catch(() => {
+      throw new Error("the far basket does not show the drag over it after the scroll");
+    });
+  });
+  await wait(text("log: "), "log: far drop card");
+  const stopped = await surface.eval(scrollLeft);
+  await sleep(200);
+  if ((await surface.eval(scrollLeft)) !== stopped) throw new Error("the strip scrolls on after the drop");
+  // No scroll in the middle of the strip, or without a drag.
+  await surface.eval(`${strip}.scrollLeft = 0`);
+  await drag(await point(labeled("Card"), 0.2, 0.3), await point(strip, 0.5, 0.5), async () => {
+    await sleep(300);
+    if ((await surface.eval(scrollLeft)) !== 0) throw new Error("the strip scrolled with the pointer in the middle");
+  });
+  await sleep(100);
+
   // The keyboard: Alt+Up on the focused row moves it; the focus stays on it.
   await surface.eval(`${row("Cherry")}.focus()`);
   const altKey = async (key, code) => {
