@@ -236,6 +236,8 @@ struct HostState {
     /// The app's private space for `plinth:files` (core 1.11). Unavailable
     /// until the host gives one with `Guest::set_files`.
     files: files::Files,
+    /// The bytes of `store.kv` and the files, for the combined quota (`set_files`).
+    sql_others: Option<files::Others>,
     /// The `plinth:notify` backend (core 1.12). A `MemoryNotify` until the
     /// host gives its own with `Guest::set_notify`.
     notify: Box<dyn NotifyBackend>,
@@ -304,6 +306,7 @@ impl HostState {
             fake_timezone_offset_minutes: None,
             hub,
             files: files::Files::unavailable(),
+            sql_others: None,
             notify: Box::new(notify::MemoryNotify::default()),
             secrets: Box::new(secrets::UnsupportedSecrets),
             secrets_scope: SecretsScope::default(),
@@ -817,7 +820,11 @@ impl HostState {
             // The database follows the quota of the private space (the host
             // sets one per-app quota, `docs/STORAGE.md` S13).
             let limits = sql::Limits { quota: self.files.quota(), ..sql::Limits::default() };
-            self.sql = Some(sql::SqlStore::open(dir, limits));
+            let mut store = sql::SqlStore::open(dir, limits);
+            if let Some(others) = self.sql_others.clone() {
+                store = store.with_others(others);
+            }
+            self.sql = Some(store);
         }
         self.sql.as_ref()
     }
@@ -1185,8 +1192,24 @@ impl Guest {
     /// Gives the guest its private space for `plinth:files` (core 1.11,
     /// `docs/STORAGE.md` §2, §3). Without it, every call is
     /// `denied:unsupported`. Call it before `init`.
+    ///
+    /// The quota of the host is for all stores of the app together (`store.kv`,
+    /// the private files, `store.sql`; `docs/STORAGE.md` §7): this call also
+    /// lets each store see the bytes of the other two.
     pub fn set_files(&mut self, files: files::Files) {
-        self.data_mut().files = files;
+        let data = self.data_mut();
+        let mut files = files;
+        if let Some(root) = files.root().map(std::path::Path::to_path_buf) {
+            let sql_dir = sql::database_dir(&root);
+            let kv_used = data.kv.used_handle();
+            let kv_bytes = move || kv_used.load(std::sync::atomic::Ordering::Relaxed);
+            let (root_a, sql_a) = (root.clone(), sql_dir.clone());
+            data.kv.set_others(std::sync::Arc::new(move || files::usage(&root_a) + files::usage(&sql_a)));
+            let (kv_b, sql_b) = (kv_bytes.clone(), sql_dir);
+            files = files.with_others(std::sync::Arc::new(move || kv_b() + files::usage(&sql_b)));
+            data.sql_others = Some(std::sync::Arc::new(move || kv_bytes() + files::usage(&root)));
+        }
+        data.files = files;
     }
 
     /// Gives the guest the host's notification area for `plinth:notify`

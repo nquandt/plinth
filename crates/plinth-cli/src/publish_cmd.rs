@@ -121,8 +121,8 @@ pub fn run(options: &Options) -> Result<bool> {
     // the registry stays as it is.
     let stage = temp_stage();
     let result = stage_and_check(&dir, &name, &project.id, &registry, &stage);
-    let staged = match result {
-        Ok(Some(report)) => report,
+    let (staged, summary) = match result {
+        Ok(Some(done)) => done,
         Ok(None) => {
             std::fs::remove_dir_all(&stage).ok();
             return Ok(false);
@@ -155,6 +155,7 @@ pub fn run(options: &Options) -> Result<bool> {
     let copied = std::fs::copy(stage.join("incoming").join(format!("{name}.{}", plinth_package::EXTENSION)), &target);
     std::fs::remove_dir_all(&stage).ok();
     copied.with_context(|| format!("write {}", target.display()))?;
+    println!("built {} {summary}", target.display());
     crate::registry_cmd::build(&registry, options.with_core, Vec::new())?;
 
     if let Some(url) = config.registry_url.as_deref().filter(|u| !u.is_empty()) {
@@ -176,11 +177,10 @@ pub fn run(options: &Options) -> Result<bool> {
 /// Builds the app into `<stage>/incoming/` and runs the registry build on
 /// `stage` with a copy of the app document of `registry`. `Ok(None)` when
 /// the app has errors.
-fn stage_and_check(dir: &Path, name: &str, id: &str, registry: &Path, stage: &Path) -> Result<Option<plinth_registry::build::Report>> {
+fn stage_and_check(dir: &Path, name: &str, id: &str, registry: &Path, stage: &Path) -> Result<Option<(plinth_registry::build::Report, String)>> {
     let out = stage.join("incoming").join(format!("{name}.{}", plinth_package::EXTENSION));
-    if crate::build_package(dir, Some(out), true, true)?.is_none() {
-        return Ok(None);
-    }
+    // The scratch path is of no use to the user: the caller prints the registry path.
+    let Some((_, summary)) = crate::build_package_quiet(dir, Some(out), true, true)? else { return Ok(None) };
     let doc = Path::new("apps").join(id).join("index.json");
     if registry.join(&doc).exists() {
         let to = stage.join(&doc);
@@ -189,7 +189,7 @@ fn stage_and_check(dir: &Path, name: &str, id: &str, registry: &Path, stage: &Pa
     }
     let report = plinth_registry::build::build(stage, &plinth_registry::build::Options::default())
         .with_context(|| format!("the registry at {} would refuse this package", registry.display()))?;
-    Ok(Some(report))
+    Ok(Some((report, summary)))
 }
 
 fn shell(command: &str) -> std::process::Command {

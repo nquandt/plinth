@@ -162,6 +162,8 @@ pub struct Db {
     /// Set while the host runs its own statements (`user_version`, the
     /// transactions of `batch` and `migrate`); the authorizer then allows all.
     internal: Arc<AtomicBool>,
+    /// The bytes of the other stores of the app (`SqlStore::with_others`).
+    others: Option<crate::files::Others>,
 }
 
 impl Db {
@@ -175,7 +177,7 @@ impl Db {
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_EXRESCODE;
         let conn = Connection::open_with_flags(&path, flags).map_err(|e| sql_error(&e))?;
-        let db = Db { conn, limits, deadline: Arc::new(Mutex::new(None)), internal: Arc::new(AtomicBool::new(false)) };
+        let db = Db { conn, limits, deadline: Arc::new(Mutex::new(None)), internal: Arc::new(AtomicBool::new(false)), others: None };
         db.configure().map_err(|e| sql_error(&e))?;
         Ok(db)
     }
@@ -243,6 +245,21 @@ impl Db {
     /// The database's `user_version`.
     pub fn version(&self) -> Result<i64, String> {
         self.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(|e| sql_error(&e))
+    }
+
+    /// With the bytes of the other stores known, the database may grow only
+    /// into the room that is left of the one quota of the app. A database
+    /// that is already bigger can still shrink and be changed in place
+    /// (`max_page_count` is never below the current page count).
+    fn apply_budget(&self) {
+        let Some(others) = &self.others else { return };
+        self.internal.store(true, Ordering::SeqCst);
+        let page_size: u64 = self.conn.query_row("PRAGMA page_size", [], |r| r.get::<_, i64>(0)).map_or(4096, |v| v.max(512) as u64);
+        let page_count: u64 = self.conn.query_row("PRAGMA page_count", [], |r| r.get::<_, i64>(0)).map_or(0, |v| v.max(0) as u64);
+        let room = self.limits.quota.saturating_sub(others());
+        let max_pages = (room / page_size).max(page_count).max(1);
+        let _ = self.conn.query_row(&format!("PRAGMA max_page_count = {max_pages}"), [], |_| Ok(()));
+        self.internal.store(false, Ordering::SeqCst);
     }
 
     /// `exec(statement, params)`.
@@ -399,6 +416,7 @@ impl Db {
     /// rows is not given for `query` (0), 0 for `batch`, and the new version
     /// for `migrate`.
     pub fn run(&self, op: Op) -> Value {
+        self.apply_budget();
         match op {
             Op::Exec { sql, params } => match self.exec(&sql, &params) {
                 Ok(r) => success(r.changes as i32, r.to_json()),
@@ -560,6 +578,7 @@ struct Job {
 pub struct SqlStore {
     dir: PathBuf,
     limits: Limits,
+    others: Option<crate::files::Others>,
     worker: Mutex<Option<Sender<Job>>>,
 }
 
@@ -567,7 +586,14 @@ impl SqlStore {
     /// A store whose database is `<dir>/store.sqlite` (`dir` is the app's
     /// private space, `files::private_space_dir`).
     pub fn open(dir: PathBuf, limits: Limits) -> Self {
-        Self { dir, limits, worker: Mutex::new(None) }
+        Self { dir, limits, others: None, worker: Mutex::new(None) }
+    }
+
+    /// The same store, limited by the bytes of the other stores of the app
+    /// too (the quota is then for all stores together).
+    pub fn with_others(mut self, others: crate::files::Others) -> Self {
+        self.others = Some(others);
+        self
     }
 
     /// The path of the database file.
@@ -581,7 +607,7 @@ impl SqlStore {
         let mut worker = self.worker.lock().unwrap();
         if worker.is_none() {
             let (tx, rx) = channel::<Job>();
-            let (dir, limits) = (self.dir.clone(), self.limits);
+            let (dir, limits, others) = (self.dir.clone(), self.limits, self.others.clone());
             std::thread::Builder::new()
                 .name("plinth-sql".into())
                 .spawn(move || {
@@ -589,7 +615,10 @@ impl SqlStore {
                     for job in rx {
                         if db.is_none() {
                             match Db::open(&dir, limits) {
-                                Ok(d) => db = Some(d),
+                                Ok(mut d) => {
+                                    d.others = others.clone();
+                                    db = Some(d);
+                                }
                                 Err(e) => {
                                     job.results.lock().unwrap().push((job.id, failure(e)));
                                     continue;

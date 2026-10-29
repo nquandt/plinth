@@ -29,8 +29,8 @@ use std::fs::File;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-/// The default quota of the data of one app (each store: the private files,
-/// `store.kv` and `store.sql`), in bytes. `docs/STORAGE.md` S13.
+/// The default quota of the data of one app (the private files, `store.kv`
+/// and `store.sql` together), in bytes. `docs/STORAGE.md` S13.
 pub const DEFAULT_DATA_QUOTA: u64 = 100 << 20;
 
 /// The format name in `manifest.json` of an export.

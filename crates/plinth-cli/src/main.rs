@@ -88,7 +88,7 @@ usage:
                                    trust (or stop to trust) a key id as a Hub key: only a
                                    package signed by it may use hub.manage (docs/HUB.md §4.1)
   plinth hub policy quota <MiB> | default
-                                   the data quota of one app for each store (default 100 MiB)
+                                   the data quota of one app for all its stores together (default 100 MiB)
   plinth registry build <folder> [--with-core] [--hub-trusted-key <key id>]
                                    generate a static registry from .plnt files
   plinth registry serve <folder> [--port N] [--web]
@@ -521,6 +521,16 @@ fn build(dir: &Path, out: Option<PathBuf>, sign: bool, release: bool) -> Result<
 /// the identity's name. `release`: optimizes the app module with
 /// `wasm-opt` (`optimize.rs`, SPEC.md §5.1 step 10).
 fn build_package(dir: &Path, out: Option<PathBuf>, sign: bool, release: bool) -> Result<Option<PathBuf>> {
+    Ok(build_package_quiet(dir, out, sign, release)?.map(|(path, summary)| {
+        println!("built {} {summary}", path.display());
+        path
+    }))
+}
+
+/// Like `build_package`, but prints nothing. Returns the path and the
+/// summary text ("in 12 ms (app ...)") so the caller can print the path
+/// that is useful to the user (`plinth publish` builds in a scratch folder).
+pub(crate) fn build_package_quiet(dir: &Path, out: Option<PathBuf>, sign: bool, release: bool) -> Result<Option<(PathBuf, String)>> {
     let started = std::time::Instant::now();
     let Some(mut b) = compile(dir)? else { return Ok(None) };
     let mut note = String::new();
@@ -561,14 +571,8 @@ fn build_package(dir: &Path, out: Option<PathBuf>, sign: bool, release: bool) ->
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&out, &bytes).with_context(|| format!("write {}", out.display()))?;
-    println!(
-        "built {} in {} ms (app {} B{note}, package {} KiB)",
-        out.display(),
-        started.elapsed().as_millis(),
-        pkg.component.len(),
-        bytes.len().div_ceil(1024)
-    );
-    Ok(Some(out))
+    let summary = format!("in {} ms (app {} B{note}, package {} KiB)", started.elapsed().as_millis(), pkg.component.len(), bytes.len().div_ceil(1024));
+    Ok(Some((out, summary)))
 }
 
 // -- web export (SPEC.md §10.3) -------------------------------------------------
@@ -1222,7 +1226,7 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                     mib => {
                         let mib: u64 = mib.parse().with_context(|| usage.to_owned())?;
                         hub.set_data_quota_mib(Some(mib))?;
-                        println!("the data quota of an app is {mib} MiB for each store (private files, kv, sql)");
+                        println!("the data quota of an app is {mib} MiB for all stores together (private files, kv, sql)");
                     }
                 }
             }
@@ -1244,7 +1248,7 @@ fn hub_command(args: &[&str], raw: &[&str]) -> Result<ExitCode> {
                 }
             }
             Some("show") | None => {
-                println!("data quota of an app: {} for each store", format_bytes(hub.data_quota()));
+                println!("data quota of an app: {} for all its stores together", format_bytes(hub.data_quota()));
                 let saved = hub.saved_hub_keys()?;
                 let all = plinth_hub::trusted_hub_keys_in(hub.dir());
                 if all.is_empty() {

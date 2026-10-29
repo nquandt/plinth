@@ -443,10 +443,9 @@ impl Hub {
             && old_key != &new.key
         {
             bail!(
-                "{} is signed by a different key ({}) than the installed version ({}); key rotation is not supported yet",
-                pkg.manifest.id,
-                new.key,
-                old_key
+                "{id} is signed by a different key ({new_key}) than the installed version ({old_key}); key rotation is not supported yet.                  To install this package, run `plinth hub remove {id}`, then install it again.                  `remove` only takes the app out of the library: the data of the old version stays on disk, but it belongs to the old key, so the new package does not see it.                  To delete that data, run `plinth hub uninstall {id}` instead of `remove` (without `--keep-data`)",
+                id = pkg.manifest.id,
+                new_key = new.key,
             );
         }
         entry.name = pkg.manifest.name.clone();
@@ -597,7 +596,7 @@ impl Hub {
         layout.export_zip(&version, out)
     }
 
-    /// The data quota of one app, in bytes, for each store (the private
+    /// The data quota of one app, in bytes, for all stores together (the private
     /// files, `store.kv` and `store.sql`): `PLINTH_DATA_QUOTA_MIB`, else the
     /// `dataQuotaMib` of `policy.json`, else `DEFAULT_DATA_QUOTA`.
     pub fn data_quota(&self) -> u64 {
@@ -1778,7 +1777,11 @@ mod tests {
         let id = hub.add_package(&fake_signed_package("com.example.notes", "0.1.0", &acme)).unwrap();
         assert_eq!(id, "com.example.notes");
         let err = hub.add_package(&fake_signed_package("com.example.notes", "0.2.0", &other)).unwrap_err();
-        assert!(err.to_string().contains("different key"), "{err}");
+        let text = err.to_string();
+        assert!(text.contains("different key"), "{err}");
+        assert!(text.contains("plinth hub remove com.example.notes"), "{err}");
+        assert!(text.contains("plinth hub uninstall com.example.notes"), "{err}");
+        assert!(text.contains("data of the old version stays on disk"), "{err}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
