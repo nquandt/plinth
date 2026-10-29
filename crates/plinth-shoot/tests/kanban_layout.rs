@@ -110,7 +110,7 @@ impl Harness {
         cx.run_until_parked();
         let scale = f64::from(cx.update(|cx| window.update(cx, |_, window, _| window.scale_factor())).unwrap());
         let mut h = Self { cx, window, scale, data };
-        h.until("the first issues load", |h| h.bounds(Role::Button, "KAN-1: Set up the project").is_some());
+        h.until("the first issues load", |h| h.bounds(Role::Button, "KAN-7: Export issues to CSV").is_some());
         h
     }
 
@@ -244,27 +244,34 @@ fn the_board_adapts_to_the_width_class() {
             let mode = if dark { "dark" } else { "light" };
             let mut app = Harness::new(&component, w, h, dark, &format!("{class}-{mode}"));
             app.shot(&format!("{class}-{mode}"));
-            let backlog = app.must(Role::ScrollView, "Backlog column");
-            let review = app.must(Role::ScrollView, "Review column");
+            let backlog = app.must(Role::Group, "Backlog column");
             match class {
                 "compact" => {
-                    // One column shows (the first); the others have no height. The switch shows.
+                    // One column shows (the first); the others are hidden: no node. The switch shows.
                     assert!(backlog.3 - backlog.1 > 100.0, "compact: the Backlog column shows");
-                    assert!(review.3 - review.1 < 2.0, "compact: the Review column is folded away: {review:?}");
+                    assert!(app.bounds(Role::Group, "Review column").is_none(), "compact: the Review column is in the tree");
                     let switch = app.must(Role::Button, "Show Review");
                     assert!(switch.3 > switch.1, "compact: the switch shows");
                     let at = app.center(Role::Button, "Show Review");
                     app.click(at);
-                    let review = app.must(Role::ScrollView, "Review column");
+                    let review = app.must(Role::Group, "Review column");
                     assert!(review.3 - review.1 > 100.0, "compact: Review shows after the switch");
+                    assert!(app.bounds(Role::Group, "Backlog column").is_none(), "compact: Backlog is hidden after the switch");
                     app.shot(&format!("{class}-{mode}-review"));
                 }
                 _ => {
-                    // The columns are side by side, on the same row; the switch has no height.
+                    // All four columns are side by side in the window (UI API 1.14: the screen is full
+                    // width and the columns share it); the switch is hidden.
+                    let review = app.must(Role::Group, "Review column");
+                    let done = app.must(Role::Group, "Done column");
                     assert!(review.0 > backlog.0 + 100.0, "{class}: Review is right of Backlog");
                     assert!((review.1 - backlog.1).abs() < 2.0, "{class}: the columns share a top");
-                    let switch = app.bounds(Role::Button, "Show Review");
-                    assert!(switch.is_none_or(|b| b.3 - b.1 < 2.0), "{class}: the switch has no height: {switch:?}");
+                    assert!(app.bounds(Role::Button, "Show Review").is_none(), "{class}: the switch is in the tree");
+                    if class == "wide" {
+                        assert!(done.2 <= f64::from(w) + 1.0 && done.0 >= 0.0, "wide: Done is not in the window: {done:?}");
+                        let (b, r) = (backlog.2 - backlog.0, review.2 - review.0);
+                        assert!(b > 200.0 && (b - r).abs() < 2.0, "wide: the columns do not share the width: {b} {r}");
+                    }
                 }
             }
         }
@@ -277,7 +284,7 @@ fn a_drag_moves_a_card_to_another_column() {
     let component = compile();
     let mut app = Harness::new(&component, 1280., 800., false, "drag");
     let card = app.center(Role::Button, "KAN-7: Export issues to CSV");
-    let done = app.must(Role::ScrollView, "In Progress column");
+    let done = app.must(Role::Group, "In Progress column");
     let target = point(px(((done.0 + done.2) / 2.0) as f32), px((done.1 + 150.0) as f32));
     app.drag(card, target);
     app.until("the card is in In Progress", |h| h.bounds(Role::Button, "KAN-7: Export issues to CSV").is_some_and(|b| b.0 >= done.0 - 1.0));

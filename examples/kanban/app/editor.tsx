@@ -31,8 +31,8 @@ function moveChip(name: string) {
   const here = () => columnName(detail().status) === name;
   return (
     <Pressable label={`Move to ${name}`} role="button" paddingX={3} paddingY={1} radius="full" border={here() ? "accent" : "border"}
-               bg={here() ? "selected" : "surface"} focus={{ border: "accent" }} onPress={() => moveByName(detail().id, name)}>
-      <Span size="sm" weight={here() ? "semibold" : "regular"} fg={here() ? "accent" : "text"}>{here() ? `${name} (here)` : name}</Span>
+               selected={here()} focus={{ border: "accent" }} onPress={() => moveByName(detail().id, name)}>
+      <Span size="sm" weight={here() ? "semibold" : "regular"} fg={here() ? "accent" : "text"}>{name}</Span>
     </Pressable>
   );
 }

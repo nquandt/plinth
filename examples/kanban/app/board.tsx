@@ -1,10 +1,12 @@
 // The board screen: the summary, the filter bar, and the four columns.
 //
-// Wide and regular windows show the columns side by side in a Scroll that
-// scrolls sideways. A compact window shows one column, chosen with the
-// switch above it. The app cannot read the width class, so each column
-// carries both looks: its `maxHeight` is 0 when it is not the chosen one,
-// and the `regular` and `wide` partial styles undo that.
+// The screen uses the whole window width (`layout="full"`). Wide and
+// regular windows show the columns side by side: they share the width, and
+// each has a floor (`minWidth`); a Scroll scrolls sideways if they do not
+// fit. A compact window shows one column, chosen with the switch above it:
+// the other columns are `hidden` (UI API 1.14) there, and the switch is
+// `hidden` on the wider classes. A hidden element has no space, no tab
+// stop and no accessibility node.
 import {
   signal,
   Screen,
@@ -42,8 +44,8 @@ import { COLUMNS, COLUMN_NAMES } from "./types";
 import { card } from "./cards";
 import { editor } from "./editor";
 
-/** The width of a column, in spacing units. */
-const COL_W = 52;
+/** The least width of a column, in spacing units. The columns share the width of the window above it. */
+const COL_MIN = 52;
 /** The most height of the cards of a column, in spacing units. */
 const COL_H = 150;
 
@@ -60,12 +62,12 @@ function priorityChip(priority: string) {
       paddingY={1}
       radius="full"
       border={on() ? "accent" : "border"}
-      bg={on() ? "selected" : "surface"}
+      pressed={on()}
       hover={{ border: "accent" }}
       focus={{ border: "accent" }}
       onPress={() => togglePriorityFilter(priority)}
     >
-      <Span size="sm" weight={on() ? "semibold" : "regular"} fg={on() ? "accent" : "text"}>{on() ? `${priority} (on)` : priority}</Span>
+      <Span size="sm" weight={on() ? "semibold" : "regular"} fg={on() ? "accent" : "text"}>{priority}</Span>
     </Pressable>
   );
 }
@@ -103,25 +105,25 @@ function switchButton(c: number) {
       paddingY={2}
       radius="md"
       align="center"
-      bg={chosen() === c ? "accent" : "surface"}
+      selected={chosen() === c}
       border={chosen() === c ? "accent" : "border"}
       focus={{ border: "text" }}
       onPress={() => chosen.set(c)}
     >
-      <Span size="sm" weight="semibold" fg={chosen() === c ? "on.accent" : "text"}>{`${name} ${counts()[c]}`}</Span>
+      <Span size="sm" weight="semibold" fg={chosen() === c ? "accent" : "text"}>{`${name} ${counts()[c]}`}</Span>
     </Pressable>
   );
 }
 
-/** The switch of the compact window. It has no height on a wider window. */
+/** The switch of the compact window. A wider window hides it (UI API 1.14 `hidden`). */
 function columnSwitch() {
   return (
-    <Scroll label="Choose a column" direction="row" gap={1} maxHeight={0} compact={{ maxHeight: 100 }}>
+    <Box label="Choose a column" direction="row" gap={1} regular={{ hidden: true }} wide={{ hidden: true }}>
       {switchButton(0)}
       {switchButton(1)}
       {switchButton(2)}
       {switchButton(3)}
-    </Scroll>
+    </Box>
   );
 }
 
@@ -129,13 +131,13 @@ function column(c: number) {
   const name = COLUMN_NAMES[c];
   const id = COLUMNS[c];
   return (
-    <Scroll
+    <Box
       label={`${name} column`}
-      width={COL_W}
-      maxHeight={chosen() === c ? 400 : 0}
-      compact={{ width: "full" }}
-      regular={{ maxHeight: 400 }}
-      wide={{ maxHeight: 400 }}
+      grow={1}
+      minWidth={COL_MIN}
+      hidden={chosen() !== c}
+      regular={{ hidden: false }}
+      wide={{ hidden: false }}
     >
       <Box padding={2} gap={2} radius="lg" bg="surface.alt" width="full" onDrop={(value) => dropOnColumn(value, id)}>
         <Box direction="row" align="center" gap={2} paddingX={1}>
@@ -155,7 +157,7 @@ function column(c: number) {
           ) : null}
         </Scroll>
       </Box>
-    </Scroll>
+    </Box>
   );
 }
 
@@ -163,6 +165,7 @@ export default function Board() {
   return (
     <Screen
       title="Board"
+      layout="full"
       actions={[
         <Action label="New issue" icon="plus" role="primary" onPress={() => startCreate("backlog")} />,
         <Action label="Add 100 demo issues" onPress={() => { addDemoIssues(100); }} />,
@@ -172,7 +175,7 @@ export default function Board() {
       <Section title="Issues">
         {filterBar()}
         {columnSwitch()}
-        <Scroll label="Board" direction="row" gap={3} paddingY={1} compact={{ direction: "column" }}>
+        <Scroll label="Board" direction="row" gap={3} paddingY={1}>
           {column(0)}
           {column(1)}
           {column(2)}
